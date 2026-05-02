@@ -185,19 +185,40 @@ def build_report_row(sheet, location, language, original, err):
 # ... [Keeping process_excel, process_csv, etc. logic as per original]
 
 # ─── Main UI ──────────────────────────────────────────────────────────────────
-# ... [Keeping Upload UI logic]
+col_upload, col_info = st.columns([3, 1])
+
+with col_upload:
+    st.markdown("#### 📤 Upload Your File")
+    # This line defines 'uploaded_file'
+    uploaded_file = st.file_uploader(
+        "Drop any file — AI detects language and errors automatically",
+        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "srt", "docx"],
+        label_visibility="collapsed"
+    )
+
+with col_info:
+    st.markdown("#### What AI checks")
+    for item in ["✦ Auto language detection", "✦ Mistranslation", "✦ Grammar & spelling",
+                 "✦ Terminology", "✦ Mixed language", "✦ Style & tone", "✦ Formatting"]:
+        st.markdown(f"<small>{item}</small>", unsafe_allow_html=True)
+
+st.divider()
 
 # ─── API KEY CONFIGURATION ────────────────────────────────────────────────────
-# Option 1: Read from Streamlit Secrets (Recommended)
-# Option 2: Fallback to manual entry for testing
+# Replace the string below with your actual sk-... key
 api_key = os.environ.get("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY_HERE"
 
 if not api_key or "YOUR_OPENAI_API_KEY_HERE" in api_key:
     st.error("⚠️ OpenAI API Key missing! Set OPENAI_API_KEY in Secrets or paste it in the code.")
     st.stop()
 
-run_button = st.button("🚀 Run AI QA Check", use_container_width=True, type="primary")
+# ─── Execution Logic ─────────────────────────────────────────────────────────
+run_button = st.button(
+    "🚀 Run AI QA Check", use_container_width=True, 
+    type="primary", disabled=not uploaded_file
+)
 
+# Line 201 should now work because uploaded_file is defined above
 if uploaded_file and run_button:
-    client = OpenAI(api_key=api_key) # Initialize OpenAI
-    # ... [Rest of the processing loop]
+    client = OpenAI(api_key=api_key)
+    # ... (rest of your processing code)
