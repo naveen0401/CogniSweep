@@ -3,42 +3,62 @@ import pandas as pd
 import io
 import json
 import os
-from google import genai  # Switched to Google GenAI
+from openai import OpenAI
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Font
+from openpyxl.comments import Comment
 
 # ─── Page Setup ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="ErrorSweep Pro | Gemini Mode", layout="wide")
+st.set_page_config(page_title="ErrorSweep Pro | Strong Mode", layout="wide")
 
 # ─── Core AI Logic ───────────────────────────────────────────────────────────
 def ai_qa_segment(text, domain, strictness, client):
     if not text or len(str(text).strip()) < 1:
         return []
 
+    # Stronger prompt focusing on Linguistic nuances
     prompt = f"""Act as a Senior Linguistic Auditor. 
     Analyze this text from the '{domain}' domain with {strictness} strictness.
-    TEXT: "{text}"
-    Return ONLY a JSON object with an 'errors' list containing error_type, severity, original, suggestion, and explanation."""
+    
+    TEXT TO AUDIT: "{text}"
+
+    CRITICAL CHECKLIST:
+    1. Mistranslation: Does it accurately convey the source meaning?
+    2. Unicode: Check for normalization errors (NFC/NFD) in Indic scripts.
+    3. Grammar/Spelling: Flag any typos or syntax issues.
+    4. Terminology: Is it consistent with professional industry standards?
+
+    Respond ONLY in JSON format:
+    {{
+      "errors": [
+        {{
+          "error_type": "Specific Type",
+          "severity": "Minor/Major/Critical",
+          "original": "the exact mistake",
+          "suggestion": "your correction",
+          "explanation": "why this is a bug"
+        }}
+      ]
+    }}
+    If NO errors exist, return {{"errors": []}}"""
 
     try:
-        # Gemini 3 Flash is optimized for fast, accurate linguistic extraction
-        response = client.models.generate_content(
-            model="gemini-3-flash",
-            contents=prompt,
-            config={
-                'response_mime_type': 'application/json', # Enforces structured JSON
-            }
+        response = client.chat.completions.create(
+            model="gpt-5.5-pro", # Using high-reasoning model
+            messages=[{"role": "system", "content": "You are a specialized LQA tool. Output valid JSON."},
+                      {"role": "user", "content": prompt}],
+            response_format={"type": "json_object"} # Force valid JSON
         )
-        # Gemini responses are accessed via .text or .parsed if a schema is used
-        return json.loads(response.text).get("errors", [])
+        return json.loads(response.choices[0].message.content).get("errors", [])
     except Exception as e:
-        st.sidebar.error(f"Gemini API Error: {e}")
+        st.sidebar.error(f"API Debug: {e}")
         return []
 
 # ─── Main Application ────────────────────────────────────────────────────────
-st.title("🧹 ErrorSweep Pro: Gemini Mode")
+st.title("🧹 ErrorSweep Pro: Strong Mode")
 
-# 🔑 PASTE YOUR GOOGLE API KEY HERE
-api_key = os.environ.get("GEMINI_API_KEY") or "YOUR_GOOGLE_API_KEY_HERE"
+# API Key - Paste your sk-... key here or set it in Streamlit Secrets
+api_key = os.environ.get("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY_HERE"
 
 with st.sidebar:
     st.header("Settings")
@@ -46,25 +66,27 @@ with st.sidebar:
     strictness = st.select_slider("Strictness", ["Lenient", "Standard", "Strict", "Audit Mode"], value="Strict")
     max_rows = st.number_input("Scan Limit (Rows)", 1, 500, 50)
 
-uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-if uploaded_file and st.button("🚀 Start Gemini Deep Scan"):
+if uploaded_file and st.button("🚀 Start Deep Scan"):
     if not api_key or "YOUR" in api_key:
-        st.error("Please provide a valid Google API Key (from AI Studio).")
+        st.error("Please provide a valid OpenAI API Key.")
         st.stop()
 
-    # Initialize Google GenAI client
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key)
     
+    # Load Data
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file)
     else:
         df = pd.read_excel(uploaded_file)
 
+    st.info(f"Scanning first {min(len(df), max_rows)} rows across all columns...")
+    
     results = []
     progress = st.progress(0)
     
-    # Deep Scan across all columns for maximum error detection
+    # SCANNING LOGIC: Checks every cell in the row
     for i, row in df.head(max_rows).iterrows():
         for col_name, cell_value in row.items():
             if pd.notna(cell_value) and len(str(cell_value)) > 1:
@@ -74,6 +96,7 @@ if uploaded_file and st.button("🚀 Start Gemini Deep Scan"):
                     results.append(err)
         progress.progress((i + 1) / min(len(df), max_rows))
 
+    # Display Findings
     if results:
         st.subheader(f"🚩 Found {len(results)} Issues")
         for error in results:
@@ -82,4 +105,4 @@ if uploaded_file and st.button("🚀 Start Gemini Deep Scan"):
                 st.success(f"**Correction:** {error['suggestion']}")
                 st.info(f"**Reason:** {error['explanation']}")
     else:
-        st.success("Gemini Scan complete. Your file is clean!")
+        st.success("Deep Scan complete. No linguistic bugs detected.")
