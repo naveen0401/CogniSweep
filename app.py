@@ -11,256 +11,228 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.comments import Comment
 from docx import Document
 
-# ─── Page Config ────────────────────────────────────────────────────────────
-st.set_page_config(page_title="ErrorSweep Pro", layout="wide", page_icon="✅")
+# ─── Page Config ─────────────────────────────────────────────────────────────
+st.set_page_config(page_title="ErrorSweep Pro", layout="wide", page_icon="🧹")
 
 st.markdown("""
 <style>
-.title  {text-align:center;font-size:42px;color:#22C55E;font-weight:bold;margin-bottom:4px;}
-.subtitle {text-align:center;font-size:16px;color:#9CA3AF;margin-bottom:20px;}
-.badge  {display:inline-block;background:#22C55E;color:white;border-radius:12px;
-         padding:2px 10px;font-size:12px;margin:2px;}
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+.hero {
+    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 50%, #16213e 100%);
+    border: 1px solid #2a2a4a; border-radius: 16px;
+    padding: 40px; margin-bottom: 24px; text-align: center;
+}
+.hero-title { font-family: 'Space Mono', monospace; font-size: 48px; color: #00ff88; font-weight: 700; margin: 0; }
+.hero-sub   { font-size: 16px; color: #8888aa; margin-top: 8px; font-weight: 300; }
+.hero-badge {
+    display: inline-block; background: rgba(0,255,136,0.1);
+    border: 1px solid rgba(0,255,136,0.3); color: #00ff88;
+    border-radius: 20px; padding: 4px 14px; font-size: 12px;
+    font-family: 'Space Mono', monospace; margin-top: 12px;
+}
+.error-card {
+    background: #0f0f1a; border-left: 3px solid #ff4466;
+    border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 12px;
+}
+.error-card.minor    { border-left-color: #ffaa00; }
+.error-card.major    { border-left-color: #ff4466; }
+.error-card.critical { border-left-color: #ff0044; }
+.error-type   { font-family: 'Space Mono', monospace; font-size: 11px; color: #8888aa; text-transform: uppercase; letter-spacing: 1px; }
+.error-before { color: #ff6680; font-size: 14px; margin: 6px 0 2px; }
+.error-after  { color: #00ff88; font-size: 14px; }
+.severity-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; }
+.sev-minor    { background: rgba(255,170,0,0.15);  color: #ffaa00; }
+.sev-major    { background: rgba(255,68,102,0.15); color: #ff4466; }
+.sev-critical { background: rgba(255,0,68,0.2);    color: #ff0044; }
+.empty-state  { text-align:center; padding:60px; color:#444; border: 1px dashed #2a2a4a; border-radius:12px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="title">✅ ErrorSweep Pro</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">AI-powered multilingual QA automation — English · Hindi · Telugu</div>', unsafe_allow_html=True)
+# ─── Hero ─────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="hero">
+    <div class="hero-title">🧹 ErrorSweep Pro</div>
+    <div class="hero-sub">Fully AI-powered linguistic QA — any language, any file, zero setup</div>
+    <div class="hero-badge">✦ No corrections file needed &nbsp;·&nbsp; Auto language detection &nbsp;·&nbsp; Powered by Claude AI</div>
+</div>
+""", unsafe_allow_html=True)
 
-# ─── Sidebar ─────────────────────────────────────────────────────────────────
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/checked--v1.png", width=60)
-    st.title("ErrorSweep Pro")
+    st.markdown("### 🧹 ErrorSweep Pro")
+    st.caption("v3.0 — Fully AI-Powered")
+    st.divider()
 
-    st.subheader("🌐 Language")
-    language = st.selectbox(
-        "Select document language",
-        ["English", "Hindi (हिंदी)", "Telugu (తెలుగు)"],
-        help="This tells the AI which language rules to apply during QA"
+    st.markdown("**📁 Supported Formats**")
+    for fmt in [".xlsx", ".csv", ".txt", ".json", ".xml", ".xliff", ".srt", ".docx"]:
+        st.markdown(f"`{fmt}`")
+
+    st.divider()
+    st.markdown("**⚙️ QA Settings**")
+
+    domain = st.selectbox(
+        "Content Domain",
+        ["Auto-detect", "Software UI / App Strings", "Subtitles / Captions",
+         "Legal / Compliance", "Medical / Healthcare", "Marketing / Ad Copy",
+         "E-learning / Education", "General"],
+        help="Helps Claude apply domain-specific quality rules"
     )
 
-    st.subheader("📁 Supported Formats")
-    for fmt in [".xlsx", ".csv", ".txt", ".json", ".xml", ".xliff", ".srt", ".docx"]:
-        st.markdown(f'<span class="badge">{fmt}</span>', unsafe_allow_html=True)
+    strictness = st.select_slider(
+        "QA Strictness",
+        options=["Lenient", "Standard", "Strict", "Very Strict"],
+        value="Standard"
+    )
 
-    st.subheader("📋 Corrections CSV Format")
-    st.code("wrong,correct,error_type,severity,status")
-    st.caption("Only 'wrong' and 'correct' columns are required.")
-
-    st.divider()
-    st.subheader("🤖 AI Settings")
-    use_ai = st.checkbox("Enable AI linguistic QA", value=True,
-                         help="Uses Claude AI to detect grammar, fluency and mistranslation issues")
-    max_ai_calls = st.number_input("Max AI checks per file", min_value=1, max_value=100, value=20)
-    ai_max_chars  = st.number_input("Max chars per AI check", min_value=50, max_value=2000, value=500)
+    max_segments = st.number_input(
+        "Max segments to check", min_value=5, max_value=200, value=50,
+        help="Limit AI checks to control API cost"
+    )
 
     st.divider()
-    st.caption("ErrorSweep Pro v2.0 · Powered by Claude AI")
+    st.caption("💡 Set domain correctly for best results.")
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 HIGHLIGHT_FILL = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
 HEADER_FILL    = PatternFill(start_color="D9EAF7", end_color="D9EAF7", fill_type="solid")
 HEADER_FONT    = Font(bold=True)
-REPORT_SHEETS  = ["Correction Report", "Remaining Errors"]
+REPORT_SHEETS  = ["ErrorSweep Report"]
 
-LANGUAGE_MAP = {
-    "English":          "English",
-    "Hindi (हिंदी)":    "Hindi",
-    "Telugu (తెలుగు)":  "Telugu",
-}
+# ─── Core AI QA ───────────────────────────────────────────────────────────────
+def ai_qa_segment(text, domain, strictness, client):
+    if not text or not text.strip() or len(text.strip()) < 3:
+        return []
 
-# ─── Helper: Load Corrections CSV ────────────────────────────────────────────
-def load_corrections(file):
-    corrections = pd.read_csv(file)
-    if "wrong" not in corrections.columns or "correct" not in corrections.columns:
-        st.error("❌ Corrections CSV must contain at least: wrong, correct")
-        return None
-    corrections["wrong"]   = corrections["wrong"].astype(str)
-    corrections["correct"] = corrections["correct"].astype(str)
-    return corrections
+    strictness_guide = {
+        "Lenient":     "Only flag clear, obvious errors. Ignore minor style preferences.",
+        "Standard":    "Flag clear errors and notable quality issues.",
+        "Strict":      "Flag all errors including minor style, tone, and consistency issues.",
+        "Very Strict": "Flag everything including subtle fluency, register, and micro-style issues."
+    }
 
-def get_value(row, key):
-    return str(row[key]) if key in row and pd.notna(row[key]) else ""
+    prompt = f"""You are an expert multilingual linguistic QA specialist.
 
-# ─── Helper: Normalize Unicode ───────────────────────────────────────────────
-def normalize_text(text):
-    text = str(text)
-    for ch in ["\u00A0", "\u200B", "\u200C", "\u200D"]:
-        text = text.replace(ch, " " if ch == "\u00A0" else "")
-    return text
+Analyze the following text segment for quality issues.
+Domain: {domain}
+Strictness: {strictness_guide[strictness]}
 
-# ─── Helper: Safe Replace ────────────────────────────────────────────────────
-def safe_replace(text, wrong, correct):
-    text  = normalize_text(text)
-    wrong = normalize_text(wrong)
-    pattern = re.compile(re.escape(wrong), re.IGNORECASE)
-    matches = pattern.findall(text)
-    if not matches:
-        return text, 0
-    return pattern.sub(correct, text), len(matches)
+Text to analyze:
+\"\"\"
+{text}
+\"\"\"
 
-# ─── AI: Claude Linguistic QA ────────────────────────────────────────────────
-def ai_suggest_fix(text, lang):
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return text
+Instructions:
+1. Auto-detect the language(s) present
+2. Check for: Mistranslation, Terminology, Grammar, Spelling, Punctuation, Formatting, Style/Tone, Mixed Language, Consistency
+3. For EACH error found, return a JSON object
+4. If NO errors found, return empty array []
 
-    if not text or len(text) > ai_max_chars:
-        return text
+Return ONLY a valid JSON array, no other text:
+[
+  {{
+    "language_detected": "Telugu",
+    "error_type": "Mistranslation",
+    "severity": "Major",
+    "original": "exact wrong text",
+    "suggestion": "corrected text",
+    "explanation": "brief reason"
+  }}
+]
+
+Severity: Minor, Major, or Critical only.
+If text is correct, return: []"""
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-
-        system_prompt = f"""You are a professional linguistic QA specialist for {lang} language content.
-Your job is to fix ONLY:
-- Spelling mistakes
-- Grammar errors
-- Punctuation issues
-- Spacing/formatting problems
-- Fluency issues (unnatural phrasing)
-- Mistranslation markers (if you spot text that is clearly in the wrong language)
-
-Rules:
-- Do NOT change the meaning of the text
-- Do NOT add or remove information
-- Do NOT translate the text to another language
-- Return ONLY the corrected text, nothing else
-- If the text is already correct, return it exactly as is
-- Preserve all original formatting, line breaks, and special characters"""
-
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Fix linguistic errors in this {lang} text:\n\n{text}"
-                }
-            ],
-            system=system_prompt
+            messages=[{"role": "user", "content": prompt}]
         )
-        return message.content[0].text.strip()
+        response_text = message.content[0].text.strip()
+        response_text = re.sub(r'^```json\s*', '', response_text)
+        response_text = re.sub(r'^```\s*',     '', response_text)
+        response_text = re.sub(r'\s*```$',     '', response_text)
+        errors = json.loads(response_text)
+        return errors if isinstance(errors, list) else []
     except Exception:
-        return text
+        return []
 
-def apply_ai(text, location, report_rows, ai_state, lang):
-    if not use_ai:
-        return text
-    if ai_state["calls"] >= max_ai_calls:
-        return text
-    if len(text) > ai_max_chars or not text.strip():
-        return text
 
-    ai_state["calls"] += 1
-    ai_text = ai_suggest_fix(text, lang)
-
-    if ai_text and ai_text != text:
-        report_rows.append({
-            "Sheet": "", "Location": location,
-            "Before": text, "After": ai_text,
-            "Wrong": "AI detected", "Correct": "AI suggestion",
-            "Error Type": f"AI Linguistic QA ({lang})",
-            "Severity": "Review", "Status": "Needs Review", "Fixed Count": 1
-        })
-        return ai_text
+def normalize_text(text):
+    text = str(text)
+    for ch in ["\u200B", "\u200C", "\u200D"]:
+        text = text.replace(ch, "")
     return text
 
-# ─── Helper: Style Excel Header ──────────────────────────────────────────────
+
 def style_header(sheet):
     for cell in sheet[1]:
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
 
-# ─── Core: Apply Corrections to Text ─────────────────────────────────────────
-def apply_corrections_to_text(text, corrections, location, sheet_name="", ai_state=None, lang="English"):
+
+def build_report_row(sheet, location, language, original, err):
+    return {
+        "Sheet":         sheet,
+        "Location":      location,
+        "Language":      language,
+        "Original Text": original[:200],
+        "Error Type":    err.get("error_type", ""),
+        "Severity":      err.get("severity", "Minor"),
+        "Wrong Segment": err.get("original", ""),
+        "Suggestion":    err.get("suggestion", ""),
+        "Explanation":   err.get("explanation", ""),
+    }
+
+
+# ─── Processors ───────────────────────────────────────────────────────────────
+def process_excel(uploaded_file, domain, strictness, client, progress_bar, status_text):
+    wb          = load_workbook(uploaded_file)
     report_rows = []
-    new_text    = normalize_text(text)
 
-    for _, row in corrections.iterrows():
-        wrong      = str(row["wrong"])
-        correct    = str(row["correct"])
-        error_type = get_value(row, "error_type")
-        severity   = get_value(row, "severity")
-        status     = get_value(row, "status")
+    all_cells = [
+        (ws, cell)
+        for ws in wb.worksheets
+        if ws.title not in REPORT_SHEETS
+        for row in ws.iter_rows()
+        for cell in row
+        if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 3
+    ]
 
-        before_value = new_text
-        fixed_value, count = safe_replace(new_text, wrong, correct)
+    total = min(len(all_cells), max_segments)
 
-        if count > 0:
-            new_text = fixed_value
-            report_rows.append({
-                "Sheet": sheet_name, "Location": location,
-                "Before": before_value, "After": new_text,
-                "Wrong": wrong, "Correct": correct,
-                "Error Type": error_type, "Severity": severity,
-                "Status": status, "Fixed Count": count
-            })
+    for idx, (ws, cell) in enumerate(all_cells[:max_segments]):
+        text = normalize_text(cell.value)
+        status_text.text(f"🔍 Checking segment {idx+1} of {total}...")
+        progress_bar.progress((idx + 1) / total)
 
-    if ai_state is not None:
-        new_text = apply_ai(new_text, location, report_rows, ai_state, lang)
+        errors = ai_qa_segment(text, domain, strictness, client)
 
-    return new_text, report_rows
-
-# ─── Processors ──────────────────────────────────────────────────────────────
-def process_excel(uploaded_file, corrections, lang):
-    wb         = load_workbook(uploaded_file)
-    report_rows = []
-    ai_state   = {"calls": 0}
-
-    for ws in wb.worksheets:
-        if ws.title in REPORT_SHEETS:
-            continue
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value is None:
-                    continue
-                original_value = str(cell.value)
-                fixed_value, reports = apply_corrections_to_text(
-                    original_value, corrections,
-                    location=cell.coordinate, sheet_name=ws.title,
-                    ai_state=ai_state, lang=lang
+        if errors:
+            cell.fill = HIGHLIGHT_FILL
+            notes = []
+            for err in errors:
+                lang = err.get("language_detected", "Unknown")
+                report_rows.append(build_report_row(ws.title, cell.coordinate, lang, text, err))
+                notes.append(
+                    f"[{err.get('severity','').upper()}] {err.get('error_type','')}\n"
+                    f"Issue: {err.get('original','')}\n"
+                    f"Fix:   {err.get('suggestion','')}\n"
+                    f"Why:   {err.get('explanation','')}"
                 )
-                if fixed_value != normalize_text(original_value):
-                    cell.value   = fixed_value
-                    cell.fill    = HIGHLIGHT_FILL
-                    notes = [
-                        f"Wrong: {r['Wrong']}\nCorrect: {r['Correct']}\n"
-                        f"Error Type: {r['Error Type']}\nSeverity: {r['Severity']}\n"
-                        f"Status: {r['Status']}\nFixed Count: {r['Fixed Count']}"
-                        for r in reports
-                    ]
-                    cell.comment = Comment("\n\n".join(notes), "ErrorSweep")
-                report_rows.extend(reports)
+            cell.comment = Comment("\n\n".join(notes), "ErrorSweep")
 
     for sn in REPORT_SHEETS:
         if sn in wb.sheetnames:
             del wb[sn]
 
-    # Correction Report sheet
-    rpt = wb.create_sheet("Correction Report")
-    headers = ["Sheet","Location","Before","After","Wrong","Correct","Error Type","Severity","Status","Fixed Count"]
+    rpt     = wb.create_sheet("ErrorSweep Report")
+    headers = ["Sheet","Location","Language","Original Text","Error Type","Severity","Wrong Segment","Suggestion","Explanation"]
     rpt.append(headers)
     for item in report_rows:
         rpt.append([item.get(h, "") for h in headers])
     style_header(rpt)
-
-    # Remaining Errors sheet
-    rem = wb.create_sheet("Remaining Errors")
-    rem.append(["Sheet","Location","Remaining Error","Error Type","Severity","Status"])
-    for ws in wb.worksheets:
-        if ws.title in REPORT_SHEETS:
-            continue
-        for row in ws.iter_rows():
-            for cell in row:
-                if cell.value is None:
-                    continue
-                cell_text = normalize_text(cell.value)
-                for _, r in corrections.iterrows():
-                    wrong   = str(r["wrong"])
-                    pattern = re.compile(re.escape(normalize_text(wrong)), re.IGNORECASE)
-                    if pattern.search(cell_text):
-                        rem.append([ws.title, cell.coordinate, wrong,
-                                    get_value(r,"error_type"), get_value(r,"severity"), "Remaining"])
-    style_header(rem)
 
     output = io.BytesIO()
     wb.save(output)
@@ -268,194 +240,182 @@ def process_excel(uploaded_file, corrections, lang):
     return output, report_rows, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def process_csv(uploaded_file, corrections, lang):
+def process_csv(uploaded_file, domain, strictness, client, progress_bar, status_text):
     df          = pd.read_csv(uploaded_file)
     report_rows = []
-    ai_state    = {"calls": 0}
 
-    for col in df.columns:
-        for index, value in df[col].items():
-            if pd.isna(value):
-                continue
-            fixed_value, reports = apply_corrections_to_text(
-                value, corrections,
-                location=f"Row {index+2}, Column {col}",
-                ai_state=ai_state, lang=lang
-            )
-            df.at[index, col] = fixed_value
-            report_rows.extend(reports)
+    segments = [
+        (col, index, str(value))
+        for col in df.columns
+        for index, value in df[col].items()
+        if pd.notna(value) and isinstance(value, str) and len(str(value).strip()) > 3
+    ]
+    total = min(len(segments), max_segments)
+
+    for idx, (col, index, text) in enumerate(segments[:max_segments]):
+        status_text.text(f"🔍 Checking segment {idx+1} of {total}...")
+        progress_bar.progress((idx + 1) / total)
+        errors = ai_qa_segment(normalize_text(text), domain, strictness, client)
+        for err in errors:
+            lang = err.get("language_detected", "Unknown")
+            report_rows.append(build_report_row("CSV", f"Row {index+2}, Col: {col}", lang, text, err))
 
     output = io.BytesIO()
-    output.write(df.to_csv(index=False).encode("utf-8"))
+    output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
     output.seek(0)
     return output, report_rows, "text/csv"
 
 
-def process_plain_text(uploaded_file, corrections, mime_type, lang):
-    text      = uploaded_file.read().decode("utf-8", errors="ignore")
-    ai_state  = {"calls": 0}
-    fixed_text, report_rows = apply_corrections_to_text(
-        text, corrections, location="File", ai_state=ai_state, lang=lang
-    )
+def process_text_based(uploaded_file, domain, strictness, client, progress_bar, status_text):
+    text        = uploaded_file.read().decode("utf-8", errors="ignore")
+    lines       = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 3]
+    report_rows = []
+    total       = min(len(lines), max_segments)
+
+    for idx, line in enumerate(lines[:max_segments]):
+        status_text.text(f"🔍 Checking line {idx+1} of {total}...")
+        progress_bar.progress((idx + 1) / total)
+        errors = ai_qa_segment(normalize_text(line), domain, strictness, client)
+        for err in errors:
+            lang = err.get("language_detected", "Unknown")
+            report_rows.append(build_report_row("File", f"Line {idx+1}", lang, line, err))
+
     output = io.BytesIO()
-    output.write(fixed_text.encode("utf-8"))
+    output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
     output.seek(0)
-    return output, report_rows, mime_type
+    return output, report_rows, "text/csv"
 
 
-def process_json(uploaded_file, corrections, lang):
-    text     = uploaded_file.read().decode("utf-8", errors="ignore")
-    ai_state = {"calls": 0}
-    fixed_text, report_rows = apply_corrections_to_text(
-        text, corrections, location="JSON File", ai_state=ai_state, lang=lang
-    )
-    try:
-        parsed     = json.loads(fixed_text)
-        fixed_text = json.dumps(parsed, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
-    output = io.BytesIO()
-    output.write(fixed_text.encode("utf-8"))
-    output.seek(0)
-    return output, report_rows, "application/json"
-
-
-def process_docx(uploaded_file, corrections, lang):
+def process_docx(uploaded_file, domain, strictness, client, progress_bar, status_text):
     doc         = Document(uploaded_file)
     report_rows = []
-    ai_state    = {"calls": 0}
+    paragraphs  = [p.text.strip() for p in doc.paragraphs if p.text.strip() and len(p.text.strip()) > 3]
+    total       = min(len(paragraphs), max_segments)
 
-    def fix_paragraph(paragraph, location):
-        original = paragraph.text
-        if not original.strip():
-            return
-        fixed, reports = apply_corrections_to_text(
-            original, corrections, location=location,
-            ai_state=ai_state, lang=lang
-        )
-        if fixed != normalize_text(original):
-            paragraph.clear()
-            paragraph.add_run(fixed)
-        report_rows.extend(reports)
-
-    for i, p in enumerate(doc.paragraphs, start=1):
-        fix_paragraph(p, f"Paragraph {i}")
-
-    for t_idx, table in enumerate(doc.tables, start=1):
-        for r_idx, row in enumerate(table.rows, start=1):
-            for c_idx, cell in enumerate(row.cells, start=1):
-                for p in cell.paragraphs:
-                    fix_paragraph(p, f"Table {t_idx}, Row {r_idx}, Cell {c_idx}")
+    for idx, text in enumerate(paragraphs[:max_segments]):
+        status_text.text(f"🔍 Checking paragraph {idx+1} of {total}...")
+        progress_bar.progress((idx + 1) / total)
+        errors = ai_qa_segment(normalize_text(text), domain, strictness, client)
+        for err in errors:
+            lang = err.get("language_detected", "Unknown")
+            report_rows.append(build_report_row("Document", f"Paragraph {idx+1}", lang, text, err))
 
     output = io.BytesIO()
-    doc.save(output)
+    output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
     output.seek(0)
-    return output, report_rows, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return output, report_rows, "text/csv"
+
 
 # ─── Main UI ──────────────────────────────────────────────────────────────────
-st.divider()
+col_upload, col_info = st.columns([3, 1])
 
-left, right = st.columns([2, 1])
-
-with left:
-    st.subheader("📤 Upload Files")
-    uploaded_file   = st.file_uploader(
-        "Upload your document",
-        type=["xlsx","csv","txt","json","xml","xliff","srt","docx"],
-        help="The file you want to run QA on"
-    )
-    correction_file = st.file_uploader(
-        "Upload corrections CSV",
-        type=["csv"],
-        help="CSV with wrong/correct pairs"
+with col_upload:
+    st.markdown("#### 📤 Upload Your File")
+    uploaded_file = st.file_uploader(
+        "Drop any file — AI detects language and errors automatically",
+        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "srt", "docx"],
+        label_visibility="collapsed"
     )
 
-with right:
-    st.subheader("📦 Output Includes")
-    features = [
-        "✅ Corrected file download",
-        "✅ Before vs After preview",
-        "✅ Full correction report",
-        "✅ Excel cell highlighting",
-        "✅ AI linguistic QA",
-        "✅ Hindi & Telugu support",
-        "✅ Remaining errors sheet",
-    ]
-    for f in features:
-        st.write(f)
+with col_info:
+    st.markdown("#### What AI checks")
+    for item in ["✦ Auto language detection", "✦ Mistranslation", "✦ Grammar & spelling",
+                 "✦ Terminology", "✦ Mixed language", "✦ Style & tone", "✦ Formatting"]:
+        st.markdown(f"<small>{item}</small>", unsafe_allow_html=True)
 
 st.divider()
 
-# AI Key warning
-if use_ai and not os.environ.get("ANTHROPIC_API_KEY"):
-    st.warning("⚠️ AI QA is enabled but ANTHROPIC_API_KEY is not set. "
-               "Add it in Streamlit Cloud → Settings → Secrets as: ANTHROPIC_API_KEY = 'your-key'")
+api_key = os.environ.get("ANTHROPIC_API_KEY")
+if not api_key:
+    st.error("⚠️ ANTHROPIC_API_KEY not set. Add it in Streamlit Cloud → Settings → Secrets.")
+    st.stop()
 
-run_button = st.button("🚀 Run QA Check", use_container_width=True, type="primary")
+run_button = st.button(
+    "🚀 Run AI QA Check", use_container_width=True,
+    type="primary", disabled=not uploaded_file
+)
 
-if uploaded_file and correction_file and run_button:
-    lang        = LANGUAGE_MAP.get(language, "English")
-    start_time  = time.time()
-    corrections = load_corrections(correction_file)
+if uploaded_file and run_button:
+    client     = anthropic.Anthropic(api_key=api_key)
+    start_time = time.time()
+    st.markdown("---")
+    status_text  = st.empty()
+    progress_bar = st.progress(0)
 
-    if corrections is not None:
-        with st.spinner(f"Running QA on your {lang} document..."):
-            lower_name = uploaded_file.name.lower()
+    lower_name = uploaded_file.name.lower()
 
-            if lower_name.endswith(".xlsx"):
-                output, report_rows, mime_type = process_excel(uploaded_file, corrections, lang)
-            elif lower_name.endswith(".csv"):
-                output, report_rows, mime_type = process_csv(uploaded_file, corrections, lang)
-            elif lower_name.endswith(".txt"):
-                output, report_rows, mime_type = process_plain_text(uploaded_file, corrections, "text/plain", lang)
-            elif lower_name.endswith((".xml", ".xliff")):
-                output, report_rows, mime_type = process_plain_text(uploaded_file, corrections, "application/xml", lang)
-            elif lower_name.endswith(".srt"):
-                output, report_rows, mime_type = process_plain_text(uploaded_file, corrections, "text/plain", lang)
-            elif lower_name.endswith(".json"):
-                output, report_rows, mime_type = process_json(uploaded_file, corrections, lang)
-            elif lower_name.endswith(".docx"):
-                output, report_rows, mime_type = process_docx(uploaded_file, corrections, lang)
-            else:
-                st.error("❌ Unsupported file format.")
-                st.stop()
+    try:
+        if lower_name.endswith(".xlsx"):
+            output, report_rows, mime_type = process_excel(uploaded_file, domain, strictness, client, progress_bar, status_text)
+        elif lower_name.endswith(".csv"):
+            output, report_rows, mime_type = process_csv(uploaded_file, domain, strictness, client, progress_bar, status_text)
+        elif lower_name.endswith(".docx"):
+            output, report_rows, mime_type = process_docx(uploaded_file, domain, strictness, client, progress_bar, status_text)
+        else:
+            output, report_rows, mime_type = process_text_based(uploaded_file, domain, strictness, client, progress_bar, status_text)
 
+        progress_bar.progress(1.0)
+        status_text.text("✅ QA complete!")
         processing_time = round(time.time() - start_time, 2)
-        st.success(f"✅ File processed successfully in {processing_time}s")
 
         if report_rows:
-            report_df = pd.DataFrame(report_rows)
+            df = pd.DataFrame(report_rows)
+            critical_count  = len(df[df["Severity"] == "Critical"])
+            major_count     = len(df[df["Severity"] == "Major"])
+            minor_count     = len(df[df["Severity"] == "Minor"])
+            languages_found = ", ".join(df["Language"].unique())
 
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Fixes",     int(report_df["Fixed Count"].sum()))
-            col2.metric("Changed Items",   len(report_df))
-            col3.metric("Language",        lang)
-            col4.metric("Time (sec)",      processing_time)
+            st.markdown("### 📊 QA Summary")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Errors",  len(df))
+            c2.metric("🔴 Critical",   critical_count)
+            c3.metric("🟠 Major",      major_count)
+            c4.metric("🟡 Minor",      minor_count)
+            c5.metric("⏱ Secs",        processing_time)
 
-            ai_fixes   = report_df[report_df["Wrong"] == "AI detected"]
-            rule_fixes = report_df[report_df["Wrong"] != "AI detected"]
+            st.info(f"🌐 **Languages detected:** {languages_found}")
 
-            if not rule_fixes.empty:
-                st.subheader("📋 Rule-Based Corrections")
-                st.dataframe(rule_fixes.head(50), use_container_width=True)
+            st.markdown("### 🔍 Errors by Type")
+            type_counts = df["Error Type"].value_counts().reset_index()
+            type_counts.columns = ["Error Type", "Count"]
+            st.dataframe(type_counts, use_container_width=True, hide_index=True)
 
-            if not ai_fixes.empty:
-                st.subheader("🤖 AI Linguistic QA Suggestions")
-                st.caption("These require human review before accepting")
-                st.dataframe(ai_fixes.head(50), use_container_width=True)
+            st.markdown("### 📋 Detailed Findings")
+            for _, row in df.iterrows():
+                sev   = row["Severity"].lower() if row["Severity"].lower() in ["minor","major","critical"] else "minor"
+                badge = f'<span class="severity-badge sev-{sev}">{row["Severity"]}</span>'
+                st.markdown(f"""
+                <div class="error-card {sev}">
+                    <div class="error-type">{row['Error Type']} · {row['Location']} · {row['Language']} {badge}</div>
+                    <div class="error-before">✗ {row['Wrong Segment'] or row['Original Text'][:80]}</div>
+                    <div class="error-after">✓ {row['Suggestion']}</div>
+                    <small style="color:#888">{row['Explanation']}</small>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.download_button(
+                label="⬇️ Download Full QA Report",
+                data=output.getvalue(),
+                file_name="errorsweep_report_" + uploaded_file.name,
+                mime=mime_type,
+                use_container_width=True,
+                type="primary"
+            )
+
         else:
-            st.info("ℹ️ No matching errors found.")
+            progress_bar.empty()
+            status_text.empty()
+            st.success("✅ No errors found! Your file looks clean.")
 
-        st.download_button(
-            label="⬇️ Download Fixed File",
-            data=output.getvalue(),
-            file_name="fixed_" + uploaded_file.name,
-            mime=mime_type,
-            use_container_width=True,
-            type="primary"
-        )
+    except Exception as e:
+        st.error(f"❌ Error during processing: {str(e)}")
 
-elif uploaded_file and correction_file:
-    st.info("📁 Files uploaded. Click **Run QA Check** to process.")
-else:
-    st.info("👆 Upload your document and corrections CSV to get started.")
+elif not uploaded_file:
+    st.markdown("""
+    <div class="empty-state">
+        <div style="font-size:48px">📂</div>
+        <div style="font-family:'Space Mono',monospace; margin-top:12px; color:#666">Upload a file to begin AI QA</div>
+        <div style="font-size:13px; margin-top:8px; color:#444">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
+    </div>
+    """, unsafe_allow_html=True)
