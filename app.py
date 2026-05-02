@@ -1,111 +1,108 @@
 import streamlit as st
 import pandas as pd
 import io
-import time
 import json
 import os
-import re
 from openai import OpenAI
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
 from openpyxl.comments import Comment
-from docx import Document
 
-# ─── Page Config & CSS ───────────────────────────────────────────────────────
-st.set_page_config(page_title="ErrorSweep Pro", layout="wide", page_icon="🧹")
+# ─── Page Setup ──────────────────────────────────────────────────────────────
+st.set_page_config(page_title="ErrorSweep Pro | Strong Mode", layout="wide")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.hero {
-    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 50%, #16213e 100%);
-    border: 1px solid #2a2a4a; border-radius: 16px;
-    padding: 40px; margin-bottom: 24px; text-align: center;
-}
-.hero-title { font-family: 'Space Mono', monospace; font-size: 48px; color: #00ff88; font-weight: 700; margin: 0; }
-.hero-sub   { font-size: 16px; color: #8888aa; margin-top: 8px; font-weight: 300; }
-.error-card { background: #0f0f1a; border-left: 3px solid #ff4466; border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 12px; }
-.error-type { font-family: 'Space Mono', monospace; font-size: 11px; color: #8888aa; text-transform: uppercase; }
-.error-before { color: #ff6680; font-size: 14px; }
-.error-after  { color: #00ff88; font-size: 14px; }
-.severity-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-family: 'Space Mono', monospace; }
-.sev-minor { background: rgba(255,170,0,0.15); color: #ffaa00; }
-.sev-major { background: rgba(255,68,102,0.15); color: #ff4466; }
-.sev-critical { background: rgba(255,0,68,0.2); color: #ff0044; }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="hero"><div class="hero-title">🧹 ErrorSweep Pro</div><div class="hero-sub">AI-powered Linguistic QA (GPT-5.5 Pro)</div></div>', unsafe_allow_html=True)
-
-# ─── Sidebar Settings ────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### ⚙️ QA Settings")
-    domain = st.selectbox("Content Domain", ["General", "Software UI", "Subtitles", "Linguistic Query Resolutions"])
-    strictness = st.select_slider("QA Strictness", options=["Lenient", "Standard", "Strict", "Very Strict"], value="Standard")
-    max_segments = st.number_input("Max segments", min_value=1, max_value=200, value=50)
-
-# ─── Core Logic ──────────────────────────────────────────────────────────────
+# ─── Core AI Logic ───────────────────────────────────────────────────────────
 def ai_qa_segment(text, domain, strictness, client):
-    if not text or not text.strip(): return []
+    if not text or len(str(text).strip()) < 1:
+        return []
+
+    # Stronger prompt focusing on Linguistic nuances
+    prompt = f"""Act as a Senior Linguistic Auditor. 
+    Analyze this text from the '{domain}' domain with {strictness} strictness.
     
-    prompt = f"Perform linguistic QA on this {domain} text: '{text}'. Strictness: {strictness}. Return ONLY a JSON object with an 'errors' list."
-    
+    TEXT TO AUDIT: "{text}"
+
+    CRITICAL CHECKLIST:
+    1. Mistranslation: Does it accurately convey the source meaning?
+    2. Unicode: Check for normalization errors (NFC/NFD) in Indic scripts.
+    3. Grammar/Spelling: Flag any typos or syntax issues.
+    4. Terminology: Is it consistent with professional industry standards?
+
+    Respond ONLY in JSON format:
+    {{
+      "errors": [
+        {{
+          "error_type": "Specific Type",
+          "severity": "Minor/Major/Critical",
+          "original": "the exact mistake",
+          "suggestion": "your correction",
+          "explanation": "why this is a bug"
+        }}
+      ]
+    }}
+    If NO errors exist, return {{"errors": []}}"""
+
     try:
         response = client.chat.completions.create(
-            model="gpt-5.5-pro", #
-            messages=[{"role": "system", "content": "You are a QA specialist. Output JSON."}, {"role": "user", "content": prompt}],
-            response_format={"type": "json_object"} #
+            model="gpt-5.5-pro", # Using high-reasoning model
+            messages=[{"role": "system", "content": "You are a specialized LQA tool. Output valid JSON."},
+                      {"role": "user", "content": prompt}],
+            response_format={"type": "json_object"} # Force valid JSON
         )
         return json.loads(response.choices[0].message.content).get("errors", [])
     except Exception as e:
-        st.error(f"AI Error: {e}")
+        st.sidebar.error(f"API Debug: {e}")
         return []
 
-# ─── Main UI & File Upload ───────────────────────────────────────────────────
-uploaded_file = st.file_uploader("Upload File", type=["xlsx", "csv", "docx", "txt"])
+# ─── Main Application ────────────────────────────────────────────────────────
+st.title("🧹 ErrorSweep Pro: Strong Mode")
 
-# 🔑 PASTE YOUR KEY HERE
+# API Key - Paste your sk-... key here or set it in Streamlit Secrets
 api_key = os.environ.get("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY_HERE"
 
-if uploaded_file:
-    run_button = st.button("🚀 Run AI QA Check", type="primary", use_container_width=True)
+with st.sidebar:
+    st.header("Settings")
+    domain = st.selectbox("Domain", ["Software UI", "Subtitles", "Linguistic Query", "General"])
+    strictness = st.select_slider("Strictness", ["Lenient", "Standard", "Strict", "Audit Mode"], value="Strict")
+    max_rows = st.number_input("Scan Limit (Rows)", 1, 500, 50)
 
-    if run_button:
-        if not api_key or "YOUR_OPENAI_API_KEY_HERE" in api_key:
-            st.error("Please add your OpenAI API Key!")
-            st.stop()
+uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-        client = OpenAI(api_key=api_key)
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        report_rows = []
+if uploaded_file and st.button("🚀 Start Deep Scan"):
+    if not api_key or "YOUR" in api_key:
+        st.error("Please provide a valid OpenAI API Key.")
+        st.stop()
 
-        # Simple Text/CSV Processor logic for brevity
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-            total = min(len(df), max_segments)
-            for i, row in df.head(total).iterrows():
-                status_text.text(f"Checking row {i+1}...")
-                progress_bar.progress((i+1)/total)
-                text = str(row.iloc[0])
-                errors = ai_qa_segment(text, domain, strictness, client)
-                for e in errors:
-                    e['Location'] = f"Row {i+1}"; e['Original Text'] = text
-                    report_rows.append(e)
-        
-        # Display Results
-        if report_rows:
-            st.success(f"Found {len(report_rows)} errors!")
-            for row in report_rows:
-                sev = row.get('severity', 'Minor').lower()
-                st.markdown(f"""
-                <div class="error-card">
-                    <div class="error-type">{row.get('error_type')} <span class="severity-badge sev-{sev}">{sev}</span></div>
-                    <div class="error-before">✗ {row.get('original')}</div>
-                    <div class="error-after">✓ {row.get('suggestion')}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.balloons()
-            st.success("No errors found!")
+    client = OpenAI(api_key=api_key)
+    
+    # Load Data
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+
+    st.info(f"Scanning first {min(len(df), max_rows)} rows across all columns...")
+    
+    results = []
+    progress = st.progress(0)
+    
+    # SCANNING LOGIC: Checks every cell in the row
+    for i, row in df.head(max_rows).iterrows():
+        for col_name, cell_value in row.items():
+            if pd.notna(cell_value) and len(str(cell_value)) > 1:
+                errors = ai_qa_segment(str(cell_value), domain, strictness, client)
+                for err in errors:
+                    err['Location'] = f"Row {i+1}, Col: {col_name}"
+                    results.append(err)
+        progress.progress((i + 1) / min(len(df), max_rows))
+
+    # Display Findings
+    if results:
+        st.subheader(f"🚩 Found {len(results)} Issues")
+        for error in results:
+            with st.expander(f"{error['error_type']} at {error['Location']}"):
+                st.write(f"**Issue:** `{error['original']}`")
+                st.success(f"**Correction:** {error['suggestion']}")
+                st.info(f"**Reason:** {error['explanation']}")
+    else:
+        st.success("Deep Scan complete. No linguistic bugs detected.")
