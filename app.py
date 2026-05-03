@@ -157,7 +157,7 @@ st.markdown("""
 <div class="hero">
     <div class="hero-title">ErrorSweep Pro</div>
     <div class="hero-sub">Fast AI linguistic QA for source-vs-translation review</div>
-    <div class="hero-badge">Fast mode · Global segment limit · Batched AI calls · No endless loading</div>
+    <div class="hero-badge">Fast mode · Rule checks · ZWNJ detection · Batched AI calls</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -298,14 +298,23 @@ with st.sidebar:
     st.divider()
     st.markdown("**Detection options**")
     run_rule_checks = st.checkbox(
-        "Run deterministic punctuation/spacing checks",
+        "Run deterministic punctuation/spacing/ZWNJ checks",
         value=True,
-        help="Fast rule-based checks for double spaces, missing ending punctuation, brackets, bullets, numbers, and placeholders."
+        help="Fast rule-based checks for double spaces, missing punctuation, brackets, bullets, numbers, placeholders, and Telugu ZWNJ issues."
     )
     run_ai_checks = st.checkbox(
         "Run AI semantic/language QA",
         value=True,
         help="AI checks meaning, grammar, script, terminology, and fluency. Turn OFF to test formatting rules only."
+    )
+
+    include_ai_style_terminology = st.checkbox(
+        "Include AI terminology/style suggestions",
+        value=False,
+        help=(
+            "OFF by default because terminology/style suggestions can be subjective. "
+            "Keep OFF for reliable reports; turn ON only for reviewer-style analysis."
+        )
     )
 
     st.divider()
@@ -317,9 +326,14 @@ with st.sidebar:
 # Utility functions
 # ==============================
 def normalize_text(text):
+    """
+    Normalize visible spacing but preserve ZWNJ (U+200C).
+    Earlier versions removed ZWNJ, which made ZWNJ QA impossible.
+    """
     text = str(text)
     text = text.replace("\u00A0", " ")
-    for ch in ["\u200B", "\u200C", "\u200D"]:
+    # Remove zero-width space and zero-width joiner for matching, but keep ZWNJ.
+    for ch in ["\u200B", "\u200D"]:
         text = text.replace(ch, "")
     return text.strip()
 
@@ -726,10 +740,11 @@ def collect_docx_segments(uploaded_file):
 # Fast deterministic QA checks
 # ==============================
 def rule_clean(text):
-    """Keep text readable for rule checks while preserving internal spaces."""
+    """Keep text readable for rule checks while preserving internal spaces and ZWNJ."""
     text = str(text or "")
     text = text.replace("\u00A0", " ")
-    for ch in ["\u200B", "\u200C", "\u200D"]:
+    # Preserve ZWNJ (U+200C). It is meaningful in Telugu/Indic QA.
+    for ch in ["\u200B", "\u200D"]:
         text = text.replace(ch, "")
     return text
 
@@ -751,6 +766,61 @@ BULLET_CHARS = {"•", "∙", "●", "○", "-", "–", "—", "*"}
 PLACEHOLDER_PATTERN = re.compile(
     r"(\{\{[^}]+\}\}|\{\d+\}|%[sdif]|\$[A-Za-z_][A-Za-z0-9_]*|<[^>]+>|\[[A-Za-z0-9_]+\])"
 )
+
+ZWNJ = "\u200C"
+ZWSP = "\u200B"
+ZWJ = "\u200D"
+
+TELUGU_ZWNJ_SUFFIXES = "లు|లను|ను|ని|తో|కు|కి|లో|గా|పై|వద్ద"
+TELUGU_ZWNJ_PATTERNS = [
+    (r"డాక్యుమెంట్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "డాక్యుమెంట్" + ZWNJ, "డాక్యుమెంట్ + suffix"),
+    (r"టెంప్లేట్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "టెంప్లేట్" + ZWNJ, "టెంప్లేట్ + suffix"),
+    (r"సెట్టింగ్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "సెట్టింగ్" + ZWNJ, "సెట్టింగ్ + suffix"),
+    (r"ట్రాకింగ్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "ట్రాకింగ్" + ZWNJ, "ట్రాకింగ్ + suffix"),
+    (r"కనెక్షన్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "కనెక్షన్" + ZWNJ, "కనెక్షన్ + suffix"),
+    (r"వెర్షన్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "వెర్షన్" + ZWNJ, "వెర్షన్ + suffix"),
+    (r"స్క్రీన్(?!" + ZWNJ + r")(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "స్క్రీన్" + ZWNJ, "స్క్రీన్ + suffix"),
+    (r"ఫిట్(?!" + ZWNJ + r")(?=నెస్)", "ఫిట్" + ZWNJ, "ఫిట్ + నెస్"),
+    (r"ఆన్(?!" + ZWNJ + r")(?=బోర్డింగ్)", "ఆన్" + ZWNJ, "ఆన్ + బోర్డింగ్"),
+    (r"అప్(?!" + ZWNJ + r")(?=లోడ్)", "అప్" + ZWNJ, "అప్ + లోడ్"),
+    (r"డాష్(?!" + ZWNJ + r")(?=బోర్డ్)", "డాష్" + ZWNJ, "డాష్ + బోర్డ్"),
+    (r"పాస్(?!" + ZWNJ + r")(?=వర్డ్)", "పాస్" + ZWNJ, "పాస్ + వర్డ్"),
+    # Common spacing/misspelling variants.
+    (r"డాక్యుమెంట్\s+(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "డాక్యుమెంట్" + ZWNJ, "డాక్యుమెంట్ + suffix"),
+    (r"టెంప్లేట్\s+(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "టెంప్లేట్" + ZWNJ, "టెంప్లేట్ + suffix"),
+    (r"సెట్టింగ్\s+(?=" + TELUGU_ZWNJ_SUFFIXES + r")", "సెట్టింగ్" + ZWNJ, "సెట్టింగ్ + suffix"),
+    (r"పాస్\s+వర్డ్", "పాస్" + ZWNJ + "వర్డ్", "పాస్ + వర్డ్"),
+    (r"పాస్వర్డ్", "పాస్" + ZWNJ + "వర్డ్", "పాస్వర్డ్ -> పాస్⟨ZWNJ⟩వర్డ్"),
+]
+
+
+def show_invisible_chars(text):
+    """Make invisible Unicode characters visible inside the report."""
+    return (
+        str(text)
+        .replace(ZWNJ, "⟨ZWNJ⟩")
+        .replace(ZWSP, "⟨ZWSP⟩")
+        .replace(ZWJ, "⟨ZWJ⟩")
+        .replace("\u00A0", "⟨NBSP⟩")
+    )
+
+
+def suggest_telugu_zwnj(text):
+    """
+    Suggests missing Telugu ZWNJ fixes for common UI/localization loanwords.
+    Returns (fixed_text, labels).
+    The report shows ⟨ZWNJ⟩ so reviewers can see the invisible character.
+    """
+    fixed = str(text or "")
+    labels = []
+
+    for pattern, replacement, label in TELUGU_ZWNJ_PATTERNS:
+        new_fixed, count = re.subn(pattern, replacement, fixed)
+        if count:
+            fixed = new_fixed
+            labels.append(label)
+
+    return fixed, labels
 
 
 def get_terminal_punctuation(text):
@@ -815,6 +885,41 @@ def run_deterministic_checks(seg):
 
     if not target.strip():
         return rows
+
+    # 0. Invisible Unicode / ZWNJ checks.
+    if ZWSP in target or ZWJ in target:
+        cleaned_target = target.replace(ZWSP, "").replace(ZWJ, "")
+        rows.append(make_rule_report(
+            seg,
+            "Unicode / Invisible Character",
+            "Major",
+            show_invisible_chars(target),
+            show_invisible_chars(cleaned_target),
+            "Target contains invisible Unicode characters such as ZWSP/ZWJ. Remove them unless specifically required."
+        ))
+
+    zwnj_fixed_target, zwnj_labels = suggest_telugu_zwnj(target)
+    if zwnj_labels and zwnj_fixed_target != target:
+        rows.append(make_rule_report(
+            seg,
+            "ZWNJ / Unicode",
+            "Major",
+            "Possible missing Zero Width Non-Joiner (U+200C): " + ", ".join(zwnj_labels),
+            show_invisible_chars(zwnj_fixed_target),
+            "Telugu UI/loanword suffixes often need ZWNJ. The report uses ⟨ZWNJ⟩ to make the invisible character visible."
+        ))
+
+    if ZWNJ in target:
+        # Helpful note only when there are suspicious adjacent spaces around ZWNJ.
+        if re.search(r"\s" + ZWNJ + r"|" + ZWNJ + r"\s", target):
+            rows.append(make_rule_report(
+                seg,
+                "ZWNJ / Unicode",
+                "Minor",
+                "Space adjacent to ZWNJ",
+                show_invisible_chars(re.sub(r"\s*" + ZWNJ + r"\s*", ZWNJ, target)),
+                "ZWNJ should usually sit directly between the stem and suffix, without surrounding spaces."
+            ))
 
     # 1. Multiple spaces inside target text.
     multi_space_matches = list(re.finditer(r" {2,}", target))
@@ -984,6 +1089,48 @@ def make_batch_prompt(batch):
     return "\n\n".join(lines)
 
 
+def should_keep_ai_error(err, segment):
+    """
+    Filter out low-confidence AI suggestions that can hurt trust.
+    Rule-based checks still catch mechanical issues like punctuation, spaces, placeholders, and ZWNJ.
+    """
+    error_type = str(err.get("error_type", "")).strip()
+    wrong_part = str(err.get("wrong_part", "")).strip()
+    suggestion = str(err.get("suggestion", "")).strip()
+
+    if not suggestion:
+        return False
+
+    # Soft/subjective categories are optional because they can produce bad suggestions.
+    soft_types = {"Terminology", "Style & Tone", "Readability"}
+    if error_type in soft_types and not include_ai_style_terminology:
+        return False
+
+    # For local issues, the wrong fragment should appear in the translation/text.
+    translation = ""
+    if segment:
+        translation = str(segment.get("translation", segment.get("text", "")))
+
+    if error_type not in {"Accuracy"} and wrong_part and translation and wrong_part not in translation:
+        return False
+
+    # Basic guardrails against obviously broken suggestions.
+    suspicious_fragments = [
+        "డానికించటానికి",
+        "కించటానికి",
+        "డానికించ",
+        "చడానికించ"
+    ]
+    if any(fragment in suggestion for fragment in suspicious_fragments):
+        return False
+
+    # Do not allow very long rewrite suggestions for soft categories.
+    if error_type in soft_types and len(suggestion) > max(80, len(translation) + 40):
+        return False
+
+    return True
+
+
 def run_ai_batch(batch):
     if not batch:
         return []
@@ -1013,7 +1160,9 @@ Check only real issues:
 5. Terminology problems for the domain.
 6. Formatting or placeholder problems like {{variable}}, %s, {{0}}, <tag>, URLs, numbers.
 7. Unnatural style or tone.
-8. Do not ignore missing final punctuation, removed quotes, removed brackets, removed bullets, extra internal spaces, or missing numbers/placeholders.
+8. Do not ignore missing final punctuation, removed quotes, removed brackets, removed bullets, extra internal spaces, missing numbers/placeholders, or Unicode/ZWNJ issues.
+9. For Telugu/Indic localization, check Zero Width Non-Joiner U+200C placement. Use the visible marker ⟨ZWNJ⟩ in suggestions when needed.
+10. Avoid subjective terminology/style rewrites unless clearly wrong. Suggestions must be grammatical and minimal. Do not invent awkward compound forms.
 
 Return ONLY a valid JSON array. No markdown. No explanation outside JSON.
 
@@ -1106,6 +1255,9 @@ def run_qa_on_segments(segments, status_text, progress_bar):
                     sheet = ""
                     source = err.get("source", "")
                     translation = err.get("translation", "")
+
+                if not should_keep_ai_error(err, original_segment):
+                    continue
 
                 report_rows.append(
                     build_report_row(
@@ -1202,7 +1354,7 @@ with col_info:
     st.markdown("#### Fast QA mode")
     st.markdown("<small>Default mode checks source/translation pairs only.</small>", unsafe_allow_html=True)
     st.markdown("<small>Use Deep Scan only for files without source/target columns.</small>", unsafe_allow_html=True)
-    st.markdown("<small>Recommended demo: 20 segments, gpt-5-nano.</small>", unsafe_allow_html=True)
+    st.markdown("<small>Recommended demo: 20 segments, gpt-4o-mini.</small>", unsafe_allow_html=True)
 
 st.divider()
 
