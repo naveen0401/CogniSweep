@@ -140,7 +140,18 @@ TARGET_KEYWORDS_STRONG = [
 ]
 
 SKIP_SHEET_KEYWORDS = [
-    "instruction", "calculation", "error_count", "error counts", "pull-out", "pull_out", "summary", "dashboard"
+    "instruction",
+    "lqa instruction",
+    "calculation",
+    "error_count",
+    "error counts",
+    "pull-out",
+    "pull_out",
+    "summary",
+    "dashboard",
+    "quality evaluation",
+    "quality eval",
+    "score card",
 ]
 
 # Common Telugu UI/loanword ZWNJ patterns. This is intentionally conservative.
@@ -510,22 +521,46 @@ def retrieve_relevant_rules(segment: Dict[str, Any], rules: Dict[str, Any], max_
 # ==========================================================
 
 def detect_source_target_columns(headers: List[str], source_hint: str = "", target_hint: str = "") -> Tuple[Optional[int], Optional[int]]:
-    headers_lower = [str(h).lower().strip() for h in headers]
+    """
+    Detect real content columns, not metadata rows.
+    Excel review forms often have rows like Source language* / Target language* before the actual table.
+    Those rows must not be treated as Source/Translation headers.
+    """
+    headers_clean = [normalize_text(h).lower() for h in headers]
+
+    metadata_terms = [
+        "source language", "target language", "client", "project id", "date",
+        "number of checked words", "checked words", "review date"
+    ]
+
+    strong_source_terms = [
+        "source text", "source segment", "source string", "source copy", "source"
+    ]
+    strong_target_terms = [
+        "original translation", "translation", "target text", "target segment",
+        "translated text", "translated string", "localized", "target"
+    ]
+
+    def bad_metadata_header(h: str) -> bool:
+        return any(term in h for term in metadata_terms)
 
     def find_by_hint(hint: str) -> Optional[int]:
         if not hint:
             return None
-        h = hint.lower().strip()
+        hint = hint.lower().strip()
         try:
-            idx = int(h)
+            idx = int(hint)
             if 1 <= idx <= len(headers):
                 return idx - 1
             if 0 <= idx < len(headers):
                 return idx
-        except Exception:
+        except ValueError:
             pass
-        for i, col in enumerate(headers_lower):
-            if col == h or h in col:
+        for i, h in enumerate(headers_clean):
+            if h == hint and not bad_metadata_header(h):
+                return i
+        for i, h in enumerate(headers_clean):
+            if hint in h and not bad_metadata_header(h):
                 return i
         return None
 
@@ -533,23 +568,22 @@ def detect_source_target_columns(headers: List[str], source_hint: str = "", targ
     tgt_idx = find_by_hint(target_hint)
 
     if src_idx is None:
-        for keyword in SOURCE_KEYWORDS_STRONG:
-            for i, col in enumerate(headers_lower):
-                if keyword == col or keyword in col:
-                    # Avoid bad metadata headers like "client"
-                    if col in ["client", "project id", "date", "language"]:
-                        continue
+        for term in strong_source_terms:
+            for i, h in enumerate(headers_clean):
+                if bad_metadata_header(h):
+                    continue
+                if term == h or term in h:
                     src_idx = i
                     break
             if src_idx is not None:
                 break
 
     if tgt_idx is None:
-        for keyword in TARGET_KEYWORDS_STRONG:
-            for i, col in enumerate(headers_lower):
-                if keyword == col or keyword in col:
-                    if col in ["client", "project id", "date", "language"]:
-                        continue
+        for term in strong_target_terms:
+            for i, h in enumerate(headers_clean):
+                if bad_metadata_header(h):
+                    continue
+                if term == h or term in h:
                     tgt_idx = i
                     break
             if tgt_idx is not None:
@@ -558,16 +592,69 @@ def detect_source_target_columns(headers: List[str], source_hint: str = "", targ
     return src_idx, tgt_idx
 
 
+def score_header_row(headers: List[str], src_idx: Optional[int], tgt_idx: Optional[int], need_target: bool) -> int:
+    joined = " | ".join([normalize_text(h).lower() for h in headers])
+    score = 0
+
+    if "source text" in joined:
+        score += 100
+    if "original translation" in joined:
+        score += 120
+    if "suggested translation" in joined:
+        score += 40
+    if "error category" in joined or "error severity" in joined:
+        score += 25
+    if "item no" in joined or "item no." in joined:
+        score += 20
+
+    bad_rows = [
+        "source language", "target language", "client", "project id", "date",
+        "number of checked words", "quality evaluation score card"
+    ]
+    if any(term in joined for term in bad_rows):
+        score -= 200
+
+    if src_idx is not None:
+        score += 20
+    if tgt_idx is not None:
+        score += 20
+    elif need_target:
+        score -= 100
+
+    return score
+
+
 def find_excel_header_row(rows: List[Any], source_hint: str, target_hint: str, need_target: bool = True) -> Tuple[int, List[str], Optional[int], Optional[int]]:
-    max_scan = min(len(rows), 25)
+    """
+    Find the real content table header. This prevents metadata rows like Source language* / Target language*
+    from being mistaken as the actual QA columns.
+    """
+    max_scan = min(len(rows), 50)
+    best = (None, -9999, [], None, None)
+
     for row_index in range(max_scan):
         headers = [str(cell.value).strip() if cell.value is not None else "" for cell in rows[row_index]]
+        if not any(headers):
+            continue
         src, tgt = detect_source_target_columns(headers, source_hint, target_hint)
-        if src is not None and ((tgt is not None) or not need_target):
-            return row_index, headers, src, tgt
+        score = score_header_row(headers, src, tgt, need_target)
+        if score > best[1]:
+            best = (row_index, score, headers, src, tgt)
+
+    row_index, score, headers, src, tgt = best
+
+    if row_index is not None and src is not None and ((tgt is not None) or not need_target) and score >= 60:
+        return row_index, headers, src, tgt
+
+    if source_hint or target_hint:
+        for row_index in range(max_scan):
+            headers = [str(cell.value).strip() if cell.value is not None else "" for cell in rows[row_index]]
+            src, tgt = detect_source_target_columns(headers, source_hint, target_hint)
+            if src is not None and ((tgt is not None) or not need_target):
+                return row_index, headers, src, tgt
+
     headers = [str(cell.value).strip() if cell.value is not None else "" for cell in rows[0]] if rows else []
     return 0, headers, None, None
-
 
 def should_skip_sheet(sheet_name: str, skip_non_content: bool) -> bool:
     if sheet_name in REPORT_SHEETS:
@@ -655,6 +742,8 @@ def extract_excel_segments(uploaded_file, source_hint: str, target_hint: str, mo
             logs.append(f"{ws.title}: no source/target columns found; deep-scan text cells")
             for row in rows:
                 for cell in row:
+                    if getattr(cell, "data_type", None) == "f":
+                        continue
                     if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 3:
                         loc = f"{ws.title}!{cell.coordinate}"
                         seg = {
@@ -901,6 +990,10 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     if not target:
         return rows
 
+    # Do not QA Excel formulas as translation text. They create false placeholder issues like $B, $C, $E.
+    if target.lstrip().startswith("="):
+        return rows
+
     # Extra spaces
     if re.search(r" {2,}", target):
         suggestion = re.sub(r" {2,}", " ", target)
@@ -916,11 +1009,13 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
         ))
 
     # Punctuation preservation where appropriate
-    src_end = source[-1:] if source else ""
-    tgt_end = target[-1:] if target else ""
-    if source and src_end in ".!?;:" and tgt_end not in ".!?;:":
+    source_for_punct = source.strip()
+    target_for_punct = target.strip()
+    src_end = source_for_punct[-1:] if source_for_punct else ""
+    tgt_end = target_for_punct[-1:] if target_for_punct else ""
+    if source_for_punct and src_end in ".!?;:" and tgt_end not in ".!?;:":
         rows.append(make_report_row(
-            segment, "Punctuation", "Minor", tgt_end or "missing ending punctuation", target + src_end,
+            segment, "Punctuation", "Minor", tgt_end or "missing ending punctuation", target_for_punct + src_end,
             f"Source ends with '{src_end}', but translation does not preserve ending punctuation.", "Rule Engine"
         ))
 
@@ -1238,13 +1333,24 @@ If no issues, return [].
 # OUTPUT BUILDERS
 # ==========================================================
 
+def safe_report_cell_value(value: Any) -> Any:
+    """Write report text safely. If a value starts with =/+/-/@, Excel may treat it as a formula."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        if value.startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+    return value
+
+
 def add_report_sheet_to_workbook(wb, sheet_name: str, report_rows: List[Dict[str, Any]], headers: List[str]):
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
     ws = wb.create_sheet(sheet_name)
     ws.append(headers)
     for row in report_rows:
-        ws.append([row.get(h, "") for h in headers])
+        ws.append([safe_report_cell_value(row.get(h, "")) for h in headers])
     style_header(ws)
     for col in ws.columns:
         max_len = 0
@@ -1254,7 +1360,6 @@ def add_report_sheet_to_workbook(wb, sheet_name: str, report_rows: List[Dict[str
             max_len = max(max_len, min(len(val), 60))
             cell.alignment = Alignment(wrap_text=True, vertical="top")
         ws.column_dimensions[col_letter].width = max(12, min(max_len + 2, 60))
-
 
 def highlight_excel_cells(cell_map: Dict[str, Any], report_rows: List[Dict[str, Any]]):
     grouped: Dict[str, List[Dict[str, Any]]] = {}
