@@ -39,6 +39,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .error-card.major    { border-left-color: #ff4466; }
 .error-card.critical { border-left-color: #ff0044; }
 .error-type   { font-family: 'Space Mono', monospace; font-size: 11px; color: #8888aa; text-transform: uppercase; letter-spacing: 1px; }
+.error-source { color: #555577; font-size: 12px; margin: 4px 0; }
 .error-before { color: #ff6680; font-size: 14px; margin: 6px 0 2px; }
 .error-after  { color: #00ff88; font-size: 14px; }
 .severity-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; }
@@ -54,14 +55,14 @@ st.markdown("""
 <div class="hero">
     <div class="hero-title">🧹 ErrorSweep Pro</div>
     <div class="hero-sub">Fully AI-powered linguistic QA — any language, any file, zero setup</div>
-    <div class="hero-badge">✦ No corrections file needed &nbsp;·&nbsp; Auto language detection &nbsp;·&nbsp; Powered by Claude AI</div>
+    <div class="hero-badge">✦ Bilingual source-vs-translation QA &nbsp;·&nbsp; Auto language detection &nbsp;·&nbsp; Powered by Claude AI</div>
 </div>
 """, unsafe_allow_html=True)
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🧹 ErrorSweep Pro")
-    st.caption("v3.0 — Fully AI-Powered")
+    st.caption("v3.1 — Bilingual QA Engine")
     st.divider()
 
     st.markdown("**📁 Supported Formats**")
@@ -91,6 +92,13 @@ with st.sidebar:
     )
 
     st.divider()
+    st.markdown("**🔢 Column Mapping (Excel/CSV)**")
+    st.caption("Override auto-detection if needed")
+    source_col_hint = st.text_input("Source column (name or index)", value="",
+                                     placeholder="e.g. Source Text or 1")
+    target_col_hint = st.text_input("Translation column (name or index)", value="",
+                                     placeholder="e.g. Original Translation or 2")
+    st.divider()
     st.caption("💡 Set domain correctly for best results.")
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -98,50 +106,109 @@ HIGHLIGHT_FILL = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type
 HEADER_FILL    = PatternFill(start_color="D9EAF7", end_color="D9EAF7", fill_type="solid")
 HEADER_FONT    = Font(bold=True)
 REPORT_SHEETS  = ["ErrorSweep Report"]
+BATCH_SIZE     = 10  # segments per API call
+
+STRICTNESS_GUIDE = {
+    "Lenient":     "Only flag clear, obvious errors. Ignore minor style preferences.",
+    "Standard":    "Flag clear errors and notable quality issues.",
+    "Strict":      "Flag all errors including minor style, tone, and consistency issues.",
+    "Very Strict": "Flag everything including subtle fluency, register, and micro-style issues."
+}
 
 # ─── Core AI QA ───────────────────────────────────────────────────────────────
-def ai_qa_segment(text, domain, strictness, client):
-    if not text or not text.strip() or len(text.strip()) < 3:
+
+def ai_qa_bilingual_batch(pairs, domain, strictness, client):
+    """
+    Bilingual QA: compare source vs translation in batches.
+    pairs = [{"source": str, "translation": str, "location": str}, ...]
+    Returns list of error dicts.
+    """
+    if not pairs:
         return []
 
-    strictness_guide = {
-        "Lenient":     "Only flag clear, obvious errors. Ignore minor style preferences.",
-        "Standard":    "Flag clear errors and notable quality issues.",
-        "Strict":      "Flag all errors including minor style, tone, and consistency issues.",
-        "Very Strict": "Flag everything including subtle fluency, register, and micro-style issues."
-    }
+    numbered = "\n\n".join(
+        f"[Segment {i+1}] ({p['location']})\n"
+        f"SOURCE: {p['source']}\n"
+        f"TRANSLATION: {p['translation']}"
+        for i, p in enumerate(pairs)
+    )
 
-    prompt = f"""You are an expert multilingual linguistic QA specialist.
+    prompt = f"""You are an expert bilingual linguistic QA specialist reviewing source-vs-translation pairs.
 
-Analyze the following text segment for quality issues.
 Domain: {domain}
-Strictness: {strictness_guide[strictness]}
+Strictness: {STRICTNESS_GUIDE[strictness]}
 
-Text to analyze:
-\"\"\"
-{text}
-\"\"\"
+Translation pairs to review:
 
-Instructions:
-1. Auto-detect the language(s) present
-2. Check for: Mistranslation, Terminology, Grammar, Spelling, Punctuation, Formatting, Style/Tone, Mixed Language, Consistency
-3. For EACH error found, return a JSON object
-4. If NO errors found, return empty array []
+{numbered}
 
-Return ONLY a valid JSON array, no other text:
+For EACH segment, check:
+1. Accuracy — does the translation faithfully convey the source meaning? Any omissions, additions, or wrong meaning?
+2. Mixed script — are target-language words written in the wrong script? (e.g. Roman/Latin characters used where native script like Telugu/Hindi is expected)
+3. Grammar — grammatical errors in the target language
+4. Terminology — wrong or inconsistent UI/domain terms
+5. Style & Tone — formality mismatch, unnatural phrasing for native speakers
+6. Formatting — extra spaces, wrong punctuation, missing/changed placeholders like {{{{variable}}}}
+7. Readability — awkward structure unnatural for native speakers
+
+Return ONLY a valid JSON array — no markdown, no explanation outside the JSON:
 [
   {{
-    "language_detected": "Telugu",
-    "error_type": "Mistranslation",
-    "severity": "Major",
-    "original": "exact wrong text",
+    "segment_index": 1,
+    "location": "exact location string from input",
+    "source": "source text",
+    "translation": "translation text",
+    "language_detected": "detected target language",
+    "error_type": "Accuracy|Mixed Script|Grammar|Terminology|Style & Tone|Formatting|Readability",
+    "severity": "Minor|Major|Critical",
+    "wrong_part": "the specific wrong fragment in the translation",
+    "suggestion": "corrected translation or fix",
+    "explanation": "brief, specific reason"
+  }}
+]
+
+Only include entries where you found a REAL error. If all segments are correct, return [].
+Severity: Minor = typo/punctuation/spacing; Major = wrong meaning or wrong script; Critical = offensive or completely incomprehensible."""
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = message.content[0].text.strip()
+        text = re.sub(r'^```json\s*', '', text)
+        text = re.sub(r'^```\s*',     '', text)
+        text = re.sub(r'\s*```$',     '', text)
+        result = json.loads(text)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def ai_qa_monolingual(text, location, domain, strictness, client):
+    """Fallback: single-text QA when no source column is available."""
+    prompt = f"""You are an expert multilingual linguistic QA specialist.
+
+Analyze this text for quality issues.
+Domain: {domain}
+Strictness: {STRICTNESS_GUIDE[strictness]}
+
+Text: \"\"\"{text}\"\"\"
+
+Check: Grammar, Spelling, Punctuation, Mixed Language/Script, Style, Formatting.
+Return ONLY a valid JSON array:
+[
+  {{
+    "language_detected": "detected language",
+    "error_type": "Grammar|Spelling|Mixed Script|Formatting|Style",
+    "severity": "Minor|Major|Critical",
+    "wrong_part": "exact wrong fragment",
     "suggestion": "corrected text",
     "explanation": "brief reason"
   }}
 ]
-
-Severity: Minor, Major, or Critical only.
-If text is correct, return: []"""
+If no errors, return: []"""
 
     try:
         message = client.messages.create(
@@ -149,12 +216,12 @@ If text is correct, return: []"""
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}]
         )
-        response_text = message.content[0].text.strip()
-        response_text = re.sub(r'^```json\s*', '', response_text)
-        response_text = re.sub(r'^```\s*',     '', response_text)
-        response_text = re.sub(r'\s*```$',     '', response_text)
-        errors = json.loads(response_text)
-        return errors if isinstance(errors, list) else []
+        resp = message.content[0].text.strip()
+        resp = re.sub(r'^```json\s*', '', resp)
+        resp = re.sub(r'^```\s*',     '', resp)
+        resp = re.sub(r'\s*```$',     '', resp)
+        result = json.loads(resp)
+        return result if isinstance(result, list) else []
     except Exception:
         return []
 
@@ -163,7 +230,7 @@ def normalize_text(text):
     text = str(text)
     for ch in ["\u200B", "\u200C", "\u200D"]:
         text = text.replace(ch, "")
-    return text
+    return text.strip()
 
 
 def style_header(sheet):
@@ -172,63 +239,158 @@ def style_header(sheet):
         cell.font = HEADER_FONT
 
 
-def build_report_row(sheet, location, language, original, err):
+def build_report_row(sheet, location, language, source, translation, err):
     return {
-        "Sheet":         sheet,
-        "Location":      location,
-        "Language":      language,
-        "Original Text": original[:200],
-        "Error Type":    err.get("error_type", ""),
-        "Severity":      err.get("severity", "Minor"),
-        "Wrong Segment": err.get("original", ""),
-        "Suggestion":    err.get("suggestion", ""),
-        "Explanation":   err.get("explanation", ""),
+        "Sheet":       sheet,
+        "Location":    location,
+        "Language":    language,
+        "Source Text": (source or "")[:200],
+        "Translation": (translation or "")[:200],
+        "Error Type":  err.get("error_type", ""),
+        "Severity":    err.get("severity", "Minor"),
+        "Wrong Part":  err.get("wrong_part", err.get("original", "")),
+        "Suggestion":  err.get("suggestion", ""),
+        "Explanation": err.get("explanation", ""),
     }
+
+
+# ─── Column detection ─────────────────────────────────────────────────────────
+def detect_source_target_columns(headers, source_hint="", target_hint=""):
+    headers_lower = [str(h).lower().strip() for h in headers]
+    source_keywords = ["source text", "source", "src", "english", "en", "original"]
+    target_keywords = ["original translation", "translation", "target", "translated",
+                       "suggested translation", "tgt", "output", "localized"]
+
+    def find_col(hint, keywords):
+        if hint:
+            for i, h in enumerate(headers_lower):
+                if h == hint.lower().strip():
+                    return i
+            try:
+                idx = int(hint)
+                if 0 <= idx < len(headers):
+                    return idx
+            except ValueError:
+                pass
+            for i, h in enumerate(headers_lower):
+                if hint.lower() in h:
+                    return i
+        for kw in keywords:
+            for i, h in enumerate(headers_lower):
+                if kw in h:
+                    return i
+        return None
+
+    src_idx = find_col(source_hint, source_keywords)
+    tgt_idx = find_col(target_hint, target_keywords)
+
+    if src_idx is not None and tgt_idx is None:
+        tgt_idx = src_idx + 1 if src_idx + 1 < len(headers) else None
+    if tgt_idx is not None and src_idx is None:
+        src_idx = tgt_idx - 1 if tgt_idx - 1 >= 0 else None
+
+    return src_idx, tgt_idx
 
 
 # ─── Processors ───────────────────────────────────────────────────────────────
 def process_excel(uploaded_file, domain, strictness, client, progress_bar, status_text):
-    wb          = load_workbook(uploaded_file)
+    wb = load_workbook(uploaded_file)
     report_rows = []
 
-    all_cells = [
-        (ws, cell)
-        for ws in wb.worksheets
-        if ws.title not in REPORT_SHEETS
-        for row in ws.iter_rows()
-        for cell in row
-        if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 3
-    ]
+    for ws in wb.worksheets:
+        if ws.title in REPORT_SHEETS:
+            continue
 
-    total = min(len(all_cells), max_segments)
+        rows = list(ws.iter_rows(values_only=False))
+        if not rows:
+            continue
 
-    for idx, (ws, cell) in enumerate(all_cells[:max_segments]):
-        text = normalize_text(cell.value)
-        status_text.text(f"🔍 Checking segment {idx+1} of {total}...")
-        progress_bar.progress((idx + 1) / total)
+        header_row = [str(cell.value).strip() if cell.value else "" for cell in rows[0]]
+        src_idx, tgt_idx = detect_source_target_columns(
+            header_row, source_col_hint, target_col_hint
+        )
 
-        errors = ai_qa_segment(text, domain, strictness, client)
+        if src_idx is not None and tgt_idx is not None:
+            # ── Bilingual mode ──
+            status_text.text(f"📋 Sheet '{ws.title}': [{header_row[src_idx]}] → [{header_row[tgt_idx]}] (bilingual mode)")
+            pairs = []
+            cell_map = {}
 
-        if errors:
-            cell.fill = HIGHLIGHT_FILL
-            notes = []
-            for err in errors:
-                lang = err.get("language_detected", "Unknown")
-                report_rows.append(build_report_row(ws.title, cell.coordinate, lang, text, err))
-                notes.append(
-                    f"[{err.get('severity','').upper()}] {err.get('error_type','')}\n"
-                    f"Issue: {err.get('original','')}\n"
-                    f"Fix:   {err.get('suggestion','')}\n"
-                    f"Why:   {err.get('explanation','')}"
+            for row_idx, row in enumerate(rows[1:], start=2):
+                if len(row) <= max(src_idx, tgt_idx):
+                    continue
+                src_val = normalize_text(row[src_idx].value or "")
+                tgt_val = normalize_text(row[tgt_idx].value or "")
+                if src_val and tgt_val and len(src_val) > 2 and not src_val.startswith("["):
+                    loc = f"Row {row_idx}"
+                    pairs.append({"source": src_val, "translation": tgt_val, "location": loc})
+                    cell_map[loc] = row[tgt_idx]
+
+            pairs = pairs[:max_segments]
+            total_batches = max(1, (len(pairs) + BATCH_SIZE - 1) // BATCH_SIZE)
+
+            for b in range(total_batches):
+                batch = pairs[b * BATCH_SIZE:(b + 1) * BATCH_SIZE]
+                status_text.text(
+                    f"🔍 Sheet '{ws.title}': checking segments "
+                    f"{b*BATCH_SIZE+1}–{min((b+1)*BATCH_SIZE, len(pairs))} of {len(pairs)}..."
                 )
-            cell.comment = Comment("\n\n".join(notes), "ErrorSweep")
+                progress_bar.progress((b + 1) / total_batches)
+                errors = ai_qa_bilingual_batch(batch, domain, strictness, client)
 
+                for err in errors:
+                    loc = err.get("location", "")
+                    lang = err.get("language_detected", "Unknown")
+                    report_rows.append(build_report_row(
+                        ws.title, loc, lang,
+                        err.get("source", ""), err.get("translation", ""), err
+                    ))
+                    if loc in cell_map:
+                        cell_map[loc].fill = HIGHLIGHT_FILL
+                        existing = cell_map[loc].comment.text if cell_map[loc].comment else ""
+                        note = (
+                            f"[{err.get('severity','').upper()}] {err.get('error_type','')}\n"
+                            f"Issue: {err.get('wrong_part','')}\n"
+                            f"Fix:   {err.get('suggestion','')}\n"
+                            f"Why:   {err.get('explanation','')}"
+                        )
+                        combined = (existing + "\n\n" + note).strip() if existing else note
+                        cell_map[loc].comment = Comment(combined, "ErrorSweep")
+        else:
+            # ── Monolingual fallback ──
+            status_text.text(f"📋 Sheet '{ws.title}': no source/translation columns found — single-text QA mode")
+            all_cells = [
+                cell for row in rows
+                for cell in row
+                if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 3
+            ]
+            total = min(len(all_cells), max_segments)
+            for idx, cell in enumerate(all_cells[:max_segments]):
+                text = normalize_text(cell.value)
+                status_text.text(f"🔍 Checking cell {idx+1}/{total} ({cell.coordinate})...")
+                progress_bar.progress((idx + 1) / total)
+                errors = ai_qa_monolingual(text, cell.coordinate, domain, strictness, client)
+                if errors:
+                    cell.fill = HIGHLIGHT_FILL
+                    notes = []
+                    for err in errors:
+                        report_rows.append(build_report_row(ws.title, cell.coordinate,
+                                                             err.get("language_detected", "Unknown"), "", text, err))
+                        notes.append(
+                            f"[{err.get('severity','').upper()}] {err.get('error_type','')}\n"
+                            f"Issue: {err.get('wrong_part', err.get('original',''))}\n"
+                            f"Fix:   {err.get('suggestion','')}\n"
+                            f"Why:   {err.get('explanation','')}"
+                        )
+                    cell.comment = Comment("\n\n".join(notes), "ErrorSweep")
+
+    # Write report sheet
     for sn in REPORT_SHEETS:
         if sn in wb.sheetnames:
             del wb[sn]
-
-    rpt     = wb.create_sheet("ErrorSweep Report")
-    headers = ["Sheet","Location","Language","Original Text","Error Type","Severity","Wrong Segment","Suggestion","Explanation"]
+    rpt = wb.create_sheet("ErrorSweep Report")
+    headers = ["Sheet", "Location", "Language", "Source Text", "Translation",
+               "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation"]
     rpt.append(headers)
     for item in report_rows:
         rpt.append([item.get(h, "") for h in headers])
@@ -241,24 +403,52 @@ def process_excel(uploaded_file, domain, strictness, client, progress_bar, statu
 
 
 def process_csv(uploaded_file, domain, strictness, client, progress_bar, status_text):
-    df          = pd.read_csv(uploaded_file)
+    df = pd.read_csv(uploaded_file)
     report_rows = []
 
-    segments = [
-        (col, index, str(value))
-        for col in df.columns
-        for index, value in df[col].items()
-        if pd.notna(value) and isinstance(value, str) and len(str(value).strip()) > 3
-    ]
-    total = min(len(segments), max_segments)
+    src_idx, tgt_idx = detect_source_target_columns(
+        list(df.columns), source_col_hint, target_col_hint
+    )
 
-    for idx, (col, index, text) in enumerate(segments[:max_segments]):
-        status_text.text(f"🔍 Checking segment {idx+1} of {total}...")
-        progress_bar.progress((idx + 1) / total)
-        errors = ai_qa_segment(normalize_text(text), domain, strictness, client)
-        for err in errors:
-            lang = err.get("language_detected", "Unknown")
-            report_rows.append(build_report_row("CSV", f"Row {index+2}, Col: {col}", lang, text, err))
+    if src_idx is not None and tgt_idx is not None:
+        src_col = df.columns[src_idx]
+        tgt_col = df.columns[tgt_idx]
+        status_text.text(f"📋 Bilingual mode: [{src_col}] → [{tgt_col}]")
+
+        pairs = []
+        for i, row in df.iterrows():
+            sv = normalize_text(str(row[src_col])) if pd.notna(row[src_col]) else ""
+            tv = normalize_text(str(row[tgt_col])) if pd.notna(row[tgt_col]) else ""
+            if sv and tv and len(sv) > 2:
+                pairs.append({"source": sv, "translation": tv, "location": f"Row {i+2}"})
+
+        pairs = pairs[:max_segments]
+        total_batches = max(1, (len(pairs) + BATCH_SIZE - 1) // BATCH_SIZE)
+        for b in range(total_batches):
+            batch = pairs[b * BATCH_SIZE:(b + 1) * BATCH_SIZE]
+            status_text.text(f"🔍 Checking segments {b*BATCH_SIZE+1}–{min((b+1)*BATCH_SIZE, len(pairs))} of {len(pairs)}...")
+            progress_bar.progress((b + 1) / total_batches)
+            errors = ai_qa_bilingual_batch(batch, domain, strictness, client)
+            for err in errors:
+                report_rows.append(build_report_row(
+                    "CSV", err.get("location", ""), err.get("language_detected", "Unknown"),
+                    err.get("source", ""), err.get("translation", ""), err
+                ))
+    else:
+        segments = [
+            (col, index, str(value))
+            for col in df.columns
+            for index, value in df[col].items()
+            if pd.notna(value) and isinstance(value, str) and len(str(value).strip()) > 3
+        ]
+        total = min(len(segments), max_segments)
+        for idx, (col, index, text) in enumerate(segments[:max_segments]):
+            status_text.text(f"🔍 Checking segment {idx+1}/{total}...")
+            progress_bar.progress((idx + 1) / total)
+            errors = ai_qa_monolingual(normalize_text(text), f"Row {index+2}, Col: {col}", domain, strictness, client)
+            for err in errors:
+                report_rows.append(build_report_row("CSV", f"Row {index+2}, Col: {col}",
+                                                     err.get("language_detected", "Unknown"), "", text, err))
 
     output = io.BytesIO()
     output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
@@ -267,18 +457,39 @@ def process_csv(uploaded_file, domain, strictness, client, progress_bar, status_
 
 
 def process_text_based(uploaded_file, domain, strictness, client, progress_bar, status_text):
-    text        = uploaded_file.read().decode("utf-8", errors="ignore")
-    lines       = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 3]
+    text = uploaded_file.read().decode("utf-8", errors="ignore")
+    lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 3]
     report_rows = []
-    total       = min(len(lines), max_segments)
+    total = min(len(lines), max_segments)
 
-    for idx, line in enumerate(lines[:max_segments]):
-        status_text.text(f"🔍 Checking line {idx+1} of {total}...")
-        progress_bar.progress((idx + 1) / total)
-        errors = ai_qa_segment(normalize_text(line), domain, strictness, client)
-        for err in errors:
-            lang = err.get("language_detected", "Unknown")
-            report_rows.append(build_report_row("File", f"Line {idx+1}", lang, line, err))
+    # Detect tab-separated bilingual pairs
+    pairs = []
+    for i, line in enumerate(lines[:max_segments]):
+        parts = line.split("\t")
+        if len(parts) >= 2 and len(parts[0].strip()) > 2 and len(parts[1].strip()) > 2:
+            pairs.append({"source": parts[0].strip(), "translation": parts[1].strip(), "location": f"Line {i+1}"})
+
+    if len(pairs) > total // 2:
+        status_text.text("📋 Detected tab-separated pairs — using bilingual mode")
+        total_batches = max(1, (len(pairs) + BATCH_SIZE - 1) // BATCH_SIZE)
+        for b in range(total_batches):
+            batch = pairs[b * BATCH_SIZE:(b + 1) * BATCH_SIZE]
+            status_text.text(f"🔍 Checking pairs {b*BATCH_SIZE+1}–{min((b+1)*BATCH_SIZE, len(pairs))} of {len(pairs)}...")
+            progress_bar.progress((b + 1) / total_batches)
+            errors = ai_qa_bilingual_batch(batch, domain, strictness, client)
+            for err in errors:
+                report_rows.append(build_report_row(
+                    "File", err.get("location", ""), err.get("language_detected", "Unknown"),
+                    err.get("source", ""), err.get("translation", ""), err
+                ))
+    else:
+        for idx, line in enumerate(lines[:max_segments]):
+            status_text.text(f"🔍 Checking line {idx+1}/{total}...")
+            progress_bar.progress((idx + 1) / total)
+            errors = ai_qa_monolingual(normalize_text(line), f"Line {idx+1}", domain, strictness, client)
+            for err in errors:
+                report_rows.append(build_report_row("File", f"Line {idx+1}",
+                                                     err.get("language_detected", "Unknown"), "", line, err))
 
     output = io.BytesIO()
     output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
@@ -287,18 +498,18 @@ def process_text_based(uploaded_file, domain, strictness, client, progress_bar, 
 
 
 def process_docx(uploaded_file, domain, strictness, client, progress_bar, status_text):
-    doc         = Document(uploaded_file)
+    doc = Document(uploaded_file)
     report_rows = []
-    paragraphs  = [p.text.strip() for p in doc.paragraphs if p.text.strip() and len(p.text.strip()) > 3]
-    total       = min(len(paragraphs), max_segments)
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip() and len(p.text.strip()) > 3]
+    total = min(len(paragraphs), max_segments)
 
     for idx, text in enumerate(paragraphs[:max_segments]):
-        status_text.text(f"🔍 Checking paragraph {idx+1} of {total}...")
+        status_text.text(f"🔍 Checking paragraph {idx+1}/{total}...")
         progress_bar.progress((idx + 1) / total)
-        errors = ai_qa_segment(normalize_text(text), domain, strictness, client)
+        errors = ai_qa_monolingual(normalize_text(text), f"Paragraph {idx+1}", domain, strictness, client)
         for err in errors:
-            lang = err.get("language_detected", "Unknown")
-            report_rows.append(build_report_row("Document", f"Paragraph {idx+1}", lang, text, err))
+            report_rows.append(build_report_row("Document", f"Paragraph {idx+1}",
+                                                 err.get("language_detected", "Unknown"), "", text, err))
 
     output = io.BytesIO()
     output.write(pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8"))
@@ -319,8 +530,9 @@ with col_upload:
 
 with col_info:
     st.markdown("#### What AI checks")
-    for item in ["✦ Auto language detection", "✦ Mistranslation", "✦ Grammar & spelling",
-                 "✦ Terminology", "✦ Mixed language", "✦ Style & tone", "✦ Formatting"]:
+    for item in ["✦ Source vs translation accuracy", "✦ Mixed script detection",
+                 "✦ Grammar & spelling", "✦ Terminology",
+                 "✦ Mixed language", "✦ Style & tone", "✦ Formatting & placeholders"]:
         st.markdown(f"<small>{item}</small>", unsafe_allow_html=True)
 
 st.divider()
@@ -384,10 +596,13 @@ if uploaded_file and run_button:
             for _, row in df.iterrows():
                 sev   = row["Severity"].lower() if row["Severity"].lower() in ["minor","major","critical"] else "minor"
                 badge = f'<span class="severity-badge sev-{sev}">{row["Severity"]}</span>'
+                src_html = (f'<div class="error-source">↑ Source: {row["Source Text"][:120]}</div>'
+                            if row.get("Source Text") else "")
                 st.markdown(f"""
                 <div class="error-card {sev}">
                     <div class="error-type">{row['Error Type']} · {row['Location']} · {row['Language']} {badge}</div>
-                    <div class="error-before">✗ {row['Wrong Segment'] or row['Original Text'][:80]}</div>
+                    {src_html}
+                    <div class="error-before">✗ {row['Wrong Part'] or row['Translation'][:80]}</div>
                     <div class="error-after">✓ {row['Suggestion']}</div>
                     <small style="color:#888">{row['Explanation']}</small>
                 </div>
@@ -410,6 +625,7 @@ if uploaded_file and run_button:
 
     except Exception as e:
         st.error(f"❌ Error during processing: {str(e)}")
+        st.exception(e)
 
 elif not uploaded_file:
     st.markdown("""
@@ -417,5 +633,6 @@ elif not uploaded_file:
         <div style="font-size:48px">📂</div>
         <div style="font-family:'Space Mono',monospace; margin-top:12px; color:#666">Upload a file to begin AI QA</div>
         <div style="font-size:13px; margin-top:8px; color:#444">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
+        <div style="font-size:12px; margin-top:12px; color:#555">For Excel/CSV: AI auto-detects source & translation columns<br>or set column names in the sidebar</div>
     </div>
     """, unsafe_allow_html=True)
