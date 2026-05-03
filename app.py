@@ -251,6 +251,24 @@ def visible_invisibles(text: Any) -> str:
     )
 
 
+def unlimited_scan(max_segments: int) -> bool:
+    """max_segments <= 0 means scan the whole file."""
+    try:
+        return int(max_segments) <= 0
+    except Exception:
+        return True
+
+
+def reached_segment_limit(segments: List[Dict[str, Any]], max_segments: int) -> bool:
+    return (not unlimited_scan(max_segments)) and len(segments) >= int(max_segments)
+
+
+def limit_sequence(items, max_segments: int):
+    if unlimited_scan(max_segments):
+        return list(items)
+    return list(items)[:int(max_segments)]
+
+
 def style_header(sheet):
     for cell in sheet[1]:
         cell.fill = HEADER_FILL
@@ -753,7 +771,7 @@ def extract_excel_segments(uploaded_file, source_hint: str, target_hint: str, mo
                 if target_cell is not None:
                     cell_map[loc] = target_cell
                 translation_col_map[loc] = (ws.title, abs_row, output_col_idx)
-                if len(segments) >= max_segments:
+                if reached_segment_limit(segments, max_segments):
                     return wb, segments, cell_map, translation_col_map, logs
 
         elif deep_scan:
@@ -777,7 +795,7 @@ def extract_excel_segments(uploaded_file, source_hint: str, target_hint: str, mo
                         }
                         segments.append(seg)
                         cell_map[loc] = cell
-                        if len(segments) >= max_segments:
+                        if reached_segment_limit(segments, max_segments):
                             return wb, segments, cell_map, translation_col_map, logs
         else:
             logs.append(f"{ws.title}: no usable columns found; skipped")
@@ -818,7 +836,7 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
                 "mode": "bilingual" if translation else "source_only",
                 "target_column": tgt_col,
             })
-            if len(segments) >= max_segments:
+            if reached_segment_limit(segments, max_segments):
                 return df, segments, logs
     elif deep_scan:
         logs.append("CSV: deep-scan text cells")
@@ -836,7 +854,7 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
                         "text": normalize_text(value),
                         "mode": "monolingual",
                     })
-                    if len(segments) >= max_segments:
+                    if reached_segment_limit(segments, max_segments):
                         return df, segments, logs
     else:
         logs.append("CSV: no usable columns found")
@@ -873,7 +891,7 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
             pairs = []
         if pairs:
             segments = []
-            for i, (src, tgt) in enumerate(pairs[:max_segments], start=1):
+            for i, (src, tgt) in enumerate(limit_sequence(pairs, max_segments), start=1):
                 if mode == "qa" and not tgt:
                     continue
                 segments.append({
@@ -891,7 +909,7 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
     lines = [line.strip() for line in text.splitlines() if line.strip() and len(line.strip()) > 2]
     segments = []
     # Tab-separated bilingual pairs
-    for i, line in enumerate(lines[:max_segments], start=1):
+    for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
         parts = line.split("\t")
         if len(parts) >= 2 and len(parts[0].strip()) > 1 and len(parts[1].strip()) > 1:
             segments.append({
@@ -906,10 +924,10 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
             })
 
     if len(segments) >= max(1, min(5, len(lines))):
-        return text, segments[:max_segments], ["Text: detected tab-separated source/translation pairs"]
+        return text, limit_sequence(segments, max_segments), ["Text: detected tab-separated source/translation pairs"]
 
     if mode == "pro":
-        for i, line in enumerate(lines[:max_segments], start=1):
+        for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
             segments.append({
                 "id": len(segments) + 1,
                 "file_type": "text",
@@ -921,7 +939,7 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
                 "mode": "source_only",
             })
     else:
-        for i, line in enumerate(lines[:max_segments], start=1):
+        for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
             segments.append({
                 "id": len(segments) + 1,
                 "file_type": "text",
@@ -933,7 +951,7 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
                 "mode": "monolingual",
             })
 
-    return text, segments[:max_segments], ["Text: line-based mode"]
+    return text, limit_sequence(segments, max_segments), ["Text: line-based mode"]
 
 
 def extract_docx_segments(uploaded_file, mode: str, max_segments: int):
@@ -955,7 +973,7 @@ def extract_docx_segments(uploaded_file, mode: str, max_segments: int):
             }
             segments.append(seg)
             para_map[seg["location"]] = p
-            if len(segments) >= max_segments:
+            if reached_segment_limit(segments, max_segments):
                 break
     return doc, segments, para_map, ["DOCX: paragraph mode"]
 
@@ -1123,10 +1141,19 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     target_for_punct = target.strip()
     src_end = source_for_punct[-1:] if source_for_punct else ""
     tgt_end = target_for_punct[-1:] if target_for_punct else ""
-    if source_for_punct and src_end in ".!?;:" and tgt_end not in ".!?;:":
+    # Equivalent punctuation marks for Indic and localized punctuation.
+    punctuation_equivalents = {
+        ".": {".", "।", "॥"},
+        "!": {"!", "！"},
+        "?": {"?", "？"},
+        ";": {";", "；"},
+        ":": {":", "："},
+    }
+    if source_for_punct and src_end in punctuation_equivalents and tgt_end not in punctuation_equivalents[src_end]:
+        preferred = "।" if src_end == "." and any("\u0900" <= ch <= "\u097F" for ch in target_for_punct) else src_end
         rows.append(make_report_row(
-            segment, "Punctuation", "Minor", "missing ending punctuation", target_for_punct + src_end,
-            f"Source ends with '{src_end}', but translation does not preserve ending punctuation.", "Rule Engine"
+            segment, "Punctuation", "Minor", "missing ending punctuation", target_for_punct + preferred,
+            f"Source ends with '{src_end}', but translation does not preserve equivalent ending punctuation.", "Rule Engine"
         ))
 
     # Placeholders/tags
@@ -1464,6 +1491,65 @@ If no issues, return [].
 
 
 # ==========================================================
+# SEGMENT COVERAGE / FULL-FILE STATUS REPORT
+# ==========================================================
+
+def highest_severity(rows: List[Dict[str, Any]]) -> str:
+    order = {"Critical": 4, "Major": 3, "Minor": 2, "Review": 1, "Pass": 0}
+    if not rows:
+        return "Pass"
+    return max((str(r.get("Severity", "Review")) for r in rows), key=lambda x: order.get(x, 1))
+
+
+def build_segment_status_rows(segments: List[Dict[str, Any]], issue_rows: List[Dict[str, Any]], checked_by: str = "Rules + AI") -> List[Dict[str, Any]]:
+    """Build one status row for every extracted segment so users can see full-file coverage."""
+    issues_by_loc: Dict[str, List[Dict[str, Any]]] = {}
+    for row in issue_rows:
+        loc = str(row.get("Location", ""))
+        if loc:
+            issues_by_loc.setdefault(loc, []).append(row)
+
+    status_rows: List[Dict[str, Any]] = []
+    for seg in segments:
+        loc = str(seg.get("location", ""))
+        rows = issues_by_loc.get(loc, [])
+        issue_count = len(rows)
+        status = "Needs Review" if issue_count else "Pass"
+        severity = highest_severity(rows)
+        error_types = "; ".join(sorted({str(r.get("Error Type", "")) for r in rows if r.get("Error Type")}))
+        suggestions = " | ".join(dict.fromkeys(str(r.get("Suggestion", "")) for r in rows if str(r.get("Suggestion", "")).strip()))
+        explanations = " | ".join(dict.fromkeys(str(r.get("Explanation", "")) for r in rows if str(r.get("Explanation", "")).strip()))
+
+        status_rows.append({
+            "Sheet": seg.get("sheet", ""),
+            "Location": loc,
+            "Mode": seg.get("mode", ""),
+            "Source Text": truncate(seg.get("source", ""), 500),
+            "Translation": truncate(seg.get("translation", seg.get("text", "")), 500),
+            "Review Status": status,
+            "Issue Count": issue_count,
+            "Highest Severity": severity,
+            "Error Types": error_types,
+            "Suggestion Summary": truncate(suggestions, 800) if suggestions else "No change suggested",
+            "Explanation Summary": truncate(explanations, 800) if explanations else "Checked; no issue found",
+            "Checked By": checked_by,
+        })
+    return status_rows
+
+
+def merge_issue_and_status_csv(issue_rows: List[Dict[str, Any]], status_rows: List[Dict[str, Any]]) -> bytes:
+    """For non-Excel files, return one CSV that includes all checked segments and issue details."""
+    status_df = pd.DataFrame(status_rows)
+    issue_df = pd.DataFrame(issue_rows)
+    output = io.StringIO()
+    output.write("ALL SEGMENT REVIEW\n")
+    status_df.to_csv(output, index=False)
+    output.write("\nISSUE DETAILS\n")
+    issue_df.to_csv(output, index=False)
+    return output.getvalue().encode("utf-8-sig")
+
+
+# ==========================================================
 # OUTPUT BUILDERS
 # ==========================================================
 
@@ -1744,7 +1830,16 @@ def render_dashboard() -> None:
             value="Strict",
         )
 
-        max_segments = st.number_input("Max total segments", min_value=5, max_value=500, value=60)
+        check_whole_file = st.checkbox(
+            "Check whole file",
+            value=True,
+            help="When enabled, ErrorSweep extracts and checks every available segment instead of stopping after a fixed limit."
+        )
+        if check_whole_file:
+            max_segments = 0
+            st.caption("Full-file mode is ON. For very large files this can take longer and use more API credits.")
+        else:
+            max_segments = st.number_input("Max total segments", min_value=5, max_value=5000, value=200)
         batch_size = st.number_input("Segments per AI call", min_value=5, max_value=50, value=20)
 
         st.divider()
@@ -1839,7 +1934,7 @@ def render_dashboard() -> None:
             with st.expander("Extraction log", expanded=True):
                 for log in logs:
                     st.write(log)
-                st.info(f"Found {len(segments)} segment(s) to check.")
+                st.info(f"Found {len(segments)} segment(s) to check. Full-file mode is {'ON' if check_whole_file else 'OFF'}.")
 
             if not segments:
                 st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
@@ -1873,8 +1968,11 @@ def render_dashboard() -> None:
             if lower.endswith(".xlsx") and workbook is not None:
                 if output_highlighted:
                     highlight_excel_cells(cell_map, report_rows)
-                headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-                add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, headers)
+                issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+                status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+                add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
+                add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, issue_headers)
                 bio = io.BytesIO()
                 workbook.save(bio)
                 bio.seek(0)
@@ -1882,12 +1980,23 @@ def render_dashboard() -> None:
                 mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 output_name = "errorsweep_reviewed_" + uploaded_file.name
             else:
-                output_bytes = report_csv_bytes(report_rows)
+                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+                output_bytes = merge_issue_and_status_csv(report_rows, status_rows)
                 mime_type = "text/csv"
-                output_name = "errorsweep_report_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+                output_name = "errorsweep_full_review_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+
+            status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+            st.markdown("### Segment Coverage")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Segments checked", len(status_rows_for_ui))
+            c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
+            c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
+            with st.expander("All Segment Review Preview", expanded=False):
+                st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
 
             render_report(report_rows, "ErrorSweep QA Report")
             st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
+            st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="all_segment_review.csv", mime="text/csv", use_container_width=True)
 
     # ==========================================================
     # ERROR SWEEP PRO — TRANSLATE + REVIEW
@@ -1942,7 +2051,7 @@ def render_dashboard() -> None:
             with st.expander("Extraction log", expanded=True):
                 for log in logs:
                     st.write(log)
-                st.info(f"Found {len(segments)} segment(s) for translation.")
+                st.info(f"Found {len(segments)} segment(s) for translation. Full-file mode is {'ON' if check_whole_file else 'OFF'}.")
 
             if not segments:
                 st.error("No source segments found. Try setting the source column name/index in the sidebar.")
@@ -2021,8 +2130,11 @@ def render_dashboard() -> None:
 
                 # Highlight cells with review issues.
                 highlight_excel_cells(cell_map, review_rows)
-                headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-                add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, headers)
+                issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+                status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Gemini Review")
+                status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+                add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
+                add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, issue_headers)
                 bio = io.BytesIO()
                 workbook.save(bio)
                 bio.seek(0)
@@ -2081,10 +2193,20 @@ def render_dashboard() -> None:
                 })
             st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
 
+            status_rows_for_ui = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Gemini Review")
+            st.markdown("### Segment Coverage")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Segments translated/reviewed", len(status_rows_for_ui))
+            c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
+            c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
+            with st.expander("All Segment Review Preview", expanded=False):
+                st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
+
             render_report(review_rows, "Gemini / Rule Review Report")
 
             st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-            st.download_button("Download Review Report CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_review_report.csv", mime="text/csv", use_container_width=True)
+            st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="errorsweep_pro_all_segment_review.csv", mime="text/csv", use_container_width=True)
+            st.download_button("Download Issue Details CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_issue_details.csv", mime="text/csv", use_container_width=True)
 
 
     if not uploaded_file:
