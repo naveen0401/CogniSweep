@@ -5,6 +5,7 @@ import os
 import re
 import json
 import time
+import hmac
 import zipfile
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
@@ -234,12 +235,19 @@ def normalize_text(text: Any) -> str:
 
 
 def visible_invisibles(text: Any) -> str:
+    """Return report-safe text while keeping ZWNJ invisible.
+
+    Earlier versions displayed U+200C as ⟨ZWNJ⟩ in report sheets.
+    That was useful for debugging, but it looks noisy for clients.
+    This keeps the actual ZWNJ character in suggestions/output while hiding
+    the debug label from reports and UI.
+    """
     text = str(text) if text is not None else ""
     return (
-        text.replace("\u200C", "⟨ZWNJ⟩")
-        .replace("\u200B", "⟨ZWSP⟩")
-        .replace("\u200D", "⟨ZWJ⟩")
-        .replace("\u00A0", "⟨NBSP⟩")
+        text
+        .replace("\u200B", "")
+        .replace("\u200D", "")
+        .replace("\u00A0", " ")
     )
 
 
@@ -1563,401 +1571,536 @@ def render_report(report_rows: List[Dict[str, Any]], title: str = "Report"):
         """, unsafe_allow_html=True)
 
 
+
 # ==========================================================
-# APP UI
+# LOGIN / SESSION AUTH
 # ==========================================================
 
-st.markdown(
+def get_login_credentials() -> Tuple[Optional[str], Optional[str]]:
+    """Read login credentials from Streamlit Secrets or environment variables.
+
+    Preferred Streamlit Secrets:
+        ERRORSWEEP_USERNAME = "admin"
+        ERRORSWEEP_PASSWORD = "your-secure-password"
+
+    Also supported:
+        APP_USERNAME / APP_PASSWORD
+        [auth]
+        username = "admin"
+        password = "your-secure-password"
     """
-<div class="hero">
-    <div class="hero-title">ErrorSweep</div>
-    <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent AI review</div>
-    <div class="hero-badge">ErrorSweep = QA only · ErrorSweep Pro = OpenAI translation + Gemini review</div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-mode_choice = st.radio(
-    "Choose version",
-    ["ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"],
-    horizontal=True,
-)
-
-with st.sidebar:
-    st.markdown("### Product Settings")
-
-    domain = st.selectbox(
-        "Content Domain",
-        [
-            "Auto-detect",
-            "Software UI / App Strings",
-            "Subtitles / Captions",
-            "Legal / Compliance",
-            "Medical / Healthcare",
-            "Marketing / Ad Copy",
-            "E-learning / Education",
-            "General",
-        ],
+    username = (
+        get_secret_value("ERRORSWEEP_USERNAME")
+        or get_secret_value("APP_USERNAME")
+    )
+    password = (
+        get_secret_value("ERRORSWEEP_PASSWORD")
+        or get_secret_value("APP_PASSWORD")
     )
 
-    strictness = st.select_slider(
-        "QA Strictness",
-        options=["Lenient", "Standard", "Strict", "Very Strict"],
-        value="Strict",
+    try:
+        auth_section = st.secrets.get("auth", {})
+        username = username or auth_section.get("username")
+        password = password or auth_section.get("password")
+    except Exception:
+        pass
+
+    return username, password
+
+
+def is_authenticated() -> bool:
+    return bool(st.session_state.get("errorsweep_authenticated", False))
+
+
+def logout_user() -> None:
+    st.session_state["errorsweep_authenticated"] = False
+    st.session_state.pop("errorsweep_username", None)
+    st.rerun()
+
+
+def render_login_page() -> None:
+    expected_username, expected_password = get_login_credentials()
+
+    st.markdown(
+        """
+        <style>
+        .login-wrapper {
+            max-width: 520px;
+            margin: 7vh auto 0 auto;
+            background: linear-gradient(135deg, #0f0f0f 0%, #161827 55%, #10213a 100%);
+            border: 1px solid #28324a;
+            border-radius: 20px;
+            padding: 34px 34px 22px 34px;
+            box-shadow: 0 18px 70px rgba(0,0,0,0.35);
+            text-align: center;
+        }
+        .login-title {
+            font-family: 'Space Mono', monospace;
+            font-size: 36px;
+            color: #00ff88;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .login-subtitle {
+            color: #a8acc8;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .login-badge {
+            display: inline-block;
+            background: rgba(0,255,136,0.08);
+            border: 1px solid rgba(0,255,136,0.25);
+            color: #00ff88;
+            border-radius: 999px;
+            padding: 5px 14px;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+        </style>
+        <div class="login-wrapper">
+            <div class="login-title">ErrorSweep Pro</div>
+            <div class="login-subtitle">Secure dashboard access</div>
+            <div class="login-badge">Login required</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    max_segments = st.number_input("Max total segments", min_value=5, max_value=500, value=60)
-    batch_size = st.number_input("Segments per AI call", min_value=5, max_value=50, value=20)
+    if not expected_username or not expected_password:
+        st.error("Login credentials are not configured.")
+        st.info("Add credentials in Streamlit Cloud → App → Settings → Secrets:")
+        st.code(
+            'ERRORSWEEP_USERNAME = "admin"\nERRORSWEEP_PASSWORD = "choose-a-strong-password"',
+            language="toml",
+        )
+        st.stop()
 
-    st.divider()
-    st.markdown("### File Detection")
-    source_col_hint = st.text_input("Source column name/index", value="", placeholder="Source Text or 2")
-    target_col_hint = st.text_input("Translation column name/index", value="", placeholder="Original Translation or 3")
-    skip_non_content = st.checkbox("Skip non-content sheets", value=True)
-    deep_scan = st.checkbox("Deep scan if columns are not found", value=False)
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
 
-    # Models are intentionally hidden from the UI for a cleaner client-facing experience.
-    openai_model = DEFAULT_OPENAI_MODEL
-    gemini_model = DEFAULT_GEMINI_MODEL
-
-openai_client = get_openai_client()
-gemini_client = get_gemini_client()
-
-if openai_client is None:
-    st.warning("OPENAI_API_KEY is not set. Add it in Streamlit Secrets to use AI features.")
-
-st.markdown("### Upload")
-uploaded_file = st.file_uploader(
-    "Upload file",
-    type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
-)
-rules_zip = st.file_uploader(
-    "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
-    type=["zip"],
-)
-
-rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
-if rules_zip:
-    rules = parse_rules_zip_bytes(rules_zip.getvalue())
-    with st.expander("Rules ZIP summary", expanded=False):
-        st.write(f"Files parsed: {len(rules.get('files', []))}")
-        st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
-        st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
-        st.write(f"DNT entries: {len(rules.get('dnt', []))}")
-        if rules.get("files"):
-            st.write(rules.get("files")[:20])
-        for w in rules.get("warnings", []):
-            st.warning(w)
-
-# ==========================================================
-# ERROR SWEEP QA ONLY
-# ==========================================================
-
-if mode_choice.startswith("ErrorSweep —"):
-    st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-    st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
-
-    q1, q2, q3 = st.columns(3)
-    with q1:
-        run_rules = st.checkbox("Run deterministic rules", value=True)
-        run_zwnj = st.checkbox("Check ZWNJ", value=True)
-    with q2:
-        run_ai = st.checkbox("Run OpenAI QA suggestions", value=True)
-        include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False)
-    with q3:
-        output_highlighted = st.checkbox("Highlight Excel output", value=True)
-
-    run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file)
-
-    if uploaded_file and run:
-        if run_ai and openai_client is None:
-            st.error("OpenAI key is missing. Disable OpenAI QA or add OPENAI_API_KEY in Streamlit Secrets.")
-            st.stop()
-
-        start = time.time()
-        status = st.empty()
-        progress = st.progress(0)
-        report_rows: List[Dict[str, Any]] = []
-        logs = []
-        lower = uploaded_file.name.lower()
-        workbook = None
-        cell_map = {}
-        output_bytes = None
-        mime_type = "text/csv"
-        output_name = "errorsweep_report_" + uploaded_file.name
-
-        # Extract segments
-        if lower.endswith(".xlsx"):
-            workbook, segments, cell_map, _, logs = extract_excel_segments(
-                uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), skip_non_content, deep_scan
-            )
-        elif lower.endswith(".csv"):
-            _, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), deep_scan)
-        elif lower.endswith(".docx"):
-            _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(max_segments))
+    if submitted:
+        username_ok = hmac.compare_digest(username.strip(), str(expected_username).strip())
+        password_ok = hmac.compare_digest(password, str(expected_password))
+        if username_ok and password_ok:
+            st.session_state["errorsweep_authenticated"] = True
+            st.session_state["errorsweep_username"] = username.strip()
+            st.rerun()
         else:
-            _, segments, logs = extract_text_segments(uploaded_file, "qa", int(max_segments))
+            st.error("Invalid username or password.")
 
-        with st.expander("Extraction log", expanded=True):
-            for log in logs:
-                st.write(log)
-            st.info(f"Found {len(segments)} segment(s) to check.")
 
-        if not segments:
-            st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
-            st.stop()
+def render_dashboard() -> None:
+    with st.sidebar:
+        st.markdown("### Account")
+        signed_in_as = st.session_state.get("errorsweep_username", "user")
+        st.caption(f"Signed in as: {signed_in_as}")
+        if st.button("Logout", use_container_width=True):
+            logout_user()
+        st.divider()
 
-        # Rule engine
-        if run_rules:
-            status.text("Running deterministic checks...")
-            for idx, seg in enumerate(segments, start=1):
-                report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
-                progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
+    # ==========================================================
+    # APP UI
+    # ==========================================================
 
-        # AI QA
-        if run_ai:
-            status.text("Running OpenAI QA suggestions...")
+    st.markdown(
+        """
+    <div class="hero">
+        <div class="hero-title">ErrorSweep</div>
+        <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent AI review</div>
+        <div class="hero-badge">ErrorSweep = QA only · ErrorSweep Pro = OpenAI translation + Gemini review</div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    mode_choice = st.radio(
+        "Choose version",
+        ["ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"],
+        horizontal=True,
+    )
+
+    with st.sidebar:
+        st.markdown("### Product Settings")
+
+        domain = st.selectbox(
+            "Content Domain",
+            [
+                "Auto-detect",
+                "Software UI / App Strings",
+                "Subtitles / Captions",
+                "Legal / Compliance",
+                "Medical / Healthcare",
+                "Marketing / Ad Copy",
+                "E-learning / Education",
+                "General",
+            ],
+        )
+
+        strictness = st.select_slider(
+            "QA Strictness",
+            options=["Lenient", "Standard", "Strict", "Very Strict"],
+            value="Strict",
+        )
+
+        max_segments = st.number_input("Max total segments", min_value=5, max_value=500, value=60)
+        batch_size = st.number_input("Segments per AI call", min_value=5, max_value=50, value=20)
+
+        st.divider()
+        st.markdown("### File Detection")
+        source_col_hint = st.text_input("Source column name/index", value="", placeholder="Source Text or 2")
+        target_col_hint = st.text_input("Translation column name/index", value="", placeholder="Original Translation or 3")
+        skip_non_content = st.checkbox("Skip non-content sheets", value=True)
+        deep_scan = st.checkbox("Deep scan if columns are not found", value=False)
+
+        # Models are intentionally hidden from the UI for a cleaner client-facing experience.
+        openai_model = DEFAULT_OPENAI_MODEL
+        gemini_model = DEFAULT_GEMINI_MODEL
+
+    openai_client = get_openai_client()
+    gemini_client = get_gemini_client()
+
+    if openai_client is None:
+        st.warning("OPENAI_API_KEY is not set. Add it in Streamlit Secrets to use AI features.")
+
+    st.markdown("### Upload")
+    uploaded_file = st.file_uploader(
+        "Upload file",
+        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+    )
+    rules_zip = st.file_uploader(
+        "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
+        type=["zip"],
+    )
+
+    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    if rules_zip:
+        rules = parse_rules_zip_bytes(rules_zip.getvalue())
+        with st.expander("Rules ZIP summary", expanded=False):
+            st.write(f"Files parsed: {len(rules.get('files', []))}")
+            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
+            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
+            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
+            if rules.get("files"):
+                st.write(rules.get("files")[:20])
+            for w in rules.get("warnings", []):
+                st.warning(w)
+
+    # ==========================================================
+    # ERROR SWEEP QA ONLY
+    # ==========================================================
+
+    if mode_choice.startswith("ErrorSweep —"):
+        st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
+        st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
+
+        q1, q2, q3 = st.columns(3)
+        with q1:
+            run_rules = st.checkbox("Run deterministic rules", value=True)
+            run_zwnj = st.checkbox("Check ZWNJ", value=True)
+        with q2:
+            run_ai = st.checkbox("Run OpenAI QA suggestions", value=True)
+            include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False)
+        with q3:
+            output_highlighted = st.checkbox("Highlight Excel output", value=True)
+
+        run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file)
+
+        if uploaded_file and run:
+            if run_ai and openai_client is None:
+                st.error("OpenAI key is missing. Disable OpenAI QA or add OPENAI_API_KEY in Streamlit Secrets.")
+                st.stop()
+
+            start = time.time()
+            status = st.empty()
+            progress = st.progress(0)
+            report_rows: List[Dict[str, Any]] = []
+            logs = []
+            lower = uploaded_file.name.lower()
+            workbook = None
+            cell_map = {}
+            output_bytes = None
+            mime_type = "text/csv"
+            output_name = "errorsweep_report_" + uploaded_file.name
+
+            # Extract segments
+            if lower.endswith(".xlsx"):
+                workbook, segments, cell_map, _, logs = extract_excel_segments(
+                    uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), skip_non_content, deep_scan
+                )
+            elif lower.endswith(".csv"):
+                _, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), deep_scan)
+            elif lower.endswith(".docx"):
+                _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(max_segments))
+            else:
+                _, segments, logs = extract_text_segments(uploaded_file, "qa", int(max_segments))
+
+            with st.expander("Extraction log", expanded=True):
+                for log in logs:
+                    st.write(log)
+                st.info(f"Found {len(segments)} segment(s) to check.")
+
+            if not segments:
+                st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
+                st.stop()
+
+            # Rule engine
+            if run_rules:
+                status.text("Running deterministic checks...")
+                for idx, seg in enumerate(segments, start=1):
+                    report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
+                    progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
+
+            # AI QA
+            if run_ai:
+                status.text("Running OpenAI QA suggestions...")
+                total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
+                for b in range(total_batches):
+                    batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
+                    status.text(f"OpenAI QA batch {b + 1}/{total_batches}...")
+                    report_rows.extend(ai_qa_batch(openai_client, openai_model, batch, rules, domain, strictness, include_ai_style))
+                    progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
+
+            report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
+            if dropped_ai_rows:
+                st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
+
+            progress.progress(1.0)
+            status.text(f"QA complete in {round(time.time() - start, 2)} seconds.")
+
+            # Output
+            if lower.endswith(".xlsx") and workbook is not None:
+                if output_highlighted:
+                    highlight_excel_cells(cell_map, report_rows)
+                headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+                add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, headers)
+                bio = io.BytesIO()
+                workbook.save(bio)
+                bio.seek(0)
+                output_bytes = bio.getvalue()
+                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                output_name = "errorsweep_reviewed_" + uploaded_file.name
+            else:
+                output_bytes = report_csv_bytes(report_rows)
+                mime_type = "text/csv"
+                output_name = "errorsweep_report_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+
+            render_report(report_rows, "ErrorSweep QA Report")
+            st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
+
+    # ==========================================================
+    # ERROR SWEEP PRO — TRANSLATE + REVIEW
+    # ==========================================================
+
+    else:
+        st.markdown("## ErrorSweep Pro — Translate with OpenAI + Review with Gemini")
+        st.caption("Use this version to translate source content with OpenAI, review it independently with Gemini, and export a translated file + review report.")
+
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            target_language = st.text_input("Target language", value="Telugu")
+        with p2:
+            apply_gemini_suggestions = st.checkbox("Apply Gemini suggestions to output", value=False)
+        with p3:
+            review_with_gemini = st.checkbox("Review with Gemini", value=True)
+
+        run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
+
+        if uploaded_file and run_pro:
+            if openai_client is None:
+                st.error("OPENAI_API_KEY is missing. Add it in Streamlit Secrets.")
+                st.stop()
+            if review_with_gemini and gemini_client is None:
+                st.error("GEMINI_API_KEY is missing or google-genai is not installed. Add GEMINI_API_KEY in Streamlit Secrets or disable Gemini review.")
+                st.stop()
+
+            start = time.time()
+            status = st.empty()
+            progress = st.progress(0)
+            lower = uploaded_file.name.lower()
+            logs = []
+            workbook = None
+            dataframe = None
+            text_original = None
+            doc = None
+            cell_map = {}
+            translation_col_map = {}
+            para_map = {}
+
+            if lower.endswith(".xlsx"):
+                workbook, segments, cell_map, translation_col_map, logs = extract_excel_segments(
+                    uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), skip_non_content, deep_scan
+                )
+            elif lower.endswith(".csv"):
+                dataframe, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), deep_scan)
+            elif lower.endswith(".docx"):
+                doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(max_segments))
+            else:
+                text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(max_segments))
+
+            with st.expander("Extraction log", expanded=True):
+                for log in logs:
+                    st.write(log)
+                st.info(f"Found {len(segments)} segment(s) for translation.")
+
+            if not segments:
+                st.error("No source segments found. Try setting the source column name/index in the sidebar.")
+                st.stop()
+
+            # Translation
+            status.text("Translating with OpenAI...")
+            translations_by_loc: Dict[str, str] = {}
             total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
             for b in range(total_batches):
                 batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                status.text(f"OpenAI QA batch {b + 1}/{total_batches}...")
-                report_rows.extend(ai_qa_batch(openai_client, openai_model, batch, rules, domain, strictness, include_ai_style))
-                progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
+                status.text(f"OpenAI translation batch {b + 1}/{total_batches}...")
+                result = openai_translate_batch(openai_client, openai_model, batch, target_language, domain, rules)
+                for item in result:
+                    loc = item.get("location", "")
+                    trans = item.get("translation", "")
+                    if loc and trans:
+                        translations_by_loc[loc] = trans
+                progress.progress(((b + 1) / total_batches) * 0.45)
 
-        report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
-        if dropped_ai_rows:
-            st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
-
-        progress.progress(1.0)
-        status.text(f"QA complete in {round(time.time() - start, 2)} seconds.")
-
-        # Output
-        if lower.endswith(".xlsx") and workbook is not None:
-            if output_highlighted:
-                highlight_excel_cells(cell_map, report_rows)
-            headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-            add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, headers)
-            bio = io.BytesIO()
-            workbook.save(bio)
-            bio.seek(0)
-            output_bytes = bio.getvalue()
-            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            output_name = "errorsweep_reviewed_" + uploaded_file.name
-        else:
-            output_bytes = report_csv_bytes(report_rows)
-            mime_type = "text/csv"
-            output_name = "errorsweep_report_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
-
-        render_report(report_rows, "ErrorSweep QA Report")
-        st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-
-# ==========================================================
-# ERROR SWEEP PRO — TRANSLATE + REVIEW
-# ==========================================================
-
-else:
-    st.markdown("## ErrorSweep Pro — Translate with OpenAI + Review with Gemini")
-    st.caption("Use this version to translate source content with OpenAI, review it independently with Gemini, and export a translated file + review report.")
-
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        target_language = st.text_input("Target language", value="Telugu")
-    with p2:
-        apply_gemini_suggestions = st.checkbox("Apply Gemini suggestions to output", value=False)
-    with p3:
-        review_with_gemini = st.checkbox("Review with Gemini", value=True)
-
-    run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
-
-    if uploaded_file and run_pro:
-        if openai_client is None:
-            st.error("OPENAI_API_KEY is missing. Add it in Streamlit Secrets.")
-            st.stop()
-        if review_with_gemini and gemini_client is None:
-            st.error("GEMINI_API_KEY is missing or google-genai is not installed. Add GEMINI_API_KEY in Streamlit Secrets or disable Gemini review.")
-            st.stop()
-
-        start = time.time()
-        status = st.empty()
-        progress = st.progress(0)
-        lower = uploaded_file.name.lower()
-        logs = []
-        workbook = None
-        dataframe = None
-        text_original = None
-        doc = None
-        cell_map = {}
-        translation_col_map = {}
-        para_map = {}
-
-        if lower.endswith(".xlsx"):
-            workbook, segments, cell_map, translation_col_map, logs = extract_excel_segments(
-                uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), skip_non_content, deep_scan
-            )
-        elif lower.endswith(".csv"):
-            dataframe, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), deep_scan)
-        elif lower.endswith(".docx"):
-            doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(max_segments))
-        else:
-            text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(max_segments))
-
-        with st.expander("Extraction log", expanded=True):
-            for log in logs:
-                st.write(log)
-            st.info(f"Found {len(segments)} segment(s) for translation.")
-
-        if not segments:
-            st.error("No source segments found. Try setting the source column name/index in the sidebar.")
-            st.stop()
-
-        # Translation
-        status.text("Translating with OpenAI...")
-        translations_by_loc: Dict[str, str] = {}
-        total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
-        for b in range(total_batches):
-            batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
-            status.text(f"OpenAI translation batch {b + 1}/{total_batches}...")
-            result = openai_translate_batch(openai_client, openai_model, batch, target_language, domain, rules)
-            for item in result:
-                loc = item.get("location", "")
-                trans = item.get("translation", "")
-                if loc and trans:
-                    translations_by_loc[loc] = trans
-            progress.progress(((b + 1) / total_batches) * 0.45)
-
-        translated_segments = []
-        for seg in segments:
-            loc = seg["location"]
-            trans = translations_by_loc.get(loc, "")
-            translated_segments.append({**seg, "translation": trans, "text": trans})
-
-        # Deterministic review of generated translations
-        review_rows: List[Dict[str, Any]] = []
-        status.text("Running deterministic review...")
-        for idx, seg in enumerate(translated_segments, start=1):
-            review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
-            progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
-
-        # Gemini review
-        if review_with_gemini:
-            status.text("Reviewing with Gemini...")
-            total_review_batches = max(1, (len(translated_segments) + int(batch_size) - 1) // int(batch_size))
-            for b in range(total_review_batches):
-                batch = translated_segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                status.text(f"Gemini review batch {b + 1}/{total_review_batches}...")
-                gemini_errors = gemini_review_translations(gemini_client, gemini_model, batch, target_language, domain, rules)
-                loc_to_seg = {s["location"]: s for s in batch}
-                for err in gemini_errors:
-                    loc = err.get("location", "")
-                    seg = loc_to_seg.get(loc, {"location": loc, "source": "", "translation": "", "sheet": ""})
-                    review_rows.append(make_report_row(
-                        seg,
-                        err.get("error_type", "Gemini Review"),
-                        err.get("severity", "Review"),
-                        err.get("wrong_part", ""),
-                        err.get("suggestion", ""),
-                        err.get("explanation", ""),
-                        "Gemini Review",
-                        "Gemini",
-                        err.get("confidence", "Medium"),
-                    ))
-                    if apply_gemini_suggestions and err.get("suggestion") and loc in translations_by_loc:
-                        translations_by_loc[loc] = err["suggestion"]
-                progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
-
-        # Build translated output
-        status.text("Building output file...")
-        output_bytes = b""
-        output_name = "errorsweep_pro_" + uploaded_file.name
-        mime_type = "text/csv"
-
-        if lower.endswith(".xlsx") and workbook is not None:
-            # Write translations to mapped cells.
+            translated_segments = []
             for seg in segments:
                 loc = seg["location"]
-                if loc in translation_col_map:
-                    ws_name, row_num, col_idx = translation_col_map[loc]
-                    if col_idx is None:
-                        continue
-                    workbook[ws_name].cell(row=row_num, column=col_idx + 1).value = translations_by_loc.get(loc, "")
+                trans = translations_by_loc.get(loc, "")
+                translated_segments.append({**seg, "translation": trans, "text": trans})
 
-            # Highlight cells with review issues.
-            highlight_excel_cells(cell_map, review_rows)
-            headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-            add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, headers)
-            bio = io.BytesIO()
-            workbook.save(bio)
-            bio.seek(0)
-            output_bytes = bio.getvalue()
-            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+            # Deterministic review of generated translations
+            review_rows: List[Dict[str, Any]] = []
+            status.text("Running deterministic review...")
+            for idx, seg in enumerate(translated_segments, start=1):
+                review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
+                progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
 
-        elif lower.endswith(".csv") and dataframe is not None:
-            # Add/update translation column.
-            out_col = "OpenAI Translation"
-            if "OpenAI Translation" not in dataframe.columns:
-                dataframe[out_col] = ""
-            for seg in segments:
-                dataframe.at[seg["row"], out_col] = translations_by_loc.get(seg["location"], "")
-            output_bytes = dataframe.to_csv(index=False).encode("utf-8-sig")
+            # Gemini review
+            if review_with_gemini:
+                status.text("Reviewing with Gemini...")
+                total_review_batches = max(1, (len(translated_segments) + int(batch_size) - 1) // int(batch_size))
+                for b in range(total_review_batches):
+                    batch = translated_segments[b * int(batch_size):(b + 1) * int(batch_size)]
+                    status.text(f"Gemini review batch {b + 1}/{total_review_batches}...")
+                    gemini_errors = gemini_review_translations(gemini_client, gemini_model, batch, target_language, domain, rules)
+                    loc_to_seg = {s["location"]: s for s in batch}
+                    for err in gemini_errors:
+                        loc = err.get("location", "")
+                        seg = loc_to_seg.get(loc, {"location": loc, "source": "", "translation": "", "sheet": ""})
+                        review_rows.append(make_report_row(
+                            seg,
+                            err.get("error_type", "Gemini Review"),
+                            err.get("severity", "Review"),
+                            err.get("wrong_part", ""),
+                            err.get("suggestion", ""),
+                            err.get("explanation", ""),
+                            "Gemini Review",
+                            "Gemini",
+                            err.get("confidence", "Medium"),
+                        ))
+                        if apply_gemini_suggestions and err.get("suggestion") and loc in translations_by_loc:
+                            translations_by_loc[loc] = err["suggestion"]
+                    progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
+
+            # Build translated output
+            status.text("Building output file...")
+            output_bytes = b""
+            output_name = "errorsweep_pro_" + uploaded_file.name
             mime_type = "text/csv"
-            output_name = "errorsweep_pro_translated_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
 
-        elif lower.endswith(".docx") and doc is not None:
-            # Append translation after each original paragraph for a readable translated DOCX.
-            for seg in segments:
-                p = para_map.get(seg["location"])
-                if p is not None:
-                    p.add_run("\n" + translations_by_loc.get(seg["location"], ""))
-            bio = io.BytesIO()
-            doc.save(bio)
-            bio.seek(0)
-            output_bytes = bio.getvalue()
-            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+            if lower.endswith(".xlsx") and workbook is not None:
+                # Write translations to mapped cells.
+                for seg in segments:
+                    loc = seg["location"]
+                    if loc in translation_col_map:
+                        ws_name, row_num, col_idx = translation_col_map[loc]
+                        if col_idx is None:
+                            continue
+                        workbook[ws_name].cell(row=row_num, column=col_idx + 1).value = translations_by_loc.get(loc, "")
 
-        else:
-            # Translation table for text/json/xml/srt/xliff.
-            table = []
-            for seg in segments:
-                table.append({
+                # Highlight cells with review issues.
+                highlight_excel_cells(cell_map, review_rows)
+                headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+                add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, headers)
+                bio = io.BytesIO()
+                workbook.save(bio)
+                bio.seek(0)
+                output_bytes = bio.getvalue()
+                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                output_name = "errorsweep_pro_translated_" + uploaded_file.name
+
+            elif lower.endswith(".csv") and dataframe is not None:
+                # Add/update translation column.
+                out_col = "OpenAI Translation"
+                if "OpenAI Translation" not in dataframe.columns:
+                    dataframe[out_col] = ""
+                for seg in segments:
+                    dataframe.at[seg["row"], out_col] = translations_by_loc.get(seg["location"], "")
+                output_bytes = dataframe.to_csv(index=False).encode("utf-8-sig")
+                mime_type = "text/csv"
+                output_name = "errorsweep_pro_translated_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+
+            elif lower.endswith(".docx") and doc is not None:
+                # Append translation after each original paragraph for a readable translated DOCX.
+                for seg in segments:
+                    p = para_map.get(seg["location"])
+                    if p is not None:
+                        p.add_run("\n" + translations_by_loc.get(seg["location"], ""))
+                bio = io.BytesIO()
+                doc.save(bio)
+                bio.seek(0)
+                output_bytes = bio.getvalue()
+                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                output_name = "errorsweep_pro_translated_" + uploaded_file.name
+
+            else:
+                # Translation table for text/json/xml/srt/xliff.
+                table = []
+                for seg in segments:
+                    table.append({
+                        "Location": seg["location"],
+                        "Source": seg.get("source") or seg.get("text", ""),
+                        "Translation": translations_by_loc.get(seg["location"], ""),
+                    })
+                output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
+                mime_type = "text/csv"
+                output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+
+            progress.progress(1.0)
+            status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
+
+            # Display translation preview and review report.
+            st.markdown("### Translation Preview")
+            preview = []
+            for seg in translated_segments[:50]:
+                preview.append({
                     "Location": seg["location"],
-                    "Source": seg.get("source") or seg.get("text", ""),
-                    "Translation": translations_by_loc.get(seg["location"], ""),
+                    "Source": truncate(seg.get("source") or seg.get("text", ""), 300),
+                    "Translation": truncate(translations_by_loc.get(seg["location"], ""), 300),
                 })
-            output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
-            mime_type = "text/csv"
-            output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+            st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
 
-        progress.progress(1.0)
-        status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
+            render_report(review_rows, "Gemini / Rule Review Report")
 
-        # Display translation preview and review report.
-        st.markdown("### Translation Preview")
-        preview = []
-        for seg in translated_segments[:50]:
-            preview.append({
-                "Location": seg["location"],
-                "Source": truncate(seg.get("source") or seg.get("text", ""), 300),
-                "Translation": truncate(translations_by_loc.get(seg["location"], ""), 300),
-            })
-        st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
-
-        render_report(review_rows, "Gemini / Rule Review Report")
-
-        st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-        st.download_button("Download Review Report CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_review_report.csv", mime="text/csv", use_container_width=True)
+            st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
+            st.download_button("Download Review Report CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_review_report.csv", mime="text/csv", use_container_width=True)
 
 
-if not uploaded_file:
-    st.markdown(
-        """
-<div class="empty-state">
-    <div style="font-family:'Space Mono',monospace; color:#a8acc8">Upload a file to begin</div>
-    <div style="font-size:13px; margin-top:8px; color:#6b7280">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
-    <div style="font-size:12px; margin-top:12px; color:#6b7280">Optional Rules ZIP can include style guides, DNT lists, glossary files, instructions, and reference documents.</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    if not uploaded_file:
+        st.markdown(
+            """
+    <div class="empty-state">
+        <div style="font-family:'Space Mono',monospace; color:#a8acc8">Upload a file to begin</div>
+        <div style="font-size:13px; margin-top:8px; color:#6b7280">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
+        <div style="font-size:12px; margin-top:12px; color:#6b7280">Optional Rules ZIP can include style guides, DNT lists, glossary files, instructions, and reference documents.</div>
+    </div>
+    """,
+            unsafe_allow_html=True,
+        )
+
+
+if not is_authenticated():
+    render_login_page()
+else:
+    render_dashboard()
