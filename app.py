@@ -170,7 +170,7 @@ HEADER_FILL = PatternFill(start_color="D9EAF7", end_color="D9EAF7", fill_type="s
 HEADER_FONT = Font(bold=True)
 
 REPORT_SHEETS = {"ErrorSweep Report", "Correction Report", "Remaining Errors"}
-COMMON_SKIP_SHEETS = {"Calculation", "Error_counts", "Pull-out_data", "LQA Instructions"}
+COMMON_SKIP_SHEETS = {"Calculation", "Error_counts", "Pull-out_data", "LQA Instructions", "Quality Evaluation"}
 
 STRICTNESS_GUIDE = {
     "Lenient": "Only flag clear, obvious errors. Ignore minor style preferences.",
@@ -224,14 +224,13 @@ with st.sidebar:
     model = st.selectbox(
         "OpenAI model",
         [
-            "gpt-5-nano",
-            "gpt-5-mini",
+            "gpt-4o-mini",
             "gpt-5.4-nano",
             "gpt-5.4-mini",
             "gpt-5.5"
         ],
         index=0,
-        help="Use nano/mini for speed. Use gpt-5.5 only for deeper final checks."
+        help="Use gpt-4o-mini first for compatibility and speed. Use GPT-5.4/5.5 only if your account supports them."
     )
 
     domain = st.selectbox(
@@ -374,62 +373,147 @@ def build_report_row(sheet, location, language, source, translation, err):
 # ==============================
 # Column detection
 # ==============================
+def clean_header_value(value):
+    text = normalize_text(value).lower()
+    text = text.replace("*", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def detect_source_target_columns(headers, source_hint="", target_hint=""):
-    headers_lower = [str(h).lower().strip() for h in headers]
+    """
+    Strong header detection.
+    Important: avoids false matches like:
+    - Client -> English because "client" contains "en"
+    - Source language / Target language metadata rows
+    - Quality Evaluation formula rows
+    """
+    headers_clean = [clean_header_value(h) for h in headers]
 
-    source_keywords = [
-        "source text", "source", "src", "english", "en", "original text"
-    ]
+    def by_hint(hint):
+        if not hint:
+            return None
 
-    target_keywords = [
-        "original translation", "translation", "target", "target language",
-        "translated", "suggested translation", "tgt", "output", "localized"
-    ]
+        hint_clean = clean_header_value(hint)
 
-    def find_col(hint, keywords):
-        if hint:
-            hint_clean = hint.lower().strip()
+        # Accept 1-based or 0-based indexes.
+        try:
+            idx = int(hint_clean)
+            if 1 <= idx <= len(headers_clean):
+                return idx - 1
+            if 0 <= idx < len(headers_clean):
+                return idx
+        except ValueError:
+            pass
 
-            for i, h in enumerate(headers_lower):
-                if h == hint_clean:
-                    return i
+        for i, h in enumerate(headers_clean):
+            if h == hint_clean:
+                return i
 
-            try:
-                idx = int(hint_clean)
-                if 1 <= idx <= len(headers):
-                    return idx - 1
-                if 0 <= idx < len(headers):
-                    return idx
-            except ValueError:
-                pass
-
-            for i, h in enumerate(headers_lower):
-                if hint_clean in h:
-                    return i
-
-        for keyword in keywords:
-            for i, h in enumerate(headers_lower):
-                if keyword in h:
-                    return i
+        for i, h in enumerate(headers_clean):
+            if hint_clean and hint_clean in h:
+                return i
 
         return None
 
-    src_idx = find_col(source_hint, source_keywords)
-    tgt_idx = find_col(target_hint, target_keywords)
+    src_from_hint = by_hint(source_hint)
+    tgt_from_hint = by_hint(target_hint)
+
+    if src_from_hint is not None and tgt_from_hint is not None and src_from_hint != tgt_from_hint:
+        return src_from_hint, tgt_from_hint
+
+    # Strong source names. Do NOT include broad keywords like "en".
+    source_exact = {
+        "source text",
+        "source",
+        "source segment",
+        "source string",
+        "src text",
+        "src"
+    }
+
+    source_contains = [
+        "source text",
+        "source segment",
+        "source string"
+    ]
+
+    # Strong target names. Prefer original translation over suggested translation.
+    target_priority = [
+        "original translation",
+        "translation",
+        "target text",
+        "target segment",
+        "target string",
+        "translated text",
+        "localized text",
+        "suggested translation",
+        "target"
+    ]
+
+    def is_metadata_header(h):
+        # These are form metadata rows, not the translation table header.
+        metadata_terms = [
+            "client",
+            "project id",
+            "date",
+            "number of checked words",
+            "source language",
+            "target language",
+            "review date",
+            "word count"
+        ]
+        return any(term in h for term in metadata_terms)
+
+    def is_source_header(h):
+        if not h or is_metadata_header(h):
+            return False
+        if h in source_exact:
+            return True
+        return any(term in h for term in source_contains)
+
+    def is_target_header(h):
+        if not h or is_metadata_header(h):
+            return False
+        return any(term == h or term in h for term in target_priority)
+
+    src_idx = None
+    tgt_idx = None
+
+    for i, h in enumerate(headers_clean):
+        if is_source_header(h):
+            src_idx = i
+            break
+
+    # Choose target by priority so Original Translation wins over Suggested Translation.
+    for target_name in target_priority:
+        for i, h in enumerate(headers_clean):
+            if is_metadata_header(h):
+                continue
+            if target_name == h or target_name in h:
+                tgt_idx = i
+                break
+        if tgt_idx is not None:
+            break
+
+    # If the user only gives one hint, infer the neighbor as a fallback.
+    if src_idx is None and src_from_hint is not None:
+        src_idx = src_from_hint
+    if tgt_idx is None and tgt_from_hint is not None:
+        tgt_idx = tgt_from_hint
 
     if src_idx is not None and tgt_idx is None:
         possible = src_idx + 1
-        tgt_idx = possible if possible < len(headers) else None
+        tgt_idx = possible if possible < len(headers_clean) else None
 
     if tgt_idx is not None and src_idx is None:
         possible = tgt_idx - 1
         src_idx = possible if possible >= 0 else None
 
-    if src_idx == tgt_idx:
+    if src_idx is None or tgt_idx is None or src_idx == tgt_idx:
         return None, None
 
     return src_idx, tgt_idx
-
 
 def find_excel_header_row(rows):
     max_scan = min(len(rows), 25)
@@ -900,9 +984,13 @@ if uploaded_file and run_button:
         status_text.text("QA complete.")
 
         if api_errors:
-            with st.expander("API warnings"):
+            with st.expander("API warnings", expanded=True):
                 for err in api_errors:
                     st.warning(err)
+
+        if api_errors and not report_rows:
+            st.error("The AI API call failed, so this is NOT a clean-file result. Check the API warnings above, model access, and OPENAI_API_KEY.")
+            st.stop()
 
         if report_rows:
             df_report = pd.DataFrame(report_rows)
@@ -993,6 +1081,7 @@ if uploaded_file and run_button:
 
         else:
             st.success(f"No errors found in {len(segments)} checked segment(s). Completed in {processing_time} seconds.")
+            st.caption("If you intentionally added errors, confirm the detected columns above show Source Text -> Original Translation. If not, set the Source and Translation columns in the sidebar.")
 
     except Exception as e:
         progress_bar.empty()
