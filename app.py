@@ -107,6 +107,16 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .sev-critical { background: rgba(255,0,68,0.2); color: #ff0044; }
 .sev-review { background: rgba(96,165,250,0.15); color: #60a5fa; }
 .empty-state { text-align:center; padding:45px; color:#6b7280; border: 1px dashed #2a2a4a; border-radius:12px; }
+
+/* Hide Streamlit public toolbar/menu/footer, including fork/deploy controls where present */
+#MainMenu {visibility: hidden; display: none;}
+footer {visibility: hidden; display: none;}
+header {visibility: hidden; display: none;}
+[data-testid="stToolbar"] {visibility: hidden; display: none;}
+[data-testid="stDecoration"] {visibility: hidden; display: none;}
+[data-testid="stStatusWidget"] {visibility: hidden; display: none;}
+[data-testid="stDeployButton"] {visibility: hidden; display: none;}
+.stAppDeployButton {visibility: hidden; display: none;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -982,6 +992,98 @@ def make_report_row(
     }
 
 
+
+
+def suggest_balanced_quotes(text: str) -> str:
+    """Return a safer quote-balanced suggestion, or empty string if no clear fix is available."""
+    t = text.strip()
+    if not t:
+        return ""
+
+    # Common mixed quote cases. Keep the sentence text unchanged; only normalize the quote marks.
+    if t.startswith("“") and t.endswith('"'):
+        return t[:-1] + "”"
+    if t.startswith('"') and t.endswith("”"):
+        return '“' + t[1:]
+    if t.startswith("‘") and t.endswith("'"):
+        return t[:-1] + "’"
+    if t.startswith("'") and t.endswith("’"):
+        return "‘" + t[1:]
+
+    if t.count('"') % 2 != 0:
+        return t + '"'
+    if t.count("'") % 2 != 0:
+        return t + "'"
+    return ""
+
+
+def has_latin_letters(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", text or ""))
+
+
+def is_low_value_ai_style_issue(row: Dict[str, Any], include_style: bool) -> bool:
+    """Drop subjective AI suggestions that look like preference, not true QA errors."""
+    if row.get("Check Source") != "AI QA":
+        return False
+
+    if str(row.get("Error Type", "")).lower() == "api warning":
+        return False
+
+    error_type = str(row.get("Error Type", "")).strip().lower()
+    explanation = str(row.get("Explanation", "")).strip().lower()
+    wrong = str(row.get("Wrong Part", "")).strip()
+    suggestion = str(row.get("Suggestion", "")).strip()
+    translation = str(row.get("Translation", "")).strip()
+    rule_source = str(row.get("Rule Source", "")).strip().lower()
+
+    if not suggestion:
+        return True
+    if suggestion == wrong or suggestion == translation:
+        return True
+
+    subjective_types = {
+        "style", "style & tone", "readability", "fluency", "fluency/readability",
+        "terminology", "ai qa"
+    }
+    if not include_style and error_type in subjective_types and rule_source in {"", "ai"}:
+        return True
+
+    subjective_phrases = [
+        "more natural", "available", "preferred", "prefer", "better", "alternative",
+        "context", "style", "tone", "readability", "fluent", "idiomatic",
+        "could be", "would be", "native speakers", "telugu equivalent"
+    ]
+    if not include_style and rule_source in {"", "ai"} and any(p in explanation for p in subjective_phrases):
+        if not (has_latin_letters(wrong) and wrong in translation):
+            return True
+
+    objective_types = {"grammar", "spelling", "mixed script", "mixed language"}
+    if error_type in objective_types and wrong and wrong not in translation:
+        return True
+
+    return False
+
+
+def post_filter_report_rows(rows: List[Dict[str, Any]], include_style: bool) -> Tuple[List[Dict[str, Any]], int]:
+    filtered = []
+    dropped = 0
+    seen = set()
+    for row in rows:
+        if is_low_value_ai_style_issue(row, include_style):
+            dropped += 1
+            continue
+        key = (
+            row.get("Sheet", ""), row.get("Location", ""), row.get("Error Type", ""),
+            row.get("Wrong Part", ""), row.get("Suggestion", "")
+        )
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        filtered.append(row)
+    return filtered, dropped
+
+
 def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
     rows = []
     source = normalize_text(segment.get("source", ""))
@@ -1015,7 +1117,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     tgt_end = target_for_punct[-1:] if target_for_punct else ""
     if source_for_punct and src_end in ".!?;:" and tgt_end not in ".!?;:":
         rows.append(make_report_row(
-            segment, "Punctuation", "Minor", tgt_end or "missing ending punctuation", target_for_punct + src_end,
+            segment, "Punctuation", "Minor", "missing ending punctuation", target_for_punct + src_end,
             f"Source ends with '{src_end}', but translation does not preserve ending punctuation.", "Rule Engine"
         ))
 
@@ -1055,11 +1157,11 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
             ))
             break
 
-    quote_chars = ['"', "'", "“", "”", "‘", "’"]
-    if target.count('"') % 2 != 0 or target.count("'") % 2 != 0:
+    quote_suggestion = suggest_balanced_quotes(target)
+    if quote_suggestion:
         rows.append(make_report_row(
-            segment, "Formatting", "Minor", "Unbalanced quote", target,
-            "Unbalanced quote mark detected.", "Rule Engine"
+            segment, "Formatting", "Minor", "unbalanced quote marks", quote_suggestion,
+            "Opening and closing quotation marks are inconsistent or unbalanced.", "Rule Engine"
         ))
 
     # DNT terms
@@ -1146,43 +1248,63 @@ def ai_qa_batch(
             f"Relevant Company Rules:\n{relevant if relevant else '(none)'}"
         )
 
-    style_line = "Include terminology/style suggestions only when clearly supported by source or company rules." if include_style else "Do NOT include subjective terminology/style suggestions unless they are clearly supported by provided company rules."
+    if include_style:
+        style_policy = (
+            "Style and terminology suggestions are allowed, but only when they are clearly better, "
+            "supported by context, and not merely a personal preference."
+        )
+    else:
+        style_policy = (
+            "Do NOT flag subjective style, wording, or terminology preferences unless a company rule, glossary, "
+            "DNT list, placeholder rule, or clear source meaning proves it is wrong. "
+            "Do NOT flag acceptable target-language loanwords/transliterations as errors merely because a native synonym exists. "
+            "For Telugu UI localization, terms like వెల్కమ్ స్క్రీన్, స్క్రీన్, ఫైల్, యాప్, సెట్టింగ్, డాక్యుమెంట్, పాస్‌వర్డ్ can be acceptable unless company rules say otherwise."
+        )
 
     instructions = (
-        "You are ErrorSweep, a professional linguistic QA engine. "
-        "Return only valid JSON. Do not include markdown. "
-        "Be precise and do not invent issues."
+        "You are ErrorSweep, a strict but conservative linguistic QA engine for localization. "
+        "Your job is to find actual QA defects, not to rewrite acceptable translations. "
+        "Return only valid JSON. No markdown. Do not invent issues."
     )
 
     prompt = f"""
 Domain: {domain}
 Strictness: {STRICTNESS_GUIDE[strictness]}
-Style guidance: {style_line}
+Style policy: {style_policy}
 
 Review the following segments for real QA errors.
 
 {chr(10).join(numbered_parts)}
 
-Check these categories:
-- Accuracy / meaning mismatch
-- Grammar
-- Spelling
-- Mixed script or mixed language
-- Terminology only if clear
-- Fluency/readability
-- Formatting that deterministic checks may miss
-- Client rules from ZIP, if provided
+Important rules:
+- Output an error only when there is clear evidence in the source, translation, or company rules.
+- Do not suggest a different phrase only because it sounds more natural.
+- Do not change a valid translation into a different meaning.
+- Do not flag transliterated UI/product terms in the target script unless company rules require another term.
+- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example "chupinchandi" in Telugu output.
+- If the issue is grammar/spelling/mixed script, "wrong_part" must be an exact visible fragment from the translation.
+- "suggestion" must be a concrete correction. Prefer a full corrected translation when possible.
+- If you are unsure, omit the error.
+
+Check only these categories:
+- Accuracy: source meaning changed, omitted, or added.
+- Grammar: real grammar mistake in target language.
+- Spelling: real spelling or typo issue.
+- Mixed Script: unexpected Latin/Roman script in target-language text.
+- Formatting: issue not already covered by deterministic rules.
+- Client Rule: clear violation of uploaded company rules.
+- Terminology: only if supported by glossary/DNT/client rule or clearly wrong for the domain.
 
 Return ONLY this JSON array:
 [
   {{
     "location": "exact location from input",
     "language_detected": "detected language or Unknown",
-    "error_type": "Accuracy|Grammar|Spelling|Mixed Script|Terminology|Style & Tone|Readability|Formatting|Client Rule",
+    "error_type": "Accuracy|Grammar|Spelling|Mixed Script|Terminology|Formatting|Client Rule",
     "severity": "Minor|Major|Critical",
-    "wrong_part": "specific wrong fragment",
-    "suggestion": "corrected suggestion",
-    "explanation": "brief reason",
+    "wrong_part": "exact wrong fragment from translation, or concise description for Accuracy only",
+    "suggestion": "corrected target text or exact replacement",
+    "explanation": "brief evidence-based reason",
     "rule_source": "company rule source if used, else AI",
     "confidence": "High|Medium|Low"
   }}
@@ -1208,12 +1330,16 @@ Only include real errors. If no errors are found, return [].
 
     rows = []
     loc_to_seg = {s.get("location", ""): s for s in segments}
+    allowed_types = {"Accuracy", "Grammar", "Spelling", "Mixed Script", "Terminology", "Formatting", "Client Rule", "API Warning"}
     for err in raw:
         loc = err.get("location", "")
         seg = loc_to_seg.get(loc, {})
+        error_type = err.get("error_type", "AI QA")
+        if error_type not in allowed_types:
+            error_type = "AI QA"
         rows.append(make_report_row(
             seg,
-            err.get("error_type", "AI QA"),
+            error_type,
             err.get("severity", "Review"),
             err.get("wrong_part", ""),
             err.get("suggestion", ""),
@@ -1491,10 +1617,9 @@ with st.sidebar:
     skip_non_content = st.checkbox("Skip non-content sheets", value=True)
     deep_scan = st.checkbox("Deep scan if columns are not found", value=False)
 
-    st.divider()
-    st.markdown("### AI Models")
-    openai_model = st.selectbox("OpenAI model", [DEFAULT_OPENAI_MODEL, "gpt-4.1-mini", "gpt-4o"], index=0)
-    gemini_model = st.selectbox("Gemini review model", [DEFAULT_GEMINI_MODEL, "gemini-2.5-pro"], index=0)
+    # Models are intentionally hidden from the UI for a cleaner client-facing experience.
+    openai_model = DEFAULT_OPENAI_MODEL
+    gemini_model = DEFAULT_GEMINI_MODEL
 
 openai_client = get_openai_client()
 gemini_client = get_gemini_client()
@@ -1502,21 +1627,15 @@ gemini_client = get_gemini_client()
 if openai_client is None:
     st.warning("OPENAI_API_KEY is not set. Add it in Streamlit Secrets to use AI features.")
 
-col_a, col_b = st.columns([2, 1])
-with col_a:
-    uploaded_file = st.file_uploader(
-        "Upload file",
-        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
-    )
-    rules_zip = st.file_uploader(
-        "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
-        type=["zip"],
-    )
-with col_b:
-    st.markdown("#### What this app uses")
-    st.write("Rules engine: spacing, punctuation, placeholders, numbers, ZWNJ, glossary, DNT")
-    st.write("OpenAI: QA suggestions and translation")
-    st.write("Gemini: independent review for Pro")
+st.markdown("### Upload")
+uploaded_file = st.file_uploader(
+    "Upload file",
+    type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+)
+rules_zip = st.file_uploader(
+    "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
+    type=["zip"],
+)
 
 rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
 if rules_zip:
@@ -1537,7 +1656,7 @@ if rules_zip:
 
 if mode_choice.startswith("ErrorSweep —"):
     st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-    st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. If no ZIP is uploaded, OpenAI uses general QA rules.")
+    st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
 
     q1, q2, q3 = st.columns(3)
     with q1:
@@ -1605,6 +1724,10 @@ if mode_choice.startswith("ErrorSweep —"):
                 status.text(f"OpenAI QA batch {b + 1}/{total_batches}...")
                 report_rows.extend(ai_qa_batch(openai_client, openai_model, batch, rules, domain, strictness, include_ai_style))
                 progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
+
+        report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
+        if dropped_ai_rows:
+            st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
 
         progress.progress(1.0)
         status.text(f"QA complete in {round(time.time() - start, 2)} seconds.")
