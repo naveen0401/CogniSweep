@@ -296,6 +296,19 @@ with st.sidebar:
     )
 
     st.divider()
+    st.markdown("**Detection options**")
+    run_rule_checks = st.checkbox(
+        "Run deterministic punctuation/spacing checks",
+        value=True,
+        help="Fast rule-based checks for double spaces, missing ending punctuation, brackets, bullets, numbers, and placeholders."
+    )
+    run_ai_checks = st.checkbox(
+        "Run AI semantic/language QA",
+        value=True,
+        help="AI checks meaning, grammar, script, terminology, and fluency. Turn OFF to test formatting rules only."
+    )
+
+    st.divider()
     st.markdown("**Supported formats**")
     st.caption(".xlsx, .csv, .txt, .json, .xml, .xliff, .srt, .docx")
 
@@ -305,6 +318,7 @@ with st.sidebar:
 # ==============================
 def normalize_text(text):
     text = str(text)
+    text = text.replace("\u00A0", " ")
     for ch in ["\u200B", "\u200C", "\u200D"]:
         text = text.replace(ch, "")
     return text.strip()
@@ -707,6 +721,247 @@ def collect_docx_segments(uploaded_file):
     return segments
 
 
+
+# ==============================
+# Fast deterministic QA checks
+# ==============================
+def rule_clean(text):
+    """Keep text readable for rule checks while preserving internal spaces."""
+    text = str(text or "")
+    text = text.replace("\u00A0", " ")
+    for ch in ["\u200B", "\u200C", "\u200D"]:
+        text = text.replace(ch, "")
+    return text
+
+
+def strip_closing_marks(text):
+    return rule_clean(text).strip().rstrip('"\'”’)]}»›')
+
+
+TERMINAL_PUNCT_EQUIV = {
+    ".": {".", "।", "॥", "。"},
+    "?": {"?", "؟", "？"},
+    "!": {"!", "！"},
+    ":": {":", "："},
+    ";": {";", "；"},
+}
+
+QUOTE_CHARS = set(['"', "'", "“", "”", "‘", "’"])
+BULLET_CHARS = {"•", "∙", "●", "○", "-", "–", "—", "*"}
+PLACEHOLDER_PATTERN = re.compile(
+    r"(\{\{[^}]+\}\}|\{\d+\}|%[sdif]|\$[A-Za-z_][A-Za-z0-9_]*|<[^>]+>|\[[A-Za-z0-9_]+\])"
+)
+
+
+def get_terminal_punctuation(text):
+    cleaned = strip_closing_marks(text)
+    if not cleaned:
+        return ""
+    last = cleaned[-1]
+    return last if last in TERMINAL_PUNCT_EQUIV else ""
+
+
+def has_equivalent_terminal_punctuation(target, source_punct):
+    cleaned = strip_closing_marks(target)
+    if not cleaned:
+        return False
+    return cleaned[-1] in TERMINAL_PUNCT_EQUIV.get(source_punct, {source_punct})
+
+
+def first_visible_char(text):
+    cleaned = rule_clean(text).strip()
+    return cleaned[0] if cleaned else ""
+
+
+def count_quote_like(text):
+    return sum(1 for ch in rule_clean(text) if ch in QUOTE_CHARS)
+
+
+def find_placeholders(text):
+    return PLACEHOLDER_PATTERN.findall(rule_clean(text))
+
+
+def make_rule_report(seg, error_type, severity, wrong_part, suggestion, explanation):
+    source = seg.get("source", "")
+    translation = seg.get("translation", seg.get("text", ""))
+    sheet = seg.get("sheet", "")
+    location = seg.get("location", "")
+    return build_report_row(
+        sheet=sheet,
+        location=location,
+        language="Rule Check",
+        source=source,
+        translation=translation,
+        err={
+            "language_detected": "Rule Check",
+            "error_type": error_type,
+            "severity": severity,
+            "wrong_part": wrong_part,
+            "suggestion": suggestion,
+            "explanation": explanation,
+        }
+    )
+
+
+def run_deterministic_checks(seg):
+    """
+    Fast rule-based checks catch issues that AI often misses:
+    double spaces, missing ending punctuation, missing brackets, bullets, placeholders, and numbers.
+    """
+    rows = []
+    is_bilingual = seg.get("mode") == "bilingual"
+    source = rule_clean(seg.get("source", "")) if is_bilingual else ""
+    target = rule_clean(seg.get("translation", seg.get("text", "")))
+
+    if not target.strip():
+        return rows
+
+    # 1. Multiple spaces inside target text.
+    multi_space_matches = list(re.finditer(r" {2,}", target))
+    if multi_space_matches:
+        collapsed = re.sub(r" {2,}", " ", target)
+        rows.append(make_rule_report(
+            seg,
+            "Formatting",
+            "Minor",
+            "Multiple consecutive spaces",
+            collapsed,
+            "Target text contains extra spaces. Collapse repeated spaces to a single space."
+        ))
+
+    # 2. Leading/trailing spaces in target text.
+    if target != target.strip():
+        rows.append(make_rule_report(
+            seg,
+            "Formatting",
+            "Minor",
+            "Leading/trailing space",
+            target.strip(),
+            "Target text has unnecessary leading or trailing spaces."
+        ))
+
+    if is_bilingual and source.strip():
+        # 3. Missing terminal punctuation from source.
+        src_end = get_terminal_punctuation(source)
+        if src_end and not has_equivalent_terminal_punctuation(target, src_end):
+            rows.append(make_rule_report(
+                seg,
+                "Formatting",
+                "Minor",
+                f"Missing ending punctuation: {src_end}",
+                target.strip() + src_end,
+                "Source ends with punctuation, but target does not preserve equivalent ending punctuation."
+            ))
+
+        # 4. Bullet prefix should be preserved for UI/menu strings.
+        src_first = first_visible_char(source)
+        tgt_first = first_visible_char(target)
+        if src_first in BULLET_CHARS and tgt_first not in BULLET_CHARS:
+            rows.append(make_rule_report(
+                seg,
+                "Formatting",
+                "Minor",
+                f"Missing bullet prefix: {src_first}",
+                src_first + target.strip(),
+                "Source starts with a bullet/list marker, but target does not."
+            ))
+
+        # 5. Brackets often mark UI labels and should be preserved.
+        bracket_pairs = [("[", "]"), ("(", ")"), ("{", "}")]
+        for open_b, close_b in bracket_pairs:
+            if open_b in source and close_b in source:
+                if open_b not in target or close_b not in target:
+                    rows.append(make_rule_report(
+                        seg,
+                        "Formatting",
+                        "Minor",
+                        f"Missing bracket pair: {open_b}{close_b}",
+                        f"Preserve {open_b}{close_b} around the translated label where appropriate",
+                        "Source contains bracket formatting, but target does not preserve the same bracket structure."
+                    ))
+                    break
+
+        # 6. Colon preservation for step labels, UI labels, and commands.
+        if ":" in source and ":" not in target and "：" not in target:
+            rows.append(make_rule_report(
+                seg,
+                "Formatting",
+                "Minor",
+                "Missing colon",
+                "Add ':' at the equivalent location in the target text",
+                "Source contains a colon that is typically required in UI labels or step text."
+            ))
+
+        # 7. Quote presence/balance.
+        source_quote_count = count_quote_like(source)
+        target_quote_count = count_quote_like(target)
+        if source_quote_count >= 2 and target_quote_count < 2:
+            rows.append(make_rule_report(
+                seg,
+                "Formatting",
+                "Minor",
+                "Missing quotation marks",
+                "Preserve opening and closing quotation marks around the translated text",
+                "Source uses quotation marks, but target is missing a matching quote pair."
+            ))
+        elif target_quote_count % 2 == 1:
+            rows.append(make_rule_report(
+                seg,
+                "Formatting",
+                "Minor",
+                "Unbalanced quotation marks",
+                "Use matching opening and closing quotation marks",
+                "Target appears to have an unmatched quotation mark."
+            ))
+
+        # 8. Placeholders/tags must be preserved exactly.
+        source_placeholders = find_placeholders(source)
+        target_placeholders = find_placeholders(target)
+        for ph in source_placeholders:
+            if ph not in target_placeholders:
+                rows.append(make_rule_report(
+                    seg,
+                    "Formatting",
+                    "Major",
+                    f"Missing placeholder/tag: {ph}",
+                    f"Keep placeholder/tag exactly as source: {ph}",
+                    "A placeholder, variable, or tag from the source is missing in the target."
+                ))
+
+        # 9. Numbers in source should generally be preserved in UI strings.
+        source_numbers = re.findall(r"\d+", source)
+        target_numbers = re.findall(r"\d+", target)
+        for num in source_numbers:
+            if num not in target_numbers:
+                rows.append(make_rule_report(
+                    seg,
+                    "Formatting",
+                    "Major",
+                    f"Missing number: {num}",
+                    f"Preserve number: {num}",
+                    "A number from the source text is missing in the target text."
+                ))
+
+    return rows
+
+
+def dedupe_report_rows(rows):
+    seen = set()
+    deduped = []
+    for row in rows:
+        key = (
+            row.get("Sheet", ""),
+            row.get("Location", ""),
+            row.get("Error Type", ""),
+            row.get("Wrong Part", ""),
+            row.get("Suggestion", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
 # ==============================
 # OpenAI QA
 # ==============================
@@ -758,6 +1013,7 @@ Check only real issues:
 5. Terminology problems for the domain.
 6. Formatting or placeholder problems like {{variable}}, %s, {{0}}, <tag>, URLs, numbers.
 7. Unnatural style or tone.
+8. Do not ignore missing final punctuation, removed quotes, removed brackets, removed bullets, extra internal spaces, or missing numbers/placeholders.
 
 Return ONLY a valid JSON array. No markdown. No explanation outside JSON.
 
@@ -808,51 +1064,65 @@ def run_qa_on_segments(segments, status_text, progress_bar):
     if not segments:
         return report_rows, errors
 
-    total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
+    # Fast deterministic checks run first. These catch formatting issues that AI may skip.
+    if run_rule_checks:
+        status_text.text("Running deterministic punctuation/spacing checks...")
+        for seg_index, seg in enumerate(segments, start=1):
+            report_rows.extend(run_deterministic_checks(seg))
+            if len(segments) > 0:
+                progress_bar.progress(min(seg_index / len(segments), 1.0) * 0.25)
 
-    for batch_index in range(total_batches):
-        batch = segments[batch_index * batch_size:(batch_index + 1) * batch_size]
+    # AI semantic QA is optional. It handles meaning, grammar, style, and terminology.
+    if run_ai_checks:
+        total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
 
-        start_num = batch_index * batch_size + 1
-        end_num = min((batch_index + 1) * batch_size, len(segments))
+        for batch_index in range(total_batches):
+            batch = segments[batch_index * batch_size:(batch_index + 1) * batch_size]
 
-        status_text.text(f"AI batch {batch_index + 1}/{total_batches}: checking segments {start_num}-{end_num} of {len(segments)}")
-        progress_bar.progress((batch_index) / total_batches)
+            start_num = batch_index * batch_size + 1
+            end_num = min((batch_index + 1) * batch_size, len(segments))
 
-        try:
-            batch_errors = run_ai_batch(batch)
-        except Exception as e:
-            errors.append(f"Batch {batch_index + 1} failed: {str(e)}")
-            continue
+            status_text.text(f"AI batch {batch_index + 1}/{total_batches}: checking segments {start_num}-{end_num} of {len(segments)}")
+            progress_base = 0.25 if run_rule_checks else 0.0
+            progress_span = 0.75 if run_rule_checks else 1.0
+            progress_bar.progress(progress_base + (batch_index / total_batches) * progress_span)
 
-        for err in batch_errors:
-            loc = err.get("location", "")
+            try:
+                batch_errors = run_ai_batch(batch)
+            except Exception as e:
+                errors.append(f"Batch {batch_index + 1} failed: {str(e)}")
+                continue
 
-            original_segment = next((s for s in batch if s.get("location") == loc), None)
+            for err in batch_errors:
+                loc = err.get("location", "")
 
-            if original_segment:
-                sheet = original_segment.get("sheet", "")
-                source = original_segment.get("source", "")
-                translation = original_segment.get("translation", original_segment.get("text", ""))
-            else:
-                sheet = ""
-                source = err.get("source", "")
-                translation = err.get("translation", "")
+                original_segment = next((s for s in batch if s.get("location") == loc), None)
 
-            report_rows.append(
-                build_report_row(
-                    sheet=sheet,
-                    location=loc,
-                    language=err.get("language_detected", "Unknown"),
-                    source=source,
-                    translation=translation,
-                    err=err
+                if original_segment:
+                    sheet = original_segment.get("sheet", "")
+                    source = original_segment.get("source", "")
+                    translation = original_segment.get("translation", original_segment.get("text", ""))
+                else:
+                    sheet = ""
+                    source = err.get("source", "")
+                    translation = err.get("translation", "")
+
+                report_rows.append(
+                    build_report_row(
+                        sheet=sheet,
+                        location=loc,
+                        language=err.get("language_detected", "Unknown"),
+                        source=source,
+                        translation=translation,
+                        err=err
+                    )
                 )
-            )
 
-        progress_bar.progress((batch_index + 1) / total_batches)
+            progress_bar.progress(progress_base + ((batch_index + 1) / total_batches) * progress_span)
+    else:
+        status_text.text("AI semantic QA skipped. Rule-based checks completed.")
 
-    return report_rows, errors
+    return dedupe_report_rows(report_rows), errors
 
 
 # ==============================
@@ -974,7 +1244,7 @@ if uploaded_file and run_button:
             st.stop()
 
         estimated_calls = max(1, (len(segments) + batch_size - 1) // batch_size)
-        st.info(f"Checking {len(segments)} segments in about {estimated_calls} API call(s).")
+        st.info(f"Checking {len(segments)} segments. Deterministic checks run instantly; AI will use about {estimated_calls} API call(s) if enabled.")
 
         report_rows, api_errors = run_qa_on_segments(segments, status_text, progress_bar)
 
@@ -1081,7 +1351,7 @@ if uploaded_file and run_button:
 
         else:
             st.success(f"No errors found in {len(segments)} checked segment(s). Completed in {processing_time} seconds.")
-            st.caption("If you intentionally added errors, confirm the detected columns above show Source Text -> Original Translation. If not, set the Source and Translation columns in the sidebar.")
+            st.caption("If you intentionally added errors, confirm detected columns show Source Text -> Original Translation, and keep deterministic punctuation/spacing checks ON.")
 
     except Exception as e:
         progress_bar.empty()
