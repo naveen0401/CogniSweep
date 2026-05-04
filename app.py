@@ -234,6 +234,90 @@ def normalize_text(text: Any) -> str:
     return text.strip("\n\r")
 
 
+def decode_text_bytes(data: bytes) -> Tuple[str, str]:
+    """Decode uploaded text files without destroying Windows/CP1252 punctuation.
+
+    Many client text files contain CP1252 bytes such as NBSP (0xA0), smart quotes,
+    and en dash. Decoding those with UTF-8 + errors=ignore removes/changes
+    characters and can collapse the visual pattern.
+    """
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
+def is_visually_blank_line(line: str) -> bool:
+    return line.replace("\u00A0", " ").strip() == ""
+
+
+def clean_line_for_ai(line: str) -> str:
+    """Clean a line for AI while preserving actual source meaning and spacing."""
+    line = line.rstrip("\r\n")
+    line = line.replace("\u00A0", " ")
+    # collapse only excessive internal whitespace created by NBSP-heavy text files
+    line = re.sub(r"[ \t]+", " ", line)
+    return normalize_text(line).strip()
+
+
+def should_skip_text_translation_line(clean_line: str, non_empty_position: int) -> bool:
+    """Skip column headers in simple Source/Target text templates."""
+    low = clean_line.lower().strip()
+    if non_empty_position <= 2 and low in {"source", "target"}:
+        return True
+    return False
+
+
+def build_preserved_text_translation(text_original: str, segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> bytes:
+    """Build a translated TXT/SRT-like output while keeping the original line pattern.
+
+    For each translated source line, the original line remains in place and the
+    translation is written into the following blank line when available. If the
+    next line is not blank, the translation is inserted immediately below.
+    This prevents the old CSV-table output from changing the user's template.
+    """
+    lines = text_original.splitlines(keepends=True)
+    if not lines and text_original:
+        lines = [text_original]
+
+    by_line_index: Dict[int, str] = {}
+    for seg in segments:
+        idx = seg.get("line_index")
+        loc = seg.get("location", "")
+        trans = translations_by_loc.get(loc, "")
+        if idx is not None and trans:
+            by_line_index[int(idx)] = trans.strip()
+
+    output_lines: List[str] = []
+    replaced_blank_indices = set()
+
+    for i, line in enumerate(lines):
+        if i in replaced_blank_indices:
+            continue
+
+        output_lines.append(line)
+
+        if i not in by_line_index:
+            continue
+
+        translation = by_line_index[i]
+        line_ending_match = re.search(r"(\r\n|\n|\r)$", line)
+        line_ending = line_ending_match.group(1) if line_ending_match else "\n"
+
+        next_index = i + 1
+        if next_index < len(lines) and is_visually_blank_line(lines[next_index]):
+            next_ending_match = re.search(r"(\r\n|\n|\r)$", lines[next_index])
+            next_ending = next_ending_match.group(1) if next_ending_match else line_ending
+            output_lines.append(translation + next_ending)
+            replaced_blank_indices.add(next_index)
+        else:
+            output_lines.append(translation + line_ending)
+
+    return "".join(output_lines).encode("utf-8-sig")
+
+
 def visible_invisibles(text: Any) -> str:
     """Return report-safe text while keeping ZWNJ invisible.
 
@@ -701,6 +785,180 @@ def should_skip_sheet(sheet_name: str, skip_non_content: bool) -> bool:
     return any(k in lower for k in SKIP_SHEET_KEYWORDS)
 
 
+# ==========================================================
+# AUTO TASK + LAYOUT DETECTION
+# ==========================================================
+
+def infer_task_from_request(request_text: str) -> Optional[str]:
+    """Return "qa", "pro" (translation workflow), or None."""
+    t = (request_text or "").lower()
+    if not t.strip():
+        return None
+    translate_terms = [
+        "translate", "translation", "localize", "localise", "localization",
+        "target language", "generate target", "fill target", "prepare translation",
+        "tl", "t9n"
+    ]
+    qa_terms = [
+        "qa", "review", "proofread", "proof read", "check", "lqa",
+        "linguistic review", "error report", "evaluate", "validation", "verify",
+        "quality check"
+    ]
+    translate_score = sum(1 for k in translate_terms if k in t)
+    qa_score = sum(1 for k in qa_terms if k in t)
+    if translate_score > qa_score:
+        return "pro"
+    if qa_score > translate_score:
+        return "qa"
+    return None
+
+
+def _bytes_io(uploaded_file):
+    return io.BytesIO(uploaded_file.getvalue())
+
+
+def _nonempty_ratio(values: List[str]) -> float:
+    if not values:
+        return 0.0
+    non_empty = sum(1 for v in values if normalize_text(v))
+    return non_empty / max(len(values), 1)
+
+
+def infer_task_from_file(uploaded_file, source_hint: str = "", target_hint: str = "") -> Tuple[str, str]:
+    """
+    Heuristic file-level task detector.
+    Returns (task, reason), where task is "qa" or "pro".
+    """
+    name = uploaded_file.name.lower()
+    try:
+        if name.endswith(".xlsx"):
+            wb = load_workbook(_bytes_io(uploaded_file), data_only=False)
+            for ws in wb.worksheets:
+                if should_skip_sheet(ws.title, True):
+                    continue
+                rows = list(ws.iter_rows(values_only=False))
+                if not rows:
+                    continue
+                header_idx, headers, src_idx, tgt_idx = find_excel_header_row(rows, source_hint, target_hint, need_target=False)
+                if src_idx is not None:
+                    if tgt_idx is None:
+                        return "pro", f"Detected source column in Excel sheet '{ws.title}' but no target column."
+                    target_values = []
+                    for row in rows[header_idx + 1: header_idx + 101]:
+                        if len(row) <= max(src_idx, tgt_idx):
+                            continue
+                        target_values.append(normalize_text(row[tgt_idx].value or ""))
+                    if _nonempty_ratio(target_values) >= 0.20:
+                        return "qa", f"Detected populated source + target columns in Excel sheet '{ws.title}'."
+                    return "pro", f"Detected source column with mostly empty target column in Excel sheet '{ws.title}'."
+            return "pro", "No reliable target translations found in Excel."
+
+        if name.endswith(".csv"):
+            df = pd.read_csv(_bytes_io(uploaded_file))
+            src_idx, tgt_idx = detect_source_target_columns(list(df.columns), source_hint, target_hint)
+            if src_idx is not None:
+                if tgt_idx is None:
+                    return "pro", "Detected source column in CSV but no target column."
+                tgt_col = df.columns[tgt_idx]
+                sample = [normalize_text(x) for x in df[tgt_col].head(100).fillna("").tolist()]
+                if _nonempty_ratio(sample) >= 0.20:
+                    return "qa", "Detected populated source + target columns in CSV."
+                return "pro", "Detected source column with mostly empty target column in CSV."
+            return "pro", "No source/target CSV columns detected."
+
+        if name.endswith(".docx"):
+            doc = Document(_bytes_io(uploaded_file))
+            for table_idx, table in enumerate(doc.tables, start=1):
+                header_idx, headers, src_idx, tgt_idx = find_docx_table_header(table, source_hint, target_hint, need_target=False)
+                if src_idx is not None:
+                    if tgt_idx is None:
+                        return "pro", f"Detected source column in DOCX table {table_idx} but no target column."
+                    vals = []
+                    for row in table.rows[header_idx + 1: header_idx + 101]:
+                        if len(row.cells) <= max(src_idx, tgt_idx):
+                            continue
+                        vals.append(get_docx_cell_text(row.cells[tgt_idx]))
+                    if _nonempty_ratio(vals) >= 0.20:
+                        return "qa", f"Detected populated source + target columns in DOCX table {table_idx}."
+                    return "pro", f"Detected source column with mostly blank target column in DOCX table {table_idx}."
+            paras = [normalize_text(p.text) for p in doc.paragraphs if normalize_text(p.text)]
+            if len(paras) >= 2 and paras[0].lower() in {"source", "source text"} and paras[1].lower() in {"target", "translation", "original translation"}:
+                return "pro", "Detected Source/Target text template in DOCX."
+            return "pro", "DOCX appears source-only."
+
+        raw = uploaded_file.getvalue()
+        txt, _ = decode_text_bytes(raw)
+        clean_lines = [clean_line_for_ai(x) for x in txt.splitlines()]
+        nonempty = [x for x in clean_lines if x]
+        if len(nonempty) >= 2 and nonempty[0].lower() in {"source", "source text"} and nonempty[1].lower() in {"target", "translation", "original translation"}:
+            return "pro", "Detected Source/Target line-template."
+        tab_pairs = 0
+        for line in nonempty[:100]:
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0].strip() and parts[1].strip():
+                tab_pairs += 1
+        if tab_pairs >= 3:
+            return "qa", "Detected tab-separated source/target pairs."
+        return "pro", "Text file appears source-only."
+    except Exception as e:
+        return "pro", f"Auto-detection fallback selected translation because layout detection failed: {e}"
+
+
+# ==========================================================
+# DOCX TABLE HELPERS
+# ==========================================================
+
+def get_docx_cell_text(cell) -> str:
+    return "\n".join(p.text for p in cell.paragraphs).strip()
+
+
+def set_docx_cell_text(cell, text: str) -> None:
+    for paragraph in cell.paragraphs:
+        for run in paragraph.runs:
+            run.text = ""
+    if cell.paragraphs:
+        cell.paragraphs[0].add_run(text)
+    else:
+        cell.add_paragraph(text)
+
+
+def set_docx_paragraph_text(paragraph, text: str) -> None:
+    for run in paragraph.runs:
+        run.text = ""
+    paragraph.add_run(text)
+
+
+def find_docx_table_header(table, source_hint: str, target_hint: str, need_target: bool = True):
+    max_scan = min(len(table.rows), 30)
+    best = (None, -9999, [], None, None)
+    for row_idx in range(max_scan):
+        headers = [get_docx_cell_text(cell) for cell in table.rows[row_idx].cells]
+        if not any(headers):
+            continue
+        src, tgt = detect_source_target_columns(headers, source_hint, target_hint)
+        score = score_header_row(headers, src, tgt, need_target)
+        joined = " ".join(str(h).lower() for h in headers)
+        if "source text" in joined:
+            score += 120
+        if "original translation" in joined or "translation" in joined:
+            score += 80
+        if score > best[1]:
+            best = (row_idx, score, headers, src, tgt)
+    row_idx, score, headers, src, tgt = best
+    if row_idx is not None and src is not None and ((tgt is not None) or not need_target) and score >= 40:
+        return row_idx, headers, src, tgt
+    return 0, [], None, None
+
+
+def is_valid_docx_source(text: str) -> bool:
+    t = normalize_text(text)
+    if len(t) < 2:
+        return False
+    if t.lower() in {"source", "target", "source text", "original translation", "translation", "target text"}:
+        return False
+    return True
+
+
 def extract_excel_segments(uploaded_file, source_hint: str, target_hint: str, mode: str, max_segments: int, skip_non_content: bool, deep_scan: bool):
     wb = load_workbook(uploaded_file)
     segments = []
@@ -864,10 +1122,11 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
 
 def extract_text_segments(uploaded_file, mode: str, max_segments: int):
     data = uploaded_file.read()
-    text = data.decode("utf-8", errors="ignore")
+    text, encoding_used = decode_text_bytes(data)
     lower_name = uploaded_file.name.lower()
 
-    # Basic XLIFF/XML pair extraction.
+    # Basic XLIFF/XML pair extraction. These formats should not be converted into
+    # line-pair text output; they are treated as structured source/target pairs.
     if lower_name.endswith((".xliff", ".xlf", ".xml")):
         pairs = []
         try:
@@ -883,8 +1142,8 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
                     elif tag == "target":
                         tgt_el = ch
                 if src_el is not None:
-                    src = normalize_text("".join(src_el.itertext()))
-                    tgt = normalize_text("".join(tgt_el.itertext())) if tgt_el is not None else ""
+                    src = clean_line_for_ai("".join(src_el.itertext()))
+                    tgt = clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else ""
                     if src:
                         pairs.append((src, tgt))
         except Exception:
@@ -904,63 +1163,171 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
                     "text": tgt if mode == "qa" else src,
                     "mode": "bilingual" if tgt else "source_only",
                 })
-            return text, segments, ["XML/XLIFF: extracted source/target pairs"]
+            return text, segments, [f"XML/XLIFF: extracted source/target pairs (decoded as {encoding_used})"]
 
-    lines = [line.strip() for line in text.splitlines() if line.strip() and len(line.strip()) > 2]
+    raw_lines = text.splitlines(keepends=True)
+    clean_lines = [clean_line_for_ai(line) for line in raw_lines]
+
+    # Detect tab-separated bilingual pairs first.
     segments = []
-    # Tab-separated bilingual pairs
-    for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
-        parts = line.split("\t")
+    for line_index, clean in enumerate(clean_lines):
+        if not clean or len(clean) <= 2:
+            continue
+        parts = clean.split("\t")
         if len(parts) >= 2 and len(parts[0].strip()) > 1 and len(parts[1].strip()) > 1:
             segments.append({
                 "id": len(segments) + 1,
                 "file_type": "text",
                 "sheet": "File",
-                "location": f"Line {i}",
+                "location": f"Line {line_index + 1}",
+                "line_index": line_index,
                 "source": parts[0].strip(),
                 "translation": parts[1].strip(),
                 "text": parts[1].strip() if mode == "qa" else parts[0].strip(),
                 "mode": "bilingual",
             })
+            if reached_segment_limit(segments, max_segments):
+                break
 
-    if len(segments) >= max(1, min(5, len(lines))):
-        return text, limit_sequence(segments, max_segments), ["Text: detected tab-separated source/translation pairs"]
+    non_empty_count = sum(1 for x in clean_lines if x.strip())
+    if segments and len(segments) >= max(1, min(5, non_empty_count)):
+        return text, segments, [f"Text: detected tab-separated source/translation pairs (decoded as {encoding_used})"]
 
-    if mode == "pro":
-        for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
-            segments.append({
-                "id": len(segments) + 1,
-                "file_type": "text",
-                "sheet": "File",
-                "location": f"Line {i}",
-                "source": line,
-                "translation": "",
-                "text": line,
-                "mode": "source_only",
-            })
-    else:
-        for i, line in enumerate(limit_sequence(lines, max_segments), start=1):
-            segments.append({
-                "id": len(segments) + 1,
-                "file_type": "text",
-                "sheet": "File",
-                "location": f"Line {i}",
-                "source": "",
-                "translation": line,
-                "text": line,
-                "mode": "monolingual",
-            })
-
-    return text, limit_sequence(segments, max_segments), ["Text: line-based mode"]
-
-
-def extract_docx_segments(uploaded_file, mode: str, max_segments: int):
-    doc = Document(uploaded_file)
+    # Line-based text template mode. This preserves the user's line pattern.
+    # Example:
+    #   Source
+    #   Target
+    #   English source line
+    #   [blank target line]
+    # becomes:
+    #   Source
+    #   Target
+    #   English source line
+    #   Telugu translation
     segments = []
-    para_map = {}
-    for i, p in enumerate(doc.paragraphs, start=1):
+    non_empty_position = 0
+    for line_index, clean in enumerate(clean_lines):
+        if not clean:
+            continue
+        non_empty_position += 1
+        if len(clean) <= 2:
+            continue
+        if should_skip_text_translation_line(clean, non_empty_position):
+            continue
+
+        if mode == "pro":
+            seg = {
+                "id": len(segments) + 1,
+                "file_type": "text",
+                "sheet": "File",
+                "location": f"Line {line_index + 1}",
+                "line_index": line_index,
+                "source": clean,
+                "translation": "",
+                "text": clean,
+                "mode": "source_only",
+            }
+        else:
+            seg = {
+                "id": len(segments) + 1,
+                "file_type": "text",
+                "sheet": "File",
+                "location": f"Line {line_index + 1}",
+                "line_index": line_index,
+                "source": "",
+                "translation": clean,
+                "text": clean,
+                "mode": "monolingual",
+            }
+        segments.append(seg)
+        if reached_segment_limit(segments, max_segments):
+            break
+
+    return text, segments, [f"Text: pattern-preserving line mode (decoded as {encoding_used})"]
+
+
+def extract_docx_segments(uploaded_file, mode: str, max_segments: int, source_hint: str = "", target_hint: str = ""):
+    """Auto DOCX extractor: tables first, Source/Target template second, paragraph fallback third."""
+    doc = Document(uploaded_file)
+    segments: List[Dict[str, Any]] = []
+    para_map: Dict[str, Dict[str, Any]] = {}
+    logs: List[str] = []
+
+    for table_idx, table in enumerate(doc.tables, start=1):
+        header_idx, headers, src_idx, tgt_idx = find_docx_table_header(table, source_hint, target_hint, need_target=(mode == "qa"))
+        if src_idx is None or (mode == "qa" and tgt_idx is None):
+            continue
+        src_name = headers[src_idx] if src_idx < len(headers) else "Source Text"
+        tgt_name = headers[tgt_idx] if tgt_idx is not None and tgt_idx < len(headers) else "Original Translation"
+        logs.append(f"DOCX table {table_idx}: column mode [{src_name}] -> [{tgt_name}]")
+
+        for row_idx in range(header_idx + 1, len(table.rows)):
+            row = table.rows[row_idx]
+            if len(row.cells) <= src_idx:
+                continue
+            source_text = normalize_text(get_docx_cell_text(row.cells[src_idx]))
+            if not is_valid_docx_source(source_text):
+                continue
+            translation_text = ""
+            target_cell = None
+            if tgt_idx is not None and len(row.cells) > tgt_idx:
+                target_cell = row.cells[tgt_idx]
+                translation_text = normalize_text(get_docx_cell_text(target_cell))
+            if mode == "qa" and not translation_text:
+                continue
+            loc = f"Table {table_idx}, Row {row_idx + 1}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "docx",
+                "sheet": f"Table {table_idx}",
+                "location": loc,
+                "row": row_idx + 1,
+                "source": source_text,
+                "translation": translation_text,
+                "text": translation_text if mode == "qa" else source_text,
+                "mode": "bilingual" if translation_text else "source_only",
+                "source_header": src_name,
+                "target_header": tgt_name,
+            })
+            if target_cell is not None:
+                para_map[loc] = {"kind": "cell", "cell": target_cell}
+            if reached_segment_limit(segments, max_segments):
+                return doc, segments, para_map, logs
+
+    if segments:
+        return doc, segments, para_map, logs
+
+    paras = list(doc.paragraphs)
+    clean_paras = [normalize_text(p.text) for p in paras]
+    nonempty = [x for x in clean_paras if x]
+    if len(nonempty) >= 2 and nonempty[0].lower() in {"source", "source text"} and nonempty[1].lower() in {"target", "translation", "original translation"}:
+        logs.append("DOCX: Source/Target paragraph-template mode")
+        for i, p in enumerate(paras):
+            text = normalize_text(p.text)
+            if not is_valid_docx_source(text):
+                continue
+            if text.lower() in {"source", "source text", "target", "translation", "original translation"}:
+                continue
+            loc = f"Paragraph {i + 1}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "docx",
+                "sheet": "Document",
+                "location": loc,
+                "source": text if mode == "pro" else "",
+                "translation": "" if mode == "pro" else text,
+                "text": text,
+                "mode": "source_only" if mode == "pro" else "monolingual",
+            })
+            para_map[loc] = {"kind": "paragraph_append", "paragraph": p}
+            if reached_segment_limit(segments, max_segments):
+                break
+        return doc, segments, para_map, logs
+
+    logs.append("DOCX: paragraph fallback mode")
+    for i, p in enumerate(paras, start=1):
         text = normalize_text(p.text)
-        if text and len(text) > 2:
+        if is_valid_docx_source(text):
             seg = {
                 "id": len(segments) + 1,
                 "file_type": "docx",
@@ -972,10 +1339,25 @@ def extract_docx_segments(uploaded_file, mode: str, max_segments: int):
                 "mode": "source_only" if mode == "pro" else "monolingual",
             }
             segments.append(seg)
-            para_map[seg["location"]] = p
+            para_map[seg["location"]] = {"kind": "paragraph_append", "paragraph": p}
             if reached_segment_limit(segments, max_segments):
                 break
-    return doc, segments, para_map, ["DOCX: paragraph mode"]
+    return doc, segments, para_map, logs
+
+
+def write_docx_translation_target(target_info: Any, translation: str) -> None:
+    if target_info is None:
+        return
+    if hasattr(target_info, "add_run"):
+        target_info.add_run("\n" + translation)
+        return
+    kind = target_info.get("kind") if isinstance(target_info, dict) else None
+    if kind == "cell":
+        set_docx_cell_text(target_info["cell"], translation)
+    elif kind == "paragraph":
+        set_docx_paragraph_text(target_info["paragraph"], translation)
+    elif kind == "paragraph_append":
+        target_info["paragraph"].add_run("\n" + translation)
 
 
 # ==========================================================
@@ -1801,9 +2183,17 @@ def render_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
+    task_request = st.text_area(
+        "Vendor request / task instruction (optional)",
+        value="",
+        placeholder="Example: Please do QA on this translated file. / Please translate this file into Telugu.",
+        height=80,
+        help="If you choose Auto Detect, ErrorSweep uses this instruction plus the file layout to decide whether to run QA or Translation."
+    )
+
     mode_choice = st.radio(
-        "Choose version",
-        ["ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"],
+        "Task mode",
+        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"],
         horizontal=True,
     )
 
@@ -1882,11 +2272,26 @@ def render_dashboard() -> None:
             for w in rules.get("warnings", []):
                 st.warning(w)
 
+    if mode_choice == "Auto Detect Task" and uploaded_file is not None:
+        requested_task = infer_task_from_request(task_request)
+        if requested_task:
+            effective_task = requested_task
+            effective_reason = "Task detected from vendor request/instruction."
+        else:
+            effective_task, effective_reason = infer_task_from_file(uploaded_file, source_col_hint, target_col_hint)
+        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"
+        st.info(f"Auto detected workflow: {'QA Run' if effective_task == 'qa' else 'Translation + Review'} — {effective_reason}")
+    elif mode_choice == "Auto Detect Task":
+        effective_mode_choice = "ErrorSweep — QA Run + Suggestions"
+        st.info("Upload a file to auto-detect QA vs Translation workflow.")
+    else:
+        effective_mode_choice = mode_choice
+
     # ==========================================================
     # ERROR SWEEP QA ONLY
     # ==========================================================
 
-    if mode_choice.startswith("ErrorSweep —"):
+    if effective_mode_choice.startswith("ErrorSweep —"):
         st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
         st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
 
@@ -1927,7 +2332,7 @@ def render_dashboard() -> None:
             elif lower.endswith(".csv"):
                 _, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), deep_scan)
             elif lower.endswith(".docx"):
-                _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(max_segments))
+                _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(max_segments), source_col_hint, target_col_hint)
             else:
                 _, segments, logs = extract_text_segments(uploaded_file, "qa", int(max_segments))
 
@@ -2044,7 +2449,7 @@ def render_dashboard() -> None:
             elif lower.endswith(".csv"):
                 dataframe, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), deep_scan)
             elif lower.endswith(".docx"):
-                doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(max_segments))
+                doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(max_segments), source_col_hint, target_col_hint)
             else:
                 text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(max_segments))
 
@@ -2154,11 +2559,11 @@ def render_dashboard() -> None:
                 output_name = "errorsweep_pro_translated_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
 
             elif lower.endswith(".docx") and doc is not None:
-                # Append translation after each original paragraph for a readable translated DOCX.
+                # Preserve DOCX layout. If a target table column exists, fill it.
+                # If no target column exists, append translation after each source paragraph.
                 for seg in segments:
-                    p = para_map.get(seg["location"])
-                    if p is not None:
-                        p.add_run("\n" + translations_by_loc.get(seg["location"], ""))
+                    target_info = para_map.get(seg["location"])
+                    write_docx_translation_target(target_info, translations_by_loc.get(seg["location"], ""))
                 bio = io.BytesIO()
                 doc.save(bio)
                 bio.seek(0)
@@ -2167,17 +2572,23 @@ def render_dashboard() -> None:
                 output_name = "errorsweep_pro_translated_" + uploaded_file.name
 
             else:
-                # Translation table for text/json/xml/srt/xliff.
-                table = []
-                for seg in segments:
-                    table.append({
-                        "Location": seg["location"],
-                        "Source": seg.get("source") or seg.get("text", ""),
-                        "Translation": translations_by_loc.get(seg["location"], ""),
-                    })
-                output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
-                mime_type = "text/csv"
-                output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+                # Text-like files should preserve the user's original pattern, not become a CSV table.
+                if lower.endswith((".txt", ".srt")) and text_original is not None:
+                    output_bytes = build_preserved_text_translation(text_original, segments, translations_by_loc)
+                    mime_type = "text/plain"
+                    output_name = "errorsweep_pro_translated_" + uploaded_file.name
+                else:
+                    # For JSON/XML/XLIFF and other structured text, keep a translation table for safety.
+                    table = []
+                    for seg in segments:
+                        table.append({
+                            "Location": seg["location"],
+                            "Source": seg.get("source") or seg.get("text", ""),
+                            "Translation": translations_by_loc.get(seg["location"], ""),
+                        })
+                    output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
+                    mime_type = "text/csv"
+                    output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
 
             progress.progress(1.0)
             status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
