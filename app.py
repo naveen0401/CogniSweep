@@ -10,7 +10,7 @@ import zipfile
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
 
-from openai import OpenAI
+from openai import OpenAI as AI
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.comments import Comment
@@ -29,8 +29,7 @@ except Exception:
 
 # ==========================================================
 # ERROR SWEEP / ERROR SWEEP PRO
-# QA-only + optional company rules ZIP
-# Translation with OpenAI + Gemini review
+# White-label AI QA + translation workflow
 # ==========================================================
 
 st.set_page_config(page_title="ErrorSweep", layout="wide")
@@ -118,10 +117,98 @@ header {visibility: hidden; display: none;}
 [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
 [data-testid="stDeployButton"] {visibility: hidden; display: none;}
 .stAppDeployButton {visibility: hidden; display: none;}
+
+/* Premium white-label visual system */
+:root {
+    --es-green: #00ff88;
+    --es-cyan: #38bdf8;
+    --es-purple: #8b5cf6;
+    --es-bg: #080a12;
+    --es-card: rgba(16, 19, 34, 0.72);
+}
+.stApp {
+    background:
+        radial-gradient(circle at 12% 18%, rgba(0,255,136,0.14), transparent 25%),
+        radial-gradient(circle at 86% 14%, rgba(56,189,248,0.12), transparent 28%),
+        radial-gradient(circle at 50% 100%, rgba(139,92,246,0.10), transparent 35%),
+        #080a12;
+}
+.hero {
+    position: relative;
+    overflow: hidden;
+    background:
+        linear-gradient(135deg, rgba(0,255,136,0.12), rgba(56,189,248,0.08) 42%, rgba(139,92,246,0.10)),
+        rgba(12, 15, 26, 0.9);
+    box-shadow: 0 28px 80px rgba(0,0,0,0.35);
+}
+.hero::after {
+    content: "";
+    position: absolute;
+    width: 420px;
+    height: 420px;
+    right: -150px;
+    top: -190px;
+    background: radial-gradient(circle, rgba(0,255,136,0.22), transparent 62%);
+    filter: blur(4px);
+}
+.hero-title {
+    background: linear-gradient(90deg, #00ff88, #38bdf8, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.glass-card, div[data-testid="stExpander"] {
+    background: rgba(16, 19, 34, 0.74) !important;
+    border: 1px solid rgba(56,189,248,0.18) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.22);
+}
+.stButton > button, .stDownloadButton > button {
+    border-radius: 14px !important;
+    border: 1px solid rgba(0,255,136,0.25) !important;
+    background: linear-gradient(90deg, #00cc6a, #0ea5e9) !important;
+    color: white !important;
+    font-weight: 800 !important;
+    letter-spacing: .2px;
+    box-shadow: 0 10px 28px rgba(14,165,233,0.20);
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 36px rgba(0,255,136,0.20);
+}
+[data-testid="stMetric"] {
+    background: rgba(16,19,34,.72);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 16px;
+    padding: 16px;
+}
+.es-visual-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin: 18px 0 24px 0;
+}
+.es-tile {
+    background: rgba(16, 19, 34, 0.74);
+    border: 1px solid rgba(0,255,136,0.14);
+    border-radius: 16px;
+    padding: 18px;
+}
+.es-tile h4 { margin: 0 0 6px 0; color: #e5e7eb; }
+.es-tile p { margin: 0; color: #9ca3af; font-size: 13px; }
+@media (max-width: 900px) { .es-visual-grid { grid-template-columns: 1fr; } }
+
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+st.markdown("""
+<div class="es-visual-grid">
+  <div class="es-tile"><h4>Secure Review</h4><p>Private server-side AI processing with protected credentials.</p></div>
+  <div class="es-tile"><h4>Smart Routing</h4><p>Automatically detects QA, translation, source columns, and target areas.</p></div>
+  <div class="es-tile"><h4>Client Rule Packs</h4><p>Optional ZIP rules for glossary, DNT, style guide, and instructions.</p></div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ==========================================================
@@ -202,11 +289,11 @@ def get_secret_value(name: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
-def get_openai_client() -> Optional[OpenAI]:
+def get_openai_client() -> Optional[AI]:
     key = get_secret_value("OPENAI_API_KEY")
     if not key:
         return None
-    return OpenAI(api_key=key, timeout=60, max_retries=1)
+    return AI(api_key=key, timeout=60, max_retries=1)
 
 
 def get_gemini_client():
@@ -981,15 +1068,15 @@ def extract_excel_segments(uploaded_file, source_hint: str, target_hint: str, mo
 
         if src_idx is not None and (tgt_idx is not None or mode == "pro"):
             src_name = headers[src_idx] if src_idx < len(headers) else "Source"
-            tgt_name = headers[tgt_idx] if tgt_idx is not None and tgt_idx < len(headers) else "OpenAI Translation"
+            tgt_name = headers[tgt_idx] if tgt_idx is not None and tgt_idx < len(headers) else "AI Translation"
             logs.append(f"{ws.title}: column mode [{src_name}] -> [{tgt_name}]")
 
             # For Pro, create output translation column if target column is missing.
             output_col_idx = tgt_idx
             if mode == "pro" and output_col_idx is None:
                 output_col_idx = ws.max_column
-                ws.cell(row=header_idx + 1, column=output_col_idx + 1).value = "OpenAI Translation"
-                logs.append(f"{ws.title}: created output column [OpenAI Translation]")
+                ws.cell(row=header_idx + 1, column=output_col_idx + 1).value = "AI Translation"
+                logs.append(f"{ws.title}: created output column [AI Translation]")
 
             data_rows = rows[header_idx + 1:]
             for abs_row, row in enumerate(data_rows, start=header_idx + 2):
@@ -1070,7 +1157,7 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
 
     if src_idx is not None and (tgt_idx is not None or mode == "pro"):
         src_col = df.columns[src_idx]
-        tgt_col = df.columns[tgt_idx] if tgt_idx is not None else "OpenAI Translation"
+        tgt_col = df.columns[tgt_idx] if tgt_idx is not None else "AI Translation"
         if mode == "pro" and tgt_col not in df.columns:
             df[tgt_col] = ""
         logs.append(f"CSV: column mode [{src_col}] -> [{tgt_col}]")
@@ -1622,10 +1709,10 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
 
 
 # ==========================================================
-# OPENAI / GEMINI CALLS
+# AI SERVICE CALLS
 # ==========================================================
 
-def openai_json(client: OpenAI, model: str, instructions: str, prompt: str, max_output_tokens: int = 3000) -> List[Dict[str, Any]]:
+def openai_json(client: AI, model: str, instructions: str, prompt: str, max_output_tokens: int = 3000) -> List[Dict[str, Any]]:
     response = client.responses.create(
         model=model,
         instructions=instructions,
@@ -1642,7 +1729,7 @@ def gemini_json(client, model: str, prompt: str) -> List[Dict[str, Any]]:
 
 
 def ai_qa_batch(
-    client: OpenAI,
+    client: AI,
     model: str,
     segments: List[Dict[str, Any]],
     rules: Dict[str, Any],
@@ -1738,7 +1825,7 @@ Only include real errors. If no errors are found, return [].
             "language_detected": "Unknown",
             "error_type": "API Warning",
             "severity": "Review",
-            "wrong_part": "OpenAI API call failed",
+            "wrong_part": "AI service call failed",
             "suggestion": "Retry with fewer segments or check API key/settings.",
             "explanation": str(e)[:250],
             "rule_source": "System",
@@ -1769,7 +1856,7 @@ Only include real errors. If no errors are found, return [].
 
 
 def openai_translate_batch(
-    client: OpenAI,
+    client: AI,
     model: str,
     segments: List[Dict[str, Any]],
     target_language: str,
@@ -1837,7 +1924,7 @@ def gemini_review_translations(
 
     prompt = f"""
 You are an independent translation reviewer.
-Review OpenAI translations into {target_language}.
+Review AI translations into {target_language}.
 Domain: {domain}
 
 Check accuracy, grammar, terminology, DNT, glossary, placeholders, numbers, punctuation, ZWNJ, style, and formatting.
@@ -1863,10 +1950,10 @@ If no issues, return [].
     except Exception as e:
         return [{
             "location": "API",
-            "error_type": "Gemini API Warning",
+            "error_type": "Review Service Warning",
             "severity": "Review",
-            "wrong_part": "Gemini review failed",
-            "suggestion": "Retry with fewer segments or check GEMINI_API_KEY.",
+            "wrong_part": "Independent review failed",
+            "suggestion": "Retry with fewer segments or contact the administrator.",
             "explanation": str(e)[:250],
             "confidence": "Low",
         }]
@@ -2177,7 +2264,7 @@ def render_dashboard() -> None:
     <div class="hero">
         <div class="hero-title">ErrorSweep</div>
         <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent AI review</div>
-        <div class="hero-badge">ErrorSweep = QA only · ErrorSweep Pro = OpenAI translation + Gemini review</div>
+        <div class="hero-badge">ErrorSweep = QA only · ErrorSweep Pro = AI translation + independent review</div>
     </div>
     """,
         unsafe_allow_html=True,
@@ -2193,7 +2280,7 @@ def render_dashboard() -> None:
 
     mode_choice = st.radio(
         "Task mode",
-        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"],
+        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate + Review"],
         horizontal=True,
     )
 
@@ -2247,7 +2334,7 @@ def render_dashboard() -> None:
     gemini_client = get_gemini_client()
 
     if openai_client is None:
-        st.warning("OPENAI_API_KEY is not set. Add it in Streamlit Secrets to use AI features.")
+        st.warning("AI service is not configured. Please contact the administrator.")
 
     st.markdown("### Upload")
     uploaded_file = st.file_uploader(
@@ -2279,7 +2366,7 @@ def render_dashboard() -> None:
             effective_reason = "Task detected from vendor request/instruction."
         else:
             effective_task, effective_reason = infer_task_from_file(uploaded_file, source_col_hint, target_col_hint)
-        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate with OpenAI + Review with Gemini"
+        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate + Review"
         st.info(f"Auto detected workflow: {'QA Run' if effective_task == 'qa' else 'Translation + Review'} — {effective_reason}")
     elif mode_choice == "Auto Detect Task":
         effective_mode_choice = "ErrorSweep — QA Run + Suggestions"
@@ -2300,7 +2387,7 @@ def render_dashboard() -> None:
             run_rules = st.checkbox("Run deterministic rules", value=True)
             run_zwnj = st.checkbox("Check ZWNJ", value=True)
         with q2:
-            run_ai = st.checkbox("Run OpenAI QA suggestions", value=True)
+            run_ai = st.checkbox("Run AI QA suggestions", value=True)
             include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False)
         with q3:
             output_highlighted = st.checkbox("Highlight Excel output", value=True)
@@ -2309,7 +2396,7 @@ def render_dashboard() -> None:
 
         if uploaded_file and run:
             if run_ai and openai_client is None:
-                st.error("OpenAI key is missing. Disable OpenAI QA or add OPENAI_API_KEY in Streamlit Secrets.")
+                st.error("Server AI configuration is missing. Please contact the administrator.")
                 st.stop()
 
             start = time.time()
@@ -2354,11 +2441,11 @@ def render_dashboard() -> None:
 
             # AI QA
             if run_ai:
-                status.text("Running OpenAI QA suggestions...")
+                status.text("Running AI QA suggestions...")
                 total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
                 for b in range(total_batches):
                     batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                    status.text(f"OpenAI QA batch {b + 1}/{total_batches}...")
+                    status.text(f"AI QA batch {b + 1}/{total_batches}...")
                     report_rows.extend(ai_qa_batch(openai_client, openai_model, batch, rules, domain, strictness, include_ai_style))
                     progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
 
@@ -2374,7 +2461,7 @@ def render_dashboard() -> None:
                 if output_highlighted:
                     highlight_excel_cells(cell_map, report_rows)
                 issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
                 status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
                 add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
                 add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, issue_headers)
@@ -2385,12 +2472,12 @@ def render_dashboard() -> None:
                 mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 output_name = "errorsweep_reviewed_" + uploaded_file.name
             else:
-                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
                 output_bytes = merge_issue_and_status_csv(report_rows, status_rows)
                 mime_type = "text/csv"
                 output_name = "errorsweep_full_review_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
 
-            status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Deterministic Rules + OpenAI QA")
+            status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
             st.markdown("### Segment Coverage")
             c1, c2, c3 = st.columns(3)
             c1.metric("Segments checked", len(status_rows_for_ui))
@@ -2408,25 +2495,25 @@ def render_dashboard() -> None:
     # ==========================================================
 
     else:
-        st.markdown("## ErrorSweep Pro — Translate with OpenAI + Review with Gemini")
-        st.caption("Use this version to translate source content with OpenAI, review it independently with Gemini, and export a translated file + review report.")
+        st.markdown("## ErrorSweep Pro — Translate + Review")
+        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report.")
 
         p1, p2, p3 = st.columns(3)
         with p1:
             target_language = st.text_input("Target language", value="Telugu")
         with p2:
-            apply_gemini_suggestions = st.checkbox("Apply Gemini suggestions to output", value=False)
+            apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to output", value=False)
         with p3:
-            review_with_gemini = st.checkbox("Review with Gemini", value=True)
+            review_with_gemini = st.checkbox("Run independent review", value=True)
 
         run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
 
         if uploaded_file and run_pro:
             if openai_client is None:
-                st.error("OPENAI_API_KEY is missing. Add it in Streamlit Secrets.")
+                st.error("AI service is not configured. Please contact the administrator.")
                 st.stop()
             if review_with_gemini and gemini_client is None:
-                st.error("GEMINI_API_KEY is missing or google-genai is not installed. Add GEMINI_API_KEY in Streamlit Secrets or disable Gemini review.")
+                st.error("Independent review service is not configured. Please contact the administrator or disable independent review.")
                 st.stop()
 
             start = time.time()
@@ -2463,12 +2550,12 @@ def render_dashboard() -> None:
                 st.stop()
 
             # Translation
-            status.text("Translating with OpenAI...")
+            status.text("Translating file...")
             translations_by_loc: Dict[str, str] = {}
             total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
             for b in range(total_batches):
                 batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                status.text(f"OpenAI translation batch {b + 1}/{total_batches}...")
+                status.text(f"Translation batch {b + 1}/{total_batches}...")
                 result = openai_translate_batch(openai_client, openai_model, batch, target_language, domain, rules)
                 for item in result:
                     loc = item.get("location", "")
@@ -2490,13 +2577,13 @@ def render_dashboard() -> None:
                 review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
                 progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
 
-            # Gemini review
+            # Reviewer review
             if review_with_gemini:
-                status.text("Reviewing with Gemini...")
+                status.text("Running independent review...")
                 total_review_batches = max(1, (len(translated_segments) + int(batch_size) - 1) // int(batch_size))
                 for b in range(total_review_batches):
                     batch = translated_segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                    status.text(f"Gemini review batch {b + 1}/{total_review_batches}...")
+                    status.text(f"Review batch {b + 1}/{total_review_batches}...")
                     gemini_errors = gemini_review_translations(gemini_client, gemini_model, batch, target_language, domain, rules)
                     loc_to_seg = {s["location"]: s for s in batch}
                     for err in gemini_errors:
@@ -2504,13 +2591,13 @@ def render_dashboard() -> None:
                         seg = loc_to_seg.get(loc, {"location": loc, "source": "", "translation": "", "sheet": ""})
                         review_rows.append(make_report_row(
                             seg,
-                            err.get("error_type", "Gemini Review"),
+                            err.get("error_type", "Independent Review"),
                             err.get("severity", "Review"),
                             err.get("wrong_part", ""),
                             err.get("suggestion", ""),
                             err.get("explanation", ""),
-                            "Gemini Review",
-                            "Gemini",
+                            "Independent Review",
+                            "Reviewer",
                             err.get("confidence", "Medium"),
                         ))
                         if apply_gemini_suggestions and err.get("suggestion") and loc in translations_by_loc:
@@ -2536,7 +2623,7 @@ def render_dashboard() -> None:
                 # Highlight cells with review issues.
                 highlight_excel_cells(cell_map, review_rows)
                 issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
-                status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Gemini Review")
+                status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
                 status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
                 add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
                 add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, issue_headers)
@@ -2549,8 +2636,8 @@ def render_dashboard() -> None:
 
             elif lower.endswith(".csv") and dataframe is not None:
                 # Add/update translation column.
-                out_col = "OpenAI Translation"
-                if "OpenAI Translation" not in dataframe.columns:
+                out_col = "AI Translation"
+                if "AI Translation" not in dataframe.columns:
                     dataframe[out_col] = ""
                 for seg in segments:
                     dataframe.at[seg["row"], out_col] = translations_by_loc.get(seg["location"], "")
@@ -2604,7 +2691,7 @@ def render_dashboard() -> None:
                 })
             st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
 
-            status_rows_for_ui = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Gemini Review")
+            status_rows_for_ui = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
             st.markdown("### Segment Coverage")
             c1, c2, c3 = st.columns(3)
             c1.metric("Segments translated/reviewed", len(status_rows_for_ui))
@@ -2613,7 +2700,7 @@ def render_dashboard() -> None:
             with st.expander("All Segment Review Preview", expanded=False):
                 st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
 
-            render_report(review_rows, "Gemini / Rule Review Report")
+            render_report(review_rows, "Independent Review Report")
 
             st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
             st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="errorsweep_pro_all_segment_review.csv", mime="text/csv", use_container_width=True)
