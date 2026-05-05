@@ -292,15 +292,38 @@ def get_secret_value(name: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
+def managed_ai_allowed() -> bool:
+    """Managed API keys are disabled by default to protect owner cost.
+
+    Set ALLOW_MANAGED_AI = "true" in Streamlit Secrets only if you want
+    server-side keys to be used. Users can still enter their own keys in
+    Control Center for the current browser session.
+    """
+    value = str(get_secret_value("ALLOW_MANAGED_AI", "false") or "false").strip().lower()
+    return value in {"true", "1", "yes", "on"}
+
+
+def get_user_openai_key() -> str:
+    return str(st.session_state.get("es_user_openai_api_key", "") or "").strip()
+
+
+def get_user_gemini_key() -> str:
+    return str(st.session_state.get("es_user_gemini_api_key", "") or "").strip()
+
+
 def get_openai_client() -> Optional[AI]:
-    key = get_secret_value("OPENAI_API_KEY")
+    key = get_user_openai_key()
+    if not key and managed_ai_allowed():
+        key = get_secret_value("OPENAI_API_KEY") or ""
     if not key:
         return None
     return AI(api_key=key, timeout=60, max_retries=1)
 
 
 def get_gemini_client():
-    key = get_secret_value("GEMINI_API_KEY")
+    key = get_user_gemini_key()
+    if not key and managed_ai_allowed():
+        key = get_secret_value("GEMINI_API_KEY") or ""
     if not key or genai is None:
         return None
     try:
@@ -2983,6 +3006,8 @@ def render_settings_summary(settings: Dict[str, Any]) -> None:
         st.write(f"Skip non-content sheets: {'Yes' if settings['skip_non_content'] else 'No'}")
         st.write(f"Deep scan fallback: {'Yes' if settings['deep_scan'] else 'No'}")
         st.write(f"Target language for Pro: {settings['target_language']}")
+        st.write(f"Managed AI allowed: {'Yes' if managed_ai_allowed() else 'No'}")
+        st.write(f"User language-engine key entered: {'Yes' if bool(get_user_openai_key()) else 'No'}")
 
 
 def render_control_center_page() -> None:
@@ -3036,6 +3061,12 @@ def render_control_center_page() -> None:
 
     st.markdown("### ErrorSweep Pro")
     st.text_input("Default target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Telugu")
+
+    st.markdown("### API Cost Control")
+    st.info("API keys are optional. Without keys, ErrorSweep QA still runs in offline rule-based mode. ErrorSweep Pro uses glossary/DNT reference mode unless a language-engine key is provided.")
+    st.text_input("Your language-engine API key (optional, current session only)", type="password", key="es_user_openai_api_key", help="Use this only if you want AI QA or full translation to use your own API account.")
+    st.text_input("Your independent-review API key (optional, current session only)", type="password", key="es_user_gemini_api_key", help="Optional review engine key for independent review.")
+    st.caption(f"Managed server AI is {'enabled' if managed_ai_allowed() else 'disabled'} by deployment settings.")
 
     st.markdown("### System Status")
     c1, c2 = st.columns(2)
@@ -3142,6 +3173,88 @@ def render_rule_upload(prefix: str) -> Tuple[Any, Any, Dict[str, Any]]:
     return uploaded_file, rules_zip, rules
 
 
+
+
+# ==========================================================
+# OFFLINE / REFERENCE-ONLY TRANSLATION FALLBACK
+# ==========================================================
+
+def _apply_glossary_replacements(source_text: str, rules: Dict[str, Any]) -> Tuple[str, int]:
+    """Very conservative no-API pre-translation.
+
+    It uses only uploaded glossary terms. This is NOT a full machine translation.
+    It is a safe fallback when no language engine/API key is available.
+    """
+    result = source_text or ""
+    replacements = 0
+    glossary = rules.get("glossary", []) if rules else []
+    # Longest first avoids replacing small substrings before longer terms.
+    glossary_sorted = sorted(glossary, key=lambda g: len(str(g.get("source_term", ""))), reverse=True)
+    for g in glossary_sorted[:1000]:
+        src = normalize_text(g.get("source_term", ""))
+        tgt = normalize_text(g.get("target_term", ""))
+        if not src or not tgt:
+            continue
+        pattern = re.compile(re.escape(src), re.IGNORECASE)
+        result, count = pattern.subn(tgt, result)
+        replacements += count
+    return result, replacements
+
+
+def offline_reference_translate_batch(
+    segments: List[Dict[str, Any]],
+    target_language: str,
+    rules: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """No-API fallback for ErrorSweep Pro.
+
+    Full translation needs a translation engine. When no API is available, this
+    function still keeps the workflow alive by applying uploaded glossary/DNT
+    references and returning safe placeholder output. It never pretends that a
+    full professional translation was produced.
+    """
+    output = []
+    dnt_terms = [normalize_text(d.get("term", "")) for d in (rules.get("dnt", []) if rules else []) if normalize_text(d.get("term", ""))]
+    for seg in segments:
+        loc = seg.get("location", "")
+        source = normalize_text(seg.get("source") or seg.get("text") or "")
+        if not source:
+            output.append({"location": loc, "translation": ""})
+            continue
+        # Preserve placeholders-only, DNT-only, or bracket labels as-is.
+        if source.startswith("[") and source.endswith("]"):
+            translation = source
+        elif any(term and source.strip() == term for term in dnt_terms):
+            translation = source
+        else:
+            translation, count = _apply_glossary_replacements(source, rules)
+            # If no glossary replacement happened, keep target blank rather than
+            # copying English as a fake translation.
+            if count == 0:
+                translation = ""
+        output.append({"location": loc, "translation": translation})
+    return output
+
+
+def build_offline_translation_review_rows(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> List[Dict[str, Any]]:
+    rows = []
+    for seg in segments:
+        loc = seg.get("location", "")
+        trans = translations_by_loc.get(loc, "")
+        if not trans:
+            rows.append(make_report_row(
+                {**seg, "translation": ""},
+                "Translation Engine Required",
+                "Review",
+                "No offline full translation available",
+                "Provide a language-engine API key or upload a glossary/rule pack with approved translations.",
+                "Offline mode can apply deterministic QA and glossary/DNT references, but it cannot generate full professional translations for arbitrary global languages.",
+                "Offline Reference Mode",
+                "Built-in fallback",
+                "High",
+            ))
+    return rows
+
 def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
     st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
     st.caption("Use this version for reviewing existing translations. Rules ZIP is optional.")
@@ -3149,7 +3262,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
 
     openai_client = get_openai_client()
     if openai_client is None:
-        st.warning("AI service is not configured. Deterministic rules can still run if AI QA suggestions are disabled.")
+        st.info("Offline QA mode is available. Deterministic rules, company Rules ZIP, glossary, DNT, placeholders, numbers, spacing, punctuation, and language-specific checks can run without any API key. App credits still apply to generate reports.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("qa")
 
@@ -3167,8 +3280,11 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
 
     if uploaded_file and run:
         if run_ai and openai_client is None:
-            st.error("AI service is not configured. Disable AI QA suggestions or configure the language engine.")
-            st.stop()
+            st.warning("AI QA is unavailable, so ErrorSweep will continue in offline rule-based mode. No API key is required, but app credits are still required for the report.")
+            run_ai = False
+        if not run_rules and not run_ai:
+            st.warning("No checks selected. Turning deterministic offline rules ON so the file can still be reviewed without API keys.")
+            run_rules = True
 
         start = time.time()
         status = st.empty()
@@ -3204,12 +3320,18 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             st.error("No segments found. Open Control Center and set source/translation columns or enable deep scan.")
             st.stop()
 
+        # App credits are required for every generated report, even when API/AI is unavailable.
+        # API credits and ErrorSweep app credits are separate:
+        # - API credits pay the external language/review engine provider.
+        # - App credits pay for ErrorSweep extraction, rule checks, report generation, storage/logging, and product usage.
+        using_managed_ai = bool(run_ai and openai_client)
         credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
         can_run, credit_msg = credit_preflight(profile, credits_needed)
         if not can_run:
-            st.error(credit_msg)
+            st.error(f"{credit_msg} App credits are required for all QA reports, including offline rule-based reports.")
             st.stop()
-        st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
+        engine_label = "Offline rules + managed AI QA" if using_managed_ai else "Offline rules only"
+        st.info(f"App credit cost: {credits_needed} credit(s) for {len(segments)} segment(s). Engine: {engine_label}.")
 
         if run_rules:
             status.text("Running deterministic checks...")
@@ -3217,7 +3339,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
                 report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
                 progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
 
-        if run_ai:
+        if using_managed_ai:
             status.text("Running AI QA suggestions...")
             total_batches = max(1, (len(segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
             for b in range(total_batches):
@@ -3258,21 +3380,27 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             output_name = "errorsweep_review_report_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
 
+        refreshed_profile = profile
         charge_ok, charge_msg, refreshed_profile = consume_user_credits(
             user_id=user_id,
             credits=credits_needed,
             workflow="qa",
             file_name=uploaded_file.name,
             segment_count=len(segments),
-            metadata={"issues": len(report_rows), "rules_zip": bool(rules_zip)},
+            metadata={
+                "issues": len(report_rows),
+                "rules_zip": bool(rules_zip),
+                "engine": "managed_ai" if using_managed_ai else "offline_rules",
+                "api_used": bool(using_managed_ai),
+            },
         )
         if not charge_ok:
-            st.error(charge_msg)
+            st.error(f"Could not deduct app credits, so the report cannot be released. {charge_msg}")
             st.stop()
         if refreshed_profile:
             st.session_state["sb_profile"] = refreshed_profile
+        st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
         log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
-        st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
 
         status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
         st.markdown("### Segment Coverage")
@@ -3301,7 +3429,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     openai_client = get_openai_client()
     gemini_client = get_gemini_client()
     if openai_client is None:
-        st.warning("Language engine is not configured. ErrorSweep Pro cannot translate until this is configured.")
+        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode: glossary/DNT/rule-pack assisted pre-translation only. Full automatic translation requires a user API key or managed language engine. App credits still apply to outputs.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("pro")
 
@@ -3316,12 +3444,13 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
 
     if uploaded_file and run_pro:
-        if openai_client is None:
-            st.error("Language engine is not configured. Please contact administrator.")
-            st.stop()
+        using_language_engine = bool(openai_client)
+        if not using_language_engine:
+            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply glossary/DNT references where possible, but it will not generate full professional translations without a language-engine API key. App credits still apply to generate outputs.")
+            review_with_gemini = False
         if review_with_gemini and gemini_client is None:
-            st.error("Independent review service is not configured. Disable independent review or contact administrator.")
-            st.stop()
+            st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
+            review_with_gemini = False
         if not target_language.strip():
             st.error("Please enter target language in this page or Control Center.")
             st.stop()
@@ -3372,12 +3501,20 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.error("No source segments found. Open Control Center and set the source column name/index.")
             st.stop()
 
+        # App credits are required for every Pro output, even in Offline Reference Mode.
+        # If API/language-engine credits are unavailable, ErrorSweep Pro can still create a same-format
+        # reference-assisted output, but users must still spend app credits to receive that output.
+        using_managed_pro_engine = bool(openai_client or (review_with_gemini and gemini_client))
         credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
         can_run, credit_msg = credit_preflight(profile, credits_needed)
         if not can_run:
-            st.error(credit_msg)
+            st.error(f"{credit_msg} App credits are required for ErrorSweep Pro outputs, including Offline Reference Mode.")
             st.stop()
-        st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
+        if using_language_engine:
+            engine_label = "Managed language engine"
+        else:
+            engine_label = "Offline Reference Mode"
+        st.info(f"App credit cost: {credits_needed} credit(s) for {len(segments)} segment(s). Engine: {engine_label}.")
 
         status.text("Translating file...")
         translations_by_loc: Dict[str, str] = {}
@@ -3385,12 +3522,15 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         for b in range(total_batches):
             batch = segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
             status.text(f"Translation batch {b + 1}/{total_batches}...")
-            result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
+            if using_language_engine and openai_client:
+                result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
+            else:
+                result = offline_reference_translate_batch(batch, target_language, rules)
             for item in result:
                 loc = item.get("location", "")
                 trans = item.get("translation", "")
-                if loc and trans:
-                    translations_by_loc[loc] = trans
+                if loc is not None:
+                    translations_by_loc[loc] = trans or ""
             progress.progress(((b + 1) / total_batches) * 0.45)
 
         translated_segments = []
@@ -3404,6 +3544,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         for idx, seg in enumerate(translated_segments, start=1):
             review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
             progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
+        if not openai_client:
+            review_rows.extend(build_offline_translation_review_rows(segments, translations_by_loc))
 
         if review_with_gemini:
             status.text("Running independent review...")
@@ -3510,21 +3652,28 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         progress.progress(1.0)
         status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
 
+        refreshed_profile = profile
         charge_ok, charge_msg, refreshed_profile = consume_user_credits(
             user_id=user_id,
             credits=credits_needed,
             workflow="pro",
             file_name=uploaded_file.name,
             segment_count=len(segments),
-            metadata={"review_issues": len(review_rows), "rules_zip": bool(rules_zip), "independent_review": bool(review_with_gemini)},
+            metadata={
+                "review_issues": len(review_rows),
+                "rules_zip": bool(rules_zip),
+                "independent_review": bool(review_with_gemini),
+                "engine": "managed_ai" if using_managed_pro_engine else "offline_reference",
+                "api_used": bool(using_managed_pro_engine),
+            },
         )
         if not charge_ok:
-            st.error(charge_msg)
+            st.error(f"Could not deduct app credits, so the output cannot be released. {charge_msg}")
             st.stop()
         if refreshed_profile:
             st.session_state["sb_profile"] = refreshed_profile
+        st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
         log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
-        st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
 
         st.markdown("### Translation Preview")
         preview = []
