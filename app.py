@@ -2473,6 +2473,40 @@ def render_usage_dashboard(user_id: str) -> None:
         with st.expander("Recent jobs", expanded=False):
             st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
 
+
+def render_workflow_rules_zip(key_prefix: str, workflow_name: str) -> Tuple[Any, Dict[str, Any]]:
+    """Render an optional rules ZIP uploader inside a workflow page.
+
+    Each workflow gets its own key, so users can upload different ZIP packs for
+    ErrorSweep QA and ErrorSweep Pro translation/review.
+    """
+    st.markdown("### Optional Rules ZIP")
+    st.caption(
+        f"Upload a company-specific ZIP for {workflow_name}. It can include style guides, glossary, DNT lists, "
+        "client instructions, reference translations, PDFs, DOCX, XLSX, CSV, TXT, XML, or XLIFF files."
+    )
+    rules_zip = st.file_uploader(
+        f"Upload {workflow_name} rules ZIP",
+        type=["zip"],
+        key=f"{key_prefix}_rules_zip",
+        help="Optional. These rules apply only to this run and this workflow page."
+    )
+
+    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    if rules_zip:
+        rules = parse_rules_zip_bytes(rules_zip.getvalue())
+        with st.expander(f"{workflow_name} Rules ZIP summary", expanded=False):
+            st.write(f"Files parsed: {len(rules.get('files', []))}")
+            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
+            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
+            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
+            if rules.get("files"):
+                st.write(rules.get("files")[:20])
+            for warning in rules.get("warnings", []):
+                st.warning(warning)
+
+    return rules_zip, rules
+
 # ==========================================================
 # LOGIN / SESSION AUTH
 # ==========================================================
@@ -2618,7 +2652,7 @@ def render_dashboard() -> None:
             logout_user()
         st.divider()
 
-    nav_options = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Rule Packs", "Billing", "Settings"]
+    nav_options = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Billing", "Settings"]
     if user_is_admin:
         nav_options.append("Admin")
 
@@ -2650,33 +2684,9 @@ def render_dashboard() -> None:
             st.markdown("### ErrorSweep Pro")
             st.write("Translate source files, review output independently, and download translated files.")
         with c3:
-            st.markdown("### Rule Packs")
-            st.write("Upload client ZIP packs containing style guides, glossary, DNT lists, and instructions.")
-        st.info("Use the Navigation selector above. The sidebar is expanded by default; if hidden, refresh the page after this update.")
-        return
-
-    if selected_page == "Rule Packs":
-        st.markdown("## Rule Packs")
-        st.write("Use this page to understand what companies can upload in the optional Rules ZIP.")
-        st.markdown(
-            """
-            **Recommended ZIP contents:**
-
-            - `style_guide.docx` or `style_guide.pdf`
-            - `glossary.xlsx` or `glossary.csv` with source/target terms
-            - `dnt.csv` for Do Not Translate terms
-            - `client_instructions.txt`
-            - `reference_translations.xlsx`
-
-            **How ErrorSweep uses it:**
-
-            1. Extracts text and tables from the ZIP.
-            2. Detects glossary and DNT rules.
-            3. Retrieves only relevant rules for each segment.
-            4. Combines rule checks with AI review.
-            """
-        )
-        st.success("Next improvement: save reusable Rule Packs per company account in Supabase.")
+            st.markdown("### Rules inside each workflow")
+            st.write("Upload a different ZIP rules pack directly in ErrorSweep or ErrorSweep Pro for each job.")
+        st.info("Use the navigation selector above. ErrorSweep and ErrorSweep Pro each have their own optional Rules ZIP upload.")
         return
 
     if selected_page == "Billing":
@@ -2857,51 +2867,21 @@ def render_dashboard() -> None:
     elif openai_client is None:
         st.warning("AI service is not configured. Please contact the administrator.")
 
-    st.markdown("### Upload")
-    uploaded_file = st.file_uploader(
-        "Upload file",
-        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
-    )
-    rules_zip = st.file_uploader(
-        "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
-        type=["zip"],
-    )
-
-    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
-    if rules_zip:
-        rules = parse_rules_zip_bytes(rules_zip.getvalue())
-        with st.expander("Rules ZIP summary", expanded=False):
-            st.write(f"Files parsed: {len(rules.get('files', []))}")
-            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
-            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
-            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
-            if rules.get("files"):
-                st.write(rules.get("files")[:20])
-            for w in rules.get("warnings", []):
-                st.warning(w)
-
-    if mode_choice == "Auto Detect Task" and uploaded_file is not None:
-        requested_task = infer_task_from_request(task_request)
-        if requested_task:
-            effective_task = requested_task
-            effective_reason = "Task detected from vendor request/instruction."
-        else:
-            effective_task, effective_reason = infer_task_from_file(uploaded_file, source_col_hint, target_col_hint)
-        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate + Review"
-        st.info(f"Auto detected workflow: {'QA Run' if effective_task == 'qa' else 'Translation + Review'} — {effective_reason}")
-    elif mode_choice == "Auto Detect Task":
-        effective_mode_choice = "ErrorSweep — QA Run + Suggestions"
-        st.info("Upload a file to auto-detect QA vs Translation workflow.")
-    else:
-        effective_mode_choice = mode_choice
-
     # ==========================================================
     # ERROR SWEEP QA ONLY
     # ==========================================================
 
-    if effective_mode_choice.startswith("ErrorSweep —"):
+    if selected_page == "ErrorSweep":
         st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-        st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
+        st.caption("Use this version for reviewing existing translations. Upload a QA-specific Rules ZIP here when the client/vendor provides style guides, glossary, DNT lists, or instructions.")
+
+        st.markdown("### QA File")
+        uploaded_file = st.file_uploader(
+            "Upload file for QA",
+            type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+            key="qa_uploaded_file",
+        )
+        rules_zip, rules = render_workflow_rules_zip("qa", "ErrorSweep QA")
 
         q1, q2, q3 = st.columns(3)
         with q1:
@@ -3051,7 +3031,15 @@ def render_dashboard() -> None:
 
     else:
         st.markdown("## ErrorSweep Pro — Translate + Review")
-        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report.")
+        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report. Upload a Pro-specific Rules ZIP here if translation instructions differ from QA rules.")
+
+        st.markdown("### Translation File")
+        uploaded_file = st.file_uploader(
+            "Upload source file for translation",
+            type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+            key="pro_uploaded_file",
+        )
+        rules_zip, rules = render_workflow_rules_zip("pro", "ErrorSweep Pro")
 
         p1, p2, p3 = st.columns(3)
         with p1:
@@ -3308,7 +3296,7 @@ def render_dashboard() -> None:
     <div class="empty-state">
         <div style="font-family:'Space Mono',monospace; color:#a8acc8">Upload a file to begin</div>
         <div style="font-size:13px; margin-top:8px; color:#6b7280">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
-        <div style="font-size:12px; margin-top:12px; color:#6b7280">Optional Rules ZIP can include style guides, DNT lists, glossary files, instructions, and reference documents.</div>
+        <div style="font-size:12px; margin-top:12px; color:#6b7280">Each workflow page has its own optional Rules ZIP upload for style guides, DNT lists, glossary files, instructions, and references.</div>
     </div>
     """,
             unsafe_allow_html=True,
