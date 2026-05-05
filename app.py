@@ -114,18 +114,12 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 /* Hide Streamlit public toolbar/menu/footer, including fork/deploy controls where present */
 #MainMenu {visibility: hidden; display: none;}
 footer {visibility: hidden; display: none;}
-header {visibility: visible !important; display: block !important; height: 2.4rem !important;}
+header {visibility: hidden; display: none;}
 [data-testid="stToolbar"] {visibility: hidden; display: none;}
 [data-testid="stDecoration"] {visibility: hidden; display: none;}
 [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
 [data-testid="stDeployButton"] {visibility: hidden; display: none;}
 .stAppDeployButton {visibility: hidden; display: none;}
-
-/* Keep sidebar/navigation accessible */
-[data-testid="collapsedControl"] { visibility: visible !important; display: flex !important; opacity: 1 !important; }
-section[data-testid="stSidebar"] { visibility: visible !important; }
-section[data-testid="stSidebar"] > div { visibility: visible !important; }
-[data-testid="collapsedControl"] {visibility: visible !important; display: block !important;}
 
 /* Premium white-label visual system */
 :root {
@@ -280,6 +274,33 @@ PLACEHOLDER_PATTERN = re.compile(
 )
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,:]\d+)*")
 
+# Offline quality rules are used when no API key is available.
+# They are intentionally conservative: they catch objective issues only.
+TELUGU_RE = re.compile(r"[\u0C00-\u0C7F]")
+LATIN_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z]{2,}\b")
+ROMANIZED_TELUGU_WORDS = {
+    "chudandi", "choosandi", "cheyandi", "chesandi", "ikkada", "akkada",
+    "meeru", "nuvvu", "dayachesi", "sari", "kadu", "avunu", "ledu",
+    "mariyu", "kosam", "loki", "nundi", "tho", "ki", "lo", "pai"
+}
+ALLOWED_LATIN_TERMS = {
+    "api", "url", "http", "https", "html", "xml", "json", "csv", "pdf",
+    "ui", "ux", "id", "otp", "sms", "email", "app", "ios", "android",
+    "kcal", "mb", "gb", "wifi", "gps"
+}
+TELUGU_COMMON_REPLACEMENTS = {
+    "పాస్వర్డ్": "పాస్‌వర్డ్",
+    "పాస్ వర్డ్": "పాస్‌వర్డ్",
+    "డౌన్లోడ్": "డౌన్‌లోడ్",
+    "డౌన్ లోడ్": "డౌన్‌లోడ్",
+    "అప్లోడ్": "అప్‌లోడ్",
+    "అప్ లోడ్": "అప్‌లోడ్",
+    "డాష్బోర్డ్": "డాష్‌బోర్డ్",
+    "డాష్ బోర్డ్": "డాష్‌బోర్డ్",
+    "సైన్ ఇన్": "సైన్‌ఇన్",
+    "లాగ్ ఇన్": "లాగిన్",
+}
+
 
 # ==========================================================
 # SECRETS / CLIENTS
@@ -298,23 +319,24 @@ def get_secret_value(name: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
-def get_openai_client(api_key_override: Optional[str] = None) -> Optional[AI]:
-    """Create an OpenAI client.
+def get_openai_client(explicit_key: Optional[str] = None) -> Optional[AI]:
+    """Return a language-engine client only when a key is available.
 
-    If api_key_override is provided, it is used for this session/run only.
-    This supports BYOK (Bring Your Own Key) so client work does not bill your
-    server API key. The override key is not saved to Supabase, Streamlit
-    secrets, reports, or output files.
+    explicit_key lets a customer use their own key for the current session.
+    If no key is provided and managed AI is enabled, the app can use the
+    server-side key. If neither exists, ErrorSweep falls back to offline rules.
     """
-    key = (api_key_override or "").strip() or get_secret_value("OPENAI_API_KEY")
+    key = (explicit_key or "").strip() or get_secret_value("OPENAI_API_KEY")
     if not key:
         return None
-    return AI(api_key=key, timeout=60, max_retries=1)
+    try:
+        return AI(api_key=key, timeout=60, max_retries=1)
+    except Exception:
+        return None
 
 
-def get_gemini_client(api_key_override: Optional[str] = None):
-    """Create a Gemini client. Supports BYOK for independent review."""
-    key = (api_key_override or "").strip() or get_secret_value("GEMINI_API_KEY")
+def get_gemini_client(explicit_key: Optional[str] = None):
+    key = (explicit_key or "").strip() or get_secret_value("GEMINI_API_KEY")
     if not key or genai is None:
         return None
     try:
@@ -323,8 +345,8 @@ def get_gemini_client(api_key_override: Optional[str] = None):
         return None
 
 
-def truthy_secret(name: str, default: str = "false") -> bool:
-    value = str(get_secret_value(name, default) or default).strip().lower()
+def bool_secret(name: str, default: bool = False) -> bool:
+    value = str(get_secret_value(name, str(default))).strip().lower()
     return value in {"1", "true", "yes", "y", "on"}
 
 
@@ -1601,6 +1623,98 @@ def post_filter_report_rows(rows: List[Dict[str, Any]], include_style: bool) -> 
     return filtered, dropped
 
 
+def protect_placeholders_for_script_check(text: str) -> str:
+    text = PLACEHOLDER_PATTERN.sub(" ", text or "")
+    text = NUMBER_PATTERN.sub(" ", text)
+    return text
+
+
+def has_telugu(text: str) -> bool:
+    return bool(TELUGU_RE.search(text or ""))
+
+
+def offline_telugu_quality_checks(segment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """General offline Telugu/LQA checks.
+
+    These rules do not call any external model. They are useful when customers
+    do not provide API keys. They focus on objective quality checks: Unicode,
+    placeholders, numbers, punctuation, mixed script, source-copy, and a small
+    conservative Telugu UI dictionary.
+    """
+    rows: List[Dict[str, Any]] = []
+    source = normalize_text(segment.get("source", ""))
+    target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+
+    if not target:
+        return rows
+
+    # Replacement character or repeated unknown markers usually indicate encoding loss.
+    if "�" in target or re.search(r"(^|\s)\?\?(\s|$)", target):
+        rows.append(make_report_row(
+            segment, "Unicode/Encoding", "Major", visible_invisibles(target),
+            "Reopen/export the file as UTF-8 and restore the missing symbol or character.",
+            "Replacement or unknown characters found. This usually means an emoji/symbol was damaged by encoding.",
+            "Offline Rule Engine", "Built-in Unicode QA", "High"
+        ))
+
+    # Source copied to target is a strong QA signal when target should be localized.
+    if source and target and source.strip().lower() == target.strip().lower() and re.search(r"[A-Za-z]", source):
+        rows.append(make_report_row(
+            segment, "Source Copy", "Major", visible_invisibles(target),
+            "Translate or localize this segment instead of leaving the source unchanged.",
+            "Source and target are identical. This is usually an untranslated segment.",
+            "Offline Rule Engine", "Built-in LQA", "High"
+        ))
+
+    # Common Telugu UI/loanword orthography corrections.
+    for wrong, correct in TELUGU_COMMON_REPLACEMENTS.items():
+        if wrong in target:
+            rows.append(make_report_row(
+                segment, "Telugu Orthography", "Minor", wrong, target.replace(wrong, correct),
+                "Common Telugu UI term spelling/ZWNJ pattern can be improved.",
+                "Offline Rule Engine", "Built-in Telugu Dictionary", "Medium"
+            ))
+
+    # Mixed Latin script in Telugu text. Keep this conservative to avoid DNT/product names.
+    check_text = protect_placeholders_for_script_check(target)
+    latin_words = [w for w in LATIN_WORD_RE.findall(check_text) if w.lower() not in ALLOWED_LATIN_TERMS]
+    if has_telugu(target) and latin_words:
+        romanized = [w for w in latin_words if w.lower() in ROMANIZED_TELUGU_WORDS]
+        if romanized:
+            rows.append(make_report_row(
+                segment, "Mixed Script", "Major", ", ".join(romanized),
+                "Replace romanized Telugu with Telugu script.",
+                "Romanized Telugu words were found inside Telugu text.",
+                "Offline Rule Engine", "Built-in Telugu Script QA", "High"
+            ))
+        elif len(latin_words) >= 2:
+            rows.append(make_report_row(
+                segment, "Mixed Script", "Review", ", ".join(latin_words[:8]),
+                "Review whether these Latin-script terms must be translated, transliterated, or kept as DNT/product terms.",
+                "Latin-script words appear inside Telugu text. This may be valid for DNT/product terms, so review is recommended.",
+                "Offline Rule Engine", "Built-in Script QA", "Medium"
+            ))
+
+    # Double punctuation and punctuation spacing.
+    if re.search(r"[.!?]{2,}", target):
+        rows.append(make_report_row(
+            segment, "Punctuation", "Minor", visible_invisibles(target),
+            re.sub(r"([.!?])\1+", r"\1", target),
+            "Repeated punctuation detected.",
+            "Offline Rule Engine", "Built-in Formatting QA", "High"
+        ))
+
+    if re.search(r"\s+([,.;:!?])", target):
+        rows.append(make_report_row(
+            segment, "Punctuation Spacing", "Minor", visible_invisibles(target),
+            re.sub(r"\s+([,.;:!?])", r"\1", target),
+            "Space before punctuation detected.",
+            "Offline Rule Engine", "Built-in Formatting QA", "High"
+        ))
+
+    return rows
+
+
 def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
     rows = []
     source = normalize_text(segment.get("source", ""))
@@ -1726,6 +1840,9 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
                         segment, "ZWNJ", "Minor", visible_invisibles(bad_spaced), visible_invisibles(good),
                         "Possible incorrect visible space where ZWNJ may be required.", "Rule Engine", "Built-in Telugu ZWNJ", "Medium"
                     ))
+
+    # Offline Telugu + general LQA checks always run.
+    rows.extend(offline_telugu_quality_checks(segment))
 
     return rows
 
@@ -2349,18 +2466,6 @@ def remaining_credits(profile: Optional[Dict[str, Any]]) -> int:
         return 0
 
 
-def get_admin_emails() -> List[str]:
-    raw = get_secret_value("ERRORSWEEP_ADMIN_EMAILS", "") or ""
-    return [email.strip().lower() for email in raw.split(",") if email.strip()]
-
-
-def is_admin_email(email: Optional[str]) -> bool:
-    email_clean = (email or "").strip().lower()
-    if not email_clean:
-        return False
-    return email_clean in get_admin_emails()
-
-
 def calculate_credit_cost(workflow: str, segment_count: int, rules_zip_used: bool = False, independent_review: bool = False) -> int:
     """Transparent MVP credit model.
     QA: 1 credit / 100 segments.
@@ -2477,40 +2582,6 @@ def render_usage_dashboard(user_id: str) -> None:
     if jobs:
         with st.expander("Recent jobs", expanded=False):
             st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
-
-
-def render_workflow_rules_zip(key_prefix: str, workflow_name: str) -> Tuple[Any, Dict[str, Any]]:
-    """Render an optional rules ZIP uploader inside a workflow page.
-
-    Each workflow gets its own key, so users can upload different ZIP packs for
-    ErrorSweep QA and ErrorSweep Pro translation/review.
-    """
-    st.markdown("### Optional Rules ZIP")
-    st.caption(
-        f"Upload a company-specific ZIP for {workflow_name}. It can include style guides, glossary, DNT lists, "
-        "client instructions, reference translations, PDFs, DOCX, XLSX, CSV, TXT, XML, or XLIFF files."
-    )
-    rules_zip = st.file_uploader(
-        f"Upload {workflow_name} rules ZIP",
-        type=["zip"],
-        key=f"{key_prefix}_rules_zip",
-        help="Optional. These rules apply only to this run and this workflow page."
-    )
-
-    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
-    if rules_zip:
-        rules = parse_rules_zip_bytes(rules_zip.getvalue())
-        with st.expander(f"{workflow_name} Rules ZIP summary", expanded=False):
-            st.write(f"Files parsed: {len(rules.get('files', []))}")
-            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
-            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
-            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
-            if rules.get("files"):
-                st.write(rules.get("files")[:20])
-            for warning in rules.get("warnings", []):
-                st.warning(warning)
-
-    return rules_zip, rules
 
 # ==========================================================
 # LOGIN / SESSION AUTH
@@ -2648,99 +2719,15 @@ def render_dashboard() -> None:
     if profile:
         st.session_state["sb_profile"] = profile
 
-    current_user_email = (user.get("email") or (profile or {}).get("email") or "").strip().lower()
-    user_is_admin = is_admin_email(current_user_email)
-
     with st.sidebar:
         render_credit_panel(profile)
         if st.button("Logout", use_container_width=True):
             logout_user()
         st.divider()
 
-    nav_options = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Billing", "Settings"]
-    if user_is_admin:
-        nav_options.append("Admin")
+    if user_id:
+        render_usage_dashboard(user_id)
 
-    selected_page = st.radio(
-        "Navigation",
-        nav_options,
-        horizontal=True,
-        key="errorsweep_main_navigation",
-    )
-
-    if selected_page == "Dashboard":
-        if user_id:
-            render_usage_dashboard(user_id)
-        st.markdown(
-            """
-            <div class="hero">
-                <div class="hero-title">ErrorSweep</div>
-                <div class="hero-sub">A secure workspace for QA checks, client rule packs, translation, and independent review.</div>
-                <div class="hero-badge">Choose a workflow above to begin</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("### ErrorSweep")
-            st.write("Run QA on existing translations and receive objective error suggestions.")
-        with c2:
-            st.markdown("### ErrorSweep Pro")
-            st.write("Translate source files, review output independently, and download translated files.")
-        with c3:
-            st.markdown("### Rules inside each workflow")
-            st.write("Upload a different ZIP rules pack directly in ErrorSweep or ErrorSweep Pro for each job.")
-        st.info("Use the navigation selector above. ErrorSweep and ErrorSweep Pro each have their own optional Rules ZIP upload.")
-        return
-
-    if selected_page == "Billing":
-        st.markdown("## Billing & Plans")
-        profile = get_profile(user_id) if user_id else None
-        if profile:
-            st.metric("Current Plan", str(profile.get("plan", "trial")).title())
-            st.metric("Credits Remaining", remaining_credits(profile))
-        plans = [
-            ("ErrorSweep", "QA-only plan for reviewers and freelancers", "PAYMENT_LINK_ERRORSWEEP"),
-            ("ErrorSweep Pro", "Translation + independent review", "PAYMENT_LINK_PRO"),
-            ("Agency", "Higher limits for teams and vendors", "PAYMENT_LINK_AGENCY"),
-        ]
-        cols = st.columns(3)
-        for col, (name, desc, secret_name) in zip(cols, plans):
-            with col:
-                st.markdown(f"### {name}")
-                st.write(desc)
-                link = get_secret_value(secret_name, "")
-                if link:
-                    st.link_button(f"Upgrade to {name}", link, use_container_width=True)
-                else:
-                    st.caption(f"Add `{secret_name}` in Streamlit Secrets to enable this button.")
-        st.info("MVP workflow: user pays via payment link, then admin upgrades the user account manually. Automatic webhook upgrade can be added next.")
-        return
-
-    if selected_page == "Settings":
-        st.markdown("## Settings")
-        st.write("Manage account and API-cost-control settings.")
-        st.markdown("### Own API key mode")
-        st.write("Public users can enter their own language/review API keys during a run. Keys are used only in the active session and are not stored by ErrorSweep.")
-        st.markdown("### System status")
-        st.write(f"Language service configured: {'Yes' if get_secret_value('OPENAI_API_KEY') else 'No'}")
-        st.write(f"Independent review configured: {'Yes' if get_secret_value('GEMINI_API_KEY') else 'No'}")
-        st.write(f"Supabase configured: {'Yes' if supabase_configured() else 'No'}")
-        return
-
-    if selected_page == "Admin":
-        st.markdown("## Admin")
-        st.write("Admin tools for MVP operations.")
-        st.info("Use Supabase Table Editor to manually update user plan/credits until automatic payment webhooks are added.")
-        if user_id:
-            st.markdown("### Recent jobs")
-            jobs = get_recent_jobs(user_id, limit=20)
-            if jobs:
-                st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
-            else:
-                st.write("No recent jobs found.")
-        return
 
     # ==========================================================
     # APP UI
@@ -2757,20 +2744,29 @@ def render_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        """
+        <div class="note-card">
+        <b>API keys are optional.</b> Without an API key, ErrorSweep uses the offline rule engine for Telugu/Unicode/LQA checks.
+        With a user-provided API key, smart semantic QA and translation are enabled for that session.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     task_request = st.text_area(
         "Vendor request / task instruction (optional)",
         value="",
         placeholder="Example: Please do QA on this translated file. / Please translate this file into Telugu.",
         height=80,
-        help="Optional instruction. Page selection decides the workflow; instructions help auto-detection and QA context."
+        help="If you choose Auto Detect, ErrorSweep uses this instruction plus the file layout to decide whether to run QA or Translation."
     )
 
-    if selected_page == "ErrorSweep":
-        mode_choice = "ErrorSweep — QA Run + Suggestions"
-    elif selected_page == "ErrorSweep Pro":
-        mode_choice = "ErrorSweep Pro — Translate + Review"
-    else:
-        mode_choice = "Auto Detect Task"
+    mode_choice = st.radio(
+        "Task mode",
+        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate + Review"],
+        horizontal=True,
+    )
 
     with st.sidebar:
         st.markdown("### Product Settings")
@@ -2818,95 +2814,108 @@ def render_dashboard() -> None:
         openai_model = DEFAULT_OPENAI_MODEL
         gemini_model = DEFAULT_GEMINI_MODEL
 
+    # API keys are optional. Without keys, ErrorSweep still runs offline rule-based QA.
+    with st.sidebar:
         st.divider()
-        st.markdown("### API Cost Control")
-        require_user_keys_for_public = truthy_secret("REQUIRE_USER_API_KEYS_FOR_PUBLIC", "true")
-        require_user_keys_for_pro = truthy_secret("REQUIRE_USER_API_KEYS_FOR_PRO", "true")
+        st.markdown("### Processing Engine")
+        managed_ai_allowed = bool_secret("ALLOW_MANAGED_AI", False)
+        api_mode_options = ["Offline rules only (no API)", "Use my own API keys"]
+        if managed_ai_allowed:
+            api_mode_options.append("Use managed AI engine")
+        api_mode = st.radio(
+            "AI mode",
+            api_mode_options,
+            index=0,
+            help="Offline mode performs deterministic QA checks without external API calls. Own-key mode uses the user's keys only for the current session."
+        )
+        user_openai_key = ""
+        user_gemini_key = ""
+        if api_mode == "Use my own API keys":
+            user_openai_key = st.text_input("Language engine key (optional)", type="password")
+            user_gemini_key = st.text_input("Review engine key (optional)", type="password")
+            st.caption("Keys entered here are used only for this browser session and are not saved in reports or the database.")
 
-        if user_is_admin and not require_user_keys_for_public:
-            use_own_api_keys = st.checkbox(
-                "Use my own API keys for this run",
-                value=False,
-                help=(
-                    "When enabled, translation/QA calls use the keys entered here instead of "
-                    "the platform server keys. Keys are used only for this session and are not stored."
-                ),
-            )
-        elif user_is_admin:
-            use_own_api_keys = st.checkbox(
-                "Use my own API keys for this run",
-                value=False,
-                help="Admin can choose managed keys or own keys. Public users are forced to own-key mode.",
-            )
+    if api_mode == "Use my own API keys":
+        openai_client = get_openai_client(user_openai_key) if user_openai_key else None
+        gemini_client = get_gemini_client(user_gemini_key) if user_gemini_key else None
+    elif api_mode == "Use managed AI engine":
+        openai_client = get_openai_client()
+        gemini_client = get_gemini_client()
+    else:
+        openai_client = None
+        gemini_client = None
+
+    if openai_client is None:
+        st.info("Offline QA mode is active. ErrorSweep will run built-in Telugu, Unicode, punctuation, placeholder, number, ZWNJ, glossary, and DNT checks without using any API key.")
+
+    st.markdown("### Upload")
+    uploaded_file = st.file_uploader(
+        "Upload file",
+        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+    )
+    rules_zip = st.file_uploader(
+        "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
+        type=["zip"],
+    )
+
+    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    if rules_zip:
+        rules = parse_rules_zip_bytes(rules_zip.getvalue())
+        with st.expander("Rules ZIP summary", expanded=False):
+            st.write(f"Files parsed: {len(rules.get('files', []))}")
+            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
+            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
+            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
+            if rules.get("files"):
+                st.write(rules.get("files")[:20])
+            for w in rules.get("warnings", []):
+                st.warning(w)
+
+    if mode_choice == "Auto Detect Task" and uploaded_file is not None:
+        requested_task = infer_task_from_request(task_request)
+        if requested_task:
+            effective_task = requested_task
+            effective_reason = "Task detected from vendor request/instruction."
         else:
-            use_own_api_keys = True
-            st.info("Public users must use their own API keys, so translation/review costs are billed to their own provider account.")
-
-        user_openai_api_key = ""
-        user_gemini_api_key = ""
-        if use_own_api_keys:
-            user_openai_api_key = st.text_input(
-                "Language engine API key",
-                value="",
-                type="password",
-                placeholder="Paste key for translation and QA",
-                help="Required when using your own keys. This is never saved by ErrorSweep.",
-            )
-            user_gemini_api_key = st.text_input(
-                "Independent review API key",
-                value="",
-                type="password",
-                placeholder="Optional unless Independent Review is enabled",
-                help="Required only if you run independent review with your own keys. This is never saved by ErrorSweep.",
-            )
-            st.caption("Your keys are used only while this session is active. They are not written to reports, logs, or database records.")
-        else:
-            st.caption("Managed mode uses ErrorSweep server keys and consumes user credits.")
-
-    openai_client = get_openai_client(user_openai_api_key if use_own_api_keys else None)
-    gemini_client = get_gemini_client(user_gemini_api_key if use_own_api_keys else None)
-    api_key_mode = "user_keys" if use_own_api_keys else "managed_keys"
-
-    if use_own_api_keys and not user_openai_api_key.strip():
-        st.info("Own-key mode is enabled. Add your language engine API key before running QA or translation.")
-    elif openai_client is None:
-        st.warning("AI service is not configured. Please contact the administrator.")
+            effective_task, effective_reason = infer_task_from_file(uploaded_file, source_col_hint, target_col_hint)
+        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate + Review"
+        st.info(f"Auto detected workflow: {'QA Run' if effective_task == 'qa' else 'Translation + Review'} — {effective_reason}")
+    elif mode_choice == "Auto Detect Task":
+        effective_mode_choice = "ErrorSweep — QA Run + Suggestions"
+        st.info("Upload a file to auto-detect QA vs Translation workflow.")
+    else:
+        effective_mode_choice = mode_choice
 
     # ==========================================================
     # ERROR SWEEP QA ONLY
     # ==========================================================
 
-    if selected_page == "ErrorSweep":
+    if effective_mode_choice.startswith("ErrorSweep —"):
         st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-        st.caption("Use this version for reviewing existing translations. Upload a QA-specific Rules ZIP here when the client/vendor provides style guides, glossary, DNT lists, or instructions.")
-
-        st.markdown("### QA File")
-        uploaded_file = st.file_uploader(
-            "Upload file for QA",
-            type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
-            key="qa_uploaded_file",
-        )
-        rules_zip, rules = render_workflow_rules_zip("qa", "ErrorSweep QA")
+        st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
 
         q1, q2, q3 = st.columns(3)
         with q1:
             run_rules = st.checkbox("Run deterministic rules", value=True)
             run_zwnj = st.checkbox("Check ZWNJ", value=True)
         with q2:
-            run_ai = st.checkbox("Run AI QA suggestions", value=True)
-            include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False)
+            ai_available = openai_client is not None
+            run_ai = st.checkbox(
+                "Run smart AI QA suggestions",
+                value=ai_available,
+                disabled=not ai_available,
+                help="Requires an optional language-engine API key. If disabled, offline rules still run."
+            )
+            include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False, disabled=not ai_available)
         with q3:
             output_highlighted = st.checkbox("Highlight Excel output", value=True)
 
         run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file)
 
         if uploaded_file and run:
-            if run_ai and use_own_api_keys and not user_openai_api_key.strip():
-                st.error("Own-key mode is enabled. Please enter your language engine API key before running QA.")
-                st.stop()
             if run_ai and openai_client is None:
-                st.error("AI service is not configured. Please contact the administrator or use your own API key.")
-                st.stop()
+                st.info("No language-engine key found. Continuing with offline rule-based QA only.")
+                run_ai = False
 
             start = time.time()
             status = st.empty()
@@ -2941,15 +2950,12 @@ def render_dashboard() -> None:
                 st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
                 st.stop()
 
-            credits_needed = 0 if use_own_api_keys else calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
-            if credits_needed > 0:
-                can_run, credit_msg = credit_preflight(profile, credits_needed)
-                if not can_run:
-                    st.error(credit_msg)
-                    st.stop()
-                st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
-            else:
-                st.info("Own-key mode: no ErrorSweep AI credits will be charged for this QA run.")
+            credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
+            can_run, credit_msg = credit_preflight(profile, credits_needed)
+            if not can_run:
+                st.error(credit_msg)
+                st.stop()
+            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
 
             # Rule engine
             if run_rules:
@@ -2996,26 +3002,22 @@ def render_dashboard() -> None:
                 mime_type = "text/csv"
                 output_name = "errorsweep_full_review_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
 
-            if credits_needed > 0:
-                charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                    user_id=user_id,
-                    credits=credits_needed,
-                    workflow="qa",
-                    file_name=uploaded_file.name,
-                    segment_count=len(segments),
-                    metadata={"issues": len(report_rows), "rules_zip": bool(rules_zip), "api_key_mode": api_key_mode},
-                )
-                if not charge_ok:
-                    st.error(charge_msg)
-                    st.stop()
-                if refreshed_profile:
-                    profile = refreshed_profile
-                    st.session_state["sb_profile"] = refreshed_profile
-                log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
-                st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
-            else:
-                log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, 0)
-                st.success("Processed using the user-provided API key. No ErrorSweep AI credits were charged.")
+            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
+                user_id=user_id,
+                credits=credits_needed,
+                workflow="qa",
+                file_name=uploaded_file.name,
+                segment_count=len(segments),
+                metadata={"issues": len(report_rows), "rules_zip": bool(rules_zip)},
+            )
+            if not charge_ok:
+                st.error(charge_msg)
+                st.stop()
+            if refreshed_profile:
+                profile = refreshed_profile
+                st.session_state["sb_profile"] = refreshed_profile
+            log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
+            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
 
             status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
             st.markdown("### Segment Coverage")
@@ -3036,15 +3038,7 @@ def render_dashboard() -> None:
 
     else:
         st.markdown("## ErrorSweep Pro — Translate + Review")
-        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report. Upload a Pro-specific Rules ZIP here if translation instructions differ from QA rules.")
-
-        st.markdown("### Translation File")
-        uploaded_file = st.file_uploader(
-            "Upload source file for translation",
-            type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
-            key="pro_uploaded_file",
-        )
-        rules_zip, rules = render_workflow_rules_zip("pro", "ErrorSweep Pro")
+        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report.")
 
         p1, p2, p3 = st.columns(3)
         with p1:
@@ -3052,26 +3046,23 @@ def render_dashboard() -> None:
         with p2:
             apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to output", value=False)
         with p3:
-            review_with_gemini = st.checkbox("Run independent review", value=True)
+            review_available = gemini_client is not None
+            review_with_gemini = st.checkbox(
+                "Run independent review",
+                value=review_available,
+                disabled=not review_available,
+                help="Requires an optional review-engine API key. Offline deterministic review still runs without it."
+            )
 
         run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
 
         if uploaded_file and run_pro:
-            if require_user_keys_for_pro and not use_own_api_keys:
-                st.error("For client translation runs, please enable 'Use my own API keys for this run' in the sidebar.")
-                st.stop()
-            if use_own_api_keys and not user_openai_api_key.strip():
-                st.error("Own-key mode is enabled. Please enter your language engine API key before running translation.")
-                st.stop()
             if openai_client is None:
-                st.error("AI service is not configured. Please contact the administrator or use your own API key.")
-                st.stop()
-            if review_with_gemini and use_own_api_keys and not user_gemini_api_key.strip():
-                st.error("Independent review is enabled. Please enter your independent review API key, or turn off independent review.")
+                st.error("Translation requires a language-engine API key. Use the ErrorSweep QA page for offline rule-based checks, or enter your own API key in the sidebar.")
                 st.stop()
             if review_with_gemini and gemini_client is None:
-                st.error("Independent review service is not configured. Please contact the administrator, add your own review API key, or disable independent review.")
-                st.stop()
+                st.warning("Independent review key is not available. Continuing with translation + offline deterministic review only.")
+                review_with_gemini = False
 
             start = time.time()
             status = st.empty()
@@ -3106,15 +3097,12 @@ def render_dashboard() -> None:
                 st.error("No source segments found. Try setting the source column name/index in the sidebar.")
                 st.stop()
 
-            credits_needed = 0 if use_own_api_keys else calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
-            if credits_needed > 0:
-                can_run, credit_msg = credit_preflight(profile, credits_needed)
-                if not can_run:
-                    st.error(credit_msg)
-                    st.stop()
-                st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
-            else:
-                st.info("Own-key mode: no ErrorSweep AI credits will be charged for this translation/review run.")
+            credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
+            can_run, credit_msg = credit_preflight(profile, credits_needed)
+            if not can_run:
+                st.error(credit_msg)
+                st.stop()
+            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
 
             # Translation
             status.text("Translating file...")
@@ -3247,26 +3235,22 @@ def render_dashboard() -> None:
             progress.progress(1.0)
             status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
 
-            if credits_needed > 0:
-                charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                    user_id=user_id,
-                    credits=credits_needed,
-                    workflow="pro",
-                    file_name=uploaded_file.name,
-                    segment_count=len(segments),
-                    metadata={"review_issues": len(review_rows), "rules_zip": bool(rules_zip), "independent_review": bool(review_with_gemini), "api_key_mode": api_key_mode},
-                )
-                if not charge_ok:
-                    st.error(charge_msg)
-                    st.stop()
-                if refreshed_profile:
-                    profile = refreshed_profile
-                    st.session_state["sb_profile"] = refreshed_profile
-                log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
-                st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
-            else:
-                log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, 0)
-                st.success("Processed using the user-provided API key(s). No ErrorSweep AI credits were charged.")
+            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
+                user_id=user_id,
+                credits=credits_needed,
+                workflow="pro",
+                file_name=uploaded_file.name,
+                segment_count=len(segments),
+                metadata={"review_issues": len(review_rows), "rules_zip": bool(rules_zip), "independent_review": bool(review_with_gemini)},
+            )
+            if not charge_ok:
+                st.error(charge_msg)
+                st.stop()
+            if refreshed_profile:
+                profile = refreshed_profile
+                st.session_state["sb_profile"] = refreshed_profile
+            log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
+            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
 
             # Display translation preview and review report.
             st.markdown("### Translation Preview")
@@ -3301,7 +3285,7 @@ def render_dashboard() -> None:
     <div class="empty-state">
         <div style="font-family:'Space Mono',monospace; color:#a8acc8">Upload a file to begin</div>
         <div style="font-size:13px; margin-top:8px; color:#6b7280">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
-        <div style="font-size:12px; margin-top:12px; color:#6b7280">Each workflow page has its own optional Rules ZIP upload for style guides, DNT lists, glossary files, instructions, and references.</div>
+        <div style="font-size:12px; margin-top:12px; color:#6b7280">Optional Rules ZIP can include style guides, DNT lists, glossary files, instructions, and reference documents.</div>
     </div>
     """,
             unsafe_allow_html=True,
