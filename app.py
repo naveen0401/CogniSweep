@@ -7,9 +7,6 @@ import json
 import time
 import hmac
 import zipfile
-import math
-from datetime import datetime, timezone
-import requests
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
 
@@ -2130,368 +2127,78 @@ def render_report(report_rows: List[Dict[str, Any]], title: str = "Report"):
 
 
 
-
-
-# ==========================================================
-# SUPABASE AUTH + CREDITS + USAGE LOGS
-# ==========================================================
-
-SUPABASE_TIMEOUT = 25
-DEFAULT_TRIAL_CREDITS = 25
-PLAN_CREDITS = {
-    "trial": 25,
-    "errorsweep": 200,
-    "pro": 600,
-    "agency": 2500,
-    "enterprise": 10000,
-}
-
-
-def supabase_configured() -> bool:
-    return bool(get_secret_value("SUPABASE_URL") and get_secret_value("SUPABASE_ANON_KEY"))
-
-
-def supabase_service_configured() -> bool:
-    return bool(get_secret_value("SUPABASE_URL") and get_secret_value("SUPABASE_SERVICE_ROLE_KEY"))
-
-
-def supabase_url(path: str) -> str:
-    base = (get_secret_value("SUPABASE_URL") or "").rstrip("/")
-    return f"{base}{path}"
-
-
-def supabase_headers(kind: str = "anon", access_token: Optional[str] = None) -> Dict[str, str]:
-    if kind == "service":
-        key = get_secret_value("SUPABASE_SERVICE_ROLE_KEY")
-    else:
-        key = get_secret_value("SUPABASE_ANON_KEY")
-
-    headers = {
-        "apikey": key or "",
-        "Authorization": f"Bearer {access_token or key or ''}",
-        "Content-Type": "application/json",
-    }
-    return headers
-
-
-def supabase_post(path: str, payload: Dict[str, Any], kind: str = "anon", access_token: Optional[str] = None) -> Tuple[bool, Any]:
-    try:
-        res = requests.post(
-            supabase_url(path),
-            headers=supabase_headers(kind=kind, access_token=access_token),
-            json=payload,
-            timeout=SUPABASE_TIMEOUT,
-        )
-        if res.status_code >= 400:
-            try:
-                return False, res.json()
-            except Exception:
-                return False, res.text
-        try:
-            return True, res.json()
-        except Exception:
-            return True, {}
-    except Exception as exc:
-        return False, str(exc)
-
-
-def supabase_get(path: str, kind: str = "anon", access_token: Optional[str] = None) -> Tuple[bool, Any]:
-    try:
-        res = requests.get(
-            supabase_url(path),
-            headers=supabase_headers(kind=kind, access_token=access_token),
-            timeout=SUPABASE_TIMEOUT,
-        )
-        if res.status_code >= 400:
-            try:
-                return False, res.json()
-            except Exception:
-                return False, res.text
-        try:
-            return True, res.json()
-        except Exception:
-            return True, {}
-    except Exception as exc:
-        return False, str(exc)
-
-
-def supabase_patch(path: str, payload: Dict[str, Any], kind: str = "service", access_token: Optional[str] = None) -> Tuple[bool, Any]:
-    try:
-        res = requests.patch(
-            supabase_url(path),
-            headers={**supabase_headers(kind=kind, access_token=access_token), "Prefer": "return=representation"},
-            json=payload,
-            timeout=SUPABASE_TIMEOUT,
-        )
-        if res.status_code >= 400:
-            try:
-                return False, res.json()
-            except Exception:
-                return False, res.text
-        try:
-            return True, res.json()
-        except Exception:
-            return True, {}
-    except Exception as exc:
-        return False, str(exc)
-
-
-def auth_sign_up(email: str, password: str, full_name: str = "") -> Tuple[bool, str, Dict[str, Any]]:
-    payload = {
-        "email": email.strip().lower(),
-        "password": password,
-        "data": {"full_name": full_name.strip() or email.strip().split("@")[0]},
-    }
-    ok, data = supabase_post("/auth/v1/signup", payload, kind="anon")
-    if not ok:
-        return False, format_supabase_error(data), {}
-    return True, "Account created. If email confirmation is enabled, please confirm your email before signing in.", data or {}
-
-
-def auth_sign_in(email: str, password: str) -> Tuple[bool, str, Dict[str, Any]]:
-    payload = {"email": email.strip().lower(), "password": password}
-    ok, data = supabase_post("/auth/v1/token?grant_type=password", payload, kind="anon")
-    if not ok:
-        return False, format_supabase_error(data), {}
-    if not data.get("access_token"):
-        return False, "Login failed. Please check email confirmation and password.", {}
-    return True, "Login successful.", data
-
-
-def auth_send_password_reset(email: str) -> Tuple[bool, str]:
-    ok, data = supabase_post("/auth/v1/recover", {"email": email.strip().lower()}, kind="anon")
-    if not ok:
-        return False, format_supabase_error(data)
-    return True, "Password reset email sent if the account exists."
-
-
-def format_supabase_error(data: Any) -> str:
-    if isinstance(data, dict):
-        for key in ["msg", "message", "error_description", "error"]:
-            if data.get(key):
-                return str(data.get(key))
-        return json.dumps(data)[:500]
-    return str(data)[:500]
-
-
-def set_session_from_auth(data: Dict[str, Any]) -> None:
-    user = data.get("user") or {}
-    st.session_state["errorsweep_authenticated"] = True
-    st.session_state["sb_access_token"] = data.get("access_token")
-    st.session_state["sb_refresh_token"] = data.get("refresh_token")
-    st.session_state["sb_user"] = user
-    st.session_state["errorsweep_username"] = user.get("email", "user")
-
-
-def get_current_user() -> Dict[str, Any]:
-    return st.session_state.get("sb_user") or {}
-
-
-def ensure_profile(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    user_id = user.get("id")
-    email = user.get("email")
-    if not user_id or not supabase_service_configured():
-        return None
-
-    profile = get_profile(user_id)
-    if profile:
-        return profile
-
-    payload = {
-        "id": user_id,
-        "email": email,
-        "full_name": (user.get("user_metadata") or {}).get("full_name") or email,
-        "plan": "trial",
-        "monthly_credits": DEFAULT_TRIAL_CREDITS,
-        "used_credits": 0,
-        "total_files_processed": 0,
-    }
-    ok, data = supabase_post("/rest/v1/profiles", payload, kind="service")
-    if not ok:
-        return None
-    return get_profile(user_id)
-
-
-def get_profile(user_id: str) -> Optional[Dict[str, Any]]:
-    if not user_id or not supabase_service_configured():
-        return None
-    ok, data = supabase_get(f"/rest/v1/profiles?id=eq.{user_id}&select=*", kind="service")
-    if ok and isinstance(data, list) and data:
-        return data[0]
-    return None
-
-
-def remaining_credits(profile: Optional[Dict[str, Any]]) -> int:
-    if not profile:
-        return 0
-    try:
-        return max(0, int(profile.get("monthly_credits") or 0) - int(profile.get("used_credits") or 0))
-    except Exception:
-        return 0
-
-
-def calculate_credit_cost(workflow: str, segment_count: int, rules_zip_used: bool = False, independent_review: bool = False) -> int:
-    """Transparent MVP credit model.
-    QA: 1 credit / 100 segments.
-    Pro: 3 credits / 75 segments + optional independent review credit.
-    Rules ZIP adds 1 credit because it increases context processing.
-    """
-    segment_count = max(1, int(segment_count or 1))
-    if workflow == "qa":
-        credits = max(1, math.ceil(segment_count / 100))
-    else:
-        credits = max(3, math.ceil(segment_count / 75) * 3)
-        if independent_review:
-            credits += max(1, math.ceil(segment_count / 150))
-    if rules_zip_used:
-        credits += 1
-    return int(credits)
-
-
-def credit_preflight(profile: Optional[Dict[str, Any]], credits_needed: int) -> Tuple[bool, str]:
-    if not supabase_service_configured():
-        return False, "Supabase service role is not configured. Add SUPABASE_SERVICE_ROLE_KEY in Streamlit Secrets."
-    if not profile:
-        return False, "User profile not found. Please log out and log in again."
-    if remaining_credits(profile) < credits_needed:
-        return False, f"Not enough credits. Required: {credits_needed}, remaining: {remaining_credits(profile)}."
-    return True, "OK"
-
-
-def consume_user_credits(user_id: str, credits: int, workflow: str, file_name: str, segment_count: int, metadata: Optional[Dict[str, Any]] = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-    if not user_id:
-        return False, "Missing user id.", None
-    if credits <= 0:
-        return True, "No credits charged.", get_profile(user_id)
-    if not supabase_service_configured():
-        return False, "Supabase service role is not configured.", None
-
-    payload = {
-        "p_user_id": user_id,
-        "p_credits": int(credits),
-        "p_workflow": workflow,
-        "p_file_name": file_name,
-        "p_segments": int(segment_count or 0),
-        "p_metadata": metadata or {},
-    }
-    ok, data = supabase_post("/rest/v1/rpc/consume_user_credits", payload, kind="service")
-    if ok:
-        refreshed = get_profile(user_id)
-        return True, "Credits charged successfully.", refreshed
-
-    # Friendly fallback message. Do not silently bypass payment/credits.
-    return False, "Credit deduction failed. Make sure the Supabase SQL setup was executed. Details: " + format_supabase_error(data), get_profile(user_id)
-
-
-def log_report_record(user_id: str, workflow: str, file_name: str, segment_count: int, issue_count: int, output_name: str, credits_charged: int) -> None:
-    if not user_id or not supabase_service_configured():
-        return
-    payload = {
-        "user_id": user_id,
-        "workflow": workflow,
-        "file_name": file_name,
-        "segments": int(segment_count or 0),
-        "issues": int(issue_count or 0),
-        "output_name": output_name,
-        "credits_charged": int(credits_charged or 0),
-    }
-    supabase_post("/rest/v1/file_jobs", payload, kind="service")
-
-
-def get_recent_jobs(user_id: str, limit: int = 8) -> List[Dict[str, Any]]:
-    if not user_id or not supabase_service_configured():
-        return []
-    ok, data = supabase_get(
-        f"/rest/v1/file_jobs?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}",
-        kind="service",
-    )
-    if ok and isinstance(data, list):
-        return data
-    return []
-
-
-def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
-    if not profile:
-        st.warning("Profile unavailable. Check Supabase setup.")
-        return
-    plan = str(profile.get("plan") or "trial").title()
-    monthly = int(profile.get("monthly_credits") or 0)
-    used = int(profile.get("used_credits") or 0)
-    remaining = max(0, monthly - used)
-    st.markdown("### Account")
-    st.caption(profile.get("email", "user"))
-    st.metric("Plan", plan)
-    st.metric("Credits Remaining", remaining)
-    st.progress(min(1.0, used / max(monthly, 1)))
-    st.caption(f"{used} / {monthly} credits used this month")
-
-
-def render_usage_dashboard(user_id: str) -> None:
-    profile = get_profile(user_id)
-    if not profile:
-        return
-    plan = str(profile.get("plan") or "trial").title()
-    monthly = int(profile.get("monthly_credits") or 0)
-    used = int(profile.get("used_credits") or 0)
-    remaining = max(0, monthly - used)
-    jobs = get_recent_jobs(user_id, limit=8)
-
-    st.markdown("### Usage Dashboard")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Plan", plan)
-    c2.metric("Monthly Credits", monthly)
-    c3.metric("Used", used)
-    c4.metric("Remaining", remaining)
-
-    if jobs:
-        with st.expander("Recent jobs", expanded=False):
-            st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
-
 # ==========================================================
 # LOGIN / SESSION AUTH
 # ==========================================================
 
+def get_login_credentials() -> Tuple[Optional[str], Optional[str]]:
+    """Read login credentials from Streamlit Secrets or environment variables.
+
+    Preferred Streamlit Secrets:
+        ERRORSWEEP_USERNAME = "admin"
+        ERRORSWEEP_PASSWORD = "your-secure-password"
+
+    Also supported:
+        APP_USERNAME / APP_PASSWORD
+        [auth]
+        username = "admin"
+        password = "your-secure-password"
+    """
+    username = (
+        get_secret_value("ERRORSWEEP_USERNAME")
+        or get_secret_value("APP_USERNAME")
+    )
+    password = (
+        get_secret_value("ERRORSWEEP_PASSWORD")
+        or get_secret_value("APP_PASSWORD")
+    )
+
+    try:
+        auth_section = st.secrets.get("auth", {})
+        username = username or auth_section.get("username")
+        password = password or auth_section.get("password")
+    except Exception:
+        pass
+
+    return username, password
+
+
 def is_authenticated() -> bool:
-    return bool(st.session_state.get("errorsweep_authenticated") and st.session_state.get("sb_user"))
+    return bool(st.session_state.get("errorsweep_authenticated", False))
 
 
 def logout_user() -> None:
-    for key in [
-        "errorsweep_authenticated",
-        "errorsweep_username",
-        "sb_access_token",
-        "sb_refresh_token",
-        "sb_user",
-        "sb_profile",
-    ]:
-        st.session_state.pop(key, None)
+    st.session_state["errorsweep_authenticated"] = False
+    st.session_state.pop("errorsweep_username", None)
     st.rerun()
 
 
 def render_login_page() -> None:
+    expected_username, expected_password = get_login_credentials()
+
     st.markdown(
         """
         <style>
         .login-wrapper {
-            max-width: 620px;
-            margin: 6vh auto 0 auto;
-            background: linear-gradient(135deg, rgba(0,255,136,0.12), rgba(56,189,248,0.08), rgba(139,92,246,0.10));
-            border: 1px solid rgba(56,189,248,0.22);
-            border-radius: 24px;
-            padding: 38px 36px 26px 36px;
-            box-shadow: 0 25px 80px rgba(0,0,0,0.35);
+            max-width: 520px;
+            margin: 7vh auto 0 auto;
+            background: linear-gradient(135deg, #0f0f0f 0%, #161827 55%, #10213a 100%);
+            border: 1px solid #28324a;
+            border-radius: 20px;
+            padding: 34px 34px 22px 34px;
+            box-shadow: 0 18px 70px rgba(0,0,0,0.35);
             text-align: center;
         }
         .login-title {
             font-family: 'Space Mono', monospace;
-            font-size: 40px;
+            font-size: 36px;
             color: #00ff88;
             font-weight: 700;
             margin-bottom: 6px;
         }
         .login-subtitle {
             color: #a8acc8;
-            font-size: 15px;
+            font-size: 14px;
             margin-bottom: 10px;
         }
         .login-badge {
@@ -2500,98 +2207,53 @@ def render_login_page() -> None:
             border: 1px solid rgba(0,255,136,0.25);
             color: #00ff88;
             border-radius: 999px;
-            padding: 6px 16px;
+            padding: 5px 14px;
             font-size: 12px;
-            margin-top: 8px;
+            margin-top: 6px;
         }
         </style>
         <div class="login-wrapper">
-            <div class="login-title">ErrorSweep</div>
-            <div class="login-subtitle">Secure language automation dashboard</div>
-            <div class="login-badge">Account required</div>
+            <div class="login-title">ErrorSweep Pro</div>
+            <div class="login-subtitle">Secure dashboard access</div>
+            <div class="login-badge">Login required</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if not supabase_configured():
-        st.error("Supabase is not configured yet.")
-        st.info("Add these values in Streamlit Cloud → App → Settings → Secrets:")
+    if not expected_username or not expected_password:
+        st.error("Login credentials are not configured.")
+        st.info("Add credentials in Streamlit Cloud → App → Settings → Secrets:")
         st.code(
-            'SUPABASE_URL = "https://your-project.supabase.co"\n'
-            'SUPABASE_ANON_KEY = "your-anon-key"\n'
-            'SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"',
+            'ERRORSWEEP_USERNAME = "admin"\nERRORSWEEP_PASSWORD = "choose-a-strong-password"',
             language="toml",
         )
         st.stop()
 
-    tab_login, tab_signup, tab_reset = st.tabs(["Sign in", "Create account", "Reset password"])
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
 
-    with tab_login:
-        with st.form("supabase_login_form", clear_on_submit=False):
-            email = st.text_input("Email", key="login_email")
-            password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Sign in", use_container_width=True, type="primary")
-        if submitted:
-            ok, msg, data = auth_sign_in(email, password)
-            if ok:
-                set_session_from_auth(data)
-                profile = ensure_profile(data.get("user") or {})
-                st.session_state["sb_profile"] = profile
-                st.success("Signed in successfully.")
-                st.rerun()
-            else:
-                st.error(msg)
+    if submitted:
+        username_ok = hmac.compare_digest(username.strip(), str(expected_username).strip())
+        password_ok = hmac.compare_digest(password, str(expected_password))
+        if username_ok and password_ok:
+            st.session_state["errorsweep_authenticated"] = True
+            st.session_state["errorsweep_username"] = username.strip()
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
 
-    with tab_signup:
-        with st.form("supabase_signup_form", clear_on_submit=False):
-            full_name = st.text_input("Full name")
-            new_email = st.text_input("Email", key="signup_email")
-            new_password = st.text_input("Password", type="password", key="signup_password", help="Use at least 8 characters.")
-            confirm_password = st.text_input("Confirm password", type="password")
-            signup_submitted = st.form_submit_button("Create account", use_container_width=True, type="primary")
-        if signup_submitted:
-            if len(new_password) < 8:
-                st.error("Password must be at least 8 characters.")
-            elif new_password != confirm_password:
-                st.error("Passwords do not match.")
-            else:
-                ok, msg, data = auth_sign_up(new_email, new_password, full_name)
-                if ok:
-                    user = data.get("user") or {}
-                    if user:
-                        ensure_profile(user)
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-    with tab_reset:
-        with st.form("password_reset_form", clear_on_submit=True):
-            reset_email = st.text_input("Account email")
-            reset_submitted = st.form_submit_button("Send reset email", use_container_width=True)
-        if reset_submitted:
-            ok, msg = auth_send_password_reset(reset_email)
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
 
 def render_dashboard() -> None:
-    user = get_current_user()
-    user_id = user.get("id")
-    profile = ensure_profile(user)
-    if profile:
-        st.session_state["sb_profile"] = profile
-
     with st.sidebar:
-        render_credit_panel(profile)
+        st.markdown("### Account")
+        signed_in_as = st.session_state.get("errorsweep_username", "user")
+        st.caption(f"Signed in as: {signed_in_as}")
         if st.button("Logout", use_container_width=True):
             logout_user()
         st.divider()
-
-    if user_id:
-        render_usage_dashboard(user_id)
-
 
     # ==========================================================
     # APP UI
@@ -2770,13 +2432,6 @@ def render_dashboard() -> None:
                 st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
                 st.stop()
 
-            credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
-            can_run, credit_msg = credit_preflight(profile, credits_needed)
-            if not can_run:
-                st.error(credit_msg)
-                st.stop()
-            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
-
             # Rule engine
             if run_rules:
                 status.text("Running deterministic checks...")
@@ -2821,23 +2476,6 @@ def render_dashboard() -> None:
                 output_bytes = merge_issue_and_status_csv(report_rows, status_rows)
                 mime_type = "text/csv"
                 output_name = "errorsweep_full_review_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
-
-            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                user_id=user_id,
-                credits=credits_needed,
-                workflow="qa",
-                file_name=uploaded_file.name,
-                segment_count=len(segments),
-                metadata={"issues": len(report_rows), "rules_zip": bool(rules_zip)},
-            )
-            if not charge_ok:
-                st.error(charge_msg)
-                st.stop()
-            if refreshed_profile:
-                profile = refreshed_profile
-                st.session_state["sb_profile"] = refreshed_profile
-            log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
-            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
 
             status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
             st.markdown("### Segment Coverage")
@@ -2910,13 +2548,6 @@ def render_dashboard() -> None:
             if not segments:
                 st.error("No source segments found. Try setting the source column name/index in the sidebar.")
                 st.stop()
-
-            credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
-            can_run, credit_msg = credit_preflight(profile, credits_needed)
-            if not can_run:
-                st.error(credit_msg)
-                st.stop()
-            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
 
             # Translation
             status.text("Translating file...")
@@ -3048,23 +2679,6 @@ def render_dashboard() -> None:
 
             progress.progress(1.0)
             status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
-
-            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                user_id=user_id,
-                credits=credits_needed,
-                workflow="pro",
-                file_name=uploaded_file.name,
-                segment_count=len(segments),
-                metadata={"review_issues": len(review_rows), "rules_zip": bool(rules_zip), "independent_review": bool(review_with_gemini)},
-            )
-            if not charge_ok:
-                st.error(charge_msg)
-                st.stop()
-            if refreshed_profile:
-                profile = refreshed_profile
-                st.session_state["sb_profile"] = refreshed_profile
-            log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
-            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
 
             # Display translation preview and review report.
             st.markdown("### Translation Preview")
