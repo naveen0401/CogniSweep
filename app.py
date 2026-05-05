@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple, Optional
 from html import escape
 
 from openai import OpenAI as AI
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.comments import Comment
 from docx import Document
@@ -1211,7 +1211,7 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
 
 
 def extract_text_segments(uploaded_file, mode: str, max_segments: int):
-    data = uploaded_file.read()
+    data = uploaded_file.getvalue()
     text, encoding_used = decode_text_bytes(data)
     lower_name = uploaded_file.name.lower()
 
@@ -2079,6 +2079,328 @@ def report_csv_bytes(report_rows: List[Dict[str, Any]]) -> bytes:
     return pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8-sig")
 
 
+def dataframe_to_xlsx_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
+    """Create an Excel workbook from multiple DataFrames."""
+    wb = Workbook()
+    # Remove default sheet after creating our own sheets.
+    default = wb.active
+    wb.remove(default)
+
+    for sheet_name, df in sheets.items():
+        safe_name = str(sheet_name)[:31] or "Sheet"
+        ws = wb.create_sheet(safe_name)
+        if df is None or df.empty:
+            ws.append(["Status"])
+            ws.append(["No rows available"])
+        else:
+            ws.append([str(c) for c in df.columns])
+            for _, row in df.iterrows():
+                ws.append([safe_report_cell_value(row.get(c, "")) for c in df.columns])
+        style_header(ws)
+        for col in ws.columns:
+            col_letter = col[0].column_letter
+            max_len = 12
+            for cell in col[:200]:
+                val = str(cell.value or "")
+                max_len = max(max_len, min(len(val) + 2, 70))
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.column_dimensions[col_letter].width = max_len
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_excel_report_bytes(
+    issue_rows: List[Dict[str, Any]],
+    status_rows: List[Dict[str, Any]],
+    extraction_logs: Optional[List[str]] = None,
+    translation_rows: Optional[List[Dict[str, Any]]] = None,
+    title: str = "ErrorSweep Report",
+) -> bytes:
+    """Always return an Excel report, regardless of input file format."""
+    extraction_logs = extraction_logs or []
+    sheets: Dict[str, pd.DataFrame] = {}
+    sheets["Summary"] = pd.DataFrame([
+        {"Metric": "Report", "Value": title},
+        {"Metric": "Segments checked", "Value": len(status_rows)},
+        {"Metric": "Issues found", "Value": len(issue_rows)},
+        {"Metric": "Generated at", "Value": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")},
+    ])
+    sheets["All Segment Review"] = pd.DataFrame(status_rows)
+    sheets["Issue Details"] = pd.DataFrame(issue_rows)
+    if translation_rows is not None:
+        sheets["Translations"] = pd.DataFrame(translation_rows)
+    sheets["Extraction Log"] = pd.DataFrame([{"Log": x} for x in extraction_logs] or [{"Log": "No extraction log."}])
+    return dataframe_to_xlsx_bytes(sheets)
+
+
+def extract_pdf_segments(uploaded_file, mode: str, max_segments: int):
+    """Extract readable lines from PDFs. Output/report is Excel; source PDF is not rewritten."""
+    logs = []
+    if PdfReader is None:
+        return [], ["PDF support package is unavailable. Add pypdf to requirements.txt."]
+    try:
+        reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+        lines = []
+        for page_index, page in enumerate(reader.pages, start=1):
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                clean = clean_line_for_ai(line)
+                if clean and len(clean) > 2:
+                    lines.append((page_index, line_no, clean))
+        segments = []
+        for page_index, line_no, clean in limit_sequence(lines, max_segments):
+            loc = f"Page {page_index}, Line {line_no}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "pdf",
+                "sheet": "PDF",
+                "location": loc,
+                "source": clean if mode == "pro" else "",
+                "translation": clean if mode == "qa" else "",
+                "text": clean,
+                "mode": "source_only" if mode == "pro" else "monolingual",
+            })
+        logs.append(f"PDF: extracted {len(segments)} text segment(s).")
+        if not segments:
+            logs.append("PDF appears image-based or has no extractable text. OCR is not enabled in this MVP.")
+        return segments, logs
+    except Exception as exc:
+        return [], [f"Could not read PDF: {exc}"]
+
+
+
+
+# ==========================================================
+# SAME-FORMAT PRO TRANSLATION BUILDERS
+# ==========================================================
+
+def extract_json_pro_segments(uploaded_file, max_segments: int):
+    """Extract string values from JSON and keep paths so translated output remains JSON."""
+    data = uploaded_file.getvalue()
+    raw_text, encoding_used = decode_text_bytes(data)
+    logs = [f"JSON: decoded as {encoding_used}"]
+    try:
+        obj = json.loads(raw_text)
+    except Exception as exc:
+        # Fallback: treat as text-like if JSON cannot be parsed.
+        logs.append(f"JSON parse failed; falling back to text mode: {exc}")
+        text_original, segments, text_logs = extract_text_segments(uploaded_file, "pro", max_segments)
+        return obj if False else None, segments, {}, logs + text_logs
+
+    segments: List[Dict[str, Any]] = []
+    path_map: Dict[str, List[Any]] = {}
+
+    def walk(node: Any, path: List[Any]) -> None:
+        if reached_segment_limit(segments, max_segments):
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                # Avoid translating keys; only translate string values.
+                walk(v, path + [k])
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, path + [i])
+        elif isinstance(node, str):
+            clean = clean_line_for_ai(node)
+            if clean and len(clean) > 1:
+                loc = "$" + "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in path)
+                seg = {
+                    "id": len(segments) + 1,
+                    "file_type": "json",
+                    "sheet": "JSON",
+                    "location": loc,
+                    "source": clean,
+                    "translation": "",
+                    "text": clean,
+                    "mode": "source_only",
+                }
+                segments.append(seg)
+                path_map[loc] = path
+
+    walk(obj, [])
+    logs.append(f"JSON: extracted {len(segments)} string value segment(s).")
+    return obj, segments, path_map, logs
+
+
+def set_json_path(obj: Any, path: List[Any], value: str) -> None:
+    cur = obj
+    for p in path[:-1]:
+        cur = cur[p]
+    if path:
+        cur[path[-1]] = value
+
+
+def build_translated_json_bytes(obj: Any, path_map: Dict[str, List[Any]], translations_by_loc: Dict[str, str]) -> bytes:
+    for loc, path in path_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            set_json_path(obj, path, trans)
+    return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def extract_srt_pro_segments(uploaded_file, max_segments: int):
+    """Extract subtitle text lines while preserving SRT cue numbers and timecodes."""
+    raw_text, encoding_used = decode_text_bytes(uploaded_file.getvalue())
+    lines = raw_text.splitlines()
+    segments: List[Dict[str, Any]] = []
+    line_map: Dict[str, List[int]] = {}
+    i = 0
+    cue_number = 0
+    timestamp_re = re.compile(r"\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}")
+    while i < len(lines):
+        # Optional cue index
+        if not lines[i].strip():
+            i += 1
+            continue
+        if i + 1 < len(lines) and timestamp_re.search(lines[i + 1]):
+            cue_number += 1
+            time_idx = i + 1
+            text_start = i + 2
+        elif timestamp_re.search(lines[i]):
+            cue_number += 1
+            time_idx = i
+            text_start = i + 1
+        else:
+            i += 1
+            continue
+        text_indices = []
+        j = text_start
+        while j < len(lines) and lines[j].strip():
+            text_indices.append(j)
+            j += 1
+        cue_text = "\n".join(lines[idx] for idx in text_indices).strip()
+        if cue_text and len(cue_text) > 1:
+            loc = f"Cue {cue_number}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "srt",
+                "sheet": "SRT",
+                "location": loc,
+                "source": cue_text,
+                "translation": "",
+                "text": cue_text,
+                "mode": "source_only",
+            })
+            line_map[loc] = text_indices
+            if reached_segment_limit(segments, max_segments):
+                break
+        i = max(j + 1, i + 1)
+    return raw_text, segments, line_map, [f"SRT: extracted {len(segments)} cue segment(s) (decoded as {encoding_used})."]
+
+
+def build_translated_srt_bytes(raw_text: str, line_map: Dict[str, List[int]], translations_by_loc: Dict[str, str]) -> bytes:
+    lines = raw_text.splitlines()
+    for loc, indices in line_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if not trans or not indices:
+            continue
+        trans_lines = trans.splitlines() or [trans]
+        # Replace first original subtitle text line with full translation, blank the rest.
+        lines[indices[0]] = trans_lines[0]
+        insert_extra = trans_lines[1:]
+        for idx in indices[1:]:
+            lines[idx] = ""
+        if insert_extra:
+            # Insert extra translation lines immediately after first text line.
+            first = indices[0]
+            lines = lines[:first + 1] + insert_extra + lines[first + 1:]
+    return ("\n".join(lines) + "\n").encode("utf-8-sig")
+
+
+def xml_local_name(tag: str) -> str:
+    return str(tag).split("}")[-1].lower()
+
+
+def make_xml_target_tag(source_tag: str) -> str:
+    if "}" in source_tag:
+        ns = source_tag.split("}")[0].strip("{")
+        return "{" + ns + "}target"
+    return "target"
+
+
+def extract_xml_xliff_pro_segments(uploaded_file, max_segments: int):
+    """Extract XLIFF/XML <source>/<target> pairs and preserve XML output."""
+    import xml.etree.ElementTree as ET
+    raw_text, encoding_used = decode_text_bytes(uploaded_file.getvalue())
+    logs = [f"XML/XLIFF: decoded as {encoding_used}"]
+    try:
+        tree = ET.ElementTree(ET.fromstring(raw_text))
+    except Exception as exc:
+        logs.append(f"XML parse failed; falling back to text mode: {exc}")
+        text_original, segments, text_logs = extract_text_segments(uploaded_file, "pro", max_segments)
+        return None, segments, {}, logs + text_logs
+
+    root = tree.getroot()
+    segments: List[Dict[str, Any]] = []
+    target_map: Dict[str, Any] = {}
+
+    for parent in root.iter():
+        children = list(parent)
+        if not children:
+            continue
+        src_el = None
+        tgt_el = None
+        for child in children:
+            lname = xml_local_name(child.tag)
+            if lname == "source" and src_el is None:
+                src_el = child
+            elif lname == "target" and tgt_el is None:
+                tgt_el = child
+        if src_el is None:
+            continue
+        src_text = clean_line_for_ai("".join(src_el.itertext()))
+        if not src_text:
+            continue
+        if tgt_el is None:
+            tgt_el = ET.Element(make_xml_target_tag(src_el.tag))
+            try:
+                insert_at = children.index(src_el) + 1
+                parent.insert(insert_at, tgt_el)
+            except Exception:
+                parent.append(tgt_el)
+        loc = f"XML Segment {len(segments) + 1}"
+        segments.append({
+            "id": len(segments) + 1,
+            "file_type": "xml",
+            "sheet": "XML",
+            "location": loc,
+            "source": src_text,
+            "translation": clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else "",
+            "text": src_text,
+            "mode": "source_only",
+        })
+        target_map[loc] = tgt_el
+        if reached_segment_limit(segments, max_segments):
+            break
+    logs.append(f"XML/XLIFF: extracted {len(segments)} source/target segment(s).")
+    return tree, segments, target_map, logs
+
+
+def build_translated_xml_bytes(tree: Any, target_map: Dict[str, Any], translations_by_loc: Dict[str, str]) -> bytes:
+    for loc, target_el in target_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            # Replace text content while preserving attributes and tag.
+            target_el.text = trans
+    output = io.BytesIO()
+    tree.write(output, encoding="utf-8", xml_declaration=True)
+    return output.getvalue()
+
+
+def is_text_like_extension(file_name: str) -> bool:
+    lower = file_name.lower()
+    return lower.endswith((
+        ".txt", ".srt", ".md", ".markdown", ".po", ".pot", ".properties", ".strings", ".resx",
+        ".html", ".htm", ".yaml", ".yml", ".ini", ".log"
+    ))
+
+
 # ==========================================================
 # UI SHARED FUNCTIONS
 # ==========================================================
@@ -2796,8 +3118,9 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
 def render_rule_upload(prefix: str) -> Tuple[Any, Any, Dict[str, Any]]:
     uploaded_file = st.file_uploader(
         "Upload file",
-        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+        type=None,
         key=f"{prefix}_uploaded_file",
+        help="Upload any file. ErrorSweep will automatically extract text/segments from Excel, Word, PDF, CSV, XLIFF/XML, JSON, subtitles, PO/properties, and other text-like files. Binary files without readable text will return an Excel report explaining the issue.",
     )
     rules_zip = st.file_uploader(
         "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
@@ -2867,6 +3190,8 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             _, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["deep_scan"])
         elif lower.endswith(".docx"):
             _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(settings["max_segments"]), settings["source_col_hint"], settings["target_col_hint"])
+        elif lower.endswith(".pdf"):
+            segments, logs = extract_pdf_segments(uploaded_file, "qa", int(settings["max_segments"]))
         else:
             _, segments, logs = extract_text_segments(uploaded_file, "qa", int(settings["max_segments"]))
 
@@ -2924,9 +3249,14 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             output_name = "errorsweep_reviewed_" + uploaded_file.name
         else:
             status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
-            output_bytes = merge_issue_and_status_csv(report_rows, status_rows)
-            mime_type = "text/csv"
-            output_name = "errorsweep_full_review_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+            output_bytes = build_excel_report_bytes(
+                issue_rows=report_rows,
+                status_rows=status_rows,
+                extraction_logs=logs,
+                title="ErrorSweep QA Report",
+            )
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_review_report_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
 
         charge_ok, charge_msg, refreshed_profile = consume_user_credits(
             user_id=user_id,
@@ -2954,7 +3284,13 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
         render_report(report_rows, "ErrorSweep QA Report")
         st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-        st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="all_segment_review.csv", mime="text/csv", use_container_width=True)
+        st.download_button(
+            "Download Excel QA Report",
+            build_excel_report_bytes(report_rows, status_rows_for_ui, extraction_logs=logs, title="ErrorSweep QA Report"),
+            file_name="errorsweep_qa_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
@@ -2999,6 +3335,11 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         dataframe = None
         text_original = None
         doc = None
+        json_obj = None
+        json_path_map = {}
+        xml_tree = None
+        xml_target_map = {}
+        srt_line_map = {}
         cell_map = {}
         translation_col_map = {}
         para_map = {}
@@ -3011,6 +3352,14 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             dataframe, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["deep_scan"])
         elif lower.endswith(".docx"):
             doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(settings["max_segments"]), settings["source_col_hint"], settings["target_col_hint"])
+        elif lower.endswith(".json"):
+            json_obj, segments, json_path_map, logs = extract_json_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith((".xml", ".xliff", ".xlf")):
+            xml_tree, segments, xml_target_map, logs = extract_xml_xliff_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith(".srt"):
+            text_original, segments, srt_line_map, logs = extract_srt_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith(".pdf"):
+            segments, logs = extract_pdf_segments(uploaded_file, "pro", int(settings["max_segments"]))
         else:
             text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(settings["max_segments"]))
 
@@ -3126,18 +3475,37 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             output_bytes = bio.getvalue()
             mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".json") and json_obj is not None:
+            output_bytes = build_translated_json_bytes(json_obj, json_path_map, translations_by_loc)
+            mime_type = "application/json"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith((".xml", ".xliff", ".xlf")) and xml_tree is not None:
+            output_bytes = build_translated_xml_bytes(xml_tree, xml_target_map, translations_by_loc)
+            mime_type = "application/xml"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".srt") and text_original is not None:
+            output_bytes = build_translated_srt_bytes(text_original, srt_line_map, translations_by_loc)
+            mime_type = "text/plain"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif is_text_like_extension(uploaded_file.name) and text_original is not None:
+            output_bytes = build_preserved_text_translation(text_original, segments, translations_by_loc)
+            mime_type = "text/plain"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
         else:
-            if lower.endswith((".txt", ".srt")) and text_original is not None:
-                output_bytes = build_preserved_text_translation(text_original, segments, translations_by_loc)
-                mime_type = "text/plain"
-                output_name = "errorsweep_pro_translated_" + uploaded_file.name
-            else:
-                table = []
-                for seg in segments:
-                    table.append({"Location": seg["location"], "Source": seg.get("source") or seg.get("text", ""), "Translation": translations_by_loc.get(seg["location"], "")})
-                output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
-                mime_type = "text/csv"
-                output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+            # For PDFs and truly unknown/binary formats, safely return an Excel translation table.
+            # Rebuilding a binary/PDF in the exact same format requires a dedicated renderer and is not safe to fake.
+            table = []
+            for seg in segments:
+                table.append({"Location": seg["location"], "Source": seg.get("source") or seg.get("text", ""), "Translation": translations_by_loc.get(seg["location"], "")})
+            output_bytes = build_excel_report_bytes(
+                issue_rows=[],
+                status_rows=[],
+                extraction_logs=logs + ["Exact same-format rebuild is unavailable for this file type; returned an Excel translation table instead."],
+                translation_rows=table,
+                title="ErrorSweep Pro Translations",
+            )
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
 
         progress.progress(1.0)
         status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
@@ -3175,8 +3543,27 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
 
         render_report(review_rows, "Independent Review Report")
         st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-        st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="errorsweep_pro_all_segment_review.csv", mime="text/csv", use_container_width=True)
-        st.download_button("Download Issue Details CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_issue_details.csv", mime="text/csv", use_container_width=True)
+        translation_rows_for_report = [
+            {
+                "Location": seg["location"],
+                "Source": truncate(seg.get("source") or seg.get("text", ""), 1000),
+                "Translation": truncate(translations_by_loc.get(seg["location"], ""), 1000),
+            }
+            for seg in translated_segments
+        ]
+        st.download_button(
+            "Download Excel Translation + Review Report",
+            build_excel_report_bytes(
+                issue_rows=review_rows,
+                status_rows=status_rows_for_ui,
+                extraction_logs=logs,
+                translation_rows=translation_rows_for_report,
+                title="ErrorSweep Pro Translation + Review Report",
+            ),
+            file_name="errorsweep_pro_excel_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 def render_dashboard() -> None:
