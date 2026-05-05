@@ -255,51 +255,162 @@ SKIP_SHEET_KEYWORDS = [
     "score card",
 ]
 
-# Common Telugu UI/loanword ZWNJ patterns. This is intentionally conservative.
-TELUGU_ZWNJ_BASE_SUFFIXES = {
-    "డాక్యుమెంట్": ["ను", "లను", "లు", "తో", "కి", "లో"],
-    "పాస్‌వర్డ్": ["ను", "తో", "లో", "కి"],
-    "పాస్వర్డ్": ["ను", "తో", "లో", "కి"],
-    "డాష్‌బోర్డ్": ["ను", "లో", "కి"],
-    "అప్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "డౌన్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "టెంప్లేట్": ["లు", "ను", "లను", "లో"],
-    "సెట్టింగ్": ["లు", "లను", "లో", "కి"],
-    "కనెక్షన్": ["ను", "తో", "లో"],
-    "ఫైల్": ["ను", "లను", "లు", "లో"],
+# ==========================================================
+# GLOBAL OFFLINE QA LANGUAGE MODULES
+# ==========================================================
+
+# These modules keep ErrorSweep global. Core QA checks are language-neutral,
+# and language-specific checks are only applied when the target language/script matches.
+SCRIPT_PATTERNS = {
+    "Latin": re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ſƀ-ɏ]"),
+    "Devanagari": re.compile(r"[\u0900-\u097F]"),
+    "Bengali": re.compile(r"[\u0980-\u09FF]"),
+    "Gurmukhi": re.compile(r"[\u0A00-\u0A7F]"),
+    "Gujarati": re.compile(r"[\u0A80-\u0AFF]"),
+    "Oriya": re.compile(r"[\u0B00-\u0B7F]"),
+    "Tamil": re.compile(r"[\u0B80-\u0BFF]"),
+    "Telugu": re.compile(r"[\u0C00-\u0C7F]"),
+    "Kannada": re.compile(r"[\u0C80-\u0CFF]"),
+    "Malayalam": re.compile(r"[\u0D00-\u0D7F]"),
+    "Sinhala": re.compile(r"[\u0D80-\u0DFF]"),
+    "Thai": re.compile(r"[\u0E00-\u0E7F]"),
+    "Lao": re.compile(r"[\u0E80-\u0EFF]"),
+    "Arabic": re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]"),
+    "Hebrew": re.compile(r"[\u0590-\u05FF]"),
+    "Cyrillic": re.compile(r"[\u0400-\u04FF]"),
+    "Greek": re.compile(r"[\u0370-\u03FF]"),
+    "Han": re.compile(r"[\u4E00-\u9FFF]"),
+    "Hiragana": re.compile(r"[\u3040-\u309F]"),
+    "Katakana": re.compile(r"[\u30A0-\u30FF]"),
+    "Hangul": re.compile(r"[\uAC00-\uD7AF]"),
+}
+
+LANGUAGE_ALIASES = {
+    "auto": "Auto-detect",
+    "auto-detect": "Auto-detect",
+    "telugu": "Telugu", "te": "Telugu",
+    "hindi": "Hindi", "hi": "Hindi",
+    "marathi": "Marathi", "mr": "Marathi",
+    "sanskrit": "Sanskrit", "sa": "Sanskrit",
+    "bengali": "Bengali", "bangla": "Bengali", "bn": "Bengali",
+    "punjabi": "Punjabi", "pa": "Punjabi",
+    "gujarati": "Gujarati", "gu": "Gujarati",
+    "odia": "Odia", "oriya": "Odia", "or": "Odia",
+    "tamil": "Tamil", "ta": "Tamil",
+    "kannada": "Kannada", "kn": "Kannada",
+    "malayalam": "Malayalam", "ml": "Malayalam",
+    "sinhala": "Sinhala", "si": "Sinhala",
+    "thai": "Thai", "th": "Thai",
+    "lao": "Lao", "lo": "Lao",
+    "arabic": "Arabic", "ar": "Arabic",
+    "persian": "Persian", "farsi": "Persian", "fa": "Persian",
+    "urdu": "Urdu", "ur": "Urdu",
+    "hebrew": "Hebrew", "he": "Hebrew", "iw": "Hebrew",
+    "russian": "Russian", "ru": "Russian",
+    "ukrainian": "Ukrainian", "uk": "Ukrainian",
+    "greek": "Greek", "el": "Greek",
+    "chinese": "Chinese", "simplified chinese": "Chinese", "traditional chinese": "Chinese", "zh": "Chinese",
+    "japanese": "Japanese", "ja": "Japanese",
+    "korean": "Korean", "ko": "Korean",
+    "french": "French", "fr": "French",
+    "spanish": "Spanish", "es": "Spanish",
+    "german": "German", "de": "German",
+    "italian": "Italian", "it": "Italian",
+    "portuguese": "Portuguese", "pt": "Portuguese",
+    "turkish": "Turkish", "tr": "Turkish",
+    "polish": "Polish", "pl": "Polish",
+    "dutch": "Dutch", "nl": "Dutch",
+    "english": "English", "en": "English",
+}
+
+LANGUAGE_MODULES = {
+    "Telugu": {"script": "Telugu", "indic_danda": False, "zwnj": True},
+    "Hindi": {"script": "Devanagari", "indic_danda": True},
+    "Marathi": {"script": "Devanagari", "indic_danda": True},
+    "Sanskrit": {"script": "Devanagari", "indic_danda": True},
+    "Bengali": {"script": "Bengali", "indic_danda": True},
+    "Punjabi": {"script": "Gurmukhi"},
+    "Gujarati": {"script": "Gujarati"},
+    "Odia": {"script": "Oriya", "indic_danda": True},
+    "Tamil": {"script": "Tamil"},
+    "Kannada": {"script": "Kannada"},
+    "Malayalam": {"script": "Malayalam"},
+    "Sinhala": {"script": "Sinhala"},
+    "Thai": {"script": "Thai", "no_word_spaces": True},
+    "Lao": {"script": "Lao", "no_word_spaces": True},
+    "Arabic": {"script": "Arabic", "rtl": True, "arabic_punctuation": True},
+    "Persian": {"script": "Arabic", "rtl": True, "arabic_punctuation": True},
+    "Urdu": {"script": "Arabic", "rtl": True, "arabic_punctuation": True},
+    "Hebrew": {"script": "Hebrew", "rtl": True},
+    "Russian": {"script": "Cyrillic"},
+    "Ukrainian": {"script": "Cyrillic"},
+    "Greek": {"script": "Greek"},
+    "Chinese": {"script": "Han", "cjk_punctuation": True, "cjk_spacing": True},
+    "Japanese": {"script": "Japanese", "cjk_punctuation": True, "cjk_spacing": True},
+    "Korean": {"script": "Hangul", "cjk_spacing": False},
+    "French": {"script": "Latin", "french_spacing": True},
+    "Spanish": {"script": "Latin", "spanish_inverted_punctuation": True},
+    "German": {"script": "Latin"},
+    "Italian": {"script": "Latin"},
+    "Portuguese": {"script": "Latin"},
+    "Turkish": {"script": "Latin"},
+    "Polish": {"script": "Latin"},
+    "Dutch": {"script": "Latin"},
+    "English": {"script": "Latin"},
+}
+
+# Conservative language-specific replacements. Keep small to avoid false positives.
+LANGUAGE_COMMON_REPLACEMENTS = {
+    "Telugu": {
+        "పాస్వర్డ్": "పాస్\u200cవర్డ్",
+        "పాస్ వర్డ్": "పాస్\u200cవర్డ్",
+        "డౌన్లోడ్": "డౌన్\u200cలోడ్",
+        "డౌన్ లోడ్": "డౌన్\u200cలోడ్",
+        "అప్లోడ్": "అప్\u200cలోడ్",
+        "అప్ లోడ్": "అప్\u200cలోడ్",
+        "డాష్బోర్డ్": "డాష్\u200cబోర్డ్",
+        "డాష్ బోర్డ్": "డాష్\u200cబోర్డ్",
+    },
+    "Hindi": {
+        "ई मेल": "ईमेल",
+        "लॉग इन": "लॉगिन",
+    },
+}
+
+# Telugu ZWNJ remains a Telugu-only module, not a global assumption.
+LANGUAGE_ZWNJ_BASE_SUFFIXES = {
+    "Telugu": {
+        "డాక్యుమెంట్": ["ను", "లను", "లు", "తో", "కి", "లో"],
+        "పాస్\u200cవర్డ్": ["ను", "తో", "లో", "కి"],
+        "పాస్వర్డ్": ["ను", "తో", "లో", "కి"],
+        "డాష్\u200cబోర్డ్": ["ను", "లో", "కి"],
+        "అప్\u200cలోడ్": ["ను", "చేయండి", "తో"],
+        "డౌన్\u200cలోడ్": ["ను", "చేయండి", "తో"],
+        "టెంప్లేట్": ["లు", "ను", "లను", "లో"],
+        "సెట్టింగ్": ["లు", "లను", "లో", "కి"],
+        "కనెక్షన్": ["ను", "తో", "లో"],
+        "ఫైల్": ["ను", "లను", "లు", "లో"],
+    }
+}
+
+LATIN_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z]{2,}\b")
+ALLOWED_LATIN_TERMS = {
+    "api", "url", "uri", "http", "https", "html", "xml", "json", "csv", "pdf", "docx", "xlsx",
+    "ui", "ux", "id", "otp", "sms", "email", "app", "ios", "android", "windows", "mac", "linux",
+    "kcal", "mb", "gb", "tb", "wifi", "gps", "ip", "vpn", "sdk", "csv", "sql", "seo",
+    "facebook", "google", "youtube", "instagram", "whatsapp", "iphone", "ipad", "chrome", "safari",
+}
+ROMANIZED_WORDS_BY_LANGUAGE = {
+    "Telugu": {"chudandi", "choosandi", "cheyandi", "chesandi", "ikkada", "akkada", "meeru", "dayachesi", "sari", "kadu", "avunu", "ledu", "mariyu", "kosam", "loki", "nundi", "tho", "ki", "lo", "pai"},
+    "Hindi": {"kripya", "dhanyavad", "namaste", "yahaan", "wahan", "aap", "nahi", "haan", "karen", "dekhen"},
+    "Tamil": {"nandri", "vanakkam", "inge", "ange", "paarungal", "seyyavum"},
+    "Kannada": {"dhanyavaada", "illi", "alli", "maadi", "nodiri"},
 }
 
 PLACEHOLDER_PATTERN = re.compile(
     r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|\b\w+_id\b|<[^>]+>)"
 )
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,:]\d+)*")
-
-# Offline quality rules are used when no API key is available.
-# They are intentionally conservative: they catch objective issues only.
-TELUGU_RE = re.compile(r"[\u0C00-\u0C7F]")
-LATIN_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z]{2,}\b")
-ROMANIZED_TELUGU_WORDS = {
-    "chudandi", "choosandi", "cheyandi", "chesandi", "ikkada", "akkada",
-    "meeru", "nuvvu", "dayachesi", "sari", "kadu", "avunu", "ledu",
-    "mariyu", "kosam", "loki", "nundi", "tho", "ki", "lo", "pai"
-}
-ALLOWED_LATIN_TERMS = {
-    "api", "url", "http", "https", "html", "xml", "json", "csv", "pdf",
-    "ui", "ux", "id", "otp", "sms", "email", "app", "ios", "android",
-    "kcal", "mb", "gb", "wifi", "gps"
-}
-TELUGU_COMMON_REPLACEMENTS = {
-    "పాస్వర్డ్": "పాస్‌వర్డ్",
-    "పాస్ వర్డ్": "పాస్‌వర్డ్",
-    "డౌన్లోడ్": "డౌన్‌లోడ్",
-    "డౌన్ లోడ్": "డౌన్‌లోడ్",
-    "అప్లోడ్": "అప్‌లోడ్",
-    "అప్ లోడ్": "అప్‌లోడ్",
-    "డాష్బోర్డ్": "డాష్‌బోర్డ్",
-    "డాష్ బోర్డ్": "డాష్‌బోర్డ్",
-    "సైన్ ఇన్": "సైన్‌ఇన్",
-    "లాగ్ ఇన్": "లాగిన్",
-}
 
 
 # ==========================================================
@@ -1629,21 +1740,236 @@ def protect_placeholders_for_script_check(text: str) -> str:
     return text
 
 
-def has_telugu(text: str) -> bool:
-    return bool(TELUGU_RE.search(text or ""))
+def normalize_language_name(language: str) -> str:
+    key = normalize_text(language or "").lower().strip()
+    return LANGUAGE_ALIASES.get(key, language.strip() if language else "Auto-detect")
 
 
-def offline_telugu_quality_checks(segment: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """General offline Telugu/LQA checks.
+def script_count(text: str, script_name: str) -> int:
+    if script_name == "Japanese":
+        return sum(len(SCRIPT_PATTERNS[s].findall(text or "")) for s in ["Han", "Hiragana", "Katakana"])
+    if script_name == "Chinese":
+        return len(SCRIPT_PATTERNS["Han"].findall(text or ""))
+    pattern = SCRIPT_PATTERNS.get(script_name)
+    return len(pattern.findall(text or "")) if pattern else 0
 
-    These rules do not call any external model. They are useful when customers
-    do not provide API keys. They focus on objective quality checks: Unicode,
-    placeholders, numbers, punctuation, mixed script, source-copy, and a small
-    conservative Telugu UI dictionary.
+
+def detect_dominant_script(text: str) -> str:
+    counts = {}
+    for script in SCRIPT_PATTERNS:
+        if script in {"Hiragana", "Katakana"}:
+            continue
+        counts[script] = script_count(text, script)
+    # Japanese is a composite script group.
+    counts["Japanese"] = script_count(text, "Japanese")
+    if not counts:
+        return "Unknown"
+    script, count = max(counts.items(), key=lambda x: x[1])
+    return script if count > 0 else "Unknown"
+
+
+def infer_language_from_text(text: str) -> str:
+    script = detect_dominant_script(text)
+    script_to_language = {
+        "Telugu": "Telugu",
+        "Devanagari": "Hindi",
+        "Bengali": "Bengali",
+        "Gurmukhi": "Punjabi",
+        "Gujarati": "Gujarati",
+        "Oriya": "Odia",
+        "Tamil": "Tamil",
+        "Kannada": "Kannada",
+        "Malayalam": "Malayalam",
+        "Sinhala": "Sinhala",
+        "Thai": "Thai",
+        "Lao": "Lao",
+        "Arabic": "Arabic",
+        "Hebrew": "Hebrew",
+        "Cyrillic": "Russian",
+        "Greek": "Greek",
+        "Han": "Chinese",
+        "Japanese": "Japanese",
+        "Hangul": "Korean",
+        "Latin": "English",
+    }
+    return script_to_language.get(script, "Unknown")
+
+
+def resolve_target_language(segment: Dict[str, Any], target_language: str = "Auto-detect") -> str:
+    lang = normalize_language_name(target_language)
+    if lang and lang != "Auto-detect":
+        return lang
+    target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+    source = normalize_text(segment.get("source", ""))
+    # Prefer target/translation text for QA; source text may be English.
+    inferred = infer_language_from_text(target) if target else "Unknown"
+    if inferred != "Unknown":
+        return inferred
+    inferred = infer_language_from_text(source) if source else "Unknown"
+    return inferred if inferred != "Unknown" else "Auto-detect"
+
+
+def has_expected_script(text: str, language: str) -> bool:
+    module = LANGUAGE_MODULES.get(language, {})
+    script = module.get("script")
+    if not script:
+        return False
+    return script_count(text, script) > 0
+
+
+def language_specific_replacement_checks(segment: Dict[str, Any], language: str, target: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    replacements = LANGUAGE_COMMON_REPLACEMENTS.get(language, {})
+    for wrong, correct in replacements.items():
+        if wrong in target:
+            rows.append(make_report_row(
+                segment, f"{language} Orthography", "Minor", visible_invisibles(wrong), visible_invisibles(target.replace(wrong, correct)),
+                f"Common {language} UI/localization spelling or joiner pattern can be improved.",
+                "Offline Rule Engine", f"Built-in {language} Dictionary", "Medium"
+            ))
+    return rows
+
+
+def language_specific_zwnj_checks(segment: Dict[str, Any], language: str, target: str, enable_zwnj: bool) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not enable_zwnj:
+        return rows
+    rules = LANGUAGE_ZWNJ_BASE_SUFFIXES.get(language, {})
+    for base, suffixes in rules.items():
+        for suffix in suffixes:
+            bad_joined = base + suffix
+            bad_spaced = base + " " + suffix
+            good = base + "\u200C" + suffix
+            if bad_joined in target:
+                rows.append(make_report_row(
+                    segment, "ZWNJ", "Minor", visible_invisibles(bad_joined), visible_invisibles(good),
+                    f"Possible missing Zero Width Non-Joiner in {language} between loanword/base and suffix.",
+                    "Offline Rule Engine", f"Built-in {language} ZWNJ", "Medium"
+                ))
+            if bad_spaced in target:
+                rows.append(make_report_row(
+                    segment, "ZWNJ", "Minor", visible_invisibles(bad_spaced), visible_invisibles(good),
+                    f"Possible visible space where ZWNJ may be required in {language}.",
+                    "Offline Rule Engine", f"Built-in {language} ZWNJ", "Medium"
+                ))
+    return rows
+
+
+def global_script_checks(segment: Dict[str, Any], language: str, target: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    module = LANGUAGE_MODULES.get(language, {})
+    script = module.get("script")
+    if not script or script == "Latin":
+        return rows
+
+    # Conservative mixed Latin check. It triggers only when expected target script is present.
+    if has_expected_script(target, language):
+        check_text = protect_placeholders_for_script_check(target)
+        latin_words = [w for w in LATIN_WORD_RE.findall(check_text) if w.lower() not in ALLOWED_LATIN_TERMS]
+        romanized = [w for w in latin_words if w.lower() in ROMANIZED_WORDS_BY_LANGUAGE.get(language, set())]
+        if romanized:
+            rows.append(make_report_row(
+                segment, "Mixed Script", "Major", ", ".join(romanized),
+                f"Replace romanized {language} words with the target script, unless the client DNT/glossary requires Latin script.",
+                f"Romanized {language} words were found inside {language} text.",
+                "Offline Rule Engine", f"Built-in {language} Script QA", "High"
+            ))
+        elif len(latin_words) >= 2:
+            rows.append(make_report_row(
+                segment, "Mixed Script", "Review", ", ".join(latin_words[:8]),
+                "Review whether these Latin-script terms should be translated, transliterated, or kept as product/DNT terms.",
+                f"Latin-script words appear inside {language} text. This can be valid for product names, so review is recommended.",
+                "Offline Rule Engine", "Built-in Script QA", "Medium"
+            ))
+    return rows
+
+
+def cjk_spacing_and_punctuation_checks(segment: Dict[str, Any], language: str, target: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    module = LANGUAGE_MODULES.get(language, {})
+    if module.get("cjk_spacing"):
+        if re.search(r"([\u4E00-\u9FFF\u3040-\u30FF])\s+([\u4E00-\u9FFF\u3040-\u30FF])", target):
+            suggestion = re.sub(r"([\u4E00-\u9FFF\u3040-\u30FF])\s+([\u4E00-\u9FFF\u3040-\u30FF])", r"\1\2", target)
+            rows.append(make_report_row(
+                segment, "Spacing", "Minor", visible_invisibles(target), visible_invisibles(suggestion),
+                f"Unnecessary spaces found between {language} characters.",
+                "Offline Rule Engine", f"Built-in {language} Spacing", "High"
+            ))
+    if module.get("cjk_punctuation") and script_count(target, module.get("script", "Han")) > 0:
+        replacements = {",": "，", ".": "。", "?": "？", "!": "！", ":": "：", ";": "；"}
+        changed = target
+        for a, b in replacements.items():
+            changed = changed.replace(a, b)
+        if changed != target:
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", visible_invisibles(target), visible_invisibles(changed),
+                f"ASCII punctuation appears in {language} text; localized full-width punctuation may be required.",
+                "Offline Rule Engine", f"Built-in {language} Punctuation", "Medium"
+            ))
+    return rows
+
+
+def locale_punctuation_checks(segment: Dict[str, Any], language: str, target: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    module = LANGUAGE_MODULES.get(language, {})
+
+    if module.get("indic_danda") and has_expected_script(target, language):
+        if target.strip().endswith("."):
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", ".", target.rstrip(".") + "।",
+                f"{language} text often uses danda punctuation instead of a Latin full stop, depending on client style.",
+                "Offline Rule Engine", f"Built-in {language} Punctuation", "Medium"
+            ))
+
+    if module.get("arabic_punctuation") and has_expected_script(target, language):
+        changed = target.replace("?", "؟").replace(",", "،")
+        if changed != target:
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", visible_invisibles(target), visible_invisibles(changed),
+                f"Arabic-script text may require Arabic comma/question mark punctuation, depending on client style.",
+                "Offline Rule Engine", f"Built-in {language} Punctuation", "Medium"
+            ))
+
+    if module.get("french_spacing"):
+        # French typography normally uses a space before : ; ? !. Use regular space in suggestion for broad compatibility.
+        if re.search(r"(?<!\s)([:;?!])", target):
+            suggestion = re.sub(r"(?<!\s)([:;?!])", r" \1", target)
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", visible_invisibles(target), visible_invisibles(suggestion),
+                "French punctuation may require spacing before colon, semicolon, question mark, and exclamation mark.",
+                "Offline Rule Engine", "Built-in French Typography", "Medium"
+            ))
+
+    if module.get("spanish_inverted_punctuation"):
+        stripped = target.strip()
+        if "?" in stripped and "¿" not in stripped:
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", "missing ¿", "¿" + stripped if not stripped.startswith("¿") else stripped,
+                "Spanish questions usually require an opening inverted question mark.",
+                "Offline Rule Engine", "Built-in Spanish Punctuation", "Medium"
+            ))
+        if "!" in stripped and "¡" not in stripped:
+            rows.append(make_report_row(
+                segment, "Locale Punctuation", "Minor", "missing ¡", "¡" + stripped if not stripped.startswith("¡") else stripped,
+                "Spanish exclamations usually require an opening inverted exclamation mark.",
+                "Offline Rule Engine", "Built-in Spanish Punctuation", "Medium"
+            ))
+
+    return rows
+
+
+def global_offline_quality_checks(segment: Dict[str, Any], target_language: str = "Auto-detect", enable_language_specific: bool = True, enable_zwnj: bool = True) -> List[Dict[str, Any]]:
+    """Global offline LQA checks used when no API key is available.
+
+    These rules are intentionally conservative and objective. They work across
+    languages for formatting, placeholders, numbers, glossary/DNT, script issues,
+    locale punctuation, encoding damage, and source-copy detection. Language modules
+    add safe checks for specific writing systems without making the app Telugu-only.
     """
     rows: List[Dict[str, Any]] = []
     source = normalize_text(segment.get("source", ""))
     target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+    language = resolve_target_language(segment, target_language)
 
     if not target:
         return rows
@@ -1666,35 +1992,6 @@ def offline_telugu_quality_checks(segment: Dict[str, Any]) -> List[Dict[str, Any
             "Offline Rule Engine", "Built-in LQA", "High"
         ))
 
-    # Common Telugu UI/loanword orthography corrections.
-    for wrong, correct in TELUGU_COMMON_REPLACEMENTS.items():
-        if wrong in target:
-            rows.append(make_report_row(
-                segment, "Telugu Orthography", "Minor", wrong, target.replace(wrong, correct),
-                "Common Telugu UI term spelling/ZWNJ pattern can be improved.",
-                "Offline Rule Engine", "Built-in Telugu Dictionary", "Medium"
-            ))
-
-    # Mixed Latin script in Telugu text. Keep this conservative to avoid DNT/product names.
-    check_text = protect_placeholders_for_script_check(target)
-    latin_words = [w for w in LATIN_WORD_RE.findall(check_text) if w.lower() not in ALLOWED_LATIN_TERMS]
-    if has_telugu(target) and latin_words:
-        romanized = [w for w in latin_words if w.lower() in ROMANIZED_TELUGU_WORDS]
-        if romanized:
-            rows.append(make_report_row(
-                segment, "Mixed Script", "Major", ", ".join(romanized),
-                "Replace romanized Telugu with Telugu script.",
-                "Romanized Telugu words were found inside Telugu text.",
-                "Offline Rule Engine", "Built-in Telugu Script QA", "High"
-            ))
-        elif len(latin_words) >= 2:
-            rows.append(make_report_row(
-                segment, "Mixed Script", "Review", ", ".join(latin_words[:8]),
-                "Review whether these Latin-script terms must be translated, transliterated, or kept as DNT/product terms.",
-                "Latin-script words appear inside Telugu text. This may be valid for DNT/product terms, so review is recommended.",
-                "Offline Rule Engine", "Built-in Script QA", "Medium"
-            ))
-
     # Double punctuation and punctuation spacing.
     if re.search(r"[.!?]{2,}", target):
         rows.append(make_report_row(
@@ -1712,10 +2009,17 @@ def offline_telugu_quality_checks(segment: Dict[str, Any]) -> List[Dict[str, Any
             "Offline Rule Engine", "Built-in Formatting QA", "High"
         ))
 
+    if enable_language_specific and language != "Auto-detect":
+        rows.extend(language_specific_replacement_checks(segment, language, target))
+        rows.extend(language_specific_zwnj_checks(segment, language, target, enable_zwnj))
+        rows.extend(global_script_checks(segment, language, target))
+        rows.extend(cjk_spacing_and_punctuation_checks(segment, language, target))
+        rows.extend(locale_punctuation_checks(segment, language, target))
+
     return rows
 
 
-def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
+def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True, target_language: str = "Auto-detect", enable_language_specific: bool = True) -> List[Dict[str, Any]]:
     rows = []
     source = normalize_text(segment.get("source", ""))
     target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
@@ -1823,26 +2127,14 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
                 "Company glossary target term is missing in translation.", "Company Rules", g.get("source", ""), "High"
             ))
 
-    # ZWNJ detection for Telugu loanword suffixes
-    if enable_zwnj:
-        for base, suffixes in TELUGU_ZWNJ_BASE_SUFFIXES.items():
-            for suffix in suffixes:
-                bad_joined = base + suffix
-                bad_spaced = base + " " + suffix
-                good = base + "\u200C" + suffix
-                if bad_joined in target:
-                    rows.append(make_report_row(
-                        segment, "ZWNJ", "Minor", visible_invisibles(bad_joined), visible_invisibles(good),
-                        "Possible missing Zero Width Non-Joiner between loanword/base and suffix.", "Rule Engine", "Built-in Telugu ZWNJ", "Medium"
-                    ))
-                if bad_spaced in target:
-                    rows.append(make_report_row(
-                        segment, "ZWNJ", "Minor", visible_invisibles(bad_spaced), visible_invisibles(good),
-                        "Possible incorrect visible space where ZWNJ may be required.", "Rule Engine", "Built-in Telugu ZWNJ", "Medium"
-                    ))
-
-    # Offline Telugu + general LQA checks always run.
-    rows.extend(offline_telugu_quality_checks(segment))
+    # Global offline quality checks always run. They are language-neutral first,
+    # then optional language modules are applied based on target language or script.
+    rows.extend(global_offline_quality_checks(
+        segment,
+        target_language=target_language,
+        enable_language_specific=enable_language_specific,
+        enable_zwnj=enable_zwnj,
+    ))
 
     return rows
 
@@ -1900,8 +2192,8 @@ def ai_qa_batch(
         style_policy = (
             "Do NOT flag subjective style, wording, or terminology preferences unless a company rule, glossary, "
             "DNT list, placeholder rule, or clear source meaning proves it is wrong. "
-            "Do NOT flag acceptable target-language loanwords/transliterations as errors merely because a native synonym exists. "
-            "For Telugu UI localization, terms like వెల్కమ్ స్క్రీన్, స్క్రీన్, ఫైల్, యాప్, సెట్టింగ్, డాక్యుమెంట్, పాస్‌వర్డ్ can be acceptable unless company rules say otherwise."
+            "Do NOT flag acceptable target-language loanwords, product names, or transliterations as errors merely because a native synonym exists. "
+            "Only flag terminology when it is clearly wrong, inconsistent, untranslated, or violates uploaded client rules."
         )
 
     instructions = (
@@ -1924,7 +2216,7 @@ Important rules:
 - Do not suggest a different phrase only because it sounds more natural.
 - Do not change a valid translation into a different meaning.
 - Do not flag transliterated UI/product terms in the target script unless company rules require another term.
-- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example "chupinchandi" in Telugu output.
+- Mixed script is an error when Roman/Latin words appear unexpectedly inside a target language that normally uses another script, unless they are product names, placeholders, URLs, DNT terms, or required by client rules.
 - If the issue is grammar/spelling/mixed script, "wrong_part" must be an exact visible fragment from the translation.
 - "suggestion" must be a concrete correction. Prefer a full corrected translation when possible.
 - If you are unsure, omit the error.
@@ -2747,7 +3039,7 @@ def render_dashboard() -> None:
     st.markdown(
         """
         <div class="note-card">
-        <b>API keys are optional.</b> Without an API key, ErrorSweep uses the offline rule engine for Telugu/Unicode/LQA checks.
+        <b>API keys are optional.</b> Without an API key, ErrorSweep uses a global offline rule engine for Unicode, formatting, placeholders, numbers, script, glossary, DNT, locale punctuation, and language-specific checks.
         With a user-provided API key, smart semantic QA and translation are enabled for that session.
         </div>
         """,
@@ -2757,7 +3049,7 @@ def render_dashboard() -> None:
     task_request = st.text_area(
         "Vendor request / task instruction (optional)",
         value="",
-        placeholder="Example: Please do QA on this translated file. / Please translate this file into Telugu.",
+        placeholder="Example: Please do QA on this translated file. / Please translate this file into Spanish.",
         height=80,
         help="If you choose Auto Detect, ErrorSweep uses this instruction plus the file layout to decide whether to run QA or Translation."
     )
@@ -2783,6 +3075,17 @@ def render_dashboard() -> None:
                 "E-learning / Education",
                 "General",
             ],
+        )
+
+        target_language_hint = st.selectbox(
+            "Target language / locale",
+            [
+                "Auto-detect", "English", "French", "Spanish", "German", "Italian", "Portuguese", "Dutch", "Polish", "Turkish",
+                "Telugu", "Hindi", "Marathi", "Bengali", "Punjabi", "Gujarati", "Odia", "Tamil", "Kannada", "Malayalam", "Sinhala",
+                "Arabic", "Persian", "Urdu", "Hebrew", "Chinese", "Japanese", "Korean", "Thai", "Lao", "Russian", "Ukrainian", "Greek",
+            ],
+            index=0,
+            help="Used by the offline global rule engine. Choose Auto-detect when unsure."
         )
 
         strictness = st.select_slider(
@@ -2846,7 +3149,7 @@ def render_dashboard() -> None:
         gemini_client = None
 
     if openai_client is None:
-        st.info("Offline QA mode is active. ErrorSweep will run built-in Telugu, Unicode, punctuation, placeholder, number, ZWNJ, glossary, and DNT checks without using any API key.")
+        st.info("Offline QA mode is active. ErrorSweep will run global Unicode, punctuation, spacing, placeholder, number, glossary, DNT, script, and language-specific rule checks without using any API key.")
 
     st.markdown("### Upload")
     uploaded_file = st.file_uploader(
@@ -2961,7 +3264,7 @@ def render_dashboard() -> None:
             if run_rules:
                 status.text("Running deterministic checks...")
                 for idx, seg in enumerate(segments, start=1):
-                    report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
+                    report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj, target_language=target_language_hint))
                     progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
 
             # AI QA
@@ -3042,7 +3345,12 @@ def render_dashboard() -> None:
 
         p1, p2, p3 = st.columns(3)
         with p1:
-            target_language = st.text_input("Target language", value="Telugu")
+            default_target_language = "" if target_language_hint == "Auto-detect" else target_language_hint
+            target_language = st.text_input(
+                "Target language",
+                value=default_target_language,
+                placeholder="Example: Spanish, French, Telugu, Arabic, Japanese"
+            )
         with p2:
             apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to output", value=False)
         with p3:
@@ -3057,6 +3365,9 @@ def render_dashboard() -> None:
         run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
 
         if uploaded_file and run_pro:
+            if not target_language.strip():
+                st.error("Please enter the target language for translation.")
+                st.stop()
             if openai_client is None:
                 st.error("Translation requires a language-engine API key. Use the ErrorSweep QA page for offline rule-based checks, or enter your own API key in the sidebar.")
                 st.stop()
@@ -3129,7 +3440,7 @@ def render_dashboard() -> None:
             review_rows: List[Dict[str, Any]] = []
             status.text("Running deterministic review...")
             for idx, seg in enumerate(translated_segments, start=1):
-                review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
+                review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True, target_language=target_language))
                 progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
 
             # Reviewer review
