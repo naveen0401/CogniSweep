@@ -114,12 +114,17 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 /* Hide Streamlit public toolbar/menu/footer, including fork/deploy controls where present */
 #MainMenu {visibility: hidden; display: none;}
 footer {visibility: hidden; display: none;}
-header {visibility: visible; height: 2.4rem;}
+header {visibility: visible !important; display: block !important; height: 2.4rem !important;}
 [data-testid="stToolbar"] {visibility: hidden; display: none;}
 [data-testid="stDecoration"] {visibility: hidden; display: none;}
 [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
 [data-testid="stDeployButton"] {visibility: hidden; display: none;}
 .stAppDeployButton {visibility: hidden; display: none;}
+
+/* Keep sidebar/navigation accessible */
+[data-testid="collapsedControl"] { visibility: visible !important; display: flex !important; opacity: 1 !important; }
+section[data-testid="stSidebar"] { visibility: visible !important; }
+section[data-testid="stSidebar"] > div { visibility: visible !important; }
 [data-testid="collapsedControl"] {visibility: visible !important; display: block !important;}
 
 /* Premium white-label visual system */
