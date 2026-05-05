@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import requests
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
+from urllib.parse import quote
 
 from openai import OpenAI as AI
 from openpyxl import load_workbook
@@ -2147,6 +2148,270 @@ PLAN_CREDITS = {
 }
 
 
+# ==========================================================
+# BILLING / PLAN GATING
+# ==========================================================
+
+PLAN_CATALOG = {
+    "trial": {
+        "name": "Free Trial",
+        "price": "₹0",
+        "credits": 25,
+        "tagline": "Test ErrorSweep with small QA files.",
+        "features": [
+            "QA preview for small files",
+            "Up to 25 segments per run",
+            "No Rules ZIP",
+            "No ErrorSweep Pro translation",
+        ],
+    },
+    "errorsweep": {
+        "name": "ErrorSweep",
+        "price": "₹999 / month",
+        "credits": 200,
+        "tagline": "QA reports and correction suggestions for localization files.",
+        "features": [
+            "QA run + suggestions",
+            "Rules ZIP support",
+            "Excel highlighted reports",
+            "Up to 1,000 segments per run",
+        ],
+    },
+    "pro": {
+        "name": "ErrorSweep Pro",
+        "price": "₹2,999 / month",
+        "credits": 600,
+        "tagline": "Translation + independent review workflow.",
+        "features": [
+            "Everything in ErrorSweep",
+            "Translate + Review",
+            "Rules ZIP support",
+            "Up to 3,000 segments per run",
+        ],
+    },
+    "agency": {
+        "name": "Agency",
+        "price": "₹9,999 / month",
+        "credits": 2500,
+        "tagline": "Higher volume for teams and agencies.",
+        "features": [
+            "Everything in Pro",
+            "Higher monthly credits",
+            "Large file workflows",
+            "Priority manual support",
+        ],
+    },
+    "enterprise": {
+        "name": "Enterprise",
+        "price": "Custom",
+        "credits": 10000,
+        "tagline": "Custom deployment, limits, and rule packs.",
+        "features": [
+            "Custom credits",
+            "Dedicated support",
+            "Client-specific rule logic",
+            "Private deployment option",
+        ],
+    },
+}
+
+PLAN_RANK = {"trial": 0, "errorsweep": 1, "pro": 2, "agency": 3, "enterprise": 4}
+
+
+def normalize_plan(plan: Any) -> str:
+    plan = str(plan or "trial").strip().lower()
+    return plan if plan in PLAN_CATALOG else "trial"
+
+
+def is_admin_user(user: Optional[Dict[str, Any]] = None) -> bool:
+    user = user or get_current_user()
+    email = str((user or {}).get("email", "")).strip().lower()
+    raw = get_secret_value("ERRORSWEEP_ADMIN_EMAILS") or get_secret_value("ERRORSWEEP_ADMIN_EMAIL") or ""
+    admins = [x.strip().lower() for x in str(raw).split(",") if x.strip()]
+    return bool(email and email in admins)
+
+
+def get_payment_link(plan: str) -> str:
+    plan = normalize_plan(plan)
+    keys = [
+        f"PAYMENT_LINK_{plan.upper()}",
+        f"RAZORPAY_LINK_{plan.upper()}",
+        f"RAZORPAY_{plan.upper()}_LINK",
+        f"STRIPE_LINK_{plan.upper()}",
+    ]
+    for key in keys:
+        value = get_secret_value(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def plan_segment_limit(plan: str, workflow: str) -> int:
+    plan = normalize_plan(plan)
+    if plan == "trial":
+        return 25
+    if plan == "errorsweep":
+        return 1000 if workflow == "qa" else 0
+    if plan == "pro":
+        return 3000
+    if plan == "agency":
+        return 15000
+    return 50000
+
+
+def plan_feature_preflight(profile: Optional[Dict[str, Any]], workflow: str, rules_zip_used: bool, segment_count: int) -> Tuple[bool, str]:
+    if not profile:
+        return False, "Profile unavailable. Please log out and log in again."
+
+    plan = normalize_plan(profile.get("plan"))
+    segment_count = int(segment_count or 0)
+
+    if plan == "trial":
+        if workflow == "pro":
+            return False, "ErrorSweep Pro translation is available on the Pro plan or above."
+        if rules_zip_used:
+            return False, "Rules ZIP is available on the ErrorSweep paid plan or above."
+        if segment_count > plan_segment_limit(plan, workflow):
+            return False, f"Free Trial supports up to {plan_segment_limit(plan, workflow)} segments per run. Upgrade to process this full file."
+
+    if plan == "errorsweep" and workflow == "pro":
+        return False, "Your current plan supports QA only. Upgrade to ErrorSweep Pro for translation + review."
+
+    limit = plan_segment_limit(plan, workflow)
+    if limit and segment_count > limit:
+        return False, f"Your current plan supports up to {limit} segments per run. Upgrade for larger files."
+
+    return True, "OK"
+
+
+def plan_can_show_download(profile: Optional[Dict[str, Any]], workflow: str) -> bool:
+    """Trial users can run a preview but paid users get full downloads."""
+    plan = normalize_plan((profile or {}).get("plan"))
+    if plan == "trial":
+        return workflow == "qa"  # Keep QA output downloadable during MVP testing.
+    return True
+
+
+def update_profile_by_email(email: str, plan: str, monthly_credits: int, reset_used: bool = True) -> Tuple[bool, str]:
+    if not supabase_service_configured():
+        return False, "Supabase service role is not configured."
+    email = email.strip().lower()
+    if not email:
+        return False, "Enter a user email."
+    plan = normalize_plan(plan)
+    payload = {
+        "plan": plan,
+        "monthly_credits": int(monthly_credits),
+    }
+    if reset_used:
+        payload["used_credits"] = 0
+    ok, data = supabase_patch(
+        f"/rest/v1/profiles?email=eq.{quote(email, safe='')}",
+        payload,
+        kind="service",
+    )
+    if not ok:
+        return False, format_supabase_error(data)
+    return True, f"Updated {email} to {PLAN_CATALOG[plan]['name']} with {int(monthly_credits)} monthly credits."
+
+
+def list_profiles_for_admin(limit: int = 100) -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    ok, data = supabase_get(
+        f"/rest/v1/profiles?select=id,email,full_name,plan,monthly_credits,used_credits,total_files_processed,created_at,updated_at&order=created_at.desc&limit={int(limit)}",
+        kind="service",
+    )
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def render_plan_card(plan_key: str, current_plan: str) -> None:
+    info = PLAN_CATALOG[plan_key]
+    is_current = normalize_plan(current_plan) == plan_key
+    st.markdown(f"#### {info['name']}")
+    st.metric("Price", info["price"])
+    st.caption(info["tagline"])
+    st.write(f"**Monthly credits:** {info['credits']}")
+    for feature in info["features"]:
+        st.write(f"- {feature}")
+    if is_current:
+        st.success("Current plan")
+    elif plan_key != "trial":
+        link = get_payment_link(plan_key)
+        if link:
+            st.link_button(f"Upgrade to {info['name']}", link, use_container_width=True)
+        else:
+            st.info(f"Add PAYMENT_LINK_{plan_key.upper()} in Streamlit Secrets to enable this upgrade button.")
+    else:
+        st.caption("Available automatically after sign-up.")
+
+
+def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Billing & Plans")
+    if not profile:
+        st.warning("Profile unavailable. Please log out and log in again.")
+        return
+
+    current_plan = normalize_plan(profile.get("plan"))
+    monthly = int(profile.get("monthly_credits") or 0)
+    used = int(profile.get("used_credits") or 0)
+    remaining = max(0, monthly - used)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current Plan", PLAN_CATALOG[current_plan]["name"])
+    c2.metric("Credits Remaining", remaining)
+    c3.metric("Used / Monthly", f"{used} / {monthly}")
+
+    st.markdown("### Choose a plan")
+    cols = st.columns(4)
+    for col, plan in zip(cols, ["errorsweep", "pro", "agency", "enterprise"]):
+        with col:
+            render_plan_card(plan, current_plan)
+
+    with st.expander("How credits are charged", expanded=False):
+        st.write("- ErrorSweep QA: 1 credit per 100 segments.")
+        st.write("- ErrorSweep Pro: 3 credits per 75 segments.")
+        st.write("- Independent review and Rules ZIP may add small extra credit cost.")
+        st.write("- Trial accounts are intentionally limited to small QA previews.")
+
+    st.markdown("### After payment")
+    st.info(
+        "For the current MVP, payments can be confirmed manually by the admin. "
+        "After a user pays, update their plan in the Admin panel. Automatic webhooks can be added next."
+    )
+
+
+def render_admin_panel() -> None:
+    st.markdown("## Admin Panel")
+    st.caption("Manual plan upgrades for MVP billing. Only emails listed in ERRORSWEEP_ADMIN_EMAILS can access this page.")
+
+    if not is_admin_user():
+        st.error("You are not allowed to access this page.")
+        return
+
+    with st.form("admin_upgrade_form"):
+        email = st.text_input("User email")
+        plan = st.selectbox("Plan", ["trial", "errorsweep", "pro", "agency", "enterprise"], index=2)
+        monthly_credits = st.number_input("Monthly credits", min_value=0, max_value=1000000, value=PLAN_CATALOG["pro"]["credits"], step=25)
+        reset_used = st.checkbox("Reset used credits to 0", value=True)
+        submitted = st.form_submit_button("Update user plan", type="primary", use_container_width=True)
+    if submitted:
+        ok, msg = update_profile_by_email(email, plan, int(monthly_credits), reset_used)
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+    st.markdown("### Recent users")
+    profiles = list_profiles_for_admin(100)
+    if profiles:
+        st.dataframe(pd.DataFrame(profiles), use_container_width=True, hide_index=True)
+    else:
+        st.info("No profiles found or service role is not configured.")
+
+
 def supabase_configured() -> bool:
     return bool(get_secret_value("SUPABASE_URL") and get_secret_value("SUPABASE_ANON_KEY"))
 
@@ -2424,6 +2689,8 @@ def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
     st.metric("Credits Remaining", remaining)
     st.progress(min(1.0, used / max(monthly, 1)))
     st.caption(f"{used} / {monthly} credits used this month")
+    if remaining <= max(3, monthly * 0.1):
+        st.warning("Credits are running low. Open Billing to upgrade.")
 
 
 def render_usage_dashboard(user_id: str) -> None:
@@ -2591,6 +2858,20 @@ def render_dashboard() -> None:
 
     if user_id:
         render_usage_dashboard(user_id)
+
+    nav_options = ["Run", "Billing"]
+    if is_admin_user(user):
+        nav_options.append("Admin")
+
+    selected_page = st.sidebar.radio("Navigation", nav_options, index=0)
+
+    if selected_page == "Billing":
+        render_billing_page(profile)
+        return
+
+    if selected_page == "Admin":
+        render_admin_panel()
+        return
 
 
     # ==========================================================
@@ -2770,10 +3051,17 @@ def render_dashboard() -> None:
                 st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
                 st.stop()
 
+            feature_ok, feature_msg = plan_feature_preflight(profile, "qa", bool(rules_zip), len(segments))
+            if not feature_ok:
+                st.error(feature_msg)
+                render_billing_page(profile)
+                st.stop()
+
             credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
             can_run, credit_msg = credit_preflight(profile, credits_needed)
             if not can_run:
                 st.error(credit_msg)
+                render_billing_page(profile)
                 st.stop()
             st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
 
@@ -2911,10 +3199,17 @@ def render_dashboard() -> None:
                 st.error("No source segments found. Try setting the source column name/index in the sidebar.")
                 st.stop()
 
+            feature_ok, feature_msg = plan_feature_preflight(profile, "pro", bool(rules_zip), len(segments))
+            if not feature_ok:
+                st.error(feature_msg)
+                render_billing_page(profile)
+                st.stop()
+
             credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
             can_run, credit_msg = credit_preflight(profile, credits_needed)
             if not can_run:
                 st.error(credit_msg)
+                render_billing_page(profile)
                 st.stop()
             st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
 
