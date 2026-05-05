@@ -35,7 +35,7 @@ except Exception:
 # White-label AI QA + translation workflow
 # ==========================================================
 
-st.set_page_config(page_title="ErrorSweep", layout="wide")
+st.set_page_config(page_title="ErrorSweep", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(
     """
@@ -114,12 +114,13 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 /* Hide Streamlit public toolbar/menu/footer, including fork/deploy controls where present */
 #MainMenu {visibility: hidden; display: none;}
 footer {visibility: hidden; display: none;}
-header {visibility: hidden; display: none;}
+header {visibility: visible; height: 2.4rem;}
 [data-testid="stToolbar"] {visibility: hidden; display: none;}
 [data-testid="stDecoration"] {visibility: hidden; display: none;}
 [data-testid="stStatusWidget"] {visibility: hidden; display: none;}
 [data-testid="stDeployButton"] {visibility: hidden; display: none;}
 .stAppDeployButton {visibility: hidden; display: none;}
+[data-testid="collapsedControl"] {visibility: visible !important; display: block !important;}
 
 /* Premium white-label visual system */
 :root {
@@ -2617,9 +2618,114 @@ def render_dashboard() -> None:
             logout_user()
         st.divider()
 
-    if user_id:
-        render_usage_dashboard(user_id)
+    nav_options = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Rule Packs", "Billing", "Settings"]
+    if user_is_admin:
+        nav_options.append("Admin")
 
+    selected_page = st.radio(
+        "Navigation",
+        nav_options,
+        horizontal=True,
+        key="errorsweep_main_navigation",
+    )
+
+    if selected_page == "Dashboard":
+        if user_id:
+            render_usage_dashboard(user_id)
+        st.markdown(
+            """
+            <div class="hero">
+                <div class="hero-title">ErrorSweep</div>
+                <div class="hero-sub">A secure workspace for QA checks, client rule packs, translation, and independent review.</div>
+                <div class="hero-badge">Choose a workflow above to begin</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("### ErrorSweep")
+            st.write("Run QA on existing translations and receive objective error suggestions.")
+        with c2:
+            st.markdown("### ErrorSweep Pro")
+            st.write("Translate source files, review output independently, and download translated files.")
+        with c3:
+            st.markdown("### Rule Packs")
+            st.write("Upload client ZIP packs containing style guides, glossary, DNT lists, and instructions.")
+        st.info("Use the Navigation selector above. The sidebar is expanded by default; if hidden, refresh the page after this update.")
+        return
+
+    if selected_page == "Rule Packs":
+        st.markdown("## Rule Packs")
+        st.write("Use this page to understand what companies can upload in the optional Rules ZIP.")
+        st.markdown(
+            """
+            **Recommended ZIP contents:**
+
+            - `style_guide.docx` or `style_guide.pdf`
+            - `glossary.xlsx` or `glossary.csv` with source/target terms
+            - `dnt.csv` for Do Not Translate terms
+            - `client_instructions.txt`
+            - `reference_translations.xlsx`
+
+            **How ErrorSweep uses it:**
+
+            1. Extracts text and tables from the ZIP.
+            2. Detects glossary and DNT rules.
+            3. Retrieves only relevant rules for each segment.
+            4. Combines rule checks with AI review.
+            """
+        )
+        st.success("Next improvement: save reusable Rule Packs per company account in Supabase.")
+        return
+
+    if selected_page == "Billing":
+        st.markdown("## Billing & Plans")
+        profile = get_profile(user_id) if user_id else None
+        if profile:
+            st.metric("Current Plan", str(profile.get("plan", "trial")).title())
+            st.metric("Credits Remaining", remaining_credits(profile))
+        plans = [
+            ("ErrorSweep", "QA-only plan for reviewers and freelancers", "PAYMENT_LINK_ERRORSWEEP"),
+            ("ErrorSweep Pro", "Translation + independent review", "PAYMENT_LINK_PRO"),
+            ("Agency", "Higher limits for teams and vendors", "PAYMENT_LINK_AGENCY"),
+        ]
+        cols = st.columns(3)
+        for col, (name, desc, secret_name) in zip(cols, plans):
+            with col:
+                st.markdown(f"### {name}")
+                st.write(desc)
+                link = get_secret_value(secret_name, "")
+                if link:
+                    st.link_button(f"Upgrade to {name}", link, use_container_width=True)
+                else:
+                    st.caption(f"Add `{secret_name}` in Streamlit Secrets to enable this button.")
+        st.info("MVP workflow: user pays via payment link, then admin upgrades the user account manually. Automatic webhook upgrade can be added next.")
+        return
+
+    if selected_page == "Settings":
+        st.markdown("## Settings")
+        st.write("Manage account and API-cost-control settings.")
+        st.markdown("### Own API key mode")
+        st.write("Public users can enter their own language/review API keys during a run. Keys are used only in the active session and are not stored by ErrorSweep.")
+        st.markdown("### System status")
+        st.write(f"Language service configured: {'Yes' if get_secret_value('OPENAI_API_KEY') else 'No'}")
+        st.write(f"Independent review configured: {'Yes' if get_secret_value('GEMINI_API_KEY') else 'No'}")
+        st.write(f"Supabase configured: {'Yes' if supabase_configured() else 'No'}")
+        return
+
+    if selected_page == "Admin":
+        st.markdown("## Admin")
+        st.write("Admin tools for MVP operations.")
+        st.info("Use Supabase Table Editor to manually update user plan/credits until automatic payment webhooks are added.")
+        if user_id:
+            st.markdown("### Recent jobs")
+            jobs = get_recent_jobs(user_id, limit=20)
+            if jobs:
+                st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
+            else:
+                st.write("No recent jobs found.")
+        return
 
     # ==========================================================
     # APP UI
@@ -2641,14 +2747,15 @@ def render_dashboard() -> None:
         value="",
         placeholder="Example: Please do QA on this translated file. / Please translate this file into Telugu.",
         height=80,
-        help="If you choose Auto Detect, ErrorSweep uses this instruction plus the file layout to decide whether to run QA or Translation."
+        help="Optional instruction. Page selection decides the workflow; instructions help auto-detection and QA context."
     )
 
-    mode_choice = st.radio(
-        "Task mode",
-        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate + Review"],
-        horizontal=True,
-    )
+    if selected_page == "ErrorSweep":
+        mode_choice = "ErrorSweep — QA Run + Suggestions"
+    elif selected_page == "ErrorSweep Pro":
+        mode_choice = "ErrorSweep Pro — Translate + Review"
+    else:
+        mode_choice = "Auto Detect Task"
 
     with st.sidebar:
         st.markdown("### Product Settings")
