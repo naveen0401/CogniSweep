@@ -273,6 +273,8 @@ PLACEHOLDER_PATTERN = re.compile(
     r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|\b\w+_id\b|<[^>]+>)"
 )
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,:]\d+)*")
+URL_PATTERN = re.compile(r"\b(?:https?://|www\.)\S+", re.IGNORECASE)
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 
 # ==========================================================
@@ -1784,6 +1786,251 @@ def post_filter_report_rows(rows: List[Dict[str, Any]], include_style: bool) -> 
     return filtered, dropped
 
 
+
+# ==========================================================
+# SOURCE-DRIVEN FORMAT QA HELPERS
+# ==========================================================
+
+TERMINAL_PUNCT_CLASSES = {
+    "period": {".", "。", "．", "｡", "।", "॥"},
+    "question": {"?", "？", "¿"},
+    "exclamation": {"!", "！", "¡"},
+    "colon": {":", "："},
+    "semicolon": {";", "；"},
+    "ellipsis": {"…"},
+}
+
+CLOSING_WRAPPERS = set(')]}›»”’"\'')
+OPENING_WRAPPERS = set('([{‹«“‘"\'')
+BRACKET_PAIRS = [("(", ")"), ("[", "]"), ("{", "}"), ("<", ">")]
+
+
+def _trim_for_terminal(text: str) -> str:
+    """Remove trailing spaces and closing quotes/brackets for terminal punctuation checks.
+
+    Example: source ends with ." or .] should still be treated as ending with a period.
+    Measurement inch marks are handled separately by _is_measurement_quote.
+    """
+    t = normalize_text(text).strip()
+    while t and t[-1] in CLOSING_WRAPPERS:
+        # Do not strip an inch mark after a number, e.g. 0.1"
+        if t[-1] in {'"', '”'} and _is_measurement_quote(t, len(t) - 1):
+            break
+        t = t[:-1].rstrip()
+    return t
+
+
+def terminal_punctuation_class(text: str) -> str:
+    """Return the terminal punctuation class, or empty string.
+
+    This is source-driven: if source has no terminal punctuation, ErrorSweep does not demand one in target.
+    """
+    t = _trim_for_terminal(text)
+    if not t:
+        return ""
+    if t.endswith("...") or t.endswith("…"):
+        return "ellipsis"
+    last = t[-1]
+    for cls, chars in TERMINAL_PUNCT_CLASSES.items():
+        if last in chars:
+            return cls
+    return ""
+
+
+def has_script_range(text: str, start: str, end: str) -> bool:
+    return any(start <= ch <= end for ch in text or "")
+
+
+def preferred_terminal_for_target(source_cls: str, target_text: str) -> str:
+    """Choose a reasonable localized equivalent for the target.
+
+    Only used when source already has terminal punctuation.
+    """
+    if source_cls == "period":
+        # Devanagari languages often use danda as sentence terminator.
+        if has_script_range(target_text, "\u0900", "\u097F"):
+            return "।"
+        if has_script_range(target_text, "\u4E00", "\u9FFF"):
+            return "。"
+        return "."
+    if source_cls == "question":
+        return "?"
+    if source_cls == "exclamation":
+        return "!"
+    if source_cls == "colon":
+        return ":"
+    if source_cls == "semicolon":
+        return ";"
+    if source_cls == "ellipsis":
+        return "…"
+    return ""
+
+
+def replace_or_append_terminal(target: str, source_cls: str) -> str:
+    """Suggest target with source-equivalent terminal punctuation.
+
+    We append when target lacks terminal punctuation. If target has a different terminal class,
+    we replace only the last terminal punctuation. We never use this when source has no terminal punctuation.
+    """
+    t = target.strip()
+    preferred = preferred_terminal_for_target(source_cls, t)
+    if not preferred:
+        return t
+    current_cls = terminal_punctuation_class(t)
+    if not current_cls:
+        return t + preferred
+    # Replace last terminal punctuation after stripping closing wrappers is too complex to do perfectly,
+    # so keep conservative: only append/replace if last visible char is a terminal mark.
+    tt = _trim_for_terminal(t)
+    if tt and terminal_punctuation_class(tt):
+        idx = t.rfind(tt[-1])
+        if idx >= 0:
+            return t[:idx] + preferred + t[idx + 1:]
+    return t + preferred
+
+
+def leading_list_marker(text: str) -> Tuple[str, str]:
+    """Return (marker_type, marker_text) for bullet/numbered-list starts.
+
+    This is source-driven: target is only required to have a list marker when source has one.
+    """
+    t = normalize_text(text).lstrip()
+    if not t:
+        return "", ""
+    m = re.match(r"^([•∙◦▪▫‣⁃])\s*", t)
+    if m:
+        return "bullet", m.group(1)
+    m = re.match(r"^([\-*])\s+", t)
+    if m:
+        return "bullet", m.group(1)
+    m = re.match(r"^(\d+[\.)])\s+", t)
+    if m:
+        return "numbered", m.group(1)
+    m = re.match(r"^([A-Za-z][\.)])\s+", t)
+    if m:
+        return "lettered", m.group(1)
+    return "", ""
+
+
+def bracket_wrapper(text: str) -> Tuple[str, str]:
+    """Detect if the whole source segment is wrapped in matching brackets.
+
+    Example: [Welcome Screen] should normally remain bracketed in target.
+    """
+    t = normalize_text(text).strip()
+    if len(t) < 2:
+        return "", ""
+    for left, right in BRACKET_PAIRS:
+        if t.startswith(left) and t.endswith(right):
+            return left, right
+    return "", ""
+
+
+def ensure_bracket_wrapper(target: str, left: str, right: str) -> str:
+    t = normalize_text(target).strip()
+    stripped = t.strip("".join([l + r for l, r in BRACKET_PAIRS]))
+    return f"{left}{stripped}{right}"
+
+
+def extract_urls(text: str) -> List[str]:
+    return URL_PATTERN.findall(text or "")
+
+
+def extract_emails(text: str) -> List[str]:
+    return EMAIL_PATTERN.findall(text or "")
+
+
+def source_driven_format_checks(segment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Conservative source-vs-target formatting checks.
+
+    Golden rule: only enforce source formatting if the source actually has that formatting.
+    If source has no ending period, ErrorSweep will not demand a period in target.
+    """
+    rows: List[Dict[str, Any]] = []
+    source = normalize_text(segment.get("source", ""))
+    target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+    if not source or not target:
+        return rows
+
+    src_cls = terminal_punctuation_class(source)
+    tgt_cls = terminal_punctuation_class(target)
+    if src_cls and tgt_cls != src_cls:
+        suggestion = replace_or_append_terminal(target, src_cls)
+        rows.append(make_report_row(
+            segment,
+            "Punctuation",
+            "Minor",
+            "missing or different ending punctuation",
+            visible_invisibles(suggestion),
+            f"Source ends with {src_cls} punctuation; target should preserve an equivalent. If source has no ending punctuation, this rule does not run.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    src_marker_type, src_marker = leading_list_marker(source)
+    tgt_marker_type, _ = leading_list_marker(target)
+    if src_marker_type and tgt_marker_type != src_marker_type:
+        rows.append(make_report_row(
+            segment,
+            "Formatting",
+            "Minor",
+            f"missing {src_marker_type} list marker",
+            src_marker + " " + target.lstrip(),
+            "Source begins with a list/bullet marker, but target does not preserve an equivalent marker.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    left, right = bracket_wrapper(source)
+    if left and right and not (target.strip().startswith(left) and target.strip().endswith(right)):
+        rows.append(make_report_row(
+            segment,
+            "Formatting",
+            "Minor",
+            f"missing wrapper {left}{right}",
+            ensure_bracket_wrapper(target, left, right),
+            "Source segment is wrapped in brackets; target should preserve the same wrapper unless client rules say otherwise.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "Medium",
+        ))
+
+    # Ellipsis only if source has ellipsis. Do not invent ellipsis when source does not have it.
+    source_has_ellipsis = source.strip().endswith("...") or source.strip().endswith("…")
+    target_has_ellipsis = target.strip().endswith("...") or target.strip().endswith("…")
+    if source_has_ellipsis and not target_has_ellipsis:
+        rows.append(make_report_row(
+            segment,
+            "Punctuation",
+            "Minor",
+            "missing ellipsis",
+            target.strip() + "…",
+            "Source ends with an ellipsis; target should preserve an equivalent ellipsis.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    # URLs/emails must be preserved exactly if present in source.
+    src_urls = extract_urls(source)
+    for url in src_urls:
+        if url not in target:
+            rows.append(make_report_row(
+                segment, "URL", "Major", url, f"Keep URL unchanged: {url}",
+                "URL from source is missing or changed in target.", "Rule Engine", "Source-driven format rules", "High"
+            ))
+    src_emails = extract_emails(source)
+    for email in src_emails:
+        if email not in target:
+            rows.append(make_report_row(
+                segment, "Email", "Major", email, f"Keep email unchanged: {email}",
+                "Email address from source is missing or changed in target.", "Rule Engine", "Source-driven format rules", "High"
+            ))
+
+    return rows
+
 def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
     rows = []
     source = normalize_text(segment.get("source", ""))
@@ -1810,25 +2057,10 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
             "Leading or trailing spaces found.", "Rule Engine"
         ))
 
-    # Punctuation preservation where appropriate
-    source_for_punct = source.strip()
-    target_for_punct = target.strip()
-    src_end = source_for_punct[-1:] if source_for_punct else ""
-    tgt_end = target_for_punct[-1:] if target_for_punct else ""
-    # Equivalent punctuation marks for Indic and localized punctuation.
-    punctuation_equivalents = {
-        ".": {".", "।", "॥"},
-        "!": {"!", "！"},
-        "?": {"?", "？"},
-        ";": {";", "；"},
-        ":": {":", "："},
-    }
-    if source_for_punct and src_end in punctuation_equivalents and tgt_end not in punctuation_equivalents[src_end]:
-        preferred = "।" if src_end == "." and any("\u0900" <= ch <= "\u097F" for ch in target_for_punct) else src_end
-        rows.append(make_report_row(
-            segment, "Punctuation", "Minor", "missing ending punctuation", target_for_punct + preferred,
-            f"Source ends with '{src_end}', but translation does not preserve equivalent ending punctuation.", "Rule Engine"
-        ))
+    # Source-driven formatting rules.
+    # Golden rule: only enforce punctuation/markers/wrappers when the source has them.
+    # Example: if source does not end with a period, target is NOT required to end with a period.
+    rows.extend(source_driven_format_checks(segment))
 
     # Placeholders/tags
     src_ph = extract_placeholders(source)
@@ -1989,6 +2221,12 @@ Important rules:
 - Output an error only when there is clear evidence in the source, translation, or company rules.
 - Do not suggest a different phrase only because it sounds more natural.
 - Do not change a valid translation into a different meaning.
+- Source-driven formatting policy: preserve source formatting only when the source actually has that formatting.
+- If the source does NOT end with a period/question/exclamation/colon/semicolon/ellipsis, do NOT demand that punctuation in the target.
+- If the source has measurement inch/foot symbols like 0.1", 1/2", or 13/16", treat them as measurement marks, not quotation marks.
+- Preserve placeholders, variables, HTML/XML tags, URLs, emails, numbers, and DNT terms exactly.
+- Preserve list/bullet markers only when the source has a list/bullet marker.
+- Preserve bracket wrappers like [Label] only when the source is bracket-wrapped.
 - Do not flag transliterated UI/product terms in the target script unless company rules require another term.
 - Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example "chupinchandi" in Telugu output.
 - If the issue is grammar/spelling/mixed script, "wrong_part" must be an exact visible fragment from the translation.
