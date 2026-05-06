@@ -1331,8 +1331,12 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
     data = uploaded_file.getvalue()
     lower_name = uploaded_file.name.lower()
 
+    # .xlz is often a compressed XLIFF package, not a plain text file.
+    if lower_name.endswith(".xlz"):
+        return extract_xlz_segments_from_zip(data, mode, max_segments)
+
     text_like_exts = (
-        ".txt", ".srt", ".xml", ".xliff", ".xlf", ".json", ".po",
+        ".txt", ".srt", ".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".json", ".po",
         ".properties", ".strings", ".html", ".htm", ".md", ".yml", ".yaml", ".csv"
     )
     if looks_like_binary(data) and not lower_name.endswith(text_like_exts):
@@ -1343,45 +1347,17 @@ def extract_text_segments(uploaded_file, mode: str, max_segments: int):
 
     text, encoding_used = decode_text_bytes(data)
 
-    # Basic XLIFF/XML pair extraction. These formats should not be converted into
+    # Basic XLIFF/XML/XLZ pair extraction. These formats should not be converted into
     # line-pair text output; they are treated as structured source/target pairs.
-    if lower_name.endswith((".xliff", ".xlf", ".xml")):
-        pairs = []
-        try:
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(text)
-            for elem in root.iter():
-                children = list(elem)
-                src_el, tgt_el = None, None
-                for ch in children:
-                    tag = ch.tag.split("}")[-1].lower()
-                    if tag == "source":
-                        src_el = ch
-                    elif tag == "target":
-                        tgt_el = ch
-                if src_el is not None:
-                    src = clean_line_for_ai("".join(src_el.itertext()))
-                    tgt = clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else ""
-                    if src:
-                        pairs.append((src, tgt))
-        except Exception:
-            pairs = []
-        if pairs:
-            segments = []
-            for i, (src, tgt) in enumerate(limit_sequence(pairs, max_segments), start=1):
-                if mode == "qa" and not tgt:
-                    continue
-                segments.append({
-                    "id": len(segments) + 1,
-                    "file_type": "text",
-                    "sheet": "File",
-                    "location": f"Segment {i}",
-                    "source": src,
-                    "translation": tgt,
-                    "text": tgt if mode == "qa" else src,
-                    "mode": "bilingual" if tgt else "source_only",
-                })
-            return text, segments, [f"XML/XLIFF: extracted source/target pairs (decoded as {encoding_used})"]
+    if lower_name.endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml")):
+        segments, xliff_logs = extract_xliff_pairs_from_xml_text(
+            text,
+            mode=mode,
+            max_segments=max_segments,
+            source_label=uploaded_file.name,
+        )
+        if segments:
+            return text, segments, [f"{msg} (decoded as {encoding_used})" for msg in xliff_logs]
 
     raw_lines = text.splitlines(keepends=True)
     clean_lines = [clean_line_for_ai(line) for line in raw_lines]
@@ -2453,7 +2429,7 @@ def make_xml_target_tag(source_tag: str) -> str:
 
 
 def extract_xml_xliff_pro_segments(uploaded_file, max_segments: int):
-    """Extract XLIFF/XML <source>/<target> pairs and preserve XML output."""
+    """Extract XLIFF/XML/XLZ <source>/<target> pairs and preserve XML output."""
     import xml.etree.ElementTree as ET
     raw_text, encoding_used = decode_text_bytes(uploaded_file.getvalue())
     logs = [f"XML/XLIFF: decoded as {encoding_used}"]
@@ -2520,6 +2496,249 @@ def build_translated_xml_bytes(tree: Any, target_map: Dict[str, Any], translatio
     tree.write(output, encoding="utf-8", xml_declaration=True)
     return output.getvalue()
 
+
+
+
+def extract_xliff_pairs_from_xml_text(raw_text: str, mode: str, max_segments: int, source_label: str = "File") -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Extract source/target pairs from XLIFF/XML/XLZ text.
+
+    This works for plain .xliff/.xlf/.xml files and for .xlz packages after the
+    XLIFF file is extracted from the ZIP. It supports namespaces and common
+    XLIFF structures where <source> and <target> are siblings.
+    """
+    import xml.etree.ElementTree as ET
+    logs: List[str] = []
+    segments: List[Dict[str, Any]] = []
+
+    try:
+        root = ET.fromstring(raw_text)
+    except Exception as exc:
+        return [], [f"{source_label}: XML/XLIFF parse failed: {exc}"]
+
+    for parent in root.iter():
+        children = list(parent)
+        if not children:
+            continue
+
+        src_el = None
+        tgt_el = None
+        for child in children:
+            lname = xml_local_name(child.tag)
+            if lname == "source" and src_el is None:
+                src_el = child
+            elif lname == "target" and tgt_el is None:
+                tgt_el = child
+
+        if src_el is None:
+            continue
+
+        src_text = clean_line_for_ai("".join(src_el.itertext()))
+        tgt_text = clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else ""
+
+        if not src_text:
+            continue
+        if mode == "qa" and not tgt_text:
+            continue
+
+        loc = f"{source_label} Segment {len(segments) + 1}"
+        segments.append({
+            "id": len(segments) + 1,
+            "file_type": "xliff",
+            "sheet": source_label,
+            "location": loc,
+            "source": src_text,
+            "translation": tgt_text,
+            "text": tgt_text if mode == "qa" else src_text,
+            "mode": "bilingual" if tgt_text else "source_only",
+        })
+
+        if reached_segment_limit(segments, max_segments):
+            break
+
+    logs.append(f"{source_label}: extracted {len(segments)} source/target segment(s).")
+    return segments, logs
+
+
+def extract_xlz_segments_from_zip(data: bytes, mode: str, max_segments: int) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """Extract XLIFF/XML/XLZ segments from compressed .xlz / zipped localization packages.
+
+    Many CAT/TMS systems export .xlz as a ZIP package that contains .xlf/.xliff
+    files. Treating .xlz as latin-1 text produces fake binary segments; this
+    function opens the ZIP and extracts the actual XLIFF/XML/XLZ content safely.
+    """
+    logs: List[str] = []
+    all_segments: List[Dict[str, Any]] = []
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            candidate_names = [
+                n for n in zf.namelist()
+                if n.lower().endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml"))
+                and not n.startswith("__MACOSX/")
+            ]
+
+            if not candidate_names:
+                logs.append("XLZ package opened, but no .xlf/.xliff/.xml file was found inside.")
+                return "", [], logs
+
+            logs.append(f"XLZ package detected. Found {len(candidate_names)} XLIFF/XML/XLZ file(s) inside.")
+
+            for inner_name in candidate_names:
+                if reached_segment_limit(all_segments, max_segments):
+                    break
+
+                try:
+                    inner_data = zf.read(inner_name)
+                    inner_text, encoding_used = decode_text_bytes(inner_data)
+                except Exception as exc:
+                    logs.append(f"{inner_name}: could not read/decode file: {exc}")
+                    continue
+
+                remaining_limit = 0 if unlimited_scan(max_segments) else max(0, int(max_segments) - len(all_segments))
+                segs, seg_logs = extract_xliff_pairs_from_xml_text(
+                    inner_text,
+                    mode=mode,
+                    max_segments=remaining_limit,
+                    source_label=inner_name,
+                )
+                logs.extend([f"{msg} (decoded as {encoding_used})" for msg in seg_logs])
+
+                for seg in segs:
+                    seg["id"] = len(all_segments) + 1
+                    all_segments.append(seg)
+                    if reached_segment_limit(all_segments, max_segments):
+                        break
+
+    except Exception as exc:
+        logs.append(f"Could not open XLZ package: {exc}")
+        return "", [], logs
+
+    return "", all_segments, logs
+
+
+def extract_xlz_pro_segments(uploaded_file, max_segments: int):
+    """Extract XLIFF/XML/XLZ segments from an .xlz package for Pro translation.
+
+    Returns a package object that can later be rebuilt as .xlz with translated
+    <target> nodes filled in.
+    """
+    import xml.etree.ElementTree as ET
+    data = uploaded_file.getvalue()
+    logs: List[str] = []
+    segments: List[Dict[str, Any]] = []
+    target_map: Dict[str, Any] = {}
+    package = {
+        "entries": {},
+        "trees": {},
+        "xml_names": set(),
+        "original_name": uploaded_file.name,
+    }
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                package["entries"][info.filename] = zf.read(info.filename)
+
+            candidate_names = [
+                n for n in zf.namelist()
+                if n.lower().endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml"))
+                and not n.startswith("__MACOSX/")
+            ]
+
+            if not candidate_names:
+                logs.append("XLZ package opened, but no .xlf/.xliff/.xml file was found inside.")
+                return None, [], {}, logs
+
+            logs.append(f"XLZ package detected. Found {len(candidate_names)} XLIFF/XML/XLZ file(s) inside.")
+
+            for inner_name in candidate_names:
+                if reached_segment_limit(segments, max_segments):
+                    break
+
+                raw_text, encoding_used = decode_text_bytes(package["entries"][inner_name])
+                try:
+                    tree = ET.ElementTree(ET.fromstring(raw_text))
+                except Exception as exc:
+                    logs.append(f"{inner_name}: XML parse failed: {exc}")
+                    continue
+
+                package["trees"][inner_name] = tree
+                package["xml_names"].add(inner_name)
+                root = tree.getroot()
+
+                for parent in root.iter():
+                    if reached_segment_limit(segments, max_segments):
+                        break
+                    children = list(parent)
+                    if not children:
+                        continue
+                    src_el = None
+                    tgt_el = None
+                    for child in children:
+                        lname = xml_local_name(child.tag)
+                        if lname == "source" and src_el is None:
+                            src_el = child
+                        elif lname == "target" and tgt_el is None:
+                            tgt_el = child
+                    if src_el is None:
+                        continue
+                    src_text = clean_line_for_ai("".join(src_el.itertext()))
+                    if not src_text:
+                        continue
+                    if tgt_el is None:
+                        tgt_el = ET.Element(make_xml_target_tag(src_el.tag))
+                        try:
+                            insert_at = children.index(src_el) + 1
+                            parent.insert(insert_at, tgt_el)
+                        except Exception:
+                            parent.append(tgt_el)
+                    loc = f"{inner_name} Segment {len(segments) + 1}"
+                    segments.append({
+                        "id": len(segments) + 1,
+                        "file_type": "xlz",
+                        "sheet": inner_name,
+                        "location": loc,
+                        "source": src_text,
+                        "translation": clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else "",
+                        "text": src_text,
+                        "mode": "source_only",
+                    })
+                    target_map[loc] = (inner_name, tgt_el)
+
+                logs.append(f"{inner_name}: extracted segments (decoded as {encoding_used}).")
+
+    except Exception as exc:
+        logs.append(f"Could not open XLZ package: {exc}")
+        return None, [], {}, logs
+
+    logs.append(f"XLZ: extracted {len(segments)} source segment(s) for translation.")
+    return package, segments, target_map, logs
+
+
+def build_translated_xlz_bytes(package: Dict[str, Any], target_map: Dict[str, Any], translations_by_loc: Dict[str, str]) -> bytes:
+    """Rebuild an .xlz ZIP package with translated <target> elements filled in."""
+    import zipfile as _zipfile
+    for loc, target_info in target_map.items():
+        if loc not in translations_by_loc:
+            continue
+        _inner_name, target_el = target_info
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            target_el.text = trans
+
+    output = io.BytesIO()
+    with _zipfile.ZipFile(output, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
+        for name, original_bytes in package.get("entries", {}).items():
+            if name in package.get("xml_names", set()) and name in package.get("trees", {}):
+                xml_out = io.BytesIO()
+                package["trees"][name].write(xml_out, encoding="utf-8", xml_declaration=True)
+                zf.writestr(name, xml_out.getvalue())
+            else:
+                zf.writestr(name, original_bytes)
+    output.seek(0)
+    return output.getvalue()
 
 def is_text_like_extension(file_name: str) -> bool:
     lower = file_name.lower()
@@ -3341,7 +3560,7 @@ def render_rule_upload(prefix: str) -> Tuple[Any, Any, Dict[str, Any]]:
         "Upload file",
         type=None,
         key=f"{prefix}_uploaded_file",
-        help="Upload any file. ErrorSweep will automatically extract text/segments from Excel, Word, PDF, CSV, XLIFF/XML, JSON, subtitles, PO/properties, and other text-like files. Binary files without readable text will return an Excel report explaining the issue.",
+        help="Upload any file. ErrorSweep will automatically extract text/segments from Excel, Word, PDF, CSV, XLIFF/XML/XLZ, JSON, subtitles, PO/properties, and other text-like files. Binary files without readable text will return an Excel report explaining the issue.",
     )
     rules_zip = st.file_uploader(
         "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
@@ -3665,6 +3884,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         json_path_map = {}
         xml_tree = None
         xml_target_map = {}
+        xlz_package = None
+        xlz_target_map = {}
         srt_line_map = {}
         cell_map = {}
         translation_col_map = {}
@@ -3681,7 +3902,9 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(settings["max_segments"]), settings["source_col_hint"], settings["target_col_hint"])
         elif lower.endswith(".json"):
             json_obj, segments, json_path_map, logs = extract_json_pro_segments(uploaded_file, int(settings["max_segments"]))
-        elif lower.endswith((".xml", ".xliff", ".xlf")):
+        elif lower.endswith(".xlz"):
+            xlz_package, segments, xlz_target_map, logs = extract_xlz_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith((".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff")):
             xml_tree, segments, xml_target_map, logs = extract_xml_xliff_pro_segments(uploaded_file, int(settings["max_segments"]))
         elif lower.endswith(".srt"):
             text_original, segments, srt_line_map, logs = extract_srt_pro_segments(uploaded_file, int(settings["max_segments"]))
@@ -3824,7 +4047,11 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             output_bytes = build_translated_json_bytes(json_obj, json_path_map, translations_by_loc)
             mime_type = "application/json"
             output_name = "errorsweep_pro_translated_" + uploaded_file.name
-        elif lower.endswith((".xml", ".xliff", ".xlf")) and xml_tree is not None:
+        elif lower.endswith(".xlz") and xlz_package is not None:
+            output_bytes = build_translated_xlz_bytes(xlz_package, xlz_target_map, translations_by_loc)
+            mime_type = "application/zip"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith((".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff")) and xml_tree is not None:
             output_bytes = build_translated_xml_bytes(xml_tree, xml_target_map, translations_by_loc)
             mime_type = "application/xml"
             output_name = "errorsweep_pro_translated_" + uploaded_file.name
