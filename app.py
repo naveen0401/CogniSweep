@@ -2982,7 +2982,7 @@ def render_top_account_bar(profile: Optional[Dict[str, Any]]) -> None:
 
 
 def render_top_nav() -> str:
-    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Control Center", "Billing", "Account"]
+    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Billing", "Account"]
     if st.session_state.get("es_page") not in pages:
         st.session_state["es_page"] = "Dashboard"
     return st.radio(
@@ -3008,6 +3008,91 @@ def render_settings_summary(settings: Dict[str, Any]) -> None:
         st.write(f"Target language for Pro: {settings['target_language']}")
         st.write(f"Managed AI allowed: {'Yes' if managed_ai_allowed() else 'No'}")
         st.write(f"User language-engine key entered: {'Yes' if bool(get_user_openai_key()) else 'No'}")
+
+
+def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
+    """Render settings directly inside ErrorSweep / ErrorSweep Pro pages.
+
+    This removes the need for a separate Control Center page and avoids dependence
+    on the left sidebar. The same session keys are used so settings persist when
+    users move between pages.
+    """
+    is_pro = context == "pro"
+    label = "Translation & review settings" if is_pro else "QA settings"
+
+    with st.expander(label, expanded=True):
+        st.markdown("#### Core settings")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.selectbox(
+                "Content Domain",
+                [
+                    "Auto-detect",
+                    "Software UI / App Strings",
+                    "Subtitles / Captions",
+                    "Legal / Compliance",
+                    "Medical / Healthcare",
+                    "Marketing / Ad Copy",
+                    "E-learning / Education",
+                    "General",
+                ],
+                key="es_domain",
+            )
+        with c2:
+            st.select_slider(
+                "QA Strictness",
+                options=["Lenient", "Standard", "Strict", "Very Strict"],
+                key="es_strictness",
+            )
+
+        st.markdown("#### Scan and extraction")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.checkbox(
+                "Check whole file",
+                key="es_check_whole_file",
+                help="When enabled, ErrorSweep checks every extracted segment. Turn off for smaller paid/test runs.",
+            )
+        with s2:
+            if st.session_state.get("es_check_whole_file", True):
+                st.info("Full-file mode ON")
+            else:
+                st.number_input("Max total segments", min_value=5, max_value=5000, key="es_max_segments")
+        with s3:
+            st.number_input("Segments per AI call", min_value=5, max_value=50, key="es_batch_size")
+
+        d1, d2 = st.columns(2)
+        with d1:
+            st.text_input("Source column name/index", key="es_source_col_hint", placeholder="Example: Source Text or 2")
+        with d2:
+            st.text_input("Target / translation column name/index", key="es_target_col_hint", placeholder="Example: Original Translation or 3")
+
+        f1, f2 = st.columns(2)
+        with f1:
+            st.checkbox("Skip non-content sheets", key="es_skip_non_content")
+        with f2:
+            st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
+
+        if is_pro:
+            st.markdown("#### Pro translation options")
+            st.text_input("Target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Telugu")
+
+        st.markdown("#### Optional API keys")
+        if is_pro:
+            st.caption("Use these only if the client wants translation/review to run on their own provider account. Keys are used for this browser session only and are not saved.")
+        else:
+            st.caption("Optional: enter a language-engine key only if you want AI QA suggestions. Offline rules work without any API key. Keys are not saved.")
+        a1, a2 = st.columns(2)
+        with a1:
+            st.text_input("Language-engine API key (optional)", type="password", key="es_user_openai_api_key")
+        with a2:
+            if is_pro:
+                st.text_input("Independent-review API key (optional)", type="password", key="es_user_gemini_api_key")
+            else:
+                st.info("Independent review key is used only in ErrorSweep Pro.")
+        st.caption(f"Managed server AI is {'enabled' if managed_ai_allowed() else 'disabled'} by deployment settings.")
+
+    return get_page_settings()
 
 
 def render_control_center_page() -> None:
@@ -3113,7 +3198,7 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     <div class="hero">
         <div class="hero-title">ErrorSweep</div>
         <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent review</div>
-        <div class="hero-badge">No left panel required · Use top navigation for all actions</div>
+        <div class="hero-badge">Top navigation · Workflow settings inside each page</div>
     </div>
     """,
         unsafe_allow_html=True,
@@ -3122,7 +3207,7 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     st.markdown(
         """
         <div class="note-card">
-        <b>Navigation fix applied:</b> Logout, settings, account, billing, QA, and Pro workflows are now accessible from normal pages. The app no longer depends on the left sidebar.
+        <b>Navigation updated:</b> Each workflow now contains its own settings. ErrorSweep has QA settings; ErrorSweep Pro has translation/review settings and API options.
         </div>
         """,
         unsafe_allow_html=True,
@@ -3137,9 +3222,9 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     st.markdown(
         """
         <div class="es-visual-grid">
-          <div class="es-tile"><h4>ErrorSweep</h4><p>Review existing translations, generate suggestions, and export QA reports.</p></div>
-          <div class="es-tile"><h4>ErrorSweep Pro</h4><p>Translate source files, review output, and preserve file structure.</p></div>
-          <div class="es-tile"><h4>Control Center</h4><p>Configure domain, strictness, scan size, columns, and target language.</p></div>
+          <div class="es-tile"><h4>ErrorSweep</h4><p>QA settings, file detection, offline rules, optional API key, and QA Rules ZIP are all inside this page.</p></div>
+          <div class="es-tile"><h4>ErrorSweep Pro</h4><p>Target language, translation settings, optional API keys, review settings, and Pro Rules ZIP are all inside this page.</p></div>
+          <div class="es-tile"><h4>Billing</h4><p>View credits, plans, and upgrade options without using a sidebar.</p></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3257,7 +3342,8 @@ def build_offline_translation_review_rows(segments: List[Dict[str, Any]], transl
 
 def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
     st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-    st.caption("Use this version for reviewing existing translations. Rules ZIP is optional.")
+    st.caption("Use this version for reviewing existing translations. QA settings, file detection, optional API key, and QA Rules ZIP are all on this page.")
+    settings = render_inline_workflow_settings("qa")
     render_settings_summary(settings)
 
     openai_client = get_openai_client()
@@ -3317,7 +3403,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             st.info(f"Found {len(segments)} segment(s) to check. Full-file mode is {'ON' if settings['check_whole_file'] else 'OFF'}.")
 
         if not segments:
-            st.error("No segments found. Open Control Center and set source/translation columns or enable deep scan.")
+            st.error("No segments found. Use the settings panel on this page to set source/translation columns or enable deep scan.")
             st.stop()
 
         # App credits are required for every generated report, even when API/AI is unavailable.
@@ -3423,7 +3509,8 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
 
 def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
     st.markdown("## ErrorSweep Pro — Translate + Review")
-    st.caption("Translate source content, run an independent review, and export a translated file plus review report.")
+    st.caption("Translate source content, run an independent review, and export a translated file plus review report. Pro settings and API options are all on this page.")
+    settings = render_inline_workflow_settings("pro")
     render_settings_summary(settings)
 
     openai_client = get_openai_client()
@@ -3433,12 +3520,11 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
 
     uploaded_file, rules_zip, rules = render_rule_upload("pro")
 
-    p1, p2, p3 = st.columns(3)
+    target_language = settings.get("target_language", "")
+    p1, p2 = st.columns(2)
     with p1:
-        target_language = st.text_input("Target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Telugu")
-    with p2:
         apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to output", value=False, key="pro_apply_review")
-    with p3:
+    with p2:
         review_with_gemini = st.checkbox("Run independent review", value=bool(gemini_client), key="pro_review", disabled=not bool(gemini_client))
 
     run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
@@ -3452,7 +3538,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
             review_with_gemini = False
         if not target_language.strip():
-            st.error("Please enter target language in this page or Control Center.")
+            st.error("Please enter the target language in the settings panel on this page.")
             st.stop()
 
         start = time.time()
@@ -3498,7 +3584,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.info(f"Found {len(segments)} segment(s) for translation. Full-file mode is {'ON' if settings['check_whole_file'] else 'OFF'}.")
 
         if not segments:
-            st.error("No source segments found. Open Control Center and set the source column name/index.")
+            st.error("No source segments found. Use the settings panel on this page to set the source column name/index.")
             st.stop()
 
         # App credits are required for every Pro output, even in Offline Reference Mode.
@@ -3733,8 +3819,6 @@ def render_dashboard() -> None:
         render_errorsweep_page(user_id, profile, settings)
     elif page == "ErrorSweep Pro":
         render_errorsweep_pro_page(user_id, profile, settings)
-    elif page == "Control Center":
-        render_control_center_page()
     elif page == "Billing":
         render_billing_page(profile)
     elif page == "Account":
