@@ -3153,6 +3153,126 @@ PLAN_CREDITS = {
 }
 
 
+# Billing plan catalog.
+# Payment links are read from Streamlit Secrets, so no payment URL is stored in GitHub.
+PLAN_CATALOG = {
+    "trial": {
+        "name": "Free Trial",
+        "price": "₹0",
+        "credits": 25,
+        "tagline": "Try ErrorSweep with a small monthly allowance.",
+        "features": [
+            "Offline QA checks",
+            "Limited segment preview",
+            "Basic Excel report",
+            "No Rules ZIP for trial users",
+        ],
+        "secret_key": "",
+    },
+    "errorsweep": {
+        "name": "ErrorSweep",
+        "price": "₹999 / month",
+        "credits": 200,
+        "tagline": "QA review, reports, and client rules for regular users.",
+        "features": [
+            "QA Run + suggestions",
+            "Rules ZIP support",
+            "Excel QA reports",
+            "Offline + optional AI checks",
+        ],
+        "secret_key": "PAYMENT_LINK_ERRORSWEEP",
+    },
+    "pro": {
+        "name": "ErrorSweep Pro",
+        "price": "₹2,999 / month",
+        "credits": 600,
+        "tagline": "Translation + review workflow for production files.",
+        "features": [
+            "Everything in ErrorSweep",
+            "Translate + Review",
+            "Same-format translation output where possible",
+            "Independent review workflow",
+        ],
+        "secret_key": "PAYMENT_LINK_PRO",
+    },
+    "agency": {
+        "name": "Agency",
+        "price": "₹9,999 / month",
+        "credits": 2500,
+        "tagline": "Higher-volume workflows for localization teams.",
+        "features": [
+            "Everything in Pro",
+            "Higher monthly credits",
+            "Large-file workflows",
+            "Priority manual support",
+        ],
+        "secret_key": "PAYMENT_LINK_AGENCY",
+    },
+    "enterprise": {
+        "name": "Enterprise",
+        "price": "Custom",
+        "credits": 10000,
+        "tagline": "Custom credits, limits, private support, and rule logic.",
+        "features": [
+            "Custom monthly credits",
+            "Dedicated support",
+            "Private deployment option",
+            "Client-specific rule packs",
+        ],
+        "secret_key": "PAYMENT_LINK_ENTERPRISE",
+    },
+}
+
+
+def normalize_plan(plan: Any) -> str:
+    plan = str(plan or "trial").strip().lower()
+    return plan if plan in PLAN_CATALOG else "trial"
+
+
+def get_payment_link(plan: str) -> str:
+    plan = normalize_plan(plan)
+    secret_key = PLAN_CATALOG[plan].get("secret_key", "")
+    candidate_keys = []
+    if secret_key:
+        candidate_keys.append(secret_key)
+    candidate_keys.extend([
+        f"PAYMENT_LINK_{plan.upper()}",
+        f"RAZORPAY_LINK_{plan.upper()}",
+        f"RAZORPAY_{plan.upper()}_LINK",
+        f"STRIPE_LINK_{plan.upper()}",
+    ])
+    for key in candidate_keys:
+        value = get_secret_value(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def render_plan_card(plan_key: str, current_plan: str) -> None:
+    plan_key = normalize_plan(plan_key)
+    current_plan = normalize_plan(current_plan)
+    info = PLAN_CATALOG[plan_key]
+    is_current = plan_key == current_plan
+
+    st.markdown(f"### {info['name']}")
+    st.metric("Price", info["price"])
+    st.caption(info["tagline"])
+    st.write(f"**Monthly credits:** {info['credits']}")
+    for feature in info["features"]:
+        st.write(f"- {feature}")
+
+    if is_current:
+        st.success("Current plan")
+    elif plan_key != "trial":
+        link = get_payment_link(plan_key)
+        if link:
+            st.link_button(f"Upgrade to {info['name']}", link, use_container_width=True)
+        else:
+            st.info(f"Add {info['secret_key']} in Streamlit Secrets to enable this upgrade button.")
+    else:
+        st.caption("Trial is created automatically after signup.")
+
+
 def supabase_configured() -> bool:
     return bool(get_secret_value("SUPABASE_URL") and get_secret_value("SUPABASE_ANON_KEY"))
 
@@ -3912,24 +4032,76 @@ def render_account_page(profile: Optional[Dict[str, Any]]) -> None:
 
 
 def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
-    st.markdown("## Billing")
-    if profile:
-        render_credit_panel(profile)
-    else:
-        st.warning("Profile unavailable. Please log out and log in again.")
+    st.markdown("## Billing & Plans")
+    st.caption("Use payment links for MVP billing. After payment, admin can manually upgrade the user from the Admin page.")
 
-    st.markdown("### Plans")
+    if not profile:
+        st.warning("Profile unavailable. Please log out and log in again.")
+        return
+
+    current_plan = normalize_plan(profile.get("plan"))
+    monthly = int(profile.get("monthly_credits") or 0)
+    used = int(profile.get("used_credits") or 0)
+    remaining = max(0, monthly - used)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Current Plan", PLAN_CATALOG[current_plan]["name"])
+    c2.metric("Credits Remaining", remaining)
+    c3.metric("Used Credits", used)
+    c4.metric("Monthly Credits", monthly)
+
+    if monthly > 0:
+        st.progress(min(1.0, used / max(monthly, 1)))
+
+    if remaining <= max(5, monthly * 0.10):
+        st.warning("Credits are low. Upgrade or contact admin to add credits.")
+
+    st.markdown("### Choose a plan")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        with st.container(border=True):
+            render_plan_card("errorsweep", current_plan)
+    with p2:
+        with st.container(border=True):
+            render_plan_card("pro", current_plan)
+    with p3:
+        with st.container(border=True):
+            render_plan_card("agency", current_plan)
+
+    with st.expander("Enterprise / custom plan", expanded=False):
+        render_plan_card("enterprise", current_plan)
+
+    st.markdown("### How billing works in this MVP")
     st.markdown(
         """
-        <div class="es-visual-grid">
-          <div class="es-tile"><h4>Trial</h4><p>Limited credits for testing ErrorSweep.</p></div>
-          <div class="es-tile"><h4>ErrorSweep</h4><p>QA review, reports, and client rule packs.</p></div>
-          <div class="es-tile"><h4>ErrorSweep Pro</h4><p>Translation + review workflows for production files.</p></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+        1. User clicks an upgrade button and completes payment.
+        2. Admin verifies payment in the payment provider dashboard.
+        3. Admin opens **Admin** page in ErrorSweep.
+        4. Admin searches the user's email and upgrades plan/credits.
+
+        This manual flow is safer for the first launch. The next upgrade can add automatic payment webhooks.
+        """
     )
-    st.info("Payment links / automatic upgrades can be added here when you are ready for public billing.")
+
+    st.markdown("### Credit charging guide")
+    st.dataframe(
+        pd.DataFrame([
+            {"Workflow": "ErrorSweep QA", "Credit rule": "1 credit per 100 segments", "Notes": "Rules ZIP adds 1 credit"},
+            {"Workflow": "ErrorSweep Pro", "Credit rule": "3 credits per 75 segments", "Notes": "Independent review and Rules ZIP may add credits"},
+            {"Workflow": "Offline QA", "Credit rule": "Same app credits apply", "Notes": "API availability does not make runs free"},
+        ]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Secrets to add for payment buttons")
+    st.code(
+        'PAYMENT_LINK_ERRORSWEEP = "https://your-payment-link-for-errorsweep"\n'
+        'PAYMENT_LINK_PRO = "https://your-payment-link-for-pro"\n'
+        'PAYMENT_LINK_AGENCY = "https://your-payment-link-for-agency"\n'
+        'PAYMENT_LINK_ENTERPRISE = "https://your-enterprise-contact-or-payment-link"',
+        language="toml",
+    )
 
 
 def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
