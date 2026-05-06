@@ -362,6 +362,100 @@ def decode_text_bytes(data: bytes) -> Tuple[str, str]:
     return data.decode("utf-8", errors="replace"), "utf-8-replace"
 
 
+
+
+def looks_like_binary(data: bytes) -> bool:
+    """Return True when a file is probably binary and should not be decoded as text.
+
+    This prevents unknown/binary uploads (or unsupported spreadsheet formats)
+    from being decoded as latin-1 and producing tens of thousands of fake text segments.
+    """
+    if not data:
+        return False
+    sample = data[:8192]
+    if b"\x00" in sample:
+        return True
+    text_chars = bytes(range(32, 127)) + b"\n\r\t\b\f"
+    non_text = sum(1 for b in sample if b not in text_chars and b < 128)
+    return (non_text / max(len(sample), 1)) > 0.30
+
+
+def is_openpyxl_compatible(data: bytes) -> bool:
+    """Detect xlsx-like ZIP workbooks even if the extension is unusual."""
+    if not data.startswith(b"PK"):
+        return False
+    try:
+        import zipfile as _zipfile
+        with _zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = set(zf.namelist())
+            return "xl/workbook.xml" in names or any(n.startswith("xl/worksheets/") for n in names)
+    except Exception:
+        return False
+
+
+def uploaded_file_bytes(uploaded_file) -> bytes:
+    try:
+        return uploaded_file.getvalue()
+    except Exception:
+        try:
+            pos = uploaded_file.tell()
+        except Exception:
+            pos = None
+        data = uploaded_file.read()
+        if pos is not None:
+            try:
+                uploaded_file.seek(pos)
+            except Exception:
+                pass
+        return data
+
+
+def max_processable_segments_for_credits(profile: Optional[Dict[str, Any]], workflow: str, rules_zip_used: bool = False, independent_review: bool = False) -> int:
+    """How many segments the user's remaining ErrorSweep app credits can cover."""
+    rem = remaining_credits(profile)
+    overhead = 1 if rules_zip_used else 0
+    rem_after_overhead = rem - overhead
+    if rem_after_overhead <= 0:
+        return 0
+    if workflow == "qa":
+        return rem_after_overhead * 100
+
+    best = 0
+    for n in range(1, 200000, 75):
+        cost = calculate_credit_cost("pro", n, rules_zip_used=rules_zip_used, independent_review=independent_review)
+        if cost <= rem:
+            best = n
+        else:
+            break
+    return best
+
+
+def maybe_limit_segments_to_available_credits(
+    segments: List[Dict[str, Any]],
+    profile: Optional[Dict[str, Any]],
+    workflow: str,
+    rules_zip_used: bool = False,
+    independent_review: bool = False,
+) -> Tuple[List[Dict[str, Any]], int, str]:
+    """Require app credits, but process a partial file if current credits cannot cover the full file."""
+    full_count = len(segments)
+    full_cost = calculate_credit_cost(workflow, full_count, rules_zip_used=rules_zip_used, independent_review=independent_review)
+    ok, msg = credit_preflight(profile, full_cost)
+    if ok:
+        return segments, full_cost, f"Full file covered: {full_count} segment(s), {full_cost} app credit(s)."
+
+    allowed = max_processable_segments_for_credits(profile, workflow, rules_zip_used=rules_zip_used, independent_review=independent_review)
+    if allowed <= 0:
+        return [], full_cost, msg
+
+    limited = segments[:allowed]
+    limited_cost = calculate_credit_cost(workflow, len(limited), rules_zip_used=rules_zip_used, independent_review=independent_review)
+    return limited, limited_cost, (
+        f"Not enough credits for full file ({full_count} segments require {full_cost} credits). "
+        f"Processing first {len(limited)} segment(s) using available credits ({limited_cost} credit(s)). "
+        "Upgrade/add credits for full-file processing."
+    )
+
 def is_visually_blank_line(line: str) -> bool:
     return line.replace("\u00A0", " ").strip() == ""
 
@@ -1235,8 +1329,19 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
 
 def extract_text_segments(uploaded_file, mode: str, max_segments: int):
     data = uploaded_file.getvalue()
-    text, encoding_used = decode_text_bytes(data)
     lower_name = uploaded_file.name.lower()
+
+    text_like_exts = (
+        ".txt", ".srt", ".xml", ".xliff", ".xlf", ".json", ".po",
+        ".properties", ".strings", ".html", ".htm", ".md", ".yml", ".yaml", ".csv"
+    )
+    if looks_like_binary(data) and not lower_name.endswith(text_like_exts):
+        return "", [], [
+            "Unsupported or binary file detected. ErrorSweep could not safely extract readable text. "
+            "If this is an Excel workbook with a non-standard extension, rename it to .xlsx and retry."
+        ]
+
+    text, encoding_used = decode_text_bytes(data)
 
     # Basic XLIFF/XML pair extraction. These formats should not be converted into
     # line-pair text output; they are treated as structured source/target pairs.
@@ -3384,9 +3489,10 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         mime_type = "text/csv"
         output_name = "errorsweep_report_" + uploaded_file.name
 
-        if lower.endswith(".xlsx"):
+        file_bytes = uploaded_file_bytes(uploaded_file)
+        if lower.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or is_openpyxl_compatible(file_bytes):
             workbook, segments, cell_map, _, logs = extract_excel_segments(
-                uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
+                io.BytesIO(file_bytes), settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
             )
         elif lower.endswith(".csv"):
             _, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["deep_scan"])
@@ -3411,13 +3517,18 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         # - API credits pay the external language/review engine provider.
         # - App credits pay for ErrorSweep extraction, rule checks, report generation, storage/logging, and product usage.
         using_managed_ai = bool(run_ai and openai_client)
-        credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
-        can_run, credit_msg = credit_preflight(profile, credits_needed)
-        if not can_run:
-            st.error(f"{credit_msg} App credits are required for all QA reports, including offline rule-based reports.")
+        segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
+            segments, profile, "qa", rules_zip_used=bool(rules_zip), independent_review=False
+        )
+        if not segments:
+            st.error(f"{credit_message} App credits are required for all QA reports, including offline rule-based reports.")
             st.stop()
+        if "Not enough credits" in credit_message:
+            st.warning(credit_message)
+        else:
+            st.info(credit_message)
         engine_label = "Offline rules + managed AI QA" if using_managed_ai else "Offline rules only"
-        st.info(f"App credit cost: {credits_needed} credit(s) for {len(segments)} segment(s). Engine: {engine_label}.")
+        st.info(f"Engine: {engine_label}. API availability does not block offline QA; app credits still apply.")
 
         if run_rules:
             status.text("Running deterministic checks...")
@@ -3559,9 +3670,10 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         translation_col_map = {}
         para_map = {}
 
-        if lower.endswith(".xlsx"):
+        file_bytes = uploaded_file_bytes(uploaded_file)
+        if lower.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or is_openpyxl_compatible(file_bytes):
             workbook, segments, cell_map, translation_col_map, logs = extract_excel_segments(
-                uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
+                io.BytesIO(file_bytes), settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
             )
         elif lower.endswith(".csv"):
             dataframe, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["deep_scan"])
@@ -3591,16 +3703,21 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         # If API/language-engine credits are unavailable, ErrorSweep Pro can still create a same-format
         # reference-assisted output, but users must still spend app credits to receive that output.
         using_managed_pro_engine = bool(openai_client or (review_with_gemini and gemini_client))
-        credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
-        can_run, credit_msg = credit_preflight(profile, credits_needed)
-        if not can_run:
-            st.error(f"{credit_msg} App credits are required for ErrorSweep Pro outputs, including Offline Reference Mode.")
+        segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
+            segments, profile, "pro", rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini)
+        )
+        if not segments:
+            st.error(f"{credit_message} App credits are required for ErrorSweep Pro outputs, including Offline Reference Mode.")
             st.stop()
+        if "Not enough credits" in credit_message:
+            st.warning(credit_message)
+        else:
+            st.info(credit_message)
         if using_language_engine:
-            engine_label = "Managed language engine"
+            engine_label = "Language engine"
         else:
             engine_label = "Offline Reference Mode"
-        st.info(f"App credit cost: {credits_needed} credit(s) for {len(segments)} segment(s). Engine: {engine_label}.")
+        st.info(f"Engine: {engine_label}. API availability does not block reference-mode output; app credits still apply.")
 
         status.text("Translating file...")
         translations_by_loc: Dict[str, str] = {}
