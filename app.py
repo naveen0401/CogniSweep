@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import requests
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
+from urllib.parse import quote
 
 from openai import OpenAI as AI
 from openpyxl import load_workbook, Workbook
@@ -3415,6 +3416,83 @@ def get_recent_jobs(user_id: str, limit: int = 8) -> List[Dict[str, Any]]:
     return []
 
 
+
+# ==========================================================
+# ADMIN USER MANAGEMENT
+# ==========================================================
+
+
+def get_admin_emails() -> List[str]:
+    raw = get_secret_value("ERRORSWEEP_ADMIN_EMAILS", "") or ""
+    return [email.strip().lower() for email in raw.split(",") if email.strip()]
+
+
+def is_admin_user() -> bool:
+    user = get_current_user()
+    email = (user.get("email") or st.session_state.get("errorsweep_username", "")).strip().lower()
+    return bool(email and email in get_admin_emails())
+
+
+def admin_list_profiles(search: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if search.strip():
+        pattern = quote(f"*{search.strip()}*", safe="")
+        query = f"/rest/v1/profiles?select=*&email=ilike.{pattern}&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/profiles?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def admin_get_profile_by_email(email: str) -> Optional[Dict[str, Any]]:
+    if not email.strip() or not supabase_service_configured():
+        return None
+    email_q = quote(email.strip().lower(), safe="")
+    ok, data = supabase_get(f"/rest/v1/profiles?email=eq.{email_q}&select=*&limit=1", kind="service")
+    if ok and isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def admin_update_profile(user_id: str, updates: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    if not user_id:
+        return False, "Missing user id.", None
+    allowed = {"plan", "monthly_credits", "used_credits", "full_name"}
+    safe_updates = {k: v for k, v in updates.items() if k in allowed}
+    if not safe_updates:
+        return False, "No valid fields to update.", None
+    ok, data = supabase_patch(f"/rest/v1/profiles?id=eq.{user_id}", safe_updates, kind="service")
+    if not ok:
+        return False, format_supabase_error(data), None
+    return True, "Profile updated successfully.", get_profile(user_id)
+
+
+def admin_list_jobs(user_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if user_id:
+        query = f"/rest/v1/file_jobs?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/file_jobs?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def admin_usage_summary() -> Dict[str, Any]:
+    profiles = admin_list_profiles(limit=500)
+    jobs = admin_list_jobs(limit=500)
+    return {
+        "users": len(profiles),
+        "jobs": len(jobs),
+        "credits_used": sum(int(p.get("used_credits") or 0) for p in profiles),
+        "credits_allocated": sum(int(p.get("monthly_credits") or 0) for p in profiles),
+    }
+
 def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
     if not profile:
         st.warning("Profile unavailable. Check Supabase setup.")
@@ -3643,6 +3721,8 @@ def render_top_account_bar(profile: Optional[Dict[str, Any]]) -> None:
 
 def render_top_nav() -> str:
     pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Billing", "Account"]
+    if is_admin_user():
+        pages.append("Admin")
     if st.session_state.get("es_page") not in pages:
         st.session_state["es_page"] = "Dashboard"
     return st.radio(
@@ -4481,6 +4561,104 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         )
 
 
+def render_admin_page(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Admin — User Management")
+    st.caption("Manage users, plans, credits, and recent jobs. This page is visible only to emails listed in ERRORSWEEP_ADMIN_EMAILS.")
+
+    if not is_admin_user():
+        st.error("You do not have admin access.")
+        return
+
+    if not supabase_service_configured():
+        st.error("Supabase service role is not configured. Add SUPABASE_SERVICE_ROLE_KEY in Streamlit Secrets.")
+        return
+
+    summary = admin_usage_summary()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Users", summary["users"])
+    c2.metric("Recent Jobs", summary["jobs"])
+    c3.metric("Credits Used", summary["credits_used"])
+    c4.metric("Credits Allocated", summary["credits_allocated"])
+
+    st.divider()
+    st.markdown("### Find user")
+    search_email = st.text_input("Search by email", placeholder="user@example.com")
+    profiles = admin_list_profiles(search_email, limit=50)
+
+    if profiles:
+        display_df = pd.DataFrame(profiles)
+        preferred_cols = ["email", "plan", "monthly_credits", "used_credits", "total_files_processed", "created_at", "id"]
+        cols = [col for col in preferred_cols if col in display_df.columns]
+        st.dataframe(display_df[cols], use_container_width=True, hide_index=True)
+    else:
+        st.info("No users found for the current search.")
+
+    st.divider()
+    st.markdown("### Upgrade / adjust credits")
+    with st.form("admin_update_user_form"):
+        target_email = st.text_input("User email to update", value=search_email or "")
+        new_plan = st.selectbox("Plan", ["trial", "errorsweep", "pro", "agency", "enterprise"], index=2)
+        monthly_credits = st.number_input("Monthly credits", min_value=0, max_value=1000000, value=600, step=25)
+        used_credits = st.number_input("Used credits", min_value=0, max_value=1000000, value=0, step=1)
+        reset_used = st.checkbox("Reset used credits to 0", value=True)
+        submitted = st.form_submit_button("Update user", type="primary", use_container_width=True)
+
+    if submitted:
+        target = admin_get_profile_by_email(target_email)
+        if not target:
+            st.error("User profile not found. Ask the user to sign up/login once, then try again.")
+        else:
+            updates = {
+                "plan": new_plan,
+                "monthly_credits": int(monthly_credits),
+                "used_credits": 0 if reset_used else int(used_credits),
+            }
+            ok, msg, refreshed = admin_update_profile(target["id"], updates)
+            if ok:
+                st.success(msg)
+                if refreshed:
+                    st.json({k: refreshed.get(k) for k in ["email", "plan", "monthly_credits", "used_credits"]})
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.markdown("### Add bonus credits")
+    with st.form("admin_bonus_credits_form"):
+        bonus_email = st.text_input("User email", key="bonus_email")
+        bonus = st.number_input("Bonus credits to add to monthly credits", min_value=1, max_value=100000, value=100, step=10)
+        bonus_submit = st.form_submit_button("Add bonus credits", use_container_width=True)
+
+    if bonus_submit:
+        target = admin_get_profile_by_email(bonus_email)
+        if not target:
+            st.error("User profile not found.")
+        else:
+            new_monthly = int(target.get("monthly_credits") or 0) + int(bonus)
+            ok, msg, refreshed = admin_update_profile(target["id"], {"monthly_credits": new_monthly})
+            if ok:
+                st.success(f"Added {bonus} credits. New monthly credits: {new_monthly}")
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.markdown("### Job history")
+    job_email = st.text_input("Filter jobs by user email", value=search_email or "", key="job_email_filter")
+    job_user_id = None
+    if job_email.strip():
+        target = admin_get_profile_by_email(job_email)
+        if target:
+            job_user_id = target.get("id")
+    jobs = admin_list_jobs(user_id=job_user_id, limit=100)
+    if jobs:
+        st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
+    else:
+        st.info("No jobs found.")
+
+    st.divider()
+    st.markdown("### Master access reminder")
+    st.code('ERRORSWEEP_ADMIN_EMAILS = "your-email@example.com,adapalanaveen401@gmail.com"', language="toml")
+
+
 def render_dashboard() -> None:
     init_page_state()
     user = get_current_user()
@@ -4503,6 +4681,8 @@ def render_dashboard() -> None:
         render_billing_page(profile)
     elif page == "Account":
         render_account_page(profile)
+    elif page == "Admin":
+        render_admin_page(profile)
 
 
 if not is_authenticated():
