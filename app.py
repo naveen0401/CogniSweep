@@ -1596,13 +1596,104 @@ def make_report_row(
 
 
 
-def suggest_balanced_quotes(text: str) -> str:
-    """Return a safer quote-balanced suggestion, or empty string if no clear fix is available."""
+def _previous_non_space_index(text: str, index: int) -> Optional[int]:
+    for j in range(index - 1, -1, -1):
+        if not text[j].isspace():
+            return j
+    return None
+
+
+def _next_non_space_index(text: str, index: int) -> Optional[int]:
+    for j in range(index + 1, len(text)):
+        if not text[j].isspace():
+            return j
+    return None
+
+
+def _is_measurement_quote(text: str, index: int) -> bool:
+    """Treat inch/foot marks as measurements, not quotation marks.
+
+    Examples that must NOT be flagged:
+        0.1" Thick Shim
+        2.31" Outer Diameter Button Plug
+        1/2" Thread Adapter
+        13/16"-16 Straight Adapter
+
+    Localization files often use the straight double quote (") as an inch mark.
+    A simple odd quote-count rule creates thousands of false positives for these.
+    """
+    prev_idx = _previous_non_space_index(text, index)
+    if prev_idx is None:
+        return False
+
+    prev_char = text[prev_idx]
+    if prev_char.isdigit():
+        return True
+
+    # Cases like 1⁄2" or 1/2" are already covered because previous char is digit,
+    # but keep this for unicode fraction symbols such as ½".
+    if prev_char in "¼½¾⅛⅜⅝⅞":
+        return True
+
+    return False
+
+
+def _is_contraction_or_apostrophe(text: str, index: int) -> bool:
+    """Ignore apostrophes inside words, e.g. Let's, don't, user’s."""
+    prev_idx = _previous_non_space_index(text, index)
+    next_idx = _next_non_space_index(text, index)
+    if prev_idx is None or next_idx is None:
+        return False
+    return text[prev_idx].isalpha() and text[next_idx].isalpha()
+
+
+def _real_quote_counts(text: str) -> Dict[str, int]:
+    """Count only real quotation marks, excluding measurements and apostrophes."""
+    text = text or ""
+    double_quotes = {'"', '“', '”', '„', '«', '»'}
+    single_quotes = {"'", '‘', '’', '‚'}
+    counts = {"double": 0, "single": 0}
+
+    for i, ch in enumerate(text):
+        if ch in double_quotes:
+            if _is_measurement_quote(text, i):
+                continue
+            counts["double"] += 1
+        elif ch in single_quotes:
+            if _is_measurement_quote(text, i) or _is_contraction_or_apostrophe(text, i):
+                continue
+            counts["single"] += 1
+    return counts
+
+
+def suggest_balanced_quotes(text: str, source_text: str = "") -> str:
+    """Return a safer quote-balanced suggestion, or empty string if no clear fix is available.
+
+    This function is intentionally conservative:
+    - It ignores inch/foot measurements like 0.1" and 1/2".
+    - It ignores apostrophes in words like don't / Let's.
+    - If the target follows the source quote pattern, it does not flag.
+    """
     t = text.strip()
+    s = (source_text or "").strip()
     if not t:
         return ""
 
-    # Common mixed quote cases. Keep the sentence text unchanged; only normalize the quote marks.
+    target_counts = _real_quote_counts(t)
+    source_counts = _real_quote_counts(s)
+
+    # If target has no real quote imbalance, no issue.
+    target_double_odd = target_counts["double"] % 2 != 0
+    target_single_odd = target_counts["single"] % 2 != 0
+    if not target_double_odd and not target_single_odd:
+        return ""
+
+    # If the source has the same real-quote count, the target is following source pattern.
+    # This avoids false positives where the source intentionally contains one symbol.
+    if source_counts == target_counts:
+        return ""
+
+    # Mixed smart/straight pairs.
     if t.startswith("“") and t.endswith('"'):
         return t[:-1] + "”"
     if t.startswith('"') and t.endswith("”"):
@@ -1612,12 +1703,19 @@ def suggest_balanced_quotes(text: str) -> str:
     if t.startswith("'") and t.endswith("’"):
         return "‘" + t[1:]
 
-    if t.count('"') % 2 != 0:
+    # Add a closing quote only for real quote imbalance.
+    if target_double_odd and source_counts["double"] != target_counts["double"]:
+        # Prefer smart closing quote if the text starts with a smart opening quote.
+        if "“" in t and "”" not in t:
+            return t + "”"
         return t + '"'
-    if t.count("'") % 2 != 0:
-        return t + "'"
-    return ""
 
+    if target_single_odd and source_counts["single"] != target_counts["single"]:
+        if "‘" in t and "’" not in t:
+            return t + "’"
+        return t + "'"
+
+    return ""
 
 def has_latin_letters(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", text or ""))
@@ -1768,11 +1866,11 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
             ))
             break
 
-    quote_suggestion = suggest_balanced_quotes(target)
+    quote_suggestion = suggest_balanced_quotes(target, source)
     if quote_suggestion:
         rows.append(make_report_row(
             segment, "Formatting", "Minor", "unbalanced quote marks", quote_suggestion,
-            "Opening and closing quotation marks are inconsistent or unbalanced.", "Rule Engine"
+            "Opening and closing quotation marks are inconsistent or unbalanced. Measurement inch/foot symbols are ignored and source quote pattern is respected.", "Rule Engine"
         ))
 
     # DNT terms
