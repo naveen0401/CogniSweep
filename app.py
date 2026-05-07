@@ -8,11 +8,19 @@ import time
 import hmac
 import zipfile
 import math
+import hashlib
+import base64
 from datetime import datetime, timezone
 import requests
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
 from urllib.parse import quote
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except Exception:
+    Fernet = None
+    InvalidToken = Exception
 
 from openai import OpenAI as AI
 from openpyxl import load_workbook, Workbook
@@ -3791,6 +3799,306 @@ def admin_usage_summary() -> Dict[str, Any]:
         "credits_allocated": sum(int(p.get("monthly_credits") or 0) for p in profiles),
     }
 
+
+# ==========================================================
+# SECURE TRANSLATION MEMORY
+# ==========================================================
+
+def tm_secret_configured() -> bool:
+    """Translation Memory requires a private encryption secret."""
+    return bool(get_secret_value("ERRORSWEEP_TM_SECRET")) and Fernet is not None and supabase_service_configured()
+
+
+def tm_fernet() -> Optional[Any]:
+    """Build a Fernet instance from ERRORSWEEP_TM_SECRET.
+
+    The secret can be a Fernet key or any long secret phrase. We derive a stable
+    Fernet key from it so the database never stores readable source/target text.
+    """
+    if Fernet is None:
+        return None
+    secret = get_secret_value("ERRORSWEEP_TM_SECRET")
+    if not secret:
+        return None
+    try:
+        raw = secret.encode("utf-8")
+        # If the user provided a valid Fernet key, use it directly.
+        if len(raw) == 44:
+            return Fernet(raw)
+        digest = hashlib.sha256(raw).digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+    except Exception:
+        return None
+
+
+def tm_client_key(client_name: str) -> str:
+    cleaned = normalize_text(client_name or "global").lower()
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", cleaned).strip("-")
+    return cleaned or "global"
+
+
+def tm_normalize_for_hash(text: Any) -> str:
+    cleaned = normalize_text(text)
+    cleaned = cleaned.replace("\u00A0", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def tm_hash_source(source_text: str) -> str:
+    return hashlib.sha256(tm_normalize_for_hash(source_text).encode("utf-8")).hexdigest()
+
+
+def tm_encrypt_text(text: Any) -> Optional[str]:
+    f = tm_fernet()
+    if f is None:
+        return None
+    return f.encrypt(str(text or "").encode("utf-8")).decode("utf-8")
+
+
+def tm_decrypt_text(token: Any) -> str:
+    f = tm_fernet()
+    if f is None or not token:
+        return ""
+    try:
+        return f.decrypt(str(token).encode("utf-8")).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def tm_target_lang_key(target_language: str) -> str:
+    value = normalize_text(target_language or "auto-detect")
+    return value if value else "auto-detect"
+
+
+def render_translation_memory_controls(context: str, default_target_language: str = "") -> Dict[str, Any]:
+    """Workflow-level TM controls. This is opt-in because client privacy matters."""
+    prefix = "qa" if context == "qa" else "pro"
+    title = "Secure Translation Memory"
+    with st.expander(title, expanded=False):
+        st.markdown(
+            """
+            Use private encrypted translation memory to improve future files with exact matches.
+            Saved translations are encrypted before storage and separated by user/client scope.
+            """
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            use_tm = st.checkbox("Use saved memory matches", value=True, key=f"{prefix}_tm_use")
+        with c2:
+            save_tm = st.checkbox("Save approved translations after this run", value=False, key=f"{prefix}_tm_save")
+        c3, c4 = st.columns(2)
+        with c3:
+            client_name = st.text_input("Client / project memory name", value="", placeholder="Example: Acme Telugu UI", key=f"{prefix}_tm_client")
+        with c4:
+            target_language = st.text_input(
+                "Target language / locale for memory",
+                value=default_target_language or st.session_state.get("es_target_language", ""),
+                placeholder="Example: Telugu, Hindi, Spanish, fr-FR",
+                key=f"{prefix}_tm_target_language",
+            )
+        if not tm_secret_configured():
+            st.warning("Translation Memory is not active. Add ERRORSWEEP_TM_SECRET in Streamlit Secrets and run the TM SQL setup.")
+        else:
+            st.success("Encrypted Translation Memory is active.")
+        st.caption("Privacy note: exact source/target text is encrypted. Matching uses a one-way hash of normalized source text.")
+    return {
+        "use": bool(use_tm),
+        "save": bool(save_tm),
+        "client_key": tm_client_key(client_name),
+        "client_name": normalize_text(client_name) or "Global",
+        "target_language": tm_target_lang_key(target_language),
+    }
+
+
+def tm_batch_lookup(user_id: str, segments: List[Dict[str, Any]], target_language: str, client_key: str, max_records: int = 500) -> Dict[str, Dict[str, Any]]:
+    """Return exact TM matches by segment location."""
+    if not tm_secret_configured() or not user_id or not segments:
+        return {}
+
+    target_language = tm_target_lang_key(target_language)
+    client_key = tm_client_key(client_key)
+    hash_to_locs: Dict[str, List[str]] = {}
+    for seg in segments:
+        source = seg.get("source") or seg.get("text") or ""
+        if not normalize_text(source):
+            continue
+        h = tm_hash_source(source)
+        hash_to_locs.setdefault(h, []).append(seg.get("location", ""))
+
+    if not hash_to_locs:
+        return {}
+
+    all_hashes = list(hash_to_locs.keys())[:max_records]
+    found_by_hash: Dict[str, Dict[str, Any]] = {}
+    batch_size = 80
+    for start in range(0, len(all_hashes), batch_size):
+        batch_hashes = all_hashes[start:start + batch_size]
+        hash_list = ",".join(batch_hashes)
+        query = (
+            f"/rest/v1/translation_memory"
+            f"?user_id=eq.{user_id}"
+            f"&client_key=eq.{quote(client_key)}"
+            f"&target_language=eq.{quote(target_language)}"
+            f"&source_hash=in.({hash_list})"
+            f"&select=id,source_hash,target_text_encrypted,status,use_count"
+            f"&limit={len(batch_hashes)}"
+        )
+        ok, data = supabase_get(query, kind="service")
+        if ok and isinstance(data, list):
+            for row in data:
+                found_by_hash[row.get("source_hash", "")] = row
+
+    loc_matches: Dict[str, Dict[str, Any]] = {}
+    for h, row in found_by_hash.items():
+        target_text = tm_decrypt_text(row.get("target_text_encrypted"))
+        if not target_text:
+            continue
+        for loc in hash_to_locs.get(h, []):
+            if loc:
+                loc_matches[loc] = {
+                    "translation": target_text,
+                    "memory_id": row.get("id"),
+                    "status": row.get("status", "approved"),
+                }
+    return loc_matches
+
+
+def tm_qa_memory_report_rows(user_id: str, segments: List[Dict[str, Any]], target_language: str, client_key: str) -> List[Dict[str, Any]]:
+    matches = tm_batch_lookup(user_id, segments, target_language, client_key)
+    rows: List[Dict[str, Any]] = []
+    if not matches:
+        return rows
+    for seg in segments:
+        loc = seg.get("location", "")
+        match = matches.get(loc)
+        if not match:
+            continue
+        saved_target = normalize_text(match.get("translation", ""))
+        current_target = normalize_text(seg.get("translation") or seg.get("text") or "")
+        if saved_target and current_target and tm_normalize_for_hash(saved_target) != tm_normalize_for_hash(current_target):
+            rows.append(make_report_row(
+                seg,
+                "Translation Memory",
+                "Major",
+                current_target,
+                saved_target,
+                "A previously saved approved translation exists for the same source segment.",
+                "Secure Translation Memory",
+                f"Client memory: {client_key}",
+                "High",
+            ))
+    return rows
+
+
+def tm_upsert_translation(
+    user_id: str,
+    source_text: str,
+    target_text: str,
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+    status: str = "approved",
+    source_language: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if not tm_secret_configured() or not user_id:
+        return False
+    source_norm = tm_normalize_for_hash(source_text)
+    target_norm = normalize_text(target_text)
+    if not source_norm or not target_norm:
+        return False
+
+    source_encrypted = tm_encrypt_text(source_text)
+    target_encrypted = tm_encrypt_text(target_text)
+    if not source_encrypted or not target_encrypted:
+        return False
+
+    payload = {
+        "user_id": user_id,
+        "client_key": tm_client_key(client_key),
+        "source_language": normalize_text(source_language or ""),
+        "target_language": tm_target_lang_key(target_language),
+        "domain": normalize_text(domain or ""),
+        "source_hash": tm_hash_source(source_text),
+        "source_text_encrypted": source_encrypted,
+        "target_text_encrypted": target_encrypted,
+        "status": status,
+        "metadata": metadata or {},
+        "use_count": 0,
+    }
+    # upsert by unique constraint
+    try:
+        res = requests.post(
+            supabase_url("/rest/v1/translation_memory?on_conflict=user_id,client_key,target_language,source_hash"),
+            headers={**supabase_headers(kind="service"), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        return res.status_code < 400
+    except Exception:
+        return False
+
+
+def tm_save_passed_qa_segments(
+    user_id: str,
+    segments: List[Dict[str, Any]],
+    issue_rows: List[Dict[str, Any]],
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+) -> int:
+    issue_locs = {str(r.get("Location", "")) for r in issue_rows if r.get("Location")}
+    saved = 0
+    for seg in segments:
+        loc = str(seg.get("location", ""))
+        if loc in issue_locs:
+            continue
+        source = seg.get("source", "")
+        target = seg.get("translation") or seg.get("text", "")
+        if source and target and tm_upsert_translation(
+            user_id,
+            source,
+            target,
+            target_language,
+            client_key,
+            domain=domain,
+            status="approved_existing",
+            metadata={"saved_from": "qa_pass", "location": loc},
+        ):
+            saved += 1
+    return saved
+
+
+def tm_save_pro_translations(
+    user_id: str,
+    translated_segments: List[Dict[str, Any]],
+    review_rows: List[Dict[str, Any]],
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+) -> int:
+    issue_locs = {str(r.get("Location", "")) for r in review_rows if r.get("Location")}
+    saved = 0
+    for seg in translated_segments:
+        loc = str(seg.get("location", ""))
+        if loc in issue_locs:
+            continue
+        source = seg.get("source") or ""
+        target = seg.get("translation") or seg.get("text") or ""
+        if source and target and tm_upsert_translation(
+            user_id,
+            source,
+            target,
+            target_language,
+            client_key,
+            domain=domain,
+            status="reviewed_or_passed",
+            metadata={"saved_from": "pro_translation", "location": loc},
+        ):
+            saved += 1
+    return saved
+
+
 def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
     if not profile:
         st.warning("Profile unavailable. Check Supabase setup.")
@@ -4803,6 +5111,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         st.info("Offline QA mode is available. Deterministic rules, company Rules ZIP, glossary, DNT, placeholders, numbers, spacing, punctuation, and language-specific checks can run without any API key. App credits still apply to generate reports.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("qa")
+    tm_controls = render_translation_memory_controls("qa", default_target_language=settings.get("target_language", ""))
 
     st.markdown("### QA run options")
     q1, q2, q3 = st.columns(3)
@@ -4888,6 +5197,13 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
                 report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
                 progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
 
+        if tm_controls.get("use"):
+            status.text("Checking secure translation memory...")
+            tm_rows = tm_qa_memory_report_rows(user_id, segments, tm_controls["target_language"], tm_controls["client_key"])
+            if tm_rows:
+                st.info(f"Secure Translation Memory found {len(tm_rows)} exact-match suggestion(s).")
+            report_rows.extend(tm_rows)
+
         if using_managed_ai:
             status.text("Running AI QA suggestions...")
             total_batches = max(1, (len(segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
@@ -4949,6 +5265,19 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         if refreshed_profile:
             st.session_state["sb_profile"] = refreshed_profile
         st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
+        if tm_controls.get("save"):
+            saved_tm = tm_save_passed_qa_segments(
+                user_id,
+                segments,
+                report_rows,
+                tm_controls["target_language"],
+                tm_controls["client_key"],
+                domain=settings.get("domain", ""),
+            )
+            if saved_tm:
+                st.success(f"Saved {saved_tm} approved/pass segment(s) to encrypted Translation Memory.")
+            elif tm_secret_configured():
+                st.info("No pass segments were saved to Translation Memory for this run.")
         log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
 
         status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
@@ -4984,6 +5313,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     uploaded_file, rules_zip, rules = render_rule_upload("pro")
 
     target_language = settings.get("target_language", "")
+    tm_controls = render_translation_memory_controls("pro", default_target_language=target_language)
+
     st.markdown("### Translation run options")
     p1, p2 = st.columns(2)
     with p1:
@@ -5078,22 +5409,34 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             engine_label = "Offline Reference Mode"
         st.info(f"Engine: {engine_label}. API availability does not block reference-mode output; app credits still apply.")
 
-        status.text("Translating file...")
+        status.text("Preparing translations...")
         translations_by_loc: Dict[str, str] = {}
-        total_batches = max(1, (len(segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
-        for b in range(total_batches):
-            batch = segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
-            status.text(f"Translation batch {b + 1}/{total_batches}...")
-            if using_language_engine and openai_client:
-                result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
-            else:
-                result = offline_reference_translate_batch(batch, target_language, rules)
-            for item in result:
-                loc = item.get("location", "")
-                trans = item.get("translation", "")
-                if loc is not None:
-                    translations_by_loc[loc] = trans or ""
-            progress.progress(((b + 1) / total_batches) * 0.45)
+        if tm_controls.get("use"):
+            tm_matches = tm_batch_lookup(user_id, segments, tm_controls["target_language"], tm_controls["client_key"])
+            for loc, match in tm_matches.items():
+                translations_by_loc[loc] = match.get("translation", "")
+            if tm_matches:
+                st.success(f"Reused {len(tm_matches)} exact saved translation(s) from encrypted Translation Memory.")
+
+        engine_segments = [seg for seg in segments if seg.get("location") not in translations_by_loc]
+        if engine_segments:
+            status.text("Translating remaining segments...")
+            total_batches = max(1, (len(engine_segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
+            for b in range(total_batches):
+                batch = engine_segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
+                status.text(f"Translation batch {b + 1}/{total_batches}...")
+                if using_language_engine and openai_client:
+                    result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
+                else:
+                    result = offline_reference_translate_batch(batch, target_language, rules)
+                for item in result:
+                    loc = item.get("location", "")
+                    trans = item.get("translation", "")
+                    if loc is not None:
+                        translations_by_loc[loc] = trans or ""
+                progress.progress(((b + 1) / total_batches) * 0.45)
+        else:
+            progress.progress(0.45)
 
         translated_segments = []
         for seg in segments:
@@ -5239,6 +5582,19 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         if refreshed_profile:
             st.session_state["sb_profile"] = refreshed_profile
         st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
+        if tm_controls.get("save"):
+            saved_tm = tm_save_pro_translations(
+                user_id,
+                translated_segments,
+                review_rows,
+                tm_controls["target_language"],
+                tm_controls["client_key"],
+                domain=settings.get("domain", ""),
+            )
+            if saved_tm:
+                st.success(f"Saved {saved_tm} reviewed/pass translation(s) to encrypted Translation Memory.")
+            elif tm_secret_configured():
+                st.info("No reviewed/pass translations were saved to Translation Memory for this run.")
         log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
 
         st.markdown("### Translation Preview")
