@@ -10,6 +10,7 @@ import zipfile
 import math
 import hashlib
 import base64
+import textwrap
 from datetime import datetime, timezone
 import requests
 from typing import Any, Dict, List, Tuple, Optional
@@ -3548,6 +3549,26 @@ def supabase_patch(path: str, payload: Dict[str, Any], kind: str = "service", ac
         return False, str(exc)
 
 
+
+def supabase_delete(path: str, kind: str = "service", access_token: Optional[str] = None) -> Tuple[bool, Any]:
+    try:
+        res = requests.delete(
+            supabase_url(path),
+            headers=supabase_headers(kind=kind, access_token=access_token),
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if res.status_code >= 400:
+            try:
+                return False, res.json()
+            except Exception:
+                return False, res.text
+        try:
+            return True, res.json()
+        except Exception:
+            return True, {}
+    except Exception as exc:
+        return False, str(exc)
+
 def auth_sign_up(email: str, password: str, full_name: str = "") -> Tuple[bool, str, Dict[str, Any]]:
     payload = {
         "email": email.strip().lower(),
@@ -4099,6 +4120,316 @@ def tm_save_pro_translations(
     return saved
 
 
+# ==========================================================
+# MEMORY & RULE PACK MANAGER
+# ==========================================================
+
+def get_user_rule_packs(user_id: str, workflow_type: str = "") -> List[Dict[str, Any]]:
+    if not user_id or not supabase_service_configured():
+        return []
+    query = f"/rest/v1/rule_packs?user_id=eq.{user_id}&select=*&order=created_at.desc&limit=500"
+    if workflow_type:
+        query = f"/rest/v1/rule_packs?user_id=eq.{user_id}&or=(workflow_type.eq.{quote(workflow_type)},workflow_type.eq.both)&select=*&order=created_at.desc&limit=500"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def get_rule_pack_by_id(user_id: str, pack_id: str) -> Optional[Dict[str, Any]]:
+    if not user_id or not pack_id or not supabase_service_configured():
+        return None
+    ok, data = supabase_get(
+        f"/rest/v1/rule_packs?id=eq.{pack_id}&user_id=eq.{user_id}&select=*&limit=1",
+        kind="service",
+    )
+    if ok and isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def create_rule_pack(
+    user_id: str,
+    name: str,
+    client_name: str,
+    workflow_type: str,
+    source_language: str,
+    target_language: str,
+    domain: str,
+    zip_file_name: str,
+    parsed_rules: Dict[str, Any],
+) -> Tuple[bool, str]:
+    if not user_id or not supabase_service_configured():
+        return False, "Supabase service role is not configured."
+    payload = {
+        "user_id": user_id,
+        "name": normalize_text(name) or "Untitled Rule Pack",
+        "client_name": normalize_text(client_name) or "General",
+        "workflow_type": workflow_type or "both",
+        "source_language": normalize_text(source_language),
+        "target_language": normalize_text(target_language),
+        "domain": normalize_text(domain),
+        "zip_file_name": zip_file_name,
+        "parsed_rules_json": parsed_rules or {},
+        "glossary_count": len((parsed_rules or {}).get("glossary", [])),
+        "dnt_count": len((parsed_rules or {}).get("dnt", [])),
+        "chunk_count": len((parsed_rules or {}).get("chunks", [])),
+    }
+    ok, data = supabase_post("/rest/v1/rule_packs", payload, kind="service")
+    if ok:
+        return True, "Rule pack saved."
+    return False, format_supabase_error(data)
+
+
+def delete_rule_pack(user_id: str, pack_id: str) -> Tuple[bool, str]:
+    if not user_id or not pack_id:
+        return False, "Missing user or rule pack id."
+    ok, data = supabase_delete(f"/rest/v1/rule_packs?id=eq.{pack_id}&user_id=eq.{user_id}", kind="service")
+    if ok:
+        return True, "Rule pack deleted."
+    return False, format_supabase_error(data)
+
+
+def touch_rule_pack(pack_id: str) -> None:
+    if not pack_id or not supabase_service_configured():
+        return
+    supabase_patch(
+        f"/rest/v1/rule_packs?id=eq.{pack_id}",
+        {"last_used_at": datetime.now(timezone.utc).isoformat()},
+        kind="service",
+    )
+
+
+def merge_rules(base_rules: Dict[str, Any], extra_rules: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    for source in [base_rules or {}, extra_rules or {}]:
+        for key in merged.keys():
+            val = source.get(key, [])
+            if isinstance(val, list):
+                merged[key].extend(val)
+    return merged
+
+
+def render_rule_pack_selector(user_id: str, workflow_type: str, prefix: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    selected_id = None
+    packs = get_user_rule_packs(user_id, workflow_type)
+    if not packs:
+        st.caption("No saved rule packs yet. Upload a ZIP below and save it for reuse.")
+        return rules, selected_id
+    options = {f"{p.get('name','Untitled')} · {p.get('client_name','General')} · {p.get('target_language') or 'Any'}": p.get("id") for p in packs}
+    selected_label = st.selectbox(
+        "Use saved rule pack (optional)",
+        ["None"] + list(options.keys()),
+        key=f"{prefix}_saved_rule_pack_select",
+    )
+    if selected_label != "None":
+        selected_id = options[selected_label]
+        pack = get_rule_pack_by_id(user_id, selected_id)
+        if pack:
+            rules = pack.get("parsed_rules_json") or rules
+            st.success(
+                f"Loaded saved rule pack: {pack.get('name')} · glossary {len(rules.get('glossary', []))}, DNT {len(rules.get('dnt', []))}, rule chunks {len(rules.get('chunks', []))}."
+            )
+            touch_rule_pack(selected_id)
+    return rules, selected_id
+
+
+def render_rule_pack_save_box(user_id: str, prefix: str, workflow_type: str, parsed_rules: Dict[str, Any], zip_name: str, default_domain: str = "") -> None:
+    if not parsed_rules or not zip_name:
+        return
+    with st.expander("Save this ZIP as reusable rule pack", expanded=False):
+        st.caption("Save client style guides, glossary, DNT lists, and instructions once, then reuse them in future jobs.")
+        c1, c2 = st.columns(2)
+        with c1:
+            pack_name = st.text_input("Rule pack name", value=zip_name.rsplit('.', 1)[0], key=f"{prefix}_save_pack_name")
+            client_name = st.text_input("Client / project name", value="General", key=f"{prefix}_save_pack_client")
+        with c2:
+            source_language = st.text_input("Source language", value="", key=f"{prefix}_save_pack_src")
+            target_language = st.text_input("Target language / locale", value=st.session_state.get("es_target_language", ""), key=f"{prefix}_save_pack_tgt")
+        wf = st.selectbox("Workflow type", [workflow_type, "both", "qa", "pro"], key=f"{prefix}_save_pack_workflow")
+        if st.button("Save Rule Pack", key=f"{prefix}_save_pack_button", use_container_width=True):
+            ok, msg = create_rule_pack(
+                user_id=user_id,
+                name=pack_name,
+                client_name=client_name,
+                workflow_type=wf,
+                source_language=source_language,
+                target_language=target_language,
+                domain=default_domain,
+                zip_file_name=zip_name,
+                parsed_rules=parsed_rules,
+            )
+            (st.success if ok else st.error)(msg)
+            if ok:
+                st.rerun()
+
+
+def get_translation_memory_records(user_id: str, limit: int = 5000) -> List[Dict[str, Any]]:
+    if not user_id or not supabase_service_configured():
+        return []
+    ok, data = supabase_get(
+        f"/rest/v1/translation_memory?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}",
+        kind="service",
+    )
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def summarize_translation_memory(records: List[Dict[str, Any]]) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame(columns=["Client Memory", "Target Language", "Domain", "Entries", "Statuses", "Created", "Last Used"])
+    summary: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for r in records:
+        key = (r.get("client_key") or "global", r.get("target_language") or "auto-detect", r.get("domain") or "")
+        item = summary.setdefault(key, {"Client Memory": key[0], "Target Language": key[1], "Domain": key[2], "Entries": 0, "Statuses": set(), "Created": r.get("created_at"), "Last Used": r.get("last_used_at")})
+        item["Entries"] += 1
+        if r.get("status"):
+            item["Statuses"].add(r.get("status"))
+        if r.get("created_at") and (not item.get("Created") or str(r.get("created_at")) < str(item.get("Created"))):
+            item["Created"] = r.get("created_at")
+        if r.get("last_used_at") and (not item.get("Last Used") or str(r.get("last_used_at")) > str(item.get("Last Used"))):
+            item["Last Used"] = r.get("last_used_at")
+    rows = []
+    for item in summary.values():
+        rows.append({**item, "Statuses": ", ".join(sorted(item["Statuses"]))})
+    return pd.DataFrame(rows).sort_values(["Client Memory", "Target Language"]) if rows else pd.DataFrame()
+
+
+def export_translation_memory_csv(records: List[Dict[str, Any]]) -> bytes:
+    rows = []
+    for r in records:
+        rows.append({
+            "client_key": r.get("client_key", ""),
+            "source_language": r.get("source_language", ""),
+            "target_language": r.get("target_language", ""),
+            "domain": r.get("domain", ""),
+            "source_text": tm_decrypt_text(r.get("source_text_encrypted")),
+            "target_text": tm_decrypt_text(r.get("target_text_encrypted")),
+            "status": r.get("status", ""),
+            "created_at": r.get("created_at", ""),
+            "last_used_at": r.get("last_used_at", ""),
+        })
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def delete_translation_memory_scope(user_id: str, client_key: str, target_language: str = "") -> Tuple[bool, str]:
+    if not user_id or not client_key:
+        return False, "Missing user or memory name."
+    path = f"/rest/v1/translation_memory?user_id=eq.{user_id}&client_key=eq.{quote(client_key)}"
+    if target_language:
+        path += f"&target_language=eq.{quote(target_language)}"
+    ok, data = supabase_delete(path, kind="service")
+    if ok:
+        return True, "Translation memory deleted for the selected scope."
+    return False, format_supabase_error(data)
+
+
+def render_memory_rulepacks_page(user_id: str, profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Memory & Rule Packs")
+    st.caption("Manage encrypted translation memory and reusable client rule packs. This page gives users privacy control over saved language data.")
+    tab_memory, tab_rules, tab_privacy = st.tabs(["Translation Memory", "Saved Rule Packs", "Privacy Controls"])
+
+    with tab_memory:
+        st.markdown("### Secure Translation Memory")
+        if not tm_secret_configured():
+            st.warning("Translation Memory is not active. Add ERRORSWEEP_TM_SECRET in Streamlit Secrets, make sure cryptography is installed, and run the translation memory SQL.")
+        records = get_translation_memory_records(user_id)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saved entries", len(records))
+        c2.metric("Client memories", len({r.get('client_key') for r in records}))
+        c3.metric("Target languages", len({r.get('target_language') for r in records}))
+        summary_df = summarize_translation_memory(records)
+        if not summary_df.empty:
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            st.download_button("Export decrypted memory CSV", export_translation_memory_csv(records), file_name="errorsweep_translation_memory_export.csv", mime="text/csv", use_container_width=True)
+            with st.expander("Delete memory scope", expanded=False):
+                clients = sorted({r.get("client_key") or "global" for r in records})
+                client_key = st.selectbox("Client memory", clients, key="tm_delete_client")
+                langs = [""] + sorted({r.get("target_language") or "auto-detect" for r in records if (r.get("client_key") or "global") == client_key})
+                lang = st.selectbox("Target language scope", langs, format_func=lambda x: "All languages" if not x else x, key="tm_delete_lang")
+                confirm = st.text_input("Type DELETE to confirm", key="tm_delete_confirm")
+                if st.button("Delete selected memory", key="tm_delete_button", type="primary", use_container_width=True):
+                    if confirm != "DELETE":
+                        st.error("Type DELETE to confirm deletion.")
+                    else:
+                        ok, msg = delete_translation_memory_scope(user_id, client_key, lang)
+                        (st.success if ok else st.error)(msg)
+                        if ok:
+                            st.rerun()
+        else:
+            st.info("No saved translation memory yet. Enable 'Save approved translations' inside ErrorSweep or ErrorSweep Pro to start building client memory.")
+
+    with tab_rules:
+        st.markdown("### Saved Rule Packs")
+        packs = get_user_rule_packs(user_id)
+        if packs:
+            rows = []
+            for p in packs:
+                rows.append({
+                    "Name": p.get("name"),
+                    "Client": p.get("client_name"),
+                    "Workflow": p.get("workflow_type"),
+                    "Target": p.get("target_language"),
+                    "Domain": p.get("domain"),
+                    "Glossary": p.get("glossary_count", 0),
+                    "DNT": p.get("dnt_count", 0),
+                    "Chunks": p.get("chunk_count", 0),
+                    "Created": p.get("created_at"),
+                    "Last Used": p.get("last_used_at"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            with st.expander("Delete saved rule pack", expanded=False):
+                opts = {f"{p.get('name')} · {p.get('client_name')} · {p.get('workflow_type')}": p.get("id") for p in packs}
+                label = st.selectbox("Rule pack", list(opts.keys()), key="delete_rule_pack_select")
+                if st.button("Delete rule pack", key="delete_rule_pack_button", use_container_width=True):
+                    ok, msg = delete_rule_pack(user_id, opts[label])
+                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        st.rerun()
+        else:
+            st.info("No saved rule packs yet. Upload a ZIP in ErrorSweep or ErrorSweep Pro, then save it as a reusable pack.")
+
+        st.markdown("### Add rule pack from this page")
+        new_zip = st.file_uploader("Upload Rules ZIP", type=["zip"], key="memory_page_rules_zip")
+        if new_zip:
+            parsed = parse_rules_zip_bytes(new_zip.getvalue())
+            st.write(f"Parsed files: {len(parsed.get('files', []))}; glossary: {len(parsed.get('glossary', []))}; DNT: {len(parsed.get('dnt', []))}; chunks: {len(parsed.get('chunks', []))}")
+            with st.form("memory_page_save_rule_pack_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    name = st.text_input("Rule pack name", value=new_zip.name.rsplit('.', 1)[0])
+                    client_name = st.text_input("Client / project", value="General")
+                    workflow_type = st.selectbox("Workflow type", ["both", "qa", "pro"])
+                with c2:
+                    source_language = st.text_input("Source language", value="")
+                    target_language = st.text_input("Target language", value="")
+                    domain = st.text_input("Domain", value="")
+                submitted = st.form_submit_button("Save Rule Pack", use_container_width=True)
+            if submitted:
+                ok, msg = create_rule_pack(user_id, name, client_name, workflow_type, source_language, target_language, domain, new_zip.name, parsed)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
+
+    with tab_privacy:
+        st.markdown("### Privacy controls")
+        st.markdown("""
+        **How storage works**
+        - Translation Memory is separated by user, client/project memory name, and target language.
+        - Source and target text are encrypted before being stored.
+        - Exact matching uses a one-way source hash, so future files can find approved translations without storing readable text in plain form.
+        - Saving memory is opt-in from the workflow pages.
+
+        **Recommended client policy**
+        - Create a separate memory name for each client/project.
+        - Do not mix confidential clients in the same memory.
+        - Export and delete memory when a client requests it.
+        - Keep ERRORSWEEP_TM_SECRET safe; changing it can make old encrypted memory unreadable.
+        """)
+        st.info("For enterprise clients, add a written privacy statement explaining what is saved, why it is saved, and how they can delete/export it.")
+
 def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
     if not profile:
         st.warning("Profile unavailable. Check Supabase setup.")
@@ -4158,7 +4489,7 @@ def logout_user() -> None:
 
 
 def render_login_page() -> None:
-    st.markdown(
+    st.markdown(textwrap.dedent(
         """
         <style>
         .login-wrapper {
@@ -4333,7 +4664,7 @@ def render_login_page() -> None:
             <div class="login-subtitle">Secure language automation dashboard</div>
             <div class="login-badge">Account required</div>
         </div>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
@@ -4460,7 +4791,7 @@ def render_top_account_bar(profile: Optional[Dict[str, Any]]) -> None:
 
 
 def render_top_nav() -> str:
-    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Billing", "Account"]
+    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Memory & Rules", "Billing", "Account"]
     if is_admin_user():
         pages.append("Admin")
     if st.session_state.get("es_page") not in pages:
@@ -4958,7 +5289,7 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     <div class="hero">
         <div class="hero-title">ErrorSweep</div>
         <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent review</div>
-        <div class="hero-badge">Top navigation · Workflow settings inside each page</div>
+        <div class="hero-badge">Top navigation · Workflow settings inside each page · Secure memory manager</div>
     </div>
     """,
         unsafe_allow_html=True,
@@ -4991,31 +5322,38 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     )
 
 
-def render_rule_upload(prefix: str) -> Tuple[Any, Any, Dict[str, Any]]:
+def render_rule_upload(prefix: str, user_id: str = "", workflow_type: str = "both") -> Tuple[Any, Any, Dict[str, Any]]:
     uploaded_file = st.file_uploader(
         "Upload file",
         type=None,
         key=f"{prefix}_uploaded_file",
         help="Upload any file. ErrorSweep will automatically extract text/segments from Excel, Word, PDF, CSV, XLIFF/XML/XLZ, JSON, subtitles, PO/properties, and other text-like files. Binary files without readable text will return an Excel report explaining the issue.",
     )
+
+    saved_rules, selected_pack_id = render_rule_pack_selector(user_id, workflow_type, prefix) if user_id else ({"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}, None)
+
     rules_zip = st.file_uploader(
         "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
         type=["zip"],
         key=f"{prefix}_rules_zip",
     )
-    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    uploaded_rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
     if rules_zip:
-        rules = parse_rules_zip_bytes(rules_zip.getvalue())
+        uploaded_rules = parse_rules_zip_bytes(rules_zip.getvalue())
         with st.expander("Rules ZIP summary", expanded=False):
-            st.write(f"Files parsed: {len(rules.get('files', []))}")
-            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
-            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
-            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
-            if rules.get("files"):
-                st.write(rules.get("files")[:20])
-            for w in rules.get("warnings", []):
+            st.write(f"Files parsed: {len(uploaded_rules.get('files', []))}")
+            st.write(f"Rule chunks: {len(uploaded_rules.get('chunks', []))}")
+            st.write(f"Glossary entries: {len(uploaded_rules.get('glossary', []))}")
+            st.write(f"DNT entries: {len(uploaded_rules.get('dnt', []))}")
+            if uploaded_rules.get("files"):
+                st.write(uploaded_rules.get("files")[:20])
+            for w in uploaded_rules.get("warnings", []):
                 st.warning(w)
-    return uploaded_file, rules_zip, rules
+        render_rule_pack_save_box(user_id, prefix, workflow_type, uploaded_rules, rules_zip.name, default_domain=st.session_state.get("es_domain", ""))
+
+    # Saved rule pack + uploaded ZIP are merged; uploaded ZIP can supplement/override current run context.
+    rules = merge_rules(saved_rules, uploaded_rules)
+    return uploaded_file, rules_zip or selected_pack_id, rules
 
 
 
@@ -5110,7 +5448,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
     if openai_client is None:
         st.info("Offline QA mode is available. Deterministic rules, company Rules ZIP, glossary, DNT, placeholders, numbers, spacing, punctuation, and language-specific checks can run without any API key. App credits still apply to generate reports.")
 
-    uploaded_file, rules_zip, rules = render_rule_upload("qa")
+    uploaded_file, rules_zip, rules = render_rule_upload("qa", user_id=user_id, workflow_type="qa")
     tm_controls = render_translation_memory_controls("qa", default_target_language=settings.get("target_language", ""))
 
     st.markdown("### QA run options")
@@ -5310,7 +5648,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     if openai_client is None:
         st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode: glossary/DNT/rule-pack assisted pre-translation only. Full automatic translation requires a user API key or managed language engine. App credits still apply to outputs.")
 
-    uploaded_file, rules_zip, rules = render_rule_upload("pro")
+    uploaded_file, rules_zip, rules = render_rule_upload("pro", user_id=user_id, workflow_type="pro")
 
     target_language = settings.get("target_language", "")
     tm_controls = render_translation_memory_controls("pro", default_target_language=target_language)
@@ -5753,6 +6091,8 @@ def render_dashboard() -> None:
         render_errorsweep_page(user_id, profile, settings)
     elif page == "ErrorSweep Pro":
         render_errorsweep_pro_page(user_id, profile, settings)
+    elif page == "Memory & Rules":
+        render_memory_rulepacks_page(user_id, profile)
     elif page == "Billing":
         render_billing_page(profile)
     elif page == "Account":
