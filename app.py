@@ -5210,9 +5210,107 @@ def render_account_page(profile: Optional[Dict[str, Any]]) -> None:
         st.markdown('<div class="account-activity-empty">No activity yet. Run your first QA check or translation workflow to start building account history.</div>', unsafe_allow_html=True)
 
 
+# ==========================================================
+# PAYMENT HISTORY / WEBHOOK STATUS
+# ==========================================================
+
+def payment_events_table_available() -> bool:
+    if not supabase_service_configured():
+        return False
+    ok, data = supabase_get("/rest/v1/payment_events?select=id&limit=1", kind="service")
+    return bool(ok)
+
+
+def get_user_payment_events(profile: Optional[Dict[str, Any]], limit: int = 25) -> List[Dict[str, Any]]:
+    if not profile or not supabase_service_configured():
+        return []
+    user_id = profile.get("id", "")
+    email = profile.get("email", "")
+
+    queries = []
+    if user_id:
+        queries.append(f"/rest/v1/payment_events?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}")
+    if email:
+        queries.append(f"/rest/v1/payment_events?user_email=ilike.{quote(str(email))}&select=*&order=created_at.desc&limit={int(limit)}")
+
+    rows_by_id: Dict[str, Dict[str, Any]] = {}
+    for query in queries:
+        ok, data = supabase_get(query, kind="service")
+        if ok and isinstance(data, list):
+            for row in data:
+                rid = str(row.get("id") or row.get("payment_id") or len(rows_by_id))
+                rows_by_id[rid] = row
+    rows = list(rows_by_id.values())
+    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    return rows[:limit]
+
+
+def admin_list_payment_events(limit: int = 100, email_filter: str = "") -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if email_filter.strip():
+        query = f"/rest/v1/payment_events?user_email=ilike.{quote('%' + email_filter.strip() + '%')}&select=*&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/payment_events?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def format_payment_events_for_display(events: List[Dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for event in events:
+        amount = event.get("amount")
+        if amount is not None:
+            try:
+                amount_display = round(float(amount) / 100, 2)
+            except Exception:
+                amount_display = amount
+        else:
+            amount_display = ""
+        rows.append({
+            "Date": event.get("created_at", ""),
+            "Email": event.get("user_email", ""),
+            "Plan": event.get("plan", ""),
+            "Credits": event.get("credits", ""),
+            "Amount": amount_display,
+            "Currency": event.get("currency", ""),
+            "Status": event.get("status", ""),
+            "Processed": "Yes" if event.get("processed") else "No",
+            "Payment ID": event.get("payment_id", ""),
+            "Error": event.get("error", ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def render_payment_history_section(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("### Payment history")
+    if not payment_events_table_available():
+        st.info("Payment event tracking is not active yet. Run the payment webhook SQL setup in Supabase to enable payment history and automatic plan upgrades.")
+        with st.expander("Supabase SQL setup needed", expanded=False):
+            st.write("Run the Razorpay payment webhook schema SQL in Supabase. This creates the `payment_events` table and payment columns in `profiles`.")
+        return
+
+    events = get_user_payment_events(profile, limit=25)
+    if not events:
+        st.info("No payment events found yet. After a successful payment webhook, events will appear here.")
+        return
+
+    df = format_payment_events_for_display(events)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    processed = sum(1 for e in events if e.get("processed"))
+    pending = len(events) - processed
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Payment Events", len(events))
+    c2.metric("Processed", processed)
+    c3.metric("Pending / Failed", pending)
+
+
 def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
     st.markdown("## Billing & Plans")
-    st.caption("Use payment links for MVP billing. After payment, admin can manually upgrade the user from the Admin page.")
+    st.caption("Use payment links for MVP billing. If Razorpay webhook is configured, upgrades can be automatic. Manual admin upgrade remains available as backup.")
 
     if not profile:
         st.warning("Profile unavailable. Please log out and log in again.")
@@ -5250,15 +5348,21 @@ def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
     with st.expander("Enterprise / custom plan", expanded=False):
         render_plan_card("enterprise", current_plan)
 
-    st.markdown("### How billing works in this MVP")
+    render_payment_history_section(profile)
+
+    st.markdown("### How billing works")
     st.markdown(
         """
-        1. User clicks an upgrade button and completes payment.
-        2. Admin verifies payment in the payment provider dashboard.
-        3. Admin opens **Admin** page in ErrorSweep.
-        4. Admin searches the user's email and upgrades plan/credits.
+        **Preferred automatic flow**
 
-        This manual flow is safer for the first launch. The next upgrade can add automatic payment webhooks.
+        1. User clicks an upgrade button and completes payment.
+        2. Payment provider sends a webhook to Supabase Edge Function.
+        3. Supabase updates the user's plan and credits automatically.
+        4. User refreshes ErrorSweep and sees upgraded credits.
+
+        **Manual backup flow**
+
+        If webhook is not configured or a payment used a different email, admin can still verify payment manually and upgrade the user from the **Admin** page.
         """
     )
 
@@ -6067,6 +6171,20 @@ def render_admin_page(profile: Optional[Dict[str, Any]]) -> None:
         st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
     else:
         st.info("No jobs found.")
+
+    st.divider()
+    st.markdown("### Payment events")
+    payment_filter = st.text_input("Filter payment events by email", value=search_email or "", key="admin_payment_filter")
+    payment_events = admin_list_payment_events(limit=100, email_filter=payment_filter)
+    if payment_events:
+        st.dataframe(format_payment_events_for_display(payment_events), use_container_width=True, hide_index=True)
+        processed_count = sum(1 for e in payment_events if e.get("processed"))
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Events", len(payment_events))
+        p2.metric("Processed", processed_count)
+        p3.metric("Pending / Failed", len(payment_events) - processed_count)
+    else:
+        st.info("No payment events found. If payment webhook is configured, successful payment events will appear here.")
 
     st.divider()
     st.markdown("### Master access reminder")
