@@ -201,6 +201,140 @@ header {visibility: hidden; display: none;}
 .es-tile p { margin: 0; color: #9ca3af; font-size: 13px; }
 @media (max-width: 900px) { .es-visual-grid { grid-template-columns: 1fr; } }
 
+
+.account-hero {
+    background: linear-gradient(135deg, rgba(8,14,26,.92), rgba(17,23,43,.92));
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 22px;
+    padding: 26px;
+    margin: 8px 0 18px 0;
+    box-shadow: 0 22px 50px rgba(0,0,0,.26);
+}
+.account-hero-grid {
+    display: grid;
+    grid-template-columns: 120px 1.5fr 1fr;
+    gap: 20px;
+    align-items: center;
+}
+.account-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 34px;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, rgba(0,255,136,.9), rgba(56,189,248,.9));
+    box-shadow: 0 16px 30px rgba(14,165,233,.22);
+}
+.account-title {
+    font-size: 30px;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #eef2ff;
+    margin: 0;
+}
+.account-subline {
+    color: #9fb0d6;
+    font-size: 15px;
+    margin-top: 8px;
+}
+.account-badge-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+.account-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .15px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.04);
+    color: #e8ecfb;
+}
+.account-pill.plan { background: rgba(0,255,136,.10); color: #8df2c1; border-color: rgba(0,255,136,.20); }
+.account-pill.role { background: rgba(56,189,248,.10); color: #8fdcff; border-color: rgba(56,189,248,.20); }
+.account-pill.status { background: rgba(250,204,21,.10); color: #fde68a; border-color: rgba(250,204,21,.20); }
+.account-pill.security { background: rgba(139,92,246,.10); color: #d8b4fe; border-color: rgba(139,92,246,.20); }
+.account-kpi-wrap {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 12px;
+}
+.account-kpi {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 16px;
+    padding: 14px;
+}
+.account-kpi-label { color: #90a3c8; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; }
+.account-kpi-value { color: #f8fafc; font-size: 26px; font-weight: 800; margin-top: 4px; }
+.account-kpi-sub { color: #8fa0c3; font-size: 12px; margin-top: 2px; }
+.account-section-title {
+    margin: 6px 0 12px 0;
+    font-size: 22px;
+    font-weight: 800;
+    color: #eef2ff;
+}
+.account-info-card {
+    background: rgba(16, 19, 34, 0.74);
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 12px;
+    min-height: 100%;
+}
+.account-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 14px 18px;
+}
+.account-info-item { min-width: 0; }
+.account-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #86a0c8;
+}
+.account-value {
+    font-size: 15px;
+    color: #edf2ff;
+    font-weight: 600;
+    margin-top: 4px;
+    word-break: break-word;
+}
+.account-soft-note {
+    background: rgba(56,189,248,.07);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #a9bbdd;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.account-activity-empty {
+    border: 1px dashed rgba(56,189,248,.2);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    color: #97a8c8;
+    background: rgba(255,255,255,.02);
+}
+@media (max-width: 900px) {
+    .account-hero-grid { grid-template-columns: 1fr; }
+    .account-kpi-wrap, .account-info-grid { grid-template-columns: 1fr; }
+    .account-avatar { width: 84px; height: 84px; font-size: 28px; }
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -3707,7 +3841,141 @@ def render_login_page() -> None:
             font-size: 12px;
             margin-top: 8px;
         }
-        </style>
+        
+.account-hero {
+    background: linear-gradient(135deg, rgba(8,14,26,.92), rgba(17,23,43,.92));
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 22px;
+    padding: 26px;
+    margin: 8px 0 18px 0;
+    box-shadow: 0 22px 50px rgba(0,0,0,.26);
+}
+.account-hero-grid {
+    display: grid;
+    grid-template-columns: 120px 1.5fr 1fr;
+    gap: 20px;
+    align-items: center;
+}
+.account-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 34px;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, rgba(0,255,136,.9), rgba(56,189,248,.9));
+    box-shadow: 0 16px 30px rgba(14,165,233,.22);
+}
+.account-title {
+    font-size: 30px;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #eef2ff;
+    margin: 0;
+}
+.account-subline {
+    color: #9fb0d6;
+    font-size: 15px;
+    margin-top: 8px;
+}
+.account-badge-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+.account-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .15px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.04);
+    color: #e8ecfb;
+}
+.account-pill.plan { background: rgba(0,255,136,.10); color: #8df2c1; border-color: rgba(0,255,136,.20); }
+.account-pill.role { background: rgba(56,189,248,.10); color: #8fdcff; border-color: rgba(56,189,248,.20); }
+.account-pill.status { background: rgba(250,204,21,.10); color: #fde68a; border-color: rgba(250,204,21,.20); }
+.account-pill.security { background: rgba(139,92,246,.10); color: #d8b4fe; border-color: rgba(139,92,246,.20); }
+.account-kpi-wrap {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 12px;
+}
+.account-kpi {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 16px;
+    padding: 14px;
+}
+.account-kpi-label { color: #90a3c8; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; }
+.account-kpi-value { color: #f8fafc; font-size: 26px; font-weight: 800; margin-top: 4px; }
+.account-kpi-sub { color: #8fa0c3; font-size: 12px; margin-top: 2px; }
+.account-section-title {
+    margin: 6px 0 12px 0;
+    font-size: 22px;
+    font-weight: 800;
+    color: #eef2ff;
+}
+.account-info-card {
+    background: rgba(16, 19, 34, 0.74);
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 12px;
+    min-height: 100%;
+}
+.account-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 14px 18px;
+}
+.account-info-item { min-width: 0; }
+.account-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #86a0c8;
+}
+.account-value {
+    font-size: 15px;
+    color: #edf2ff;
+    font-weight: 600;
+    margin-top: 4px;
+    word-break: break-word;
+}
+.account-soft-note {
+    background: rgba(56,189,248,.07);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #a9bbdd;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.account-activity-empty {
+    border: 1px dashed rgba(56,189,248,.2);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    color: #97a8c8;
+    background: rgba(255,255,255,.02);
+}
+@media (max-width: 900px) {
+    .account-hero-grid { grid-template-columns: 1fr; }
+    .account-kpi-wrap, .account-info-grid { grid-template-columns: 1fr; }
+    .account-avatar { width: 84px; height: 84px; font-size: 28px; }
+}
+
+</style>
         <div class="login-wrapper">
             <div class="login-title">ErrorSweep</div>
             <div class="login-subtitle">Secure language automation dashboard</div>
@@ -4020,15 +4288,215 @@ def render_control_center_page() -> None:
     st.caption("If an engine is missing, check Streamlit Secrets. This page replaces the hidden left panel.")
 
 
+def _format_dt(value: Any, with_time: bool = False) -> str:
+    if not value:
+        return "—"
+    try:
+        text = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%d %b %Y, %H:%M UTC" if with_time else "%d %b %Y")
+    except Exception:
+        return str(value)
+
+
+def _initials(name: str) -> str:
+    if not name:
+        return "ES"
+    parts = [p for p in re.split(r"[^A-Za-z0-9]+", name) if p]
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    if parts:
+        return parts[0][:2].upper()
+    return "ES"
+
+
+def _bool_label(flag: bool) -> str:
+    return "Enabled" if flag else "Disabled"
+
+
 def render_account_page(profile: Optional[Dict[str, Any]]) -> None:
-    st.markdown("## Account")
     user = get_current_user()
-    st.write(f"**Email:** {user.get('email') or st.session_state.get('errorsweep_username', 'user')}")
-    if profile:
-        render_credit_panel(profile)
-    st.divider()
-    if st.button("Logout", type="primary", use_container_width=True, key="account_logout_button"):
-        logout_user()
+    user_id = str(user.get("id") or "")
+    email = user.get("email") or st.session_state.get("errorsweep_username", "user@example.com")
+
+    if not profile:
+        st.warning("Profile unavailable. Please log out and sign in again.")
+        if st.button("Logout", key="account_logout_missing", use_container_width=True):
+            logout_user()
+        return
+
+    settings = get_page_settings()
+    jobs = get_recent_jobs(user_id, limit=6) if user_id else []
+
+    plan_key = normalize_plan(profile.get("plan"))
+    plan_name = PLAN_CATALOG.get(plan_key, PLAN_CATALOG["trial"])["name"]
+    monthly = int(profile.get("monthly_credits") or 0)
+    used = int(profile.get("used_credits") or 0)
+    remaining = max(0, monthly - used)
+    full_name = (profile.get("full_name") or email.split("@")[0]).strip()
+    display_name = full_name.replace(".", " ").replace("_", " ").title()
+    role_label = "Master Access" if is_admin_user() else "Member"
+    status_label = str(profile.get("subscription_status") or "active").replace("_", " ").title()
+    member_since = _format_dt(profile.get("created_at"))
+    last_activity = _format_dt(jobs[0].get("created_at"), with_time=True) if jobs else "No jobs yet"
+    initials = _initials(display_name or email)
+    workflow_mix = sum(1 for j in jobs if str(j.get("workflow", "")).lower().startswith("error"))
+    last_workflow = jobs[0].get("workflow") if jobs else "No recent workflow"
+    credits_used_pct = int(round((used / max(monthly, 1)) * 100)) if monthly else 0
+
+    st.markdown("## Account Overview")
+    st.markdown(f"""
+    <div class="account-hero">
+        <div class="account-hero-grid">
+            <div class="account-avatar">{escape(initials)}</div>
+            <div>
+                <div class="account-title">{escape(display_name)}</div>
+                <div class="account-subline">{escape(email)}</div>
+                <div class="account-badge-row">
+                    <span class="account-pill plan">Plan · {escape(plan_name)}</span>
+                    <span class="account-pill role">Role · {escape(role_label)}</span>
+                    <span class="account-pill status">Status · {escape(status_label)}</span>
+                    <span class="account-pill security">Managed AI · {escape(_bool_label(managed_ai_allowed()))}</span>
+                </div>
+            </div>
+            <div class="account-kpi-wrap">
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Credits Remaining</div>
+                    <div class="account-kpi-value">{remaining}</div>
+                    <div class="account-kpi-sub">of {monthly} monthly credits</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Usage This Cycle</div>
+                    <div class="account-kpi-value">{credits_used_pct}%</div>
+                    <div class="account-kpi-sub">{used} credits consumed</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Recent Activity</div>
+                    <div class="account-kpi-value">{len(jobs)}</div>
+                    <div class="account-kpi-sub">latest 6 jobs tracked</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Member Since</div>
+                    <div class="account-kpi-value" style="font-size:18px;">{escape(member_since)}</div>
+                    <div class="account-kpi-sub">last active {escape(last_activity)}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Current Plan", plan_name)
+    c2.metric("Credits Remaining", remaining)
+    c3.metric("Used Credits", used)
+    c4.metric("Monthly Credits", monthly)
+    st.progress(min(1.0, used / max(monthly, 1)) if monthly else 0.0)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("### Profile & Access")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Display name</div><div class="account-value">{escape(display_name)}</div></div>
+                <div class="account-info-item"><div class="account-label">Email</div><div class="account-value">{escape(email)}</div></div>
+                <div class="account-info-item"><div class="account-label">Role</div><div class="account-value">{escape(role_label)}</div></div>
+                <div class="account-info-item"><div class="account-label">Account status</div><div class="account-value">{escape(status_label)}</div></div>
+                <div class="account-info-item"><div class="account-label">Member since</div><div class="account-value">{escape(member_since)}</div></div>
+                <div class="account-info-item"><div class="account-label">Last activity</div><div class="account-value">{escape(last_activity)}</div></div>
+                <div class="account-info-item"><div class="account-label">User ID</div><div class="account-value">{escape(user_id or '—')}</div></div>
+                <div class="account-info-item"><div class="account-label">Recent workflow</div><div class="account-value">{escape(str(last_workflow))}</div></div>
+            </div>
+            <div class="account-soft-note">Your account details, plan status, and current access level are shown here. This page is designed as a premium user profile dashboard for clients and internal team members.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with right:
+        st.markdown("### Workflow Preferences")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Content domain</div><div class="account-value">{escape(str(settings['domain']))}</div></div>
+                <div class="account-info-item"><div class="account-label">QA strictness</div><div class="account-value">{escape(str(settings['strictness']))}</div></div>
+                <div class="account-info-item"><div class="account-label">Default target language</div><div class="account-value">{escape(str(settings['target_language']))}</div></div>
+                <div class="account-info-item"><div class="account-label">Batch size</div><div class="account-value">{settings['batch_size']}</div></div>
+                <div class="account-info-item"><div class="account-label">Full-file scan</div><div class="account-value">{escape('On' if settings['check_whole_file'] else 'Off')}</div></div>
+                <div class="account-info-item"><div class="account-label">Deep scan fallback</div><div class="account-value">{escape('On' if settings['deep_scan'] else 'Off')}</div></div>
+                <div class="account-info-item"><div class="account-label">User language engine key</div><div class="account-value">{escape(_bool_label(bool(get_user_openai_key())))}</div></div>
+                <div class="account-info-item"><div class="account-label">Independent review key</div><div class="account-value">{escape(_bool_label(bool(get_user_gemini_key())))}</div></div>
+            </div>
+            <div class="account-soft-note">These are the workflow preferences currently active in this session. Users can fine-tune QA and translation settings inside the ErrorSweep and ErrorSweep Pro pages.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    s1, s2 = st.columns(2)
+    with s1:
+        st.markdown("### Security & Access")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Login method</div><div class="account-value">Email + password</div></div>
+                <div class="account-info-item"><div class="account-label">Managed AI mode</div><div class="account-value">{escape(_bool_label(managed_ai_allowed()))}</div></div>
+                <div class="account-info-item"><div class="account-label">Admin / master access</div><div class="account-value">{escape('Granted' if is_admin_user() else 'No')}</div></div>
+                <div class="account-info-item"><div class="account-label">Session state</div><div class="account-value">Authenticated</div></div>
+                <div class="account-info-item"><div class="account-label">Billing model</div><div class="account-value">Credits + plan based</div></div>
+                <div class="account-info-item"><div class="account-label">Data processing</div><div class="account-value">Private app workflow</div></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with s2:
+        st.markdown("### Usage Snapshot")
+        qa_jobs = sum(1 for j in jobs if 'qa' in str(j.get('workflow','')).lower() or 'errorsweep' in str(j.get('workflow','')).lower())
+        pro_jobs = sum(1 for j in jobs if 'pro' in str(j.get('workflow','')).lower())
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Tracked jobs</div><div class="account-value">{len(jobs)}</div></div>
+                <div class="account-info-item"><div class="account-label">QA runs</div><div class="account-value">{qa_jobs}</div></div>
+                <div class="account-info-item"><div class="account-label">Pro runs</div><div class="account-value">{pro_jobs}</div></div>
+                <div class="account-info-item"><div class="account-label">Workflow mix</div><div class="account-value">{workflow_mix} tracked activity items</div></div>
+                <div class="account-info-item"><div class="account-label">Credits consumed</div><div class="account-value">{used}</div></div>
+                <div class="account-info-item"><div class="account-label">Next best action</div><div class="account-value">{escape('Upgrade plan' if remaining <= max(5, monthly * 0.1) else 'Continue working')}</div></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### Actions")
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        if st.button("Go to Billing", use_container_width=True, key="account_go_billing"):
+            st.session_state["es_page"] = "Billing"
+            st.rerun()
+    with a2:
+        if st.button("Open ErrorSweep", use_container_width=True, key="account_go_qa"):
+            st.session_state["es_page"] = "ErrorSweep"
+            st.rerun()
+    with a3:
+        if st.button("Send reset email", use_container_width=True, key="account_reset_email"):
+            ok, msg = auth_send_password_reset(email)
+            (st.success if ok else st.error)(msg)
+    with a4:
+        if st.button("Logout", type="primary", use_container_width=True, key="account_logout_button"):
+            logout_user()
+
+    st.markdown("### Recent activity")
+    if jobs:
+        job_rows = []
+        for j in jobs:
+            job_rows.append({
+                "Created": _format_dt(j.get("created_at"), with_time=True),
+                "Workflow": j.get("workflow", "—"),
+                "File": j.get("file_name") or j.get("filename") or "—",
+                "Status": j.get("status", "—"),
+                "Credits": j.get("credits_used") or j.get("credits") or 0,
+            })
+        st.dataframe(pd.DataFrame(job_rows), use_container_width=True, hide_index=True)
+    else:
+        st.markdown('<div class="account-activity-empty">No activity yet. Run your first QA check or translation workflow to start building account history.</div>', unsafe_allow_html=True)
 
 
 def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
