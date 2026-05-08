@@ -2227,7 +2227,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_v2 import deterministic_checks_v2
+        from qa_engine_global_v3 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
