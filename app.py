@@ -2227,7 +2227,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v3 import deterministic_checks_v2
+        from qa_engine_global_v4 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -5671,7 +5671,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     openai_client = get_openai_client()
     gemini_client = get_gemini_client()
     if openai_client is None:
-        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode: glossary/DNT/rule-pack assisted pre-translation only. Full automatic translation requires a user API key or managed language engine. App credits still apply to outputs.")
+        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or future local translation model. App credits still apply to outputs.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("pro", user_id=user_id, workflow_type="pro")
 
@@ -5692,7 +5692,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     if uploaded_file and run_pro:
         using_language_engine = bool(openai_client)
         if not using_language_engine:
-            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply glossary/DNT references where possible, but it will not generate full professional translations without a language-engine API key. App credits still apply to generate outputs.")
+            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply saved memory/glossary/DNT references where possible. New unmatched source segments will be left blank or marked for translation instead of fake-translated. Full professional translation requires a language-engine API key, managed engine, or future local translation model. App credits still apply.")
             review_with_gemini = False
         if review_with_gemini and gemini_client is None:
             st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
