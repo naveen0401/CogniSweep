@@ -2220,117 +2220,38 @@ def source_driven_format_checks(segment: Dict[str, Any]) -> List[Dict[str, Any]]
     return rows
 
 def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
-    rows = []
-    source = normalize_text(segment.get("source", ""))
-    target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+    """Modular QA Engine v2 wrapper.
 
-    if not target:
-        return rows
+    This keeps the existing app shell and file extraction/output logic unchanged,
+    but delegates offline QA to qa_engine_v2.py. If the external module is missing,
+    the app returns a safe warning row instead of crashing.
+    """
+    try:
+        from qa_engine_v2 import deterministic_checks_v2
+        return deterministic_checks_v2(
+            segment=segment,
+            rules=rules,
+            target_language=st.session_state.get("es_target_language", "Auto-detect"),
+            domain=st.session_state.get("es_domain", "Auto-detect"),
+            enable_zwnj=enable_zwnj,
+        )
+    except Exception as exc:
+        return [{
+            "Sheet": segment.get("sheet", ""),
+            "Location": segment.get("location", ""),
+            "Mode": segment.get("mode", ""),
+            "Source Text": truncate(segment.get("source", ""), 400),
+            "Translation": truncate(segment.get("translation", segment.get("text", "")), 400),
+            "Error Type": "Rule Engine Warning",
+            "Severity": "Review",
+            "Wrong Part": "QA Engine v2",
+            "Suggestion": "Check qa_engine_v2.py is present in GitHub and deployment.",
+            "Explanation": f"Modular rule engine could not run: {str(exc)[:180]}",
+            "Check Source": "Rule Engine",
+            "Rule Source": "System",
+            "Confidence": "Low",
+        }]
 
-    # Do not QA Excel formulas as translation text. They create false placeholder issues like $B, $C, $E.
-    if target.lstrip().startswith("="):
-        return rows
-
-    # Extra spaces
-    if re.search(r" {2,}", target):
-        suggestion = re.sub(r" {2,}", " ", target)
-        rows.append(make_report_row(
-            segment, "Spacing", "Minor", visible_invisibles(target), visible_invisibles(suggestion),
-            "Multiple consecutive spaces found.", "Rule Engine"
-        ))
-
-    if target != target.strip():
-        rows.append(make_report_row(
-            segment, "Spacing", "Minor", visible_invisibles(target), visible_invisibles(target.strip()),
-            "Leading or trailing spaces found.", "Rule Engine"
-        ))
-
-    # Source-driven formatting rules.
-    # Golden rule: only enforce punctuation/markers/wrappers when the source has them.
-    # Example: if source does not end with a period, target is NOT required to end with a period.
-    rows.extend(source_driven_format_checks(segment))
-
-    # Placeholders/tags
-    src_ph = extract_placeholders(source)
-    tgt_ph = extract_placeholders(target)
-    missing_ph = [p for p in src_ph if p not in tgt_ph]
-    extra_ph = [p for p in tgt_ph if p not in src_ph]
-    if missing_ph:
-        rows.append(make_report_row(
-            segment, "Placeholder", "Major", ", ".join(missing_ph), target,
-            "Placeholder/tag from source is missing in translation.", "Rule Engine"
-        ))
-    if extra_ph:
-        rows.append(make_report_row(
-            segment, "Placeholder", "Major", ", ".join(extra_ph), target,
-            "Translation contains placeholder/tag not found in source.", "Rule Engine"
-        ))
-
-    # Numbers
-    src_nums = extract_numbers(source)
-    tgt_nums = extract_numbers(target)
-    missing_nums = [n for n in src_nums if n not in tgt_nums]
-    if source and missing_nums:
-        rows.append(make_report_row(
-            segment, "Number", "Major", ", ".join(missing_nums), target,
-            "Number from source is missing or changed in translation.", "Rule Engine"
-        ))
-
-    # Bracket balance and quotes
-    bracket_pairs = [("(", ")"), ("[", "]"), ("{", "}"), ("<", ">")]
-    for left, right in bracket_pairs:
-        if target.count(left) != target.count(right):
-            rows.append(make_report_row(
-                segment, "Formatting", "Minor", f"Unbalanced {left}{right}", target,
-                "Unbalanced brackets detected in translation.", "Rule Engine"
-            ))
-            break
-
-    quote_suggestion = suggest_balanced_quotes(target, source)
-    if quote_suggestion:
-        rows.append(make_report_row(
-            segment, "Formatting", "Minor", "unbalanced quote marks", quote_suggestion,
-            "Opening and closing quotation marks are inconsistent or unbalanced. Measurement inch/foot symbols are ignored and source quote pattern is respected.", "Rule Engine"
-        ))
-
-    # DNT terms
-    for d in rules.get("dnt", [])[:500] if rules else []:
-        term = normalize_text(d.get("term", ""))
-        if term and (term.lower() in source.lower()) and (term not in target):
-            rows.append(make_report_row(
-                segment, "DNT", "Major", term, f"Keep '{term}' unchanged in translation.",
-                "Do-not-translate term from company rules is missing or changed.", "Company Rules", d.get("source", ""), "High"
-            ))
-
-    # Glossary terms
-    for g in rules.get("glossary", [])[:500] if rules else []:
-        src_term = normalize_text(g.get("source_term", ""))
-        tgt_term = normalize_text(g.get("target_term", ""))
-        if src_term and tgt_term and src_term.lower() in source.lower() and tgt_term not in target:
-            rows.append(make_report_row(
-                segment, "Glossary", "Major", src_term, tgt_term,
-                "Company glossary target term is missing in translation.", "Company Rules", g.get("source", ""), "High"
-            ))
-
-    # ZWNJ detection for Telugu loanword suffixes
-    if enable_zwnj:
-        for base, suffixes in TELUGU_ZWNJ_BASE_SUFFIXES.items():
-            for suffix in suffixes:
-                bad_joined = base + suffix
-                bad_spaced = base + " " + suffix
-                good = base + "\u200C" + suffix
-                if bad_joined in target:
-                    rows.append(make_report_row(
-                        segment, "ZWNJ", "Minor", visible_invisibles(bad_joined), visible_invisibles(good),
-                        "Possible missing Zero Width Non-Joiner between loanword/base and suffix.", "Rule Engine", "Built-in Telugu ZWNJ", "Medium"
-                    ))
-                if bad_spaced in target:
-                    rows.append(make_report_row(
-                        segment, "ZWNJ", "Minor", visible_invisibles(bad_spaced), visible_invisibles(good),
-                        "Possible incorrect visible space where ZWNJ may be required.", "Rule Engine", "Built-in Telugu ZWNJ", "Medium"
-                    ))
-
-    return rows
 
 
 # ==========================================================
