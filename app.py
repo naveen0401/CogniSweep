@@ -443,19 +443,8 @@ SKIP_SHEET_KEYWORDS = [
     "score card",
 ]
 
-# Common Telugu UI/loanword ZWNJ patterns. This is intentionally conservative.
-TELUGU_ZWNJ_BASE_SUFFIXES = {
-    "డాక్యుమెంట్": ["ను", "లను", "లు", "తో", "కి", "లో"],
-    "పాస్‌వర్డ్": ["ను", "తో", "లో", "కి"],
-    "పాస్వర్డ్": ["ను", "తో", "లో", "కి"],
-    "డాష్‌బోర్డ్": ["ను", "లో", "కి"],
-    "అప్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "డౌన్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "టెంప్లేట్": ["లు", "ను", "లను", "లో"],
-    "సెట్టింగ్": ["లు", "లను", "లో", "కి"],
-    "కనెక్షన్": ["ను", "తో", "లో"],
-    "ఫైల్": ["ను", "లను", "లు", "లో"],
-}
+# Language-specific QA rules are now handled by qa_engine_global_v5.py.
+# The Streamlit app shell keeps file extraction/output only.
 
 PLACEHOLDER_PATTERN = re.compile(
     r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|\b\w+_id\b|<[^>]+>)"
@@ -1941,7 +1930,7 @@ def is_low_value_ai_style_issue(row: Dict[str, Any], include_style: bool) -> boo
     subjective_phrases = [
         "more natural", "available", "preferred", "prefer", "better", "alternative",
         "context", "style", "tone", "readability", "fluent", "idiomatic",
-        "could be", "would be", "native speakers", "telugu equivalent"
+        "could be", "would be", "native speakers", "native-language equivalent"
     ]
     if not include_style and rule_source in {"", "ai"} and any(p in explanation for p in subjective_phrases):
         if not (has_latin_letters(wrong) and wrong in translation):
@@ -2227,7 +2216,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v4 import deterministic_checks_v2
+        from qa_engine_global_v5 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -2307,8 +2296,7 @@ def ai_qa_batch(
         style_policy = (
             "Do NOT flag subjective style, wording, or terminology preferences unless a company rule, glossary, "
             "DNT list, placeholder rule, or clear source meaning proves it is wrong. "
-            "Do NOT flag acceptable target-language loanwords/transliterations as errors merely because a native synonym exists. "
-            "For Telugu UI localization, terms like వెల్కమ్ స్క్రీన్, స్క్రీన్, ఫైల్, యాప్, సెట్టింగ్, డాక్యుమెంట్, పాస్‌వర్డ్ can be acceptable unless company rules say otherwise."
+            "Do NOT flag acceptable target-language loanwords, brand terms, approved transliterations, or product names as errors unless uploaded client rules say otherwise."
         )
 
     instructions = (
@@ -2337,7 +2325,7 @@ Important rules:
 - Preserve list/bullet markers only when the source has a list/bullet marker.
 - Preserve bracket wrappers like [Label] only when the source is bracket-wrapped.
 - Do not flag transliterated UI/product terms in the target script unless company rules require another term.
-- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example "chupinchandi" in Telugu output.
+- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example romanized words inside a non-Latin target language.
 - If the issue is grammar/spelling/mixed script, "wrong_part" must be an exact visible fragment from the translation.
 - "suggestion" must be a concrete correction. Prefer a full corrected translation when possible.
 - If you are unsure, omit the error.
@@ -3830,12 +3818,12 @@ def render_translation_memory_controls(context: str, default_target_language: st
             save_tm = st.checkbox("Save approved translations after this run", value=False, key=f"{prefix}_tm_save")
         c3, c4 = st.columns(2)
         with c3:
-            client_name = st.text_input("Client / project memory name", value="", placeholder="Example: Acme Telugu UI", key=f"{prefix}_tm_client")
+            client_name = st.text_input("Client / project memory name", value="", placeholder="Example: Acme French Legal / Global UI", key=f"{prefix}_tm_client")
         with c4:
             target_language = st.text_input(
                 "Target language / locale for memory",
                 value=default_target_language or st.session_state.get("es_target_language", ""),
-                placeholder="Example: Telugu, Hindi, Spanish, fr-FR",
+                placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP",
                 key=f"{prefix}_tm_target_language",
             )
         if not tm_secret_configured():
@@ -4670,7 +4658,7 @@ def init_page_state() -> None:
         "es_target_col_hint": "",
         "es_skip_non_content": True,
         "es_deep_scan": False,
-        "es_target_language": "Telugu",
+        "es_target_language": "Auto-detect",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -4688,7 +4676,7 @@ def get_page_settings() -> Dict[str, Any]:
         "target_col_hint": st.session_state.get("es_target_col_hint", ""),
         "skip_non_content": bool(st.session_state.get("es_skip_non_content", True)),
         "deep_scan": bool(st.session_state.get("es_deep_scan", False)),
-        "target_language": st.session_state.get("es_target_language", "Telugu"),
+        "target_language": st.session_state.get("es_target_language", "Auto-detect"),
         "openai_model": DEFAULT_OPENAI_MODEL,
         "gemini_model": DEFAULT_GEMINI_MODEL,
     }
@@ -4796,7 +4784,7 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
             st.text_input(
                 "Target language",
                 key="es_target_language",
-                placeholder="Example: Spanish, French, Hindi, Telugu",
+                placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP",
             )
 
         s1, s2 = st.columns(2)
@@ -4905,7 +4893,7 @@ def render_control_center_page() -> None:
     st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
 
     st.markdown("### ErrorSweep Pro")
-    st.text_input("Default target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Telugu")
+    st.text_input("Default target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP")
 
     st.markdown("### API Cost Control")
     st.info("API keys are optional. Without keys, ErrorSweep QA still runs in offline rule-based mode. ErrorSweep Pro uses glossary/DNT reference mode unless a language-engine key is provided.")
