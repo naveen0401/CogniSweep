@@ -2015,6 +2015,138 @@ def post_filter_report_rows(rows: List[Dict[str, Any]], include_style: bool) -> 
 
 
 
+
+# ==========================================================
+# QUALITY GATE / FALSE-POSITIVE CONTROL
+# ==========================================================
+
+CONFIRMED_ERROR_TYPES = {
+    "Placeholder", "Number", "DNT", "Glossary", "Translation Memory",
+    "URL", "Email", "SKU", "Tag", "Unicode Hygiene", "Encoding",
+}
+CONFIRMED_FORMAT_TYPES = {"Spacing", "Formatting", "Punctuation"}
+REVIEW_TYPES = {
+    "Grammar", "Spelling", "Style", "Readability", "Accuracy",
+    "Terminology", "Mixed Script", "Locale Convention", "Independent Review",
+    "Offline QA Coverage", "Language Profile", "Rule Warning", "API Warning",
+}
+
+
+def classify_quality_gate(row: Dict[str, Any]) -> Tuple[str, str, int]:
+    """Classify every finding into an action-safe gate status.
+
+    Goal:
+    - Confirmed Error = objective, evidence-backed issue.
+    - Needs Review = plausible linguistic/style/accuracy issue, but not safe to call definite.
+    - System Warning = operational issue, not translation quality.
+    """
+    error_type = str(row.get("Error Type", "") or "").strip()
+    severity = str(row.get("Severity", "") or "").strip()
+    confidence = str(row.get("Confidence", "") or "").strip()
+    check_source = str(row.get("Check Source", "") or "").strip()
+    rule_source = str(row.get("Rule Source", "") or "").strip()
+
+    if "warning" in error_type.lower() or "api" in error_type.lower():
+        return "System Warning", "Check configuration or retry.", 0
+
+    # Strong deterministic / client-rule evidence.
+    if error_type in CONFIRMED_ERROR_TYPES:
+        return "Confirmed Error", "Fix before delivery.", 100
+
+    if check_source in {"Company Rules", "Secure Translation Memory", "Rule Engine"} and confidence == "High":
+        if error_type in {"DNT", "Glossary", "Placeholder", "Number", "Formatting", "Spacing", "Punctuation", "Mixed Script"}:
+            return "Confirmed Error", "Fix before delivery.", 90
+
+    # Formatting is only confirmed when high-confidence or critical/major objective.
+    if error_type in CONFIRMED_FORMAT_TYPES and confidence in {"High", ""}:
+        return "Confirmed Error", "Fix or confirm exception.", 70
+
+    # Client corrections are stronger than generic linguistic hints.
+    if "Correction History" in rule_source or "Client" in rule_source:
+        return "Confirmed Error", "Apply client-approved correction.", 85
+
+    # Linguistic issues are not always safe offline or model-only; require review unless backed by client rules.
+    if error_type in REVIEW_TYPES or error_type in {"AI QA", "Client Rule"}:
+        if confidence == "High" and severity in {"Critical", "Major"} and ("Client" in rule_source or check_source == "Company Rules"):
+            return "Confirmed Error", "Fix before delivery.", 85
+        return "Needs Review", "Human reviewer should verify.", 35
+
+    if severity in {"Critical", "Major"} and confidence == "High":
+        return "Confirmed Error", "Fix before delivery.", 75
+
+    return "Needs Review", "Human reviewer should verify.", 25
+
+
+def apply_quality_gate(issue_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Add Quality Gate columns to report rows."""
+    enriched: List[Dict[str, Any]] = []
+    for row in issue_rows:
+        new_row = dict(row)
+        gate, action, score_impact = classify_quality_gate(new_row)
+        new_row["Quality Gate"] = gate
+        new_row["Action Required"] = action
+        new_row["Score Impact"] = score_impact
+        enriched.append(new_row)
+    # High-confidence deterministic issues first.
+    order = {"Confirmed Error": 0, "Needs Review": 1, "System Warning": 2}
+    severity_order = {"Critical": 0, "Major": 1, "Minor": 2, "Review": 3}
+    enriched.sort(key=lambda r: (
+        order.get(str(r.get("Quality Gate", "")), 9),
+        severity_order.get(str(r.get("Severity", "")), 9),
+        -int(r.get("Score Impact", 0) or 0),
+        str(r.get("Location", "")),
+    ))
+    return enriched
+
+
+def quality_gate_summary(issue_rows: List[Dict[str, Any]], status_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    confirmed = sum(1 for r in issue_rows if r.get("Quality Gate") == "Confirmed Error")
+    review = sum(1 for r in issue_rows if r.get("Quality Gate") == "Needs Review")
+    warning = sum(1 for r in issue_rows if r.get("Quality Gate") == "System Warning")
+    segments = len(status_rows or [])
+    blocked_segments = sum(1 for r in (status_rows or []) if r.get("Review Status") == "Blocked")
+    review_segments = sum(1 for r in (status_rows or []) if r.get("Review Status") == "Needs Review")
+    passed_segments = sum(1 for r in (status_rows or []) if r.get("Review Status") == "Pass")
+
+    penalty = min(100, confirmed * 5 + review * 1)
+    score = max(0, 100 - penalty)
+    if confirmed:
+        decision = "Blocked"
+    elif review:
+        decision = "Needs Human Review"
+    else:
+        decision = "Pass"
+
+    return {
+        "Quality Score": score,
+        "Gate Decision": decision,
+        "Confirmed Errors": confirmed,
+        "Needs Review": review,
+        "System Warnings": warning,
+        "Segments": segments,
+        "Blocked Segments": blocked_segments,
+        "Review Segments": review_segments,
+        "Passed Segments": passed_segments,
+    }
+
+
+def render_quality_gate_summary(issue_rows: List[Dict[str, Any]], status_rows: Optional[List[Dict[str, Any]]] = None) -> None:
+    summary = quality_gate_summary(issue_rows, status_rows)
+    st.markdown("### Quality Gate")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Gate Decision", summary["Gate Decision"])
+    c2.metric("Quality Score", summary["Quality Score"])
+    c3.metric("Confirmed Errors", summary["Confirmed Errors"])
+    c4.metric("Needs Review", summary["Needs Review"])
+    if summary["Gate Decision"] == "Blocked":
+        st.error("Quality gate blocked this file because confirmed errors were found.")
+    elif summary["Gate Decision"] == "Needs Human Review":
+        st.warning("No blocker-only decision: possible linguistic/style/accuracy items need human review.")
+    else:
+        st.success("Quality gate passed. No confirmed errors found.")
+
+
+
 # ==========================================================
 # SOURCE-DRIVEN FORMAT QA HELPERS
 # ==========================================================
@@ -2577,9 +2709,17 @@ def build_segment_status_rows(segments: List[Dict[str, Any]], issue_rows: List[D
         loc = str(seg.get("location", ""))
         rows = issues_by_loc.get(loc, [])
         issue_count = len(rows)
-        status = "Needs Review" if issue_count else "Pass"
+        confirmed = sum(1 for r in rows if r.get("Quality Gate") == "Confirmed Error")
+        needs_review = sum(1 for r in rows if r.get("Quality Gate") == "Needs Review")
+        if confirmed:
+            status = "Blocked"
+        elif needs_review or issue_count:
+            status = "Needs Review"
+        else:
+            status = "Pass"
         severity = highest_severity(rows)
         error_types = "; ".join(sorted({str(r.get("Error Type", "")) for r in rows if r.get("Error Type")}))
+        gate_types = "; ".join(sorted({str(r.get("Quality Gate", "")) for r in rows if r.get("Quality Gate")}))
         suggestions = " | ".join(dict.fromkeys(str(r.get("Suggestion", "")) for r in rows if str(r.get("Suggestion", "")).strip()))
         explanations = " | ".join(dict.fromkeys(str(r.get("Explanation", "")) for r in rows if str(r.get("Explanation", "")).strip()))
 
@@ -2591,14 +2731,16 @@ def build_segment_status_rows(segments: List[Dict[str, Any]], issue_rows: List[D
             "Translation": truncate(seg.get("translation", seg.get("text", "")), 500),
             "Review Status": status,
             "Issue Count": issue_count,
+            "Confirmed Error Count": confirmed,
+            "Needs Review Count": needs_review,
             "Highest Severity": severity,
+            "Quality Gate Types": gate_types,
             "Error Types": error_types,
             "Suggestion Summary": truncate(suggestions, 800) if suggestions else "No change suggested",
             "Explanation Summary": truncate(explanations, 800) if explanations else "Checked; no issue found",
             "Checked By": checked_by,
         })
     return status_rows
-
 
 def merge_issue_and_status_csv(issue_rows: List[Dict[str, Any]], status_rows: List[Dict[str, Any]]) -> bytes:
     """For non-Excel files, return one CSV that includes all checked segments and issue details."""
@@ -2713,10 +2855,16 @@ def build_excel_report_bytes(
     """Always return an Excel report, regardless of input file format."""
     extraction_logs = extraction_logs or []
     sheets: Dict[str, pd.DataFrame] = {}
+    qsum = quality_gate_summary(issue_rows, status_rows)
     sheets["Summary"] = pd.DataFrame([
         {"Metric": "Report", "Value": title},
+        {"Metric": "Quality Score", "Value": qsum["Quality Score"]},
+        {"Metric": "Gate Decision", "Value": qsum["Gate Decision"]},
         {"Metric": "Segments checked", "Value": len(status_rows)},
         {"Metric": "Issues found", "Value": len(issue_rows)},
+        {"Metric": "Confirmed Errors", "Value": qsum["Confirmed Errors"]},
+        {"Metric": "Needs Review", "Value": qsum["Needs Review"]},
+        {"Metric": "System Warnings", "Value": qsum["System Warnings"]},
         {"Metric": "Generated at", "Value": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")},
     ])
     sheets["All Segment Review"] = pd.DataFrame(status_rows)
@@ -3259,6 +3407,12 @@ def render_report(report_rows: List[Dict[str, Any]], title: str = "Report"):
     c3.metric("Major", major)
     c4.metric("Minor", minor)
     c5.metric("Review", review)
+
+    if "Quality Gate" in df.columns:
+        st.markdown("#### Quality Gate Breakdown")
+        gate_df = df["Quality Gate"].value_counts().reset_index()
+        gate_df.columns = ["Quality Gate", "Count"]
+        st.dataframe(gate_df, use_container_width=True, hide_index=True)
 
     if "Error Type" in df.columns:
         st.markdown("#### Errors by Type")
@@ -5897,6 +6051,7 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
                 progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
 
         report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
+        report_rows = apply_quality_gate(report_rows)
         if dropped_ai_rows:
             st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
 
@@ -5906,9 +6061,9 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         if lower.endswith(".xlsx") and workbook is not None:
             if output_highlighted:
                 highlight_excel_cells(cell_map, report_rows)
-            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence", "Quality Gate", "Action Required", "Score Impact"]
             status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
-            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Confirmed Error Count", "Needs Review Count", "Highest Severity", "Quality Gate Types", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
             add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
             add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, issue_headers)
             bio = io.BytesIO()
@@ -5964,11 +6119,13 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
 
         status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
+        render_quality_gate_summary(report_rows, status_rows_for_ui)
         st.markdown("### Segment Coverage")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Segments checked", len(status_rows_for_ui))
-        c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
-        c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
+        c2.metric("Blocked", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Blocked"))
+        c3.metric("Needs Review", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
+        c4.metric("Passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
         with st.expander("All Segment Review Preview", expanded=False):
             st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
         render_report(report_rows, "ErrorSweep QA Report")
@@ -6176,6 +6333,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                         translations_by_loc[loc] = err["suggestion"]
                 progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
 
+        review_rows = apply_quality_gate(review_rows)
+
         status.text("Building output file...")
         output_bytes = b""
         output_name = "errorsweep_pro_" + uploaded_file.name
@@ -6190,9 +6349,9 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                         continue
                     workbook[ws_name].cell(row=row_num, column=col_idx + 1).value = translations_by_loc.get(loc, "")
             highlight_excel_cells(cell_map, review_rows)
-            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence", "Quality Gate", "Action Required", "Score Impact"]
             status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
-            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Confirmed Error Count", "Needs Review Count", "Highest Severity", "Quality Gate Types", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
             add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
             add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, issue_headers)
             bio = io.BytesIO()
