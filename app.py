@@ -511,6 +511,57 @@ def get_gemini_client():
         return None
 
 
+def get_local_translation_config() -> Dict[str, str]:
+    """Self-hosted translation engine settings.
+
+    This allows ErrorSweep Pro to translate without OpenAI/Gemini API keys.
+    Recommended providers:
+    - libretranslate: self-hosted LibreTranslate server
+    - generic: your own NLLB/Argos/FastAPI translation worker
+    """
+    endpoint = (
+        get_secret_value("LOCAL_TRANSLATION_ENDPOINT")
+        or get_secret_value("LIBRETRANSLATE_URL")
+        or ""
+    )
+    return {
+        "endpoint": str(endpoint).strip(),
+        "provider": str(get_secret_value("LOCAL_TRANSLATION_PROVIDER", "libretranslate") or "libretranslate").strip().lower(),
+        "api_key": str(get_secret_value("LOCAL_TRANSLATION_API_KEY", "") or "").strip(),
+        "source_language": str(get_secret_value("LOCAL_TRANSLATION_SOURCE_LANGUAGE", "auto") or "auto").strip(),
+    }
+
+
+def has_local_translation_engine() -> bool:
+    return bool(get_local_translation_config().get("endpoint"))
+
+
+def local_translate_batch_adapter(segments: List[Dict[str, Any]], target_language: str, domain: str) -> List[Dict[str, str]]:
+    """Call self-hosted translation engine."""
+    cfg = get_local_translation_config()
+    try:
+        from local_translation_engine import self_hosted_translate_batch
+        return self_hosted_translate_batch(
+            segments=segments,
+            endpoint=cfg["endpoint"],
+            provider=cfg["provider"],
+            target_language=target_language,
+            source_language=cfg["source_language"],
+            domain=domain,
+            api_key=cfg["api_key"],
+            timeout=120,
+        )
+    except Exception as exc:
+        return [
+            {
+                "location": s.get("location", ""),
+                "translation": "",
+                "error": f"Local translation engine failed: {str(exc)[:180]}",
+            }
+            for s in segments
+        ]
+
+
 # ==========================================================
 # BASIC HELPERS
 # ==========================================================
@@ -5681,7 +5732,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     openai_client = get_openai_client()
     gemini_client = get_gemini_client()
     if openai_client is None:
-        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or future local translation model. App credits still apply to outputs.")
+        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or self-hosted translation engine. App credits still apply to outputs.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("pro", user_id=user_id, workflow_type="pro")
 
@@ -5700,9 +5751,9 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
 
     if uploaded_file and run_pro:
-        using_language_engine = bool(openai_client)
+        using_language_engine = bool(openai_client or has_local_translation_engine())
         if not using_language_engine:
-            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply saved memory/glossary/DNT references where possible. New unmatched source segments will be left blank or marked for translation instead of fake-translated. Full professional translation requires a language-engine API key, managed engine, or future local translation model. App credits still apply.")
+            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply saved memory/glossary/DNT references where possible. New unmatched source segments will be left blank or marked for translation instead of fake-translated. Full professional translation requires a user API key, managed engine, or self-hosted translation engine. App credits still apply.")
             review_with_gemini = False
         if review_with_gemini and gemini_client is None:
             st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
@@ -5765,7 +5816,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         # App credits are required for every Pro output, even in Offline Reference Mode.
         # If API/language-engine credits are unavailable, ErrorSweep Pro can still create a same-format
         # reference-assisted output, but users must still spend app credits to receive that output.
-        using_managed_pro_engine = bool(openai_client or (review_with_gemini and gemini_client))
+        using_managed_pro_engine = bool(openai_client or has_local_translation_engine() or (review_with_gemini and gemini_client))
         segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
             segments, profile, "pro", rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini)
         )
@@ -5776,8 +5827,10 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.warning(credit_message)
         else:
             st.info(credit_message)
-        if using_language_engine:
+        if openai_client:
             engine_label = "Language engine"
+        elif has_local_translation_engine():
+            engine_label = f"Self-hosted translation engine ({get_local_translation_config().get('provider', 'local')})"
         else:
             engine_label = "Offline Reference Mode"
         st.info(f"Engine: {engine_label}. API availability does not block reference-mode output; app credits still apply.")
@@ -5798,8 +5851,10 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             for b in range(total_batches):
                 batch = engine_segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
                 status.text(f"Translation batch {b + 1}/{total_batches}...")
-                if using_language_engine and openai_client:
+                if openai_client:
                     result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
+                elif has_local_translation_engine():
+                    result = local_translate_batch_adapter(batch, target_language, settings["domain"])
                 else:
                     result = offline_reference_translate_batch(batch, target_language, rules)
                 for item in result:
