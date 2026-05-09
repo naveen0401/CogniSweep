@@ -2425,7 +2425,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v7 import deterministic_checks_v2
+        from qa_engine_global_v8 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -2615,31 +2615,52 @@ def openai_translate_batch(
     domain: str,
     rules: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    """Translate a batch and force full coverage.
+
+    Previous versions could return partial JSON, which caused blank target cells.
+    This prompt explicitly requires one output object per input location.
+    """
     if not segments:
         return []
     parts = []
+    expected_locations = []
     for i, seg in enumerate(segments, start=1):
+        loc = seg.get("location", "")
+        expected_locations.append(loc)
         relevant = retrieve_relevant_rules(seg, rules, 1200) if rules else ""
         parts.append(
             f"[Segment {i}]\n"
-            f"Location: {seg.get('location','')}\n"
+            f"Location: {loc}\n"
             f"Source: {seg.get('source') or seg.get('text','')}\n"
             f"Relevant Company Rules:\n{relevant if relevant else '(none)'}"
         )
 
     instructions = (
-        "You are a professional localization translator. "
-        "Return only valid JSON. Preserve placeholders, numbers, tags, punctuation intent, and product terms."
+        "You are a professional enterprise localization translator. "
+        "Return only valid JSON. Never omit a segment. Never return blank translation unless the source is blank. "
+        "Preserve placeholders, variables, numbers, tags, URLs, emails, product names, bullets, brackets, and punctuation intent."
     )
     prompt = f"""
-Translate these segments into {target_language}.
+Translate every segment into {target_language}.
 Domain: {domain}
 
-Use company rules if provided. Keep DNT terms unchanged. Follow glossary terms.
+Critical output rules:
+1. Return exactly {len(segments)} JSON object(s), one for every input segment.
+2. Every returned object must use the exact location string from input.
+3. Do not skip long segments.
+4. Do not return empty translation for any non-empty source.
+5. Preserve placeholders exactly, e.g. {{{{email}}}}, {{{{password}}}}, %s, {{0}}.
+6. Preserve bullets, brackets, emoji, URLs, emails, numbers, and tags.
+7. Follow company rules, glossary, DNT, and style references if provided.
+8. If a source is a UI label in brackets, preserve bracket style and localize the inside text when appropriate.
 
+Expected locations:
+{json.dumps(expected_locations, ensure_ascii=False)}
+
+Segments:
 {chr(10).join(parts)}
 
-Return ONLY JSON:
+Return ONLY valid JSON:
 [
   {{
     "location": "exact location from input",
@@ -2648,10 +2669,164 @@ Return ONLY JSON:
 ]
 """
     try:
-        return openai_json(client, model, instructions, prompt, max_output_tokens=4000)
+        raw = openai_json(client, model, instructions, prompt, max_output_tokens=6000)
     except Exception as e:
         return [{"location": "API", "translation": "", "error": str(e)}]
 
+    # Normalize output: keep only objects with known locations.
+    known = set(expected_locations)
+    cleaned = []
+    for item in raw:
+        loc = item.get("location", "")
+        if loc in known:
+            cleaned.append({"location": loc, "translation": str(item.get("translation", "") or "")})
+    return cleaned
+
+
+def openai_repair_translation_batch(
+    client: AI,
+    model: str,
+    segments: List[Dict[str, Any]],
+    translations_by_loc: Dict[str, str],
+    review_rows: List[Dict[str, Any]],
+    target_language: str,
+    domain: str,
+    rules: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Repair blank or objectively bad translations after QA review."""
+    if not segments:
+        return []
+
+    issues_by_loc: Dict[str, List[str]] = {}
+    for row in review_rows:
+        loc = str(row.get("Location", ""))
+        if not loc:
+            continue
+        issues_by_loc.setdefault(loc, []).append(
+            f"{row.get('Error Type','Issue')}: {row.get('Wrong Part','')} -> {row.get('Suggestion','')} ({row.get('Explanation','')})"
+        )
+
+    parts = []
+    expected_locations = []
+    for i, seg in enumerate(segments, start=1):
+        loc = seg.get("location", "")
+        expected_locations.append(loc)
+        current = translations_by_loc.get(loc, "")
+        relevant = retrieve_relevant_rules(seg, rules, 1200) if rules else ""
+        issues = "\n".join(issues_by_loc.get(loc, [])) or "Translation is blank or needs repair."
+        parts.append(
+            f"[Segment {i}]\n"
+            f"Location: {loc}\n"
+            f"Source: {seg.get('source') or seg.get('text','')}\n"
+            f"Current Translation: {current}\n"
+            f"Detected Issues:\n{issues}\n"
+            f"Relevant Company Rules:\n{relevant if relevant else '(none)'}"
+        )
+
+    instructions = (
+        "You are a senior localization editor repairing translations. "
+        "Return only valid JSON. Return one corrected translation per input segment. "
+        "Do not leave corrected_translation blank unless the source is blank."
+    )
+    prompt = f"""
+Repair these translations into {target_language}.
+Domain: {domain}
+
+Rules:
+- Return exactly {len(segments)} object(s).
+- Use exact location strings.
+- Fix blank translations.
+- Fix mixed script, untranslated words, placeholder/number/tag errors, DNT/glossary errors, and quote/bracket issues.
+- Preserve placeholders, numbers, tags, bullets, brackets, URLs, emails, and product names.
+- Do not add explanations in the translation.
+- If current translation is good, return it unchanged.
+
+Expected locations:
+{json.dumps(expected_locations, ensure_ascii=False)}
+
+Segments:
+{chr(10).join(parts)}
+
+Return ONLY valid JSON:
+[
+  {{
+    "location": "exact location from input",
+    "corrected_translation": "final corrected translation"
+  }}
+]
+"""
+    try:
+        raw = openai_json(client, model, instructions, prompt, max_output_tokens=6000)
+    except Exception as e:
+        return [{"location": "API", "corrected_translation": "", "error": str(e)}]
+
+    known = set(expected_locations)
+    cleaned = []
+    for item in raw:
+        loc = item.get("location", "")
+        if loc in known:
+            cleaned.append({"location": loc, "translation": str(item.get("corrected_translation", item.get("translation", "")) or "")})
+    return cleaned
+
+
+def is_blank_translation(text: Any) -> bool:
+    return not normalize_text(text or "")
+
+
+def blank_translation_rows(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> List[Dict[str, Any]]:
+    rows = []
+    for seg in segments:
+        loc = seg.get("location", "")
+        if is_blank_translation(translations_by_loc.get(loc, "")):
+            rows.append(make_report_row(
+                {**seg, "translation": ""},
+                "Translation Missing",
+                "Major",
+                "blank translation",
+                "Re-run translation or provide a translation engine/memory/glossary match.",
+                "No translation was produced for this non-empty source segment.",
+                "Coverage Check",
+                "Translation Coverage",
+                "High",
+            ))
+    return rows
+
+
+def filter_review_noise(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove known noisy false positives from deterministic review."""
+    filtered = []
+    for row in rows:
+        error_type = str(row.get("Error Type", ""))
+        explanation = str(row.get("Explanation", ""))
+        wrong = str(row.get("Wrong Part", ""))
+        # This Telugu virama heuristic produced false positives for normal loanwords.
+        if error_type == "Unicode Hygiene" and ("malformed Telugu combining sequence" in explanation or wrong == "Telugu virama sequence"):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+OBJECTIVE_REPAIR_TYPES = {
+    "Translation Missing", "Mixed Script", "Placeholder", "Number", "DNT", "Glossary",
+    "Terminology", "Formatting", "Punctuation", "Accuracy", "Client Rule"
+}
+
+
+def get_repair_segments(
+    segments: List[Dict[str, Any]],
+    translations_by_loc: Dict[str, str],
+    review_rows: List[Dict[str, Any]],
+    max_segments: int = 30,
+) -> List[Dict[str, Any]]:
+    locs = set()
+    for seg in segments:
+        if is_blank_translation(translations_by_loc.get(seg.get("location", ""), "")):
+            locs.add(seg.get("location", ""))
+    for row in review_rows:
+        if str(row.get("Error Type", "")) in OBJECTIVE_REPAIR_TYPES:
+            locs.add(str(row.get("Location", "")))
+    selected = [seg for seg in segments if seg.get("location", "") in locs]
+    return selected[:max_segments]
 
 def gemini_review_translations(
     client,
@@ -6351,6 +6526,20 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         else:
             progress.progress(0.45)
 
+        # Coverage repair: if the engine skipped any segment, retry those locations in smaller batches.
+        missing_after_first_pass = [seg for seg in segments if is_blank_translation(translations_by_loc.get(seg.get("location", ""), ""))]
+        if openai_client and missing_after_first_pass:
+            st.warning(f"{len(missing_after_first_pass)} translation(s) were missing after first pass. Retrying missing segments in smaller batches.")
+            retry_batch_size = 5
+            for retry_start in range(0, len(missing_after_first_pass), retry_batch_size):
+                retry_batch = missing_after_first_pass[retry_start:retry_start + retry_batch_size]
+                retry_result = openai_translate_batch(openai_client, settings["openai_model"], retry_batch, target_language, settings["domain"], rules)
+                for item in retry_result:
+                    loc = item.get("location", "")
+                    trans = item.get("translation", "")
+                    if loc and normalize_text(trans):
+                        translations_by_loc[loc] = trans
+
         translated_segments = []
         for seg in segments:
             loc = seg["location"]
@@ -6358,12 +6547,15 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             translated_segments.append({**seg, "translation": trans, "text": trans})
 
         review_rows: List[Dict[str, Any]] = []
+        review_rows.extend(blank_translation_rows(segments, translations_by_loc))
         status.text("Running deterministic review...")
         for idx, seg in enumerate(translated_segments, start=1):
             review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
             progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
         if not openai_client:
             review_rows.extend(build_offline_translation_review_rows(segments, translations_by_loc))
+
+        review_rows = filter_review_noise(review_rows)
 
         if review_with_gemini:
             status.text("Running independent review...")
@@ -6391,7 +6583,45 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                         translations_by_loc[loc] = err["suggestion"]
                 progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
 
+        review_rows = filter_review_noise(review_rows)
         review_rows = apply_quality_gate(review_rows)
+
+        # Post-review repair: fix blank/objective failures, then re-run deterministic review.
+        repair_segments = get_repair_segments(segments, translations_by_loc, review_rows, max_segments=30)
+        if openai_client and repair_segments:
+            st.warning(f"Repairing {len(repair_segments)} segment(s) with missing/objective translation issues.")
+            repair_result = openai_repair_translation_batch(
+                openai_client,
+                settings["openai_model"],
+                repair_segments,
+                translations_by_loc,
+                review_rows,
+                target_language,
+                settings["domain"],
+                rules,
+            )
+            repaired_count = 0
+            for item in repair_result:
+                loc = item.get("location", "")
+                trans = item.get("translation", "")
+                if loc and normalize_text(trans):
+                    previous = translations_by_loc.get(loc, "")
+                    translations_by_loc[loc] = trans
+                    if normalize_text(trans) != normalize_text(previous):
+                        repaired_count += 1
+            if repaired_count:
+                st.success(f"Applied repaired translations to {repaired_count} segment(s). Rechecking deterministic QA.")
+                translated_segments = []
+                for seg in segments:
+                    loc = seg["location"]
+                    trans = translations_by_loc.get(loc, "")
+                    translated_segments.append({**seg, "translation": trans, "text": trans})
+                review_rows = []
+                review_rows.extend(blank_translation_rows(segments, translations_by_loc))
+                for seg in translated_segments:
+                    review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
+                review_rows = filter_review_noise(review_rows)
+                review_rows = apply_quality_gate(review_rows)
 
         status.text("Building output file...")
         output_bytes = b""
