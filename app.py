@@ -8,10 +8,20 @@ import time
 import hmac
 import zipfile
 import math
+import hashlib
+import base64
+import textwrap
 from datetime import datetime, timezone
 import requests
 from typing import Any, Dict, List, Tuple, Optional
 from html import escape
+from urllib.parse import quote
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except Exception:
+    Fernet = None
+    InvalidToken = Exception
 
 from openai import OpenAI as AI
 from openpyxl import load_workbook, Workbook
@@ -200,6 +210,184 @@ header {visibility: hidden; display: none;}
 .es-tile p { margin: 0; color: #9ca3af; font-size: 13px; }
 @media (max-width: 900px) { .es-visual-grid { grid-template-columns: 1fr; } }
 
+/* Stronger visibility + cleaner form UI */
+h1, h2, h3, h4, h5, h6, p, li, label, div, span { color: #eef2ff; }
+.block-container { padding-top: 1.2rem; padding-bottom: 3rem; }
+[data-testid="stMarkdownContainer"] p { color: #d7def7; }
+.stCaption, [data-testid="stCaptionContainer"] { color: #9fb0d6 !important; }
+.stAlert { border-radius: 16px !important; }
+[data-testid="stExpander"] details summary p,
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] label { color: #eef2ff !important; font-weight: 700 !important; }
+[data-testid="stTextInputRootElement"],
+[data-testid="stNumberInputContainer"],
+[data-baseweb="select"],
+[data-testid="stTextArea"],
+[data-testid="stFileUploaderDropzone"] {
+    background: rgba(10,14,27,0.92) !important;
+    border: 1px solid rgba(56,189,248,0.18) !important;
+    border-radius: 16px !important;
+}
+input, textarea { color: #f8fbff !important; }
+[data-baseweb="select"] * { color: #f8fbff !important; }
+[data-testid="stCheckbox"] label, [role="radiogroup"] label { color: #e7ecff !important; font-weight: 600 !important; }
+.es-page-header-card {
+    background: linear-gradient(135deg, rgba(0,255,136,.08), rgba(56,189,248,.06), rgba(139,92,246,.08));
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 20px;
+    padding: 18px 20px;
+    margin: 10px 0 16px 0;
+}
+.es-page-header-card h3 { margin: 0; color: #f8fbff; font-size: 24px; }
+.es-page-header-card p { margin: 8px 0 0 0; color: #a8b8dc; }
+.es-pill-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.es-pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; color: #dff6ff; background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+}
+.es-pill.green { color: #90f6c4; border-color: rgba(0,255,136,.18); background: rgba(0,255,136,.08); }
+.es-pill.blue { color: #9bddff; border-color: rgba(56,189,248,.18); background: rgba(56,189,248,.08); }
+.es-pill.purple { color: #ddc6ff; border-color: rgba(139,92,246,.20); background: rgba(139,92,246,.08); }
+.es-subsection-title { font-size: 18px; font-weight: 800; color: #f8fbff; margin: 8px 0 10px 0; }
+.es-soft-card {
+    background: rgba(16,19,34,.78); border: 1px solid rgba(56,189,248,.14); border-radius: 18px; padding: 16px;
+}
+.es-soft-card p { margin: 0; color: #aab9db; }
+
+.account-hero {
+    background: linear-gradient(135deg, rgba(8,14,26,.92), rgba(17,23,43,.92));
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 22px;
+    padding: 26px;
+    margin: 8px 0 18px 0;
+    box-shadow: 0 22px 50px rgba(0,0,0,.26);
+}
+.account-hero-grid {
+    display: grid;
+    grid-template-columns: 120px 1.5fr 1fr;
+    gap: 20px;
+    align-items: center;
+}
+.account-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 34px;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, rgba(0,255,136,.9), rgba(56,189,248,.9));
+    box-shadow: 0 16px 30px rgba(14,165,233,.22);
+}
+.account-title {
+    font-size: 30px;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #eef2ff;
+    margin: 0;
+}
+.account-subline {
+    color: #9fb0d6;
+    font-size: 15px;
+    margin-top: 8px;
+}
+.account-badge-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+.account-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .15px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.04);
+    color: #e8ecfb;
+}
+.account-pill.plan { background: rgba(0,255,136,.10); color: #8df2c1; border-color: rgba(0,255,136,.20); }
+.account-pill.role { background: rgba(56,189,248,.10); color: #8fdcff; border-color: rgba(56,189,248,.20); }
+.account-pill.status { background: rgba(250,204,21,.10); color: #fde68a; border-color: rgba(250,204,21,.20); }
+.account-pill.security { background: rgba(139,92,246,.10); color: #d8b4fe; border-color: rgba(139,92,246,.20); }
+.account-kpi-wrap {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 12px;
+}
+.account-kpi {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 16px;
+    padding: 14px;
+}
+.account-kpi-label { color: #90a3c8; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; }
+.account-kpi-value { color: #f8fafc; font-size: 26px; font-weight: 800; margin-top: 4px; }
+.account-kpi-sub { color: #8fa0c3; font-size: 12px; margin-top: 2px; }
+.account-section-title {
+    margin: 6px 0 12px 0;
+    font-size: 22px;
+    font-weight: 800;
+    color: #eef2ff;
+}
+.account-info-card {
+    background: rgba(16, 19, 34, 0.74);
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 12px;
+    min-height: 100%;
+}
+.account-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 14px 18px;
+}
+.account-info-item { min-width: 0; }
+.account-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #86a0c8;
+}
+.account-value {
+    font-size: 15px;
+    color: #edf2ff;
+    font-weight: 600;
+    margin-top: 4px;
+    word-break: break-word;
+}
+.account-soft-note {
+    background: rgba(56,189,248,.07);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #a9bbdd;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.account-activity-empty {
+    border: 1px dashed rgba(56,189,248,.2);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    color: #97a8c8;
+    background: rgba(255,255,255,.02);
+}
+@media (max-width: 900px) {
+    .account-hero-grid { grid-template-columns: 1fr; }
+    .account-kpi-wrap, .account-info-grid { grid-template-columns: 1fr; }
+    .account-avatar { width: 84px; height: 84px; font-size: 28px; }
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -255,24 +443,15 @@ SKIP_SHEET_KEYWORDS = [
     "score card",
 ]
 
-# Common Telugu UI/loanword ZWNJ patterns. This is intentionally conservative.
-TELUGU_ZWNJ_BASE_SUFFIXES = {
-    "డాక్యుమెంట్": ["ను", "లను", "లు", "తో", "కి", "లో"],
-    "పాస్‌వర్డ్": ["ను", "తో", "లో", "కి"],
-    "పాస్వర్డ్": ["ను", "తో", "లో", "కి"],
-    "డాష్‌బోర్డ్": ["ను", "లో", "కి"],
-    "అప్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "డౌన్‌లోడ్": ["ను", "చేయండి", "తో"],
-    "టెంప్లేట్": ["లు", "ను", "లను", "లో"],
-    "సెట్టింగ్": ["లు", "లను", "లో", "కి"],
-    "కనెక్షన్": ["ను", "తో", "లో"],
-    "ఫైల్": ["ను", "లను", "లు", "లో"],
-}
+# Language-specific QA rules are now handled by qa_engine_global_v5.py.
+# The Streamlit app shell keeps file extraction/output only.
 
 PLACEHOLDER_PATTERN = re.compile(
     r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|\b\w+_id\b|<[^>]+>)"
 )
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,:]\d+)*")
+URL_PATTERN = re.compile(r"\b(?:https?://|www\.)\S+", re.IGNORECASE)
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 
 # ==========================================================
@@ -292,21 +471,95 @@ def get_secret_value(name: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
+def managed_ai_allowed() -> bool:
+    """Managed API keys are disabled by default to protect owner cost.
+
+    Set ALLOW_MANAGED_AI = "true" in Streamlit Secrets only if you want
+    server-side keys to be used. Users can still enter their own keys in
+    Control Center for the current browser session.
+    """
+    value = str(get_secret_value("ALLOW_MANAGED_AI", "false") or "false").strip().lower()
+    return value in {"true", "1", "yes", "on"}
+
+
+def get_user_openai_key() -> str:
+    return str(st.session_state.get("es_user_openai_api_key", "") or "").strip()
+
+
+def get_user_gemini_key() -> str:
+    return str(st.session_state.get("es_user_gemini_api_key", "") or "").strip()
+
+
 def get_openai_client() -> Optional[AI]:
-    key = get_secret_value("OPENAI_API_KEY")
+    key = get_user_openai_key()
+    if not key and managed_ai_allowed():
+        key = get_secret_value("OPENAI_API_KEY") or ""
     if not key:
         return None
     return AI(api_key=key, timeout=60, max_retries=1)
 
 
 def get_gemini_client():
-    key = get_secret_value("GEMINI_API_KEY")
+    key = get_user_gemini_key()
+    if not key and managed_ai_allowed():
+        key = get_secret_value("GEMINI_API_KEY") or ""
     if not key or genai is None:
         return None
     try:
         return genai.Client(api_key=key)
     except Exception:
         return None
+
+
+def get_local_translation_config() -> Dict[str, str]:
+    """Self-hosted translation engine settings.
+
+    This allows ErrorSweep Pro to translate without OpenAI/Gemini API keys.
+    Recommended providers:
+    - libretranslate: self-hosted LibreTranslate server
+    - generic: your own NLLB/Argos/FastAPI translation worker
+    """
+    endpoint = (
+        get_secret_value("LOCAL_TRANSLATION_ENDPOINT")
+        or get_secret_value("LIBRETRANSLATE_URL")
+        or ""
+    )
+    return {
+        "endpoint": str(endpoint).strip(),
+        "provider": str(get_secret_value("LOCAL_TRANSLATION_PROVIDER", "libretranslate") or "libretranslate").strip().lower(),
+        "api_key": str(get_secret_value("LOCAL_TRANSLATION_API_KEY", "") or "").strip(),
+        "source_language": str(get_secret_value("LOCAL_TRANSLATION_SOURCE_LANGUAGE", "auto") or "auto").strip(),
+    }
+
+
+def has_local_translation_engine() -> bool:
+    return bool(get_local_translation_config().get("endpoint"))
+
+
+def local_translate_batch_adapter(segments: List[Dict[str, Any]], target_language: str, domain: str) -> List[Dict[str, str]]:
+    """Call self-hosted translation engine."""
+    cfg = get_local_translation_config()
+    try:
+        from local_translation_engine import self_hosted_translate_batch
+        return self_hosted_translate_batch(
+            segments=segments,
+            endpoint=cfg["endpoint"],
+            provider=cfg["provider"],
+            target_language=target_language,
+            source_language=cfg["source_language"],
+            domain=domain,
+            api_key=cfg["api_key"],
+            timeout=120,
+        )
+    except Exception as exc:
+        return [
+            {
+                "location": s.get("location", ""),
+                "translation": "",
+                "error": f"Local translation engine failed: {str(exc)[:180]}",
+            }
+            for s in segments
+        ]
 
 
 # ==========================================================
@@ -338,6 +591,100 @@ def decode_text_bytes(data: bytes) -> Tuple[str, str]:
             continue
     return data.decode("utf-8", errors="replace"), "utf-8-replace"
 
+
+
+
+def looks_like_binary(data: bytes) -> bool:
+    """Return True when a file is probably binary and should not be decoded as text.
+
+    This prevents unknown/binary uploads (or unsupported spreadsheet formats)
+    from being decoded as latin-1 and producing tens of thousands of fake text segments.
+    """
+    if not data:
+        return False
+    sample = data[:8192]
+    if b"\x00" in sample:
+        return True
+    text_chars = bytes(range(32, 127)) + b"\n\r\t\b\f"
+    non_text = sum(1 for b in sample if b not in text_chars and b < 128)
+    return (non_text / max(len(sample), 1)) > 0.30
+
+
+def is_openpyxl_compatible(data: bytes) -> bool:
+    """Detect xlsx-like ZIP workbooks even if the extension is unusual."""
+    if not data.startswith(b"PK"):
+        return False
+    try:
+        import zipfile as _zipfile
+        with _zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = set(zf.namelist())
+            return "xl/workbook.xml" in names or any(n.startswith("xl/worksheets/") for n in names)
+    except Exception:
+        return False
+
+
+def uploaded_file_bytes(uploaded_file) -> bytes:
+    try:
+        return uploaded_file.getvalue()
+    except Exception:
+        try:
+            pos = uploaded_file.tell()
+        except Exception:
+            pos = None
+        data = uploaded_file.read()
+        if pos is not None:
+            try:
+                uploaded_file.seek(pos)
+            except Exception:
+                pass
+        return data
+
+
+def max_processable_segments_for_credits(profile: Optional[Dict[str, Any]], workflow: str, rules_zip_used: bool = False, independent_review: bool = False) -> int:
+    """How many segments the user's remaining ErrorSweep app credits can cover."""
+    rem = remaining_credits(profile)
+    overhead = 1 if rules_zip_used else 0
+    rem_after_overhead = rem - overhead
+    if rem_after_overhead <= 0:
+        return 0
+    if workflow == "qa":
+        return rem_after_overhead * 100
+
+    best = 0
+    for n in range(1, 200000, 75):
+        cost = calculate_credit_cost("pro", n, rules_zip_used=rules_zip_used, independent_review=independent_review)
+        if cost <= rem:
+            best = n
+        else:
+            break
+    return best
+
+
+def maybe_limit_segments_to_available_credits(
+    segments: List[Dict[str, Any]],
+    profile: Optional[Dict[str, Any]],
+    workflow: str,
+    rules_zip_used: bool = False,
+    independent_review: bool = False,
+) -> Tuple[List[Dict[str, Any]], int, str]:
+    """Require app credits, but process a partial file if current credits cannot cover the full file."""
+    full_count = len(segments)
+    full_cost = calculate_credit_cost(workflow, full_count, rules_zip_used=rules_zip_used, independent_review=independent_review)
+    ok, msg = credit_preflight(profile, full_cost)
+    if ok:
+        return segments, full_cost, f"Full file covered: {full_count} segment(s), {full_cost} app credit(s)."
+
+    allowed = max_processable_segments_for_credits(profile, workflow, rules_zip_used=rules_zip_used, independent_review=independent_review)
+    if allowed <= 0:
+        return [], full_cost, msg
+
+    limited = segments[:allowed]
+    limited_cost = calculate_credit_cost(workflow, len(limited), rules_zip_used=rules_zip_used, independent_review=independent_review)
+    return limited, limited_cost, (
+        f"Not enough credits for full file ({full_count} segments require {full_cost} credits). "
+        f"Processing first {len(limited)} segment(s) using available credits ({limited_cost} credit(s)). "
+        "Upgrade/add credits for full-file processing."
+    )
 
 def is_visually_blank_line(line: str) -> bool:
     return line.replace("\u00A0", " ").strip() == ""
@@ -1211,49 +1558,36 @@ def extract_csv_segments(uploaded_file, source_hint: str, target_hint: str, mode
 
 
 def extract_text_segments(uploaded_file, mode: str, max_segments: int):
-    data = uploaded_file.read()
-    text, encoding_used = decode_text_bytes(data)
+    data = uploaded_file.getvalue()
     lower_name = uploaded_file.name.lower()
 
-    # Basic XLIFF/XML pair extraction. These formats should not be converted into
+    # .xlz is often a compressed XLIFF package, not a plain text file.
+    if lower_name.endswith(".xlz"):
+        return extract_xlz_segments_from_zip(data, mode, max_segments)
+
+    text_like_exts = (
+        ".txt", ".srt", ".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".json", ".po",
+        ".properties", ".strings", ".html", ".htm", ".md", ".yml", ".yaml", ".csv"
+    )
+    if looks_like_binary(data) and not lower_name.endswith(text_like_exts):
+        return "", [], [
+            "Unsupported or binary file detected. ErrorSweep could not safely extract readable text. "
+            "If this is an Excel workbook with a non-standard extension, rename it to .xlsx and retry."
+        ]
+
+    text, encoding_used = decode_text_bytes(data)
+
+    # Basic XLIFF/XML/XLZ pair extraction. These formats should not be converted into
     # line-pair text output; they are treated as structured source/target pairs.
-    if lower_name.endswith((".xliff", ".xlf", ".xml")):
-        pairs = []
-        try:
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(text)
-            for elem in root.iter():
-                children = list(elem)
-                src_el, tgt_el = None, None
-                for ch in children:
-                    tag = ch.tag.split("}")[-1].lower()
-                    if tag == "source":
-                        src_el = ch
-                    elif tag == "target":
-                        tgt_el = ch
-                if src_el is not None:
-                    src = clean_line_for_ai("".join(src_el.itertext()))
-                    tgt = clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else ""
-                    if src:
-                        pairs.append((src, tgt))
-        except Exception:
-            pairs = []
-        if pairs:
-            segments = []
-            for i, (src, tgt) in enumerate(limit_sequence(pairs, max_segments), start=1):
-                if mode == "qa" and not tgt:
-                    continue
-                segments.append({
-                    "id": len(segments) + 1,
-                    "file_type": "text",
-                    "sheet": "File",
-                    "location": f"Segment {i}",
-                    "source": src,
-                    "translation": tgt,
-                    "text": tgt if mode == "qa" else src,
-                    "mode": "bilingual" if tgt else "source_only",
-                })
-            return text, segments, [f"XML/XLIFF: extracted source/target pairs (decoded as {encoding_used})"]
+    if lower_name.endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml")):
+        segments, xliff_logs = extract_xliff_pairs_from_xml_text(
+            text,
+            mode=mode,
+            max_segments=max_segments,
+            source_label=uploaded_file.name,
+        )
+        if segments:
+            return text, segments, [f"{msg} (decoded as {encoding_used})" for msg in xliff_logs]
 
     raw_lines = text.splitlines(keepends=True)
     clean_lines = [clean_line_for_ai(line) for line in raw_lines]
@@ -1492,13 +1826,104 @@ def make_report_row(
 
 
 
-def suggest_balanced_quotes(text: str) -> str:
-    """Return a safer quote-balanced suggestion, or empty string if no clear fix is available."""
+def _previous_non_space_index(text: str, index: int) -> Optional[int]:
+    for j in range(index - 1, -1, -1):
+        if not text[j].isspace():
+            return j
+    return None
+
+
+def _next_non_space_index(text: str, index: int) -> Optional[int]:
+    for j in range(index + 1, len(text)):
+        if not text[j].isspace():
+            return j
+    return None
+
+
+def _is_measurement_quote(text: str, index: int) -> bool:
+    """Treat inch/foot marks as measurements, not quotation marks.
+
+    Examples that must NOT be flagged:
+        0.1" Thick Shim
+        2.31" Outer Diameter Button Plug
+        1/2" Thread Adapter
+        13/16"-16 Straight Adapter
+
+    Localization files often use the straight double quote (") as an inch mark.
+    A simple odd quote-count rule creates thousands of false positives for these.
+    """
+    prev_idx = _previous_non_space_index(text, index)
+    if prev_idx is None:
+        return False
+
+    prev_char = text[prev_idx]
+    if prev_char.isdigit():
+        return True
+
+    # Cases like 1⁄2" or 1/2" are already covered because previous char is digit,
+    # but keep this for unicode fraction symbols such as ½".
+    if prev_char in "¼½¾⅛⅜⅝⅞":
+        return True
+
+    return False
+
+
+def _is_contraction_or_apostrophe(text: str, index: int) -> bool:
+    """Ignore apostrophes inside words, e.g. Let's, don't, user’s."""
+    prev_idx = _previous_non_space_index(text, index)
+    next_idx = _next_non_space_index(text, index)
+    if prev_idx is None or next_idx is None:
+        return False
+    return text[prev_idx].isalpha() and text[next_idx].isalpha()
+
+
+def _real_quote_counts(text: str) -> Dict[str, int]:
+    """Count only real quotation marks, excluding measurements and apostrophes."""
+    text = text or ""
+    double_quotes = {'"', '“', '”', '„', '«', '»'}
+    single_quotes = {"'", '‘', '’', '‚'}
+    counts = {"double": 0, "single": 0}
+
+    for i, ch in enumerate(text):
+        if ch in double_quotes:
+            if _is_measurement_quote(text, i):
+                continue
+            counts["double"] += 1
+        elif ch in single_quotes:
+            if _is_measurement_quote(text, i) or _is_contraction_or_apostrophe(text, i):
+                continue
+            counts["single"] += 1
+    return counts
+
+
+def suggest_balanced_quotes(text: str, source_text: str = "") -> str:
+    """Return a safer quote-balanced suggestion, or empty string if no clear fix is available.
+
+    This function is intentionally conservative:
+    - It ignores inch/foot measurements like 0.1" and 1/2".
+    - It ignores apostrophes in words like don't / Let's.
+    - If the target follows the source quote pattern, it does not flag.
+    """
     t = text.strip()
+    s = (source_text or "").strip()
     if not t:
         return ""
 
-    # Common mixed quote cases. Keep the sentence text unchanged; only normalize the quote marks.
+    target_counts = _real_quote_counts(t)
+    source_counts = _real_quote_counts(s)
+
+    # If target has no real quote imbalance, no issue.
+    target_double_odd = target_counts["double"] % 2 != 0
+    target_single_odd = target_counts["single"] % 2 != 0
+    if not target_double_odd and not target_single_odd:
+        return ""
+
+    # If the source has the same real-quote count, the target is following source pattern.
+    # This avoids false positives where the source intentionally contains one symbol.
+    if source_counts == target_counts:
+        return ""
+
+    # Mixed smart/straight pairs.
     if t.startswith("“") and t.endswith('"'):
         return t[:-1] + "”"
     if t.startswith('"') and t.endswith("”"):
@@ -1508,12 +1933,19 @@ def suggest_balanced_quotes(text: str) -> str:
     if t.startswith("'") and t.endswith("’"):
         return "‘" + t[1:]
 
-    if t.count('"') % 2 != 0:
+    # Add a closing quote only for real quote imbalance.
+    if target_double_odd and source_counts["double"] != target_counts["double"]:
+        # Prefer smart closing quote if the text starts with a smart opening quote.
+        if "“" in t and "”" not in t:
+            return t + "”"
         return t + '"'
-    if t.count("'") % 2 != 0:
-        return t + "'"
-    return ""
 
+    if target_single_odd and source_counts["single"] != target_counts["single"]:
+        if "‘" in t and "’" not in t:
+            return t + "’"
+        return t + "'"
+
+    return ""
 
 def has_latin_letters(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", text or ""))
@@ -1549,7 +1981,7 @@ def is_low_value_ai_style_issue(row: Dict[str, Any], include_style: bool) -> boo
     subjective_phrases = [
         "more natural", "available", "preferred", "prefer", "better", "alternative",
         "context", "style", "tone", "readability", "fluent", "idiomatic",
-        "could be", "would be", "native speakers", "telugu equivalent"
+        "could be", "would be", "native speakers", "native-language equivalent"
     ]
     if not include_style and rule_source in {"", "ai"} and any(p in explanation for p in subjective_phrases):
         if not (has_latin_letters(wrong) and wrong in translation):
@@ -1582,38 +2014,287 @@ def post_filter_report_rows(rows: List[Dict[str, Any]], include_style: bool) -> 
     return filtered, dropped
 
 
-def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
-    """Quality Gate QA wrapper.
 
-    Uses qa_engine_quality_gate.py so the app can focus on extraction/output.
-    False-positive policy:
-    - Confirmed Error: deterministic/client-rule evidence
-    - Needs Review: lower-confidence grammar/style/accuracy hints
+# ==========================================================
+# SOURCE-DRIVEN FORMAT QA HELPERS
+# ==========================================================
+
+TERMINAL_PUNCT_CLASSES = {
+    "period": {".", "。", "．", "｡", "।", "॥"},
+    "question": {"?", "？", "¿"},
+    "exclamation": {"!", "！", "¡"},
+    "colon": {":", "："},
+    "semicolon": {";", "；"},
+    "ellipsis": {"…"},
+}
+
+CLOSING_WRAPPERS = set(')]}›»”’"\'')
+OPENING_WRAPPERS = set('([{‹«“‘"\'')
+BRACKET_PAIRS = [("(", ")"), ("[", "]"), ("{", "}"), ("<", ">")]
+
+
+def _trim_for_terminal(text: str) -> str:
+    """Remove trailing spaces and closing quotes/brackets for terminal punctuation checks.
+
+    Example: source ends with ." or .] should still be treated as ending with a period.
+    Measurement inch marks are handled separately by _is_measurement_quote.
+    """
+    t = normalize_text(text).strip()
+    while t and t[-1] in CLOSING_WRAPPERS:
+        # Do not strip an inch mark after a number, e.g. 0.1"
+        if t[-1] in {'"', '”'} and _is_measurement_quote(t, len(t) - 1):
+            break
+        t = t[:-1].rstrip()
+    return t
+
+
+def terminal_punctuation_class(text: str) -> str:
+    """Return the terminal punctuation class, or empty string.
+
+    This is source-driven: if source has no terminal punctuation, ErrorSweep does not demand one in target.
+    """
+    t = _trim_for_terminal(text)
+    if not t:
+        return ""
+    if t.endswith("...") or t.endswith("…"):
+        return "ellipsis"
+    last = t[-1]
+    for cls, chars in TERMINAL_PUNCT_CLASSES.items():
+        if last in chars:
+            return cls
+    return ""
+
+
+def has_script_range(text: str, start: str, end: str) -> bool:
+    return any(start <= ch <= end for ch in text or "")
+
+
+def preferred_terminal_for_target(source_cls: str, target_text: str) -> str:
+    """Choose a reasonable localized equivalent for the target.
+
+    Only used when source already has terminal punctuation.
+    """
+    if source_cls == "period":
+        # Devanagari languages often use danda as sentence terminator.
+        if has_script_range(target_text, "\u0900", "\u097F"):
+            return "।"
+        if has_script_range(target_text, "\u4E00", "\u9FFF"):
+            return "。"
+        return "."
+    if source_cls == "question":
+        return "?"
+    if source_cls == "exclamation":
+        return "!"
+    if source_cls == "colon":
+        return ":"
+    if source_cls == "semicolon":
+        return ";"
+    if source_cls == "ellipsis":
+        return "…"
+    return ""
+
+
+def replace_or_append_terminal(target: str, source_cls: str) -> str:
+    """Suggest target with source-equivalent terminal punctuation.
+
+    We append when target lacks terminal punctuation. If target has a different terminal class,
+    we replace only the last terminal punctuation. We never use this when source has no terminal punctuation.
+    """
+    t = target.strip()
+    preferred = preferred_terminal_for_target(source_cls, t)
+    if not preferred:
+        return t
+    current_cls = terminal_punctuation_class(t)
+    if not current_cls:
+        return t + preferred
+    # Replace last terminal punctuation after stripping closing wrappers is too complex to do perfectly,
+    # so keep conservative: only append/replace if last visible char is a terminal mark.
+    tt = _trim_for_terminal(t)
+    if tt and terminal_punctuation_class(tt):
+        idx = t.rfind(tt[-1])
+        if idx >= 0:
+            return t[:idx] + preferred + t[idx + 1:]
+    return t + preferred
+
+
+def leading_list_marker(text: str) -> Tuple[str, str]:
+    """Return (marker_type, marker_text) for bullet/numbered-list starts.
+
+    This is source-driven: target is only required to have a list marker when source has one.
+    """
+    t = normalize_text(text).lstrip()
+    if not t:
+        return "", ""
+    m = re.match(r"^([•∙◦▪▫‣⁃])\s*", t)
+    if m:
+        return "bullet", m.group(1)
+    m = re.match(r"^([\-*])\s+", t)
+    if m:
+        return "bullet", m.group(1)
+    m = re.match(r"^(\d+[\.)])\s+", t)
+    if m:
+        return "numbered", m.group(1)
+    m = re.match(r"^([A-Za-z][\.)])\s+", t)
+    if m:
+        return "lettered", m.group(1)
+    return "", ""
+
+
+def bracket_wrapper(text: str) -> Tuple[str, str]:
+    """Detect if the whole source segment is wrapped in matching brackets.
+
+    Example: [Welcome Screen] should normally remain bracketed in target.
+    """
+    t = normalize_text(text).strip()
+    if len(t) < 2:
+        return "", ""
+    for left, right in BRACKET_PAIRS:
+        if t.startswith(left) and t.endswith(right):
+            return left, right
+    return "", ""
+
+
+def ensure_bracket_wrapper(target: str, left: str, right: str) -> str:
+    t = normalize_text(target).strip()
+    stripped = t.strip("".join([l + r for l, r in BRACKET_PAIRS]))
+    return f"{left}{stripped}{right}"
+
+
+def extract_urls(text: str) -> List[str]:
+    return URL_PATTERN.findall(text or "")
+
+
+def extract_emails(text: str) -> List[str]:
+    return EMAIL_PATTERN.findall(text or "")
+
+
+def source_driven_format_checks(segment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Conservative source-vs-target formatting checks.
+
+    Golden rule: only enforce source formatting if the source actually has that formatting.
+    If source has no ending period, ErrorSweep will not demand a period in target.
+    """
+    rows: List[Dict[str, Any]] = []
+    source = normalize_text(segment.get("source", ""))
+    target = normalize_text(segment.get("translation", "") or segment.get("text", ""))
+    if not source or not target:
+        return rows
+
+    src_cls = terminal_punctuation_class(source)
+    tgt_cls = terminal_punctuation_class(target)
+    if src_cls and tgt_cls != src_cls:
+        suggestion = replace_or_append_terminal(target, src_cls)
+        rows.append(make_report_row(
+            segment,
+            "Punctuation",
+            "Minor",
+            "missing or different ending punctuation",
+            visible_invisibles(suggestion),
+            f"Source ends with {src_cls} punctuation; target should preserve an equivalent. If source has no ending punctuation, this rule does not run.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    src_marker_type, src_marker = leading_list_marker(source)
+    tgt_marker_type, _ = leading_list_marker(target)
+    if src_marker_type and tgt_marker_type != src_marker_type:
+        rows.append(make_report_row(
+            segment,
+            "Formatting",
+            "Minor",
+            f"missing {src_marker_type} list marker",
+            src_marker + " " + target.lstrip(),
+            "Source begins with a list/bullet marker, but target does not preserve an equivalent marker.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    left, right = bracket_wrapper(source)
+    if left and right and not (target.strip().startswith(left) and target.strip().endswith(right)):
+        rows.append(make_report_row(
+            segment,
+            "Formatting",
+            "Minor",
+            f"missing wrapper {left}{right}",
+            ensure_bracket_wrapper(target, left, right),
+            "Source segment is wrapped in brackets; target should preserve the same wrapper unless client rules say otherwise.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "Medium",
+        ))
+
+    # Ellipsis only if source has ellipsis. Do not invent ellipsis when source does not have it.
+    source_has_ellipsis = source.strip().endswith("...") or source.strip().endswith("…")
+    target_has_ellipsis = target.strip().endswith("...") or target.strip().endswith("…")
+    if source_has_ellipsis and not target_has_ellipsis:
+        rows.append(make_report_row(
+            segment,
+            "Punctuation",
+            "Minor",
+            "missing ellipsis",
+            target.strip() + "…",
+            "Source ends with an ellipsis; target should preserve an equivalent ellipsis.",
+            "Rule Engine",
+            "Source-driven format rules",
+            "High",
+        ))
+
+    # URLs/emails must be preserved exactly if present in source.
+    src_urls = extract_urls(source)
+    for url in src_urls:
+        if url not in target:
+            rows.append(make_report_row(
+                segment, "URL", "Major", url, f"Keep URL unchanged: {url}",
+                "URL from source is missing or changed in target.", "Rule Engine", "Source-driven format rules", "High"
+            ))
+    src_emails = extract_emails(source)
+    for email in src_emails:
+        if email not in target:
+            rows.append(make_report_row(
+                segment, "Email", "Major", email, f"Keep email unchanged: {email}",
+                "Email address from source is missing or changed in target.", "Rule Engine", "Source-driven format rules", "High"
+            ))
+
+    return rows
+
+def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_zwnj: bool = True) -> List[Dict[str, Any]]:
+    """Modular QA Engine v2 wrapper.
+
+    This keeps the existing app shell and file extraction/output logic unchanged,
+    but delegates offline QA to qa_engine_v2.py. If the external module is missing,
+    the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_quality_gate import quality_gate_checks
-        return quality_gate_checks(
+        from qa_engine_global_v7 import deterministic_checks_v2
+        return deterministic_checks_v2(
             segment=segment,
-            rules=rules or {},
-            target_language=st.session_state.get("qa_target_language", st.session_state.get("pro_target_language", "Auto-detect")),
-            domain=st.session_state.get("qa_domain", "Auto-detect"),
+            rules=rules,
+            target_language=st.session_state.get("es_target_language", "Auto-detect"),
+            domain=st.session_state.get("es_domain", "Auto-detect"),
             enable_zwnj=enable_zwnj,
-            enable_language_tool=bool(st.session_state.get("qa_enable_languagetool", True)),
-            language_tool_mode=str(st.session_state.get("qa_languagetool_mode", "public")).lower(),
-            language_tool_max_chars=int(st.session_state.get("qa_languagetool_max_chars", 1200)),
+            enable_language_tool=bool(st.session_state.get("es_enable_languagetool", False)),
+            language_tool_mode=str(st.session_state.get("es_languagetool_mode", "public")).lower(),
+            language_tool_max_chars=int(st.session_state.get("es_languagetool_max_chars", 1200)),
         )
     except Exception as exc:
-        return [make_report_row(
-            segment,
-            "Rule Engine Warning",
-            "Review",
-            "Quality Gate Engine",
-            "Check that qa_engine_quality_gate.py exists in GitHub and requirements are installed.",
-            f"Quality Gate engine could not run: {str(exc)[:180]}",
-            "System",
-            "Quality Gate",
-            "Low",
-        )]
+        return [{
+            "Sheet": segment.get("sheet", ""),
+            "Location": segment.get("location", ""),
+            "Mode": segment.get("mode", ""),
+            "Source Text": truncate(segment.get("source", ""), 400),
+            "Translation": truncate(segment.get("translation", segment.get("text", "")), 400),
+            "Error Type": "Rule Engine Warning",
+            "Severity": "Review",
+            "Wrong Part": "QA Engine v2",
+            "Suggestion": "Check qa_engine_v2.py is present in GitHub and deployment.",
+            "Explanation": f"Modular rule engine could not run: {str(exc)[:180]}",
+            "Check Source": "Rule Engine",
+            "Rule Source": "System",
+            "Confidence": "Low",
+        }]
+
 
 
 # ==========================================================
@@ -1669,8 +2350,7 @@ def ai_qa_batch(
         style_policy = (
             "Do NOT flag subjective style, wording, or terminology preferences unless a company rule, glossary, "
             "DNT list, placeholder rule, or clear source meaning proves it is wrong. "
-            "Do NOT flag acceptable target-language loanwords/transliterations as errors merely because a native synonym exists. "
-            "For Telugu UI localization, terms like వెల్కమ్ స్క్రీన్, స్క్రీన్, ఫైల్, యాప్, సెట్టింగ్, డాక్యుమెంట్, పాస్‌వర్డ్ can be acceptable unless company rules say otherwise."
+            "Do NOT flag acceptable target-language loanwords, brand terms, approved transliterations, or product names as errors unless uploaded client rules say otherwise."
         )
 
     instructions = (
@@ -1692,8 +2372,14 @@ Important rules:
 - Output an error only when there is clear evidence in the source, translation, or company rules.
 - Do not suggest a different phrase only because it sounds more natural.
 - Do not change a valid translation into a different meaning.
+- Source-driven formatting policy: preserve source formatting only when the source actually has that formatting.
+- If the source does NOT end with a period/question/exclamation/colon/semicolon/ellipsis, do NOT demand that punctuation in the target.
+- If the source has measurement inch/foot symbols like 0.1", 1/2", or 13/16", treat them as measurement marks, not quotation marks.
+- Preserve placeholders, variables, HTML/XML tags, URLs, emails, numbers, and DNT terms exactly.
+- Preserve list/bullet markers only when the source has a list/bullet marker.
+- Preserve bracket wrappers like [Label] only when the source is bracket-wrapped.
 - Do not flag transliterated UI/product terms in the target script unless company rules require another term.
-- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example "chupinchandi" in Telugu output.
+- Mixed script is an error when Roman/Latin words appear inside target-language text unexpectedly, for example romanized words inside a non-Latin target language.
 - If the issue is grammar/spelling/mixed script, "wrong_part" must be an exact visible fragment from the translation.
 - "suggestion" must be a concrete correction. Prefer a full corrected translation when possible.
 - If you are unsure, omit the error.
@@ -1926,38 +2612,6 @@ def merge_issue_and_status_csv(issue_rows: List[Dict[str, Any]], status_rows: Li
     return output.getvalue().encode("utf-8-sig")
 
 
-def build_quality_gate_excel_report(issue_rows: List[Dict[str, Any]], status_rows: List[Dict[str, Any]], logs: List[str], title: str = "ErrorSweep QA Report") -> bytes:
-    """Always return QA reports as Excel for easier client action."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Summary"
-    summary = [
-        ["Report", title],
-        ["Segments checked", len(status_rows)],
-        ["Issue rows", len(issue_rows)],
-        ["Confirmed errors", sum(1 for r in issue_rows if r.get("QA Status") == "Confirmed Error")],
-        ["Needs review", sum(1 for r in issue_rows if r.get("QA Status") == "Needs Review")],
-        ["Generated", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")],
-    ]
-    for row in summary:
-        ws.append(row)
-    style_header(ws)
-
-    status_headers = list(status_rows[0].keys()) if status_rows else ["Sheet", "Location", "Source Text", "Translation", "Review Status"]
-    add_report_sheet_to_workbook(wb, "All Segment Review", status_rows, status_headers)
-
-    issue_headers = list(issue_rows[0].keys()) if issue_rows else ["Sheet", "Location", "QA Status", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation"]
-    add_report_sheet_to_workbook(wb, "ErrorSweep Report", issue_rows, issue_headers)
-
-    log_rows = [{"Log": x} for x in logs]
-    add_report_sheet_to_workbook(wb, "Extraction Log", log_rows, ["Log"])
-
-    bio = io.BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return bio.getvalue()
-
-
 # ==========================================================
 # OUTPUT BUILDERS
 # ==========================================================
@@ -2014,6 +2668,571 @@ def highlight_excel_cells(cell_map: Dict[str, Any], report_rows: List[Dict[str, 
 
 def report_csv_bytes(report_rows: List[Dict[str, Any]]) -> bytes:
     return pd.DataFrame(report_rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def dataframe_to_xlsx_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
+    """Create an Excel workbook from multiple DataFrames."""
+    wb = Workbook()
+    # Remove default sheet after creating our own sheets.
+    default = wb.active
+    wb.remove(default)
+
+    for sheet_name, df in sheets.items():
+        safe_name = str(sheet_name)[:31] or "Sheet"
+        ws = wb.create_sheet(safe_name)
+        if df is None or df.empty:
+            ws.append(["Status"])
+            ws.append(["No rows available"])
+        else:
+            ws.append([str(c) for c in df.columns])
+            for _, row in df.iterrows():
+                ws.append([safe_report_cell_value(row.get(c, "")) for c in df.columns])
+        style_header(ws)
+        for col in ws.columns:
+            col_letter = col[0].column_letter
+            max_len = 12
+            for cell in col[:200]:
+                val = str(cell.value or "")
+                max_len = max(max_len, min(len(val) + 2, 70))
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.column_dimensions[col_letter].width = max_len
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_excel_report_bytes(
+    issue_rows: List[Dict[str, Any]],
+    status_rows: List[Dict[str, Any]],
+    extraction_logs: Optional[List[str]] = None,
+    translation_rows: Optional[List[Dict[str, Any]]] = None,
+    title: str = "ErrorSweep Report",
+) -> bytes:
+    """Always return an Excel report, regardless of input file format."""
+    extraction_logs = extraction_logs or []
+    sheets: Dict[str, pd.DataFrame] = {}
+    sheets["Summary"] = pd.DataFrame([
+        {"Metric": "Report", "Value": title},
+        {"Metric": "Segments checked", "Value": len(status_rows)},
+        {"Metric": "Issues found", "Value": len(issue_rows)},
+        {"Metric": "Generated at", "Value": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")},
+    ])
+    sheets["All Segment Review"] = pd.DataFrame(status_rows)
+    sheets["Issue Details"] = pd.DataFrame(issue_rows)
+    if translation_rows is not None:
+        sheets["Translations"] = pd.DataFrame(translation_rows)
+    sheets["Extraction Log"] = pd.DataFrame([{"Log": x} for x in extraction_logs] or [{"Log": "No extraction log."}])
+    return dataframe_to_xlsx_bytes(sheets)
+
+
+def extract_pdf_segments(uploaded_file, mode: str, max_segments: int):
+    """Extract readable lines from PDFs. Output/report is Excel; source PDF is not rewritten."""
+    logs = []
+    if PdfReader is None:
+        return [], ["PDF support package is unavailable. Add pypdf to requirements.txt."]
+    try:
+        reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+        lines = []
+        for page_index, page in enumerate(reader.pages, start=1):
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                text = ""
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                clean = clean_line_for_ai(line)
+                if clean and len(clean) > 2:
+                    lines.append((page_index, line_no, clean))
+        segments = []
+        for page_index, line_no, clean in limit_sequence(lines, max_segments):
+            loc = f"Page {page_index}, Line {line_no}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "pdf",
+                "sheet": "PDF",
+                "location": loc,
+                "source": clean if mode == "pro" else "",
+                "translation": clean if mode == "qa" else "",
+                "text": clean,
+                "mode": "source_only" if mode == "pro" else "monolingual",
+            })
+        logs.append(f"PDF: extracted {len(segments)} text segment(s).")
+        if not segments:
+            logs.append("PDF appears image-based or has no extractable text. OCR is not enabled in this MVP.")
+        return segments, logs
+    except Exception as exc:
+        return [], [f"Could not read PDF: {exc}"]
+
+
+
+
+# ==========================================================
+# SAME-FORMAT PRO TRANSLATION BUILDERS
+# ==========================================================
+
+def extract_json_pro_segments(uploaded_file, max_segments: int):
+    """Extract string values from JSON and keep paths so translated output remains JSON."""
+    data = uploaded_file.getvalue()
+    raw_text, encoding_used = decode_text_bytes(data)
+    logs = [f"JSON: decoded as {encoding_used}"]
+    try:
+        obj = json.loads(raw_text)
+    except Exception as exc:
+        # Fallback: treat as text-like if JSON cannot be parsed.
+        logs.append(f"JSON parse failed; falling back to text mode: {exc}")
+        text_original, segments, text_logs = extract_text_segments(uploaded_file, "pro", max_segments)
+        return obj if False else None, segments, {}, logs + text_logs
+
+    segments: List[Dict[str, Any]] = []
+    path_map: Dict[str, List[Any]] = {}
+
+    def walk(node: Any, path: List[Any]) -> None:
+        if reached_segment_limit(segments, max_segments):
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                # Avoid translating keys; only translate string values.
+                walk(v, path + [k])
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, path + [i])
+        elif isinstance(node, str):
+            clean = clean_line_for_ai(node)
+            if clean and len(clean) > 1:
+                loc = "$" + "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in path)
+                seg = {
+                    "id": len(segments) + 1,
+                    "file_type": "json",
+                    "sheet": "JSON",
+                    "location": loc,
+                    "source": clean,
+                    "translation": "",
+                    "text": clean,
+                    "mode": "source_only",
+                }
+                segments.append(seg)
+                path_map[loc] = path
+
+    walk(obj, [])
+    logs.append(f"JSON: extracted {len(segments)} string value segment(s).")
+    return obj, segments, path_map, logs
+
+
+def set_json_path(obj: Any, path: List[Any], value: str) -> None:
+    cur = obj
+    for p in path[:-1]:
+        cur = cur[p]
+    if path:
+        cur[path[-1]] = value
+
+
+def build_translated_json_bytes(obj: Any, path_map: Dict[str, List[Any]], translations_by_loc: Dict[str, str]) -> bytes:
+    for loc, path in path_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            set_json_path(obj, path, trans)
+    return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def extract_srt_pro_segments(uploaded_file, max_segments: int):
+    """Extract subtitle text lines while preserving SRT cue numbers and timecodes."""
+    raw_text, encoding_used = decode_text_bytes(uploaded_file.getvalue())
+    lines = raw_text.splitlines()
+    segments: List[Dict[str, Any]] = []
+    line_map: Dict[str, List[int]] = {}
+    i = 0
+    cue_number = 0
+    timestamp_re = re.compile(r"\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}")
+    while i < len(lines):
+        # Optional cue index
+        if not lines[i].strip():
+            i += 1
+            continue
+        if i + 1 < len(lines) and timestamp_re.search(lines[i + 1]):
+            cue_number += 1
+            time_idx = i + 1
+            text_start = i + 2
+        elif timestamp_re.search(lines[i]):
+            cue_number += 1
+            time_idx = i
+            text_start = i + 1
+        else:
+            i += 1
+            continue
+        text_indices = []
+        j = text_start
+        while j < len(lines) and lines[j].strip():
+            text_indices.append(j)
+            j += 1
+        cue_text = "\n".join(lines[idx] for idx in text_indices).strip()
+        if cue_text and len(cue_text) > 1:
+            loc = f"Cue {cue_number}"
+            segments.append({
+                "id": len(segments) + 1,
+                "file_type": "srt",
+                "sheet": "SRT",
+                "location": loc,
+                "source": cue_text,
+                "translation": "",
+                "text": cue_text,
+                "mode": "source_only",
+            })
+            line_map[loc] = text_indices
+            if reached_segment_limit(segments, max_segments):
+                break
+        i = max(j + 1, i + 1)
+    return raw_text, segments, line_map, [f"SRT: extracted {len(segments)} cue segment(s) (decoded as {encoding_used})."]
+
+
+def build_translated_srt_bytes(raw_text: str, line_map: Dict[str, List[int]], translations_by_loc: Dict[str, str]) -> bytes:
+    lines = raw_text.splitlines()
+    for loc, indices in line_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if not trans or not indices:
+            continue
+        trans_lines = trans.splitlines() or [trans]
+        # Replace first original subtitle text line with full translation, blank the rest.
+        lines[indices[0]] = trans_lines[0]
+        insert_extra = trans_lines[1:]
+        for idx in indices[1:]:
+            lines[idx] = ""
+        if insert_extra:
+            # Insert extra translation lines immediately after first text line.
+            first = indices[0]
+            lines = lines[:first + 1] + insert_extra + lines[first + 1:]
+    return ("\n".join(lines) + "\n").encode("utf-8-sig")
+
+
+def xml_local_name(tag: str) -> str:
+    return str(tag).split("}")[-1].lower()
+
+
+def make_xml_target_tag(source_tag: str) -> str:
+    if "}" in source_tag:
+        ns = source_tag.split("}")[0].strip("{")
+        return "{" + ns + "}target"
+    return "target"
+
+
+def extract_xml_xliff_pro_segments(uploaded_file, max_segments: int):
+    """Extract XLIFF/XML/XLZ <source>/<target> pairs and preserve XML output."""
+    import xml.etree.ElementTree as ET
+    raw_text, encoding_used = decode_text_bytes(uploaded_file.getvalue())
+    logs = [f"XML/XLIFF: decoded as {encoding_used}"]
+    try:
+        tree = ET.ElementTree(ET.fromstring(raw_text))
+    except Exception as exc:
+        logs.append(f"XML parse failed; falling back to text mode: {exc}")
+        text_original, segments, text_logs = extract_text_segments(uploaded_file, "pro", max_segments)
+        return None, segments, {}, logs + text_logs
+
+    root = tree.getroot()
+    segments: List[Dict[str, Any]] = []
+    target_map: Dict[str, Any] = {}
+
+    for parent in root.iter():
+        children = list(parent)
+        if not children:
+            continue
+        src_el = None
+        tgt_el = None
+        for child in children:
+            lname = xml_local_name(child.tag)
+            if lname == "source" and src_el is None:
+                src_el = child
+            elif lname == "target" and tgt_el is None:
+                tgt_el = child
+        if src_el is None:
+            continue
+        src_text = clean_line_for_ai("".join(src_el.itertext()))
+        if not src_text:
+            continue
+        if tgt_el is None:
+            tgt_el = ET.Element(make_xml_target_tag(src_el.tag))
+            try:
+                insert_at = children.index(src_el) + 1
+                parent.insert(insert_at, tgt_el)
+            except Exception:
+                parent.append(tgt_el)
+        loc = f"XML Segment {len(segments) + 1}"
+        segments.append({
+            "id": len(segments) + 1,
+            "file_type": "xml",
+            "sheet": "XML",
+            "location": loc,
+            "source": src_text,
+            "translation": clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else "",
+            "text": src_text,
+            "mode": "source_only",
+        })
+        target_map[loc] = tgt_el
+        if reached_segment_limit(segments, max_segments):
+            break
+    logs.append(f"XML/XLIFF: extracted {len(segments)} source/target segment(s).")
+    return tree, segments, target_map, logs
+
+
+def build_translated_xml_bytes(tree: Any, target_map: Dict[str, Any], translations_by_loc: Dict[str, str]) -> bytes:
+    for loc, target_el in target_map.items():
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            # Replace text content while preserving attributes and tag.
+            target_el.text = trans
+    output = io.BytesIO()
+    tree.write(output, encoding="utf-8", xml_declaration=True)
+    return output.getvalue()
+
+
+
+
+def extract_xliff_pairs_from_xml_text(raw_text: str, mode: str, max_segments: int, source_label: str = "File") -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Extract source/target pairs from XLIFF/XML/XLZ text.
+
+    This works for plain .xliff/.xlf/.xml files and for .xlz packages after the
+    XLIFF file is extracted from the ZIP. It supports namespaces and common
+    XLIFF structures where <source> and <target> are siblings.
+    """
+    import xml.etree.ElementTree as ET
+    logs: List[str] = []
+    segments: List[Dict[str, Any]] = []
+
+    try:
+        root = ET.fromstring(raw_text)
+    except Exception as exc:
+        return [], [f"{source_label}: XML/XLIFF parse failed: {exc}"]
+
+    for parent in root.iter():
+        children = list(parent)
+        if not children:
+            continue
+
+        src_el = None
+        tgt_el = None
+        for child in children:
+            lname = xml_local_name(child.tag)
+            if lname == "source" and src_el is None:
+                src_el = child
+            elif lname == "target" and tgt_el is None:
+                tgt_el = child
+
+        if src_el is None:
+            continue
+
+        src_text = clean_line_for_ai("".join(src_el.itertext()))
+        tgt_text = clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else ""
+
+        if not src_text:
+            continue
+        if mode == "qa" and not tgt_text:
+            continue
+
+        loc = f"{source_label} Segment {len(segments) + 1}"
+        segments.append({
+            "id": len(segments) + 1,
+            "file_type": "xliff",
+            "sheet": source_label,
+            "location": loc,
+            "source": src_text,
+            "translation": tgt_text,
+            "text": tgt_text if mode == "qa" else src_text,
+            "mode": "bilingual" if tgt_text else "source_only",
+        })
+
+        if reached_segment_limit(segments, max_segments):
+            break
+
+    logs.append(f"{source_label}: extracted {len(segments)} source/target segment(s).")
+    return segments, logs
+
+
+def extract_xlz_segments_from_zip(data: bytes, mode: str, max_segments: int) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """Extract XLIFF/XML/XLZ segments from compressed .xlz / zipped localization packages.
+
+    Many CAT/TMS systems export .xlz as a ZIP package that contains .xlf/.xliff
+    files. Treating .xlz as latin-1 text produces fake binary segments; this
+    function opens the ZIP and extracts the actual XLIFF/XML/XLZ content safely.
+    """
+    logs: List[str] = []
+    all_segments: List[Dict[str, Any]] = []
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            candidate_names = [
+                n for n in zf.namelist()
+                if n.lower().endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml"))
+                and not n.startswith("__MACOSX/")
+            ]
+
+            if not candidate_names:
+                logs.append("XLZ package opened, but no .xlf/.xliff/.xml file was found inside.")
+                return "", [], logs
+
+            logs.append(f"XLZ package detected. Found {len(candidate_names)} XLIFF/XML/XLZ file(s) inside.")
+
+            for inner_name in candidate_names:
+                if reached_segment_limit(all_segments, max_segments):
+                    break
+
+                try:
+                    inner_data = zf.read(inner_name)
+                    inner_text, encoding_used = decode_text_bytes(inner_data)
+                except Exception as exc:
+                    logs.append(f"{inner_name}: could not read/decode file: {exc}")
+                    continue
+
+                remaining_limit = 0 if unlimited_scan(max_segments) else max(0, int(max_segments) - len(all_segments))
+                segs, seg_logs = extract_xliff_pairs_from_xml_text(
+                    inner_text,
+                    mode=mode,
+                    max_segments=remaining_limit,
+                    source_label=inner_name,
+                )
+                logs.extend([f"{msg} (decoded as {encoding_used})" for msg in seg_logs])
+
+                for seg in segs:
+                    seg["id"] = len(all_segments) + 1
+                    all_segments.append(seg)
+                    if reached_segment_limit(all_segments, max_segments):
+                        break
+
+    except Exception as exc:
+        logs.append(f"Could not open XLZ package: {exc}")
+        return "", [], logs
+
+    return "", all_segments, logs
+
+
+def extract_xlz_pro_segments(uploaded_file, max_segments: int):
+    """Extract XLIFF/XML/XLZ segments from an .xlz package for Pro translation.
+
+    Returns a package object that can later be rebuilt as .xlz with translated
+    <target> nodes filled in.
+    """
+    import xml.etree.ElementTree as ET
+    data = uploaded_file.getvalue()
+    logs: List[str] = []
+    segments: List[Dict[str, Any]] = []
+    target_map: Dict[str, Any] = {}
+    package = {
+        "entries": {},
+        "trees": {},
+        "xml_names": set(),
+        "original_name": uploaded_file.name,
+    }
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                package["entries"][info.filename] = zf.read(info.filename)
+
+            candidate_names = [
+                n for n in zf.namelist()
+                if n.lower().endswith((".xliff", ".xlf", ".sdlxliff", ".mqxliff", ".xml"))
+                and not n.startswith("__MACOSX/")
+            ]
+
+            if not candidate_names:
+                logs.append("XLZ package opened, but no .xlf/.xliff/.xml file was found inside.")
+                return None, [], {}, logs
+
+            logs.append(f"XLZ package detected. Found {len(candidate_names)} XLIFF/XML/XLZ file(s) inside.")
+
+            for inner_name in candidate_names:
+                if reached_segment_limit(segments, max_segments):
+                    break
+
+                raw_text, encoding_used = decode_text_bytes(package["entries"][inner_name])
+                try:
+                    tree = ET.ElementTree(ET.fromstring(raw_text))
+                except Exception as exc:
+                    logs.append(f"{inner_name}: XML parse failed: {exc}")
+                    continue
+
+                package["trees"][inner_name] = tree
+                package["xml_names"].add(inner_name)
+                root = tree.getroot()
+
+                for parent in root.iter():
+                    if reached_segment_limit(segments, max_segments):
+                        break
+                    children = list(parent)
+                    if not children:
+                        continue
+                    src_el = None
+                    tgt_el = None
+                    for child in children:
+                        lname = xml_local_name(child.tag)
+                        if lname == "source" and src_el is None:
+                            src_el = child
+                        elif lname == "target" and tgt_el is None:
+                            tgt_el = child
+                    if src_el is None:
+                        continue
+                    src_text = clean_line_for_ai("".join(src_el.itertext()))
+                    if not src_text:
+                        continue
+                    if tgt_el is None:
+                        tgt_el = ET.Element(make_xml_target_tag(src_el.tag))
+                        try:
+                            insert_at = children.index(src_el) + 1
+                            parent.insert(insert_at, tgt_el)
+                        except Exception:
+                            parent.append(tgt_el)
+                    loc = f"{inner_name} Segment {len(segments) + 1}"
+                    segments.append({
+                        "id": len(segments) + 1,
+                        "file_type": "xlz",
+                        "sheet": inner_name,
+                        "location": loc,
+                        "source": src_text,
+                        "translation": clean_line_for_ai("".join(tgt_el.itertext())) if tgt_el is not None else "",
+                        "text": src_text,
+                        "mode": "source_only",
+                    })
+                    target_map[loc] = (inner_name, tgt_el)
+
+                logs.append(f"{inner_name}: extracted segments (decoded as {encoding_used}).")
+
+    except Exception as exc:
+        logs.append(f"Could not open XLZ package: {exc}")
+        return None, [], {}, logs
+
+    logs.append(f"XLZ: extracted {len(segments)} source segment(s) for translation.")
+    return package, segments, target_map, logs
+
+
+def build_translated_xlz_bytes(package: Dict[str, Any], target_map: Dict[str, Any], translations_by_loc: Dict[str, str]) -> bytes:
+    """Rebuild an .xlz ZIP package with translated <target> elements filled in."""
+    import zipfile as _zipfile
+    for loc, target_info in target_map.items():
+        if loc not in translations_by_loc:
+            continue
+        _inner_name, target_el = target_info
+        trans = translations_by_loc.get(loc, "")
+        if trans:
+            target_el.text = trans
+
+    output = io.BytesIO()
+    with _zipfile.ZipFile(output, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
+        for name, original_bytes in package.get("entries", {}).items():
+            if name in package.get("xml_names", set()) and name in package.get("trees", {}):
+                xml_out = io.BytesIO()
+                package["trees"][name].write(xml_out, encoding="utf-8", xml_declaration=True)
+                zf.writestr(name, xml_out.getvalue())
+            else:
+                zf.writestr(name, original_bytes)
+    output.seek(0)
+    return output.getvalue()
+
+def is_text_like_extension(file_name: str) -> bool:
+    lower = file_name.lower()
+    return lower.endswith((
+        ".txt", ".srt", ".md", ".markdown", ".po", ".pot", ".properties", ".strings", ".resx",
+        ".html", ".htm", ".yaml", ".yml", ".ini", ".log"
+    ))
 
 
 # ==========================================================
@@ -2082,6 +3301,126 @@ PLAN_CREDITS = {
     "agency": 2500,
     "enterprise": 10000,
 }
+
+
+# Billing plan catalog.
+# Payment links are read from Streamlit Secrets, so no payment URL is stored in GitHub.
+PLAN_CATALOG = {
+    "trial": {
+        "name": "Free Trial",
+        "price": "₹0",
+        "credits": 25,
+        "tagline": "Try ErrorSweep with a small monthly allowance.",
+        "features": [
+            "Offline QA checks",
+            "Limited segment preview",
+            "Basic Excel report",
+            "No Rules ZIP for trial users",
+        ],
+        "secret_key": "",
+    },
+    "errorsweep": {
+        "name": "ErrorSweep",
+        "price": "₹999 / month",
+        "credits": 200,
+        "tagline": "QA review, reports, and client rules for regular users.",
+        "features": [
+            "QA Run + suggestions",
+            "Rules ZIP support",
+            "Excel QA reports",
+            "Offline + optional AI checks",
+        ],
+        "secret_key": "PAYMENT_LINK_ERRORSWEEP",
+    },
+    "pro": {
+        "name": "ErrorSweep Pro",
+        "price": "₹2,999 / month",
+        "credits": 600,
+        "tagline": "Translation + review workflow for production files.",
+        "features": [
+            "Everything in ErrorSweep",
+            "Translate + Review",
+            "Same-format translation output where possible",
+            "Independent review workflow",
+        ],
+        "secret_key": "PAYMENT_LINK_PRO",
+    },
+    "agency": {
+        "name": "Agency",
+        "price": "₹9,999 / month",
+        "credits": 2500,
+        "tagline": "Higher-volume workflows for localization teams.",
+        "features": [
+            "Everything in Pro",
+            "Higher monthly credits",
+            "Large-file workflows",
+            "Priority manual support",
+        ],
+        "secret_key": "PAYMENT_LINK_AGENCY",
+    },
+    "enterprise": {
+        "name": "Enterprise",
+        "price": "Custom",
+        "credits": 10000,
+        "tagline": "Custom credits, limits, private support, and rule logic.",
+        "features": [
+            "Custom monthly credits",
+            "Dedicated support",
+            "Private deployment option",
+            "Client-specific rule packs",
+        ],
+        "secret_key": "PAYMENT_LINK_ENTERPRISE",
+    },
+}
+
+
+def normalize_plan(plan: Any) -> str:
+    plan = str(plan or "trial").strip().lower()
+    return plan if plan in PLAN_CATALOG else "trial"
+
+
+def get_payment_link(plan: str) -> str:
+    plan = normalize_plan(plan)
+    secret_key = PLAN_CATALOG[plan].get("secret_key", "")
+    candidate_keys = []
+    if secret_key:
+        candidate_keys.append(secret_key)
+    candidate_keys.extend([
+        f"PAYMENT_LINK_{plan.upper()}",
+        f"RAZORPAY_LINK_{plan.upper()}",
+        f"RAZORPAY_{plan.upper()}_LINK",
+        f"STRIPE_LINK_{plan.upper()}",
+    ])
+    for key in candidate_keys:
+        value = get_secret_value(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def render_plan_card(plan_key: str, current_plan: str) -> None:
+    plan_key = normalize_plan(plan_key)
+    current_plan = normalize_plan(current_plan)
+    info = PLAN_CATALOG[plan_key]
+    is_current = plan_key == current_plan
+
+    st.markdown(f"### {info['name']}")
+    st.metric("Price", info["price"])
+    st.caption(info["tagline"])
+    st.write(f"**Monthly credits:** {info['credits']}")
+    for feature in info["features"]:
+        st.write(f"- {feature}")
+
+    if is_current:
+        st.success("Current plan")
+    elif plan_key != "trial":
+        link = get_payment_link(plan_key)
+        if link:
+            st.link_button(f"Upgrade to {info['name']}", link, use_container_width=True)
+        else:
+            st.info(f"Add {info['secret_key']} in Streamlit Secrets to enable this upgrade button.")
+    else:
+        st.caption("Trial is created automatically after signup.")
 
 
 def supabase_configured() -> bool:
@@ -2172,6 +3511,26 @@ def supabase_patch(path: str, payload: Dict[str, Any], kind: str = "service", ac
     except Exception as exc:
         return False, str(exc)
 
+
+
+def supabase_delete(path: str, kind: str = "service", access_token: Optional[str] = None) -> Tuple[bool, Any]:
+    try:
+        res = requests.delete(
+            supabase_url(path),
+            headers=supabase_headers(kind=kind, access_token=access_token),
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if res.status_code >= 400:
+            try:
+                return False, res.json()
+            except Exception:
+                return False, res.text
+        try:
+            return True, res.json()
+        except Exception:
+            return True, {}
+    except Exception as exc:
+        return False, str(exc)
 
 def auth_sign_up(email: str, password: str, full_name: str = "") -> Tuple[bool, str, Dict[str, Any]]:
     payload = {
@@ -2347,6 +3706,942 @@ def get_recent_jobs(user_id: str, limit: int = 8) -> List[Dict[str, Any]]:
     return []
 
 
+
+# ==========================================================
+# ADMIN USER MANAGEMENT
+# ==========================================================
+
+
+def get_admin_emails() -> List[str]:
+    raw = get_secret_value("ERRORSWEEP_ADMIN_EMAILS", "") or ""
+    return [email.strip().lower() for email in raw.split(",") if email.strip()]
+
+
+def is_admin_user() -> bool:
+    user = get_current_user()
+    email = (user.get("email") or st.session_state.get("errorsweep_username", "")).strip().lower()
+    return bool(email and email in get_admin_emails())
+
+
+def admin_list_profiles(search: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if search.strip():
+        pattern = quote(f"*{search.strip()}*", safe="")
+        query = f"/rest/v1/profiles?select=*&email=ilike.{pattern}&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/profiles?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def admin_get_profile_by_email(email: str) -> Optional[Dict[str, Any]]:
+    if not email.strip() or not supabase_service_configured():
+        return None
+    email_q = quote(email.strip().lower(), safe="")
+    ok, data = supabase_get(f"/rest/v1/profiles?email=eq.{email_q}&select=*&limit=1", kind="service")
+    if ok and isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def admin_update_profile(user_id: str, updates: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    if not user_id:
+        return False, "Missing user id.", None
+    allowed = {"plan", "monthly_credits", "used_credits", "full_name"}
+    safe_updates = {k: v for k, v in updates.items() if k in allowed}
+    if not safe_updates:
+        return False, "No valid fields to update.", None
+    ok, data = supabase_patch(f"/rest/v1/profiles?id=eq.{user_id}", safe_updates, kind="service")
+    if not ok:
+        return False, format_supabase_error(data), None
+    return True, "Profile updated successfully.", get_profile(user_id)
+
+
+def admin_list_jobs(user_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if user_id:
+        query = f"/rest/v1/file_jobs?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/file_jobs?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def admin_usage_summary() -> Dict[str, Any]:
+    profiles = admin_list_profiles(limit=500)
+    jobs = admin_list_jobs(limit=500)
+    return {
+        "users": len(profiles),
+        "jobs": len(jobs),
+        "credits_used": sum(int(p.get("used_credits") or 0) for p in profiles),
+        "credits_allocated": sum(int(p.get("monthly_credits") or 0) for p in profiles),
+    }
+
+
+# ==========================================================
+# SECURE TRANSLATION MEMORY
+# ==========================================================
+
+def tm_secret_configured() -> bool:
+    """Translation Memory requires a private encryption secret."""
+    return bool(get_secret_value("ERRORSWEEP_TM_SECRET")) and Fernet is not None and supabase_service_configured()
+
+
+def tm_fernet() -> Optional[Any]:
+    """Build a Fernet instance from ERRORSWEEP_TM_SECRET.
+
+    The secret can be a Fernet key or any long secret phrase. We derive a stable
+    Fernet key from it so the database never stores readable source/target text.
+    """
+    if Fernet is None:
+        return None
+    secret = get_secret_value("ERRORSWEEP_TM_SECRET")
+    if not secret:
+        return None
+    try:
+        raw = secret.encode("utf-8")
+        # If the user provided a valid Fernet key, use it directly.
+        if len(raw) == 44:
+            return Fernet(raw)
+        digest = hashlib.sha256(raw).digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+    except Exception:
+        return None
+
+
+def tm_client_key(client_name: str) -> str:
+    cleaned = normalize_text(client_name or "global").lower()
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", cleaned).strip("-")
+    return cleaned or "global"
+
+
+def tm_normalize_for_hash(text: Any) -> str:
+    cleaned = normalize_text(text)
+    cleaned = cleaned.replace("\u00A0", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def tm_hash_source(source_text: str) -> str:
+    return hashlib.sha256(tm_normalize_for_hash(source_text).encode("utf-8")).hexdigest()
+
+
+def tm_encrypt_text(text: Any) -> Optional[str]:
+    f = tm_fernet()
+    if f is None:
+        return None
+    return f.encrypt(str(text or "").encode("utf-8")).decode("utf-8")
+
+
+def tm_decrypt_text(token: Any) -> str:
+    f = tm_fernet()
+    if f is None or not token:
+        return ""
+    try:
+        return f.decrypt(str(token).encode("utf-8")).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def tm_target_lang_key(target_language: str) -> str:
+    value = normalize_text(target_language or "auto-detect")
+    return value if value else "auto-detect"
+
+
+def render_translation_memory_controls(context: str, default_target_language: str = "") -> Dict[str, Any]:
+    """Workflow-level TM controls. This is opt-in because client privacy matters."""
+    prefix = "qa" if context == "qa" else "pro"
+    title = "Secure Translation Memory"
+    with st.expander(title, expanded=False):
+        st.markdown(
+            """
+            Use private encrypted translation memory to improve future files with exact matches.
+            Saved translations are encrypted before storage and separated by user/client scope.
+            """
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            use_tm = st.checkbox("Use saved memory matches", value=True, key=f"{prefix}_tm_use")
+        with c2:
+            save_tm = st.checkbox("Save approved translations after this run", value=False, key=f"{prefix}_tm_save")
+        c3, c4 = st.columns(2)
+        with c3:
+            client_name = st.text_input("Client / project memory name", value="", placeholder="Example: Acme French Legal / Global UI", key=f"{prefix}_tm_client")
+        with c4:
+            target_language = st.text_input(
+                "Target language / locale for memory",
+                value=default_target_language or st.session_state.get("es_target_language", ""),
+                placeholder="Required for no-API QA: Spanish, French, Hindi, Arabic, ja-JP",
+                key=f"{prefix}_tm_target_language",
+            )
+        if not tm_secret_configured():
+            st.warning("Translation Memory is not active. Add ERRORSWEEP_TM_SECRET in Streamlit Secrets and run the TM SQL setup.")
+        else:
+            st.success("Encrypted Translation Memory is active.")
+        st.caption("Privacy note: exact source/target text is encrypted. Matching uses a one-way hash of normalized source text.")
+    return {
+        "use": bool(use_tm),
+        "save": bool(save_tm),
+        "client_key": tm_client_key(client_name),
+        "client_name": normalize_text(client_name) or "Global",
+        "target_language": tm_target_lang_key(target_language),
+    }
+
+
+def tm_batch_lookup(user_id: str, segments: List[Dict[str, Any]], target_language: str, client_key: str, max_records: int = 500) -> Dict[str, Dict[str, Any]]:
+    """Return exact TM matches by segment location."""
+    if not tm_secret_configured() or not user_id or not segments:
+        return {}
+
+    target_language = tm_target_lang_key(target_language)
+    client_key = tm_client_key(client_key)
+    hash_to_locs: Dict[str, List[str]] = {}
+    for seg in segments:
+        source = seg.get("source") or seg.get("text") or ""
+        if not normalize_text(source):
+            continue
+        h = tm_hash_source(source)
+        hash_to_locs.setdefault(h, []).append(seg.get("location", ""))
+
+    if not hash_to_locs:
+        return {}
+
+    all_hashes = list(hash_to_locs.keys())[:max_records]
+    found_by_hash: Dict[str, Dict[str, Any]] = {}
+    batch_size = 80
+    for start in range(0, len(all_hashes), batch_size):
+        batch_hashes = all_hashes[start:start + batch_size]
+        hash_list = ",".join(batch_hashes)
+        query = (
+            f"/rest/v1/translation_memory"
+            f"?user_id=eq.{user_id}"
+            f"&client_key=eq.{quote(client_key)}"
+            f"&target_language=eq.{quote(target_language)}"
+            f"&source_hash=in.({hash_list})"
+            f"&select=id,source_hash,target_text_encrypted,status,use_count"
+            f"&limit={len(batch_hashes)}"
+        )
+        ok, data = supabase_get(query, kind="service")
+        if ok and isinstance(data, list):
+            for row in data:
+                found_by_hash[row.get("source_hash", "")] = row
+
+    loc_matches: Dict[str, Dict[str, Any]] = {}
+    for h, row in found_by_hash.items():
+        target_text = tm_decrypt_text(row.get("target_text_encrypted"))
+        if not target_text:
+            continue
+        for loc in hash_to_locs.get(h, []):
+            if loc:
+                loc_matches[loc] = {
+                    "translation": target_text,
+                    "memory_id": row.get("id"),
+                    "status": row.get("status", "approved"),
+                }
+    return loc_matches
+
+
+def tm_qa_memory_report_rows(user_id: str, segments: List[Dict[str, Any]], target_language: str, client_key: str) -> List[Dict[str, Any]]:
+    matches = tm_batch_lookup(user_id, segments, target_language, client_key)
+    rows: List[Dict[str, Any]] = []
+    if not matches:
+        return rows
+    for seg in segments:
+        loc = seg.get("location", "")
+        match = matches.get(loc)
+        if not match:
+            continue
+        saved_target = normalize_text(match.get("translation", ""))
+        current_target = normalize_text(seg.get("translation") or seg.get("text") or "")
+        if saved_target and current_target and tm_normalize_for_hash(saved_target) != tm_normalize_for_hash(current_target):
+            rows.append(make_report_row(
+                seg,
+                "Translation Memory",
+                "Major",
+                current_target,
+                saved_target,
+                "A previously saved approved translation exists for the same source segment.",
+                "Secure Translation Memory",
+                f"Client memory: {client_key}",
+                "High",
+            ))
+    return rows
+
+
+def tm_upsert_translation(
+    user_id: str,
+    source_text: str,
+    target_text: str,
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+    status: str = "approved",
+    source_language: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if not tm_secret_configured() or not user_id:
+        return False
+    source_norm = tm_normalize_for_hash(source_text)
+    target_norm = normalize_text(target_text)
+    if not source_norm or not target_norm:
+        return False
+
+    source_encrypted = tm_encrypt_text(source_text)
+    target_encrypted = tm_encrypt_text(target_text)
+    if not source_encrypted or not target_encrypted:
+        return False
+
+    payload = {
+        "user_id": user_id,
+        "client_key": tm_client_key(client_key),
+        "source_language": normalize_text(source_language or ""),
+        "target_language": tm_target_lang_key(target_language),
+        "domain": normalize_text(domain or ""),
+        "source_hash": tm_hash_source(source_text),
+        "source_text_encrypted": source_encrypted,
+        "target_text_encrypted": target_encrypted,
+        "status": status,
+        "metadata": metadata or {},
+        "use_count": 0,
+    }
+    # upsert by unique constraint
+    try:
+        res = requests.post(
+            supabase_url("/rest/v1/translation_memory?on_conflict=user_id,client_key,target_language,source_hash"),
+            headers={**supabase_headers(kind="service"), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        return res.status_code < 400
+    except Exception:
+        return False
+
+
+def tm_save_passed_qa_segments(
+    user_id: str,
+    segments: List[Dict[str, Any]],
+    issue_rows: List[Dict[str, Any]],
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+) -> int:
+    issue_locs = {str(r.get("Location", "")) for r in issue_rows if r.get("Location")}
+    saved = 0
+    for seg in segments:
+        loc = str(seg.get("location", ""))
+        if loc in issue_locs:
+            continue
+        source = seg.get("source", "")
+        target = seg.get("translation") or seg.get("text", "")
+        if source and target and tm_upsert_translation(
+            user_id,
+            source,
+            target,
+            target_language,
+            client_key,
+            domain=domain,
+            status="approved_existing",
+            metadata={"saved_from": "qa_pass", "location": loc},
+        ):
+            saved += 1
+    return saved
+
+
+def tm_save_pro_translations(
+    user_id: str,
+    translated_segments: List[Dict[str, Any]],
+    review_rows: List[Dict[str, Any]],
+    target_language: str,
+    client_key: str,
+    domain: str = "",
+) -> int:
+    issue_locs = {str(r.get("Location", "")) for r in review_rows if r.get("Location")}
+    saved = 0
+    for seg in translated_segments:
+        loc = str(seg.get("location", ""))
+        if loc in issue_locs:
+            continue
+        source = seg.get("source") or ""
+        target = seg.get("translation") or seg.get("text") or ""
+        if source and target and tm_upsert_translation(
+            user_id,
+            source,
+            target,
+            target_language,
+            client_key,
+            domain=domain,
+            status="reviewed_or_passed",
+            metadata={"saved_from": "pro_translation", "location": loc},
+        ):
+            saved += 1
+    return saved
+
+
+# ==========================================================
+# MEMORY & RULE PACK MANAGER
+# ==========================================================
+
+def get_user_rule_packs(user_id: str, workflow_type: str = "") -> List[Dict[str, Any]]:
+    if not user_id or not supabase_service_configured():
+        return []
+    query = f"/rest/v1/rule_packs?user_id=eq.{user_id}&select=*&order=created_at.desc&limit=500"
+    if workflow_type:
+        query = f"/rest/v1/rule_packs?user_id=eq.{user_id}&or=(workflow_type.eq.{quote(workflow_type)},workflow_type.eq.both)&select=*&order=created_at.desc&limit=500"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def get_rule_pack_by_id(user_id: str, pack_id: str) -> Optional[Dict[str, Any]]:
+    if not user_id or not pack_id or not supabase_service_configured():
+        return None
+    ok, data = supabase_get(
+        f"/rest/v1/rule_packs?id=eq.{pack_id}&user_id=eq.{user_id}&select=*&limit=1",
+        kind="service",
+    )
+    if ok and isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def create_rule_pack(
+    user_id: str,
+    name: str,
+    client_name: str,
+    workflow_type: str,
+    source_language: str,
+    target_language: str,
+    domain: str,
+    zip_file_name: str,
+    parsed_rules: Dict[str, Any],
+) -> Tuple[bool, str]:
+    if not user_id or not supabase_service_configured():
+        return False, "Supabase service role is not configured."
+    payload = {
+        "user_id": user_id,
+        "name": normalize_text(name) or "Untitled Rule Pack",
+        "client_name": normalize_text(client_name) or "General",
+        "workflow_type": workflow_type or "both",
+        "source_language": normalize_text(source_language),
+        "target_language": normalize_text(target_language),
+        "domain": normalize_text(domain),
+        "zip_file_name": zip_file_name,
+        "parsed_rules_json": parsed_rules or {},
+        "glossary_count": len((parsed_rules or {}).get("glossary", [])),
+        "dnt_count": len((parsed_rules or {}).get("dnt", [])),
+        "chunk_count": len((parsed_rules or {}).get("chunks", [])),
+    }
+    ok, data = supabase_post("/rest/v1/rule_packs", payload, kind="service")
+    if ok:
+        return True, "Rule pack saved."
+    return False, format_supabase_error(data)
+
+
+def delete_rule_pack(user_id: str, pack_id: str) -> Tuple[bool, str]:
+    if not user_id or not pack_id:
+        return False, "Missing user or rule pack id."
+    ok, data = supabase_delete(f"/rest/v1/rule_packs?id=eq.{pack_id}&user_id=eq.{user_id}", kind="service")
+    if ok:
+        return True, "Rule pack deleted."
+    return False, format_supabase_error(data)
+
+
+def touch_rule_pack(pack_id: str) -> None:
+    if not pack_id or not supabase_service_configured():
+        return
+    supabase_patch(
+        f"/rest/v1/rule_packs?id=eq.{pack_id}",
+        {"last_used_at": datetime.now(timezone.utc).isoformat()},
+        kind="service",
+    )
+
+
+def merge_rules(base_rules: Dict[str, Any], extra_rules: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    for source in [base_rules or {}, extra_rules or {}]:
+        for key in merged.keys():
+            val = source.get(key, [])
+            if isinstance(val, list):
+                merged[key].extend(val)
+    return merged
+
+
+def render_rule_pack_selector(user_id: str, workflow_type: str, prefix: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    selected_id = None
+    packs = get_user_rule_packs(user_id, workflow_type)
+    if not packs:
+        st.caption("No saved rule packs yet. Upload a ZIP below and save it for reuse.")
+        return rules, selected_id
+    options = {f"{p.get('name','Untitled')} · {p.get('client_name','General')} · {p.get('target_language') or 'Any'}": p.get("id") for p in packs}
+    selected_label = st.selectbox(
+        "Use saved rule pack (optional)",
+        ["None"] + list(options.keys()),
+        key=f"{prefix}_saved_rule_pack_select",
+    )
+    if selected_label != "None":
+        selected_id = options[selected_label]
+        pack = get_rule_pack_by_id(user_id, selected_id)
+        if pack:
+            rules = pack.get("parsed_rules_json") or rules
+            st.success(
+                f"Loaded saved rule pack: {pack.get('name')} · glossary {len(rules.get('glossary', []))}, DNT {len(rules.get('dnt', []))}, rule chunks {len(rules.get('chunks', []))}."
+            )
+            touch_rule_pack(selected_id)
+    return rules, selected_id
+
+
+def render_rule_pack_save_box(user_id: str, prefix: str, workflow_type: str, parsed_rules: Dict[str, Any], zip_name: str, default_domain: str = "") -> None:
+    if not parsed_rules or not zip_name:
+        return
+    with st.expander("Save this ZIP as reusable rule pack", expanded=False):
+        st.caption("Save client style guides, glossary, DNT lists, and instructions once, then reuse them in future jobs.")
+        c1, c2 = st.columns(2)
+        with c1:
+            pack_name = st.text_input("Rule pack name", value=zip_name.rsplit('.', 1)[0], key=f"{prefix}_save_pack_name")
+            client_name = st.text_input("Client / project name", value="General", key=f"{prefix}_save_pack_client")
+        with c2:
+            source_language = st.text_input("Source language", value="", key=f"{prefix}_save_pack_src")
+            target_language = st.text_input("Target language / locale", value=st.session_state.get("es_target_language", ""), key=f"{prefix}_save_pack_tgt")
+        wf = st.selectbox("Workflow type", [workflow_type, "both", "qa", "pro"], key=f"{prefix}_save_pack_workflow")
+        if st.button("Save Rule Pack", key=f"{prefix}_save_pack_button", use_container_width=True):
+            ok, msg = create_rule_pack(
+                user_id=user_id,
+                name=pack_name,
+                client_name=client_name,
+                workflow_type=wf,
+                source_language=source_language,
+                target_language=target_language,
+                domain=default_domain,
+                zip_file_name=zip_name,
+                parsed_rules=parsed_rules,
+            )
+            (st.success if ok else st.error)(msg)
+            if ok:
+                st.rerun()
+
+
+def get_translation_memory_records(user_id: str, limit: int = 5000) -> List[Dict[str, Any]]:
+    if not user_id or not supabase_service_configured():
+        return []
+    ok, data = supabase_get(
+        f"/rest/v1/translation_memory?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}",
+        kind="service",
+    )
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def summarize_translation_memory(records: List[Dict[str, Any]]) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame(columns=["Client Memory", "Target Language", "Domain", "Entries", "Statuses", "Created", "Last Used"])
+    summary: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for r in records:
+        key = (r.get("client_key") or "global", r.get("target_language") or "auto-detect", r.get("domain") or "")
+        item = summary.setdefault(key, {"Client Memory": key[0], "Target Language": key[1], "Domain": key[2], "Entries": 0, "Statuses": set(), "Created": r.get("created_at"), "Last Used": r.get("last_used_at")})
+        item["Entries"] += 1
+        if r.get("status"):
+            item["Statuses"].add(r.get("status"))
+        if r.get("created_at") and (not item.get("Created") or str(r.get("created_at")) < str(item.get("Created"))):
+            item["Created"] = r.get("created_at")
+        if r.get("last_used_at") and (not item.get("Last Used") or str(r.get("last_used_at")) > str(item.get("Last Used"))):
+            item["Last Used"] = r.get("last_used_at")
+    rows = []
+    for item in summary.values():
+        rows.append({**item, "Statuses": ", ".join(sorted(item["Statuses"]))})
+    return pd.DataFrame(rows).sort_values(["Client Memory", "Target Language"]) if rows else pd.DataFrame()
+
+
+def export_translation_memory_csv(records: List[Dict[str, Any]]) -> bytes:
+    rows = []
+    for r in records:
+        rows.append({
+            "client_key": r.get("client_key", ""),
+            "source_language": r.get("source_language", ""),
+            "target_language": r.get("target_language", ""),
+            "domain": r.get("domain", ""),
+            "source_text": tm_decrypt_text(r.get("source_text_encrypted")),
+            "target_text": tm_decrypt_text(r.get("target_text_encrypted")),
+            "status": r.get("status", ""),
+            "created_at": r.get("created_at", ""),
+            "last_used_at": r.get("last_used_at", ""),
+        })
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def delete_translation_memory_scope(user_id: str, client_key: str, target_language: str = "") -> Tuple[bool, str]:
+    if not user_id or not client_key:
+        return False, "Missing user or memory name."
+    path = f"/rest/v1/translation_memory?user_id=eq.{user_id}&client_key=eq.{quote(client_key)}"
+    if target_language:
+        path += f"&target_language=eq.{quote(target_language)}"
+    ok, data = supabase_delete(path, kind="service")
+    if ok:
+        return True, "Translation memory deleted for the selected scope."
+    return False, format_supabase_error(data)
+
+
+
+# ==========================================================
+# CORRECTION HISTORY / HUMAN FEEDBACK LEARNING
+# ==========================================================
+
+def correction_history_configured() -> bool:
+    return supabase_service_configured()
+
+
+def normalize_correction_col(name: Any) -> str:
+    value = normalize_text(name).lower()
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value
+
+
+def parse_correction_history_upload(uploaded_file) -> List[Dict[str, Any]]:
+    """Parse human correction history from CSV/XLSX.
+
+    Supported columns:
+    source/source_text, bad_translation/wrong/current_translation,
+    fixed_translation/correct/suggestion/preferred_translation,
+    error_type/category, severity, target_language, client, domain, notes.
+    """
+    if uploaded_file is None:
+        return []
+
+    name = uploaded_file.name.lower()
+    if name.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+        df = pd.read_excel(uploaded_file)
+    else:
+        df = pd.read_csv(uploaded_file)
+
+    col_map = {normalize_correction_col(c): c for c in df.columns}
+
+    def find_col(*names: str) -> Optional[str]:
+        for n in names:
+            key = normalize_correction_col(n)
+            if key in col_map:
+                return col_map[key]
+        for key, original in col_map.items():
+            if any(normalize_correction_col(n) in key for n in names):
+                return original
+        return None
+
+    source_col = find_col("source", "source_text", "source segment", "source string")
+    bad_col = find_col("bad_translation", "wrong", "wrong_translation", "current_translation", "translation", "issue", "wrong_part")
+    fixed_col = find_col("fixed_translation", "correct", "correct_translation", "suggestion", "preferred_translation", "approved_translation", "target")
+    type_col = find_col("error_type", "category", "error category", "issue_type")
+    sev_col = find_col("severity", "error severity")
+    lang_col = find_col("target_language", "language", "locale", "target locale")
+    client_col = find_col("client", "client_name", "project", "project_name", "memory", "client_key")
+    domain_col = find_col("domain", "content_domain")
+    notes_col = find_col("notes", "comment", "reviewer_comment", "explanation")
+
+    records: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        source = normalize_text(row[source_col]) if source_col and pd.notna(row.get(source_col)) else ""
+        bad = normalize_text(row[bad_col]) if bad_col and pd.notna(row.get(bad_col)) else ""
+        fixed = normalize_text(row[fixed_col]) if fixed_col and pd.notna(row.get(fixed_col)) else ""
+        if not fixed:
+            continue
+        if not bad and not source:
+            continue
+        error_type = normalize_text(row[type_col]) if type_col and pd.notna(row.get(type_col)) else "Client Correction"
+        severity = normalize_text(row[sev_col]) if sev_col and pd.notna(row.get(sev_col)) else "Major"
+        if severity not in {"Critical", "Major", "Minor", "Review"}:
+            severity = "Major"
+        target_language = normalize_text(row[lang_col]) if lang_col and pd.notna(row.get(lang_col)) else "auto-detect"
+        client_name = normalize_text(row[client_col]) if client_col and pd.notna(row.get(client_col)) else "Global"
+        domain = normalize_text(row[domain_col]) if domain_col and pd.notna(row.get(domain_col)) else ""
+        notes = normalize_text(row[notes_col]) if notes_col and pd.notna(row.get(notes_col)) else ""
+        records.append({
+            "source_text": source,
+            "bad_translation": bad,
+            "fixed_translation": fixed,
+            "error_type": error_type,
+            "severity": severity,
+            "target_language": target_language,
+            "client_name": client_name,
+            "client_key": tm_client_key(client_name),
+            "domain": domain,
+            "notes": notes,
+        })
+    return records[:5000]
+
+
+def save_correction_history_records(user_id: str, records: List[Dict[str, Any]]) -> Tuple[bool, str, int]:
+    if not user_id:
+        return False, "Missing user id.", 0
+    if not correction_history_configured():
+        return False, "Supabase service role is not configured.", 0
+    if not records:
+        return False, "No valid correction rows found.", 0
+
+    payload = []
+    for r in records:
+        payload.append({
+            "user_id": user_id,
+            "client_key": tm_client_key(r.get("client_key") or r.get("client_name") or "global"),
+            "client_name": r.get("client_name") or "Global",
+            "source_language": r.get("source_language", ""),
+            "target_language": tm_target_lang_key(r.get("target_language") or "auto-detect"),
+            "domain": r.get("domain", ""),
+            "source_text": r.get("source_text", ""),
+            "bad_translation": r.get("bad_translation", ""),
+            "fixed_translation": r.get("fixed_translation", ""),
+            "error_type": r.get("error_type", "Client Correction"),
+            "severity": r.get("severity", "Major"),
+            "status": "approved",
+            "notes": r.get("notes", ""),
+            "metadata": r.get("metadata", {}),
+        })
+
+    saved = 0
+    batch_size = 200
+    for start in range(0, len(payload), batch_size):
+        batch = payload[start:start + batch_size]
+        ok, data = supabase_post("/rest/v1/correction_history", batch, kind="service")
+        if not ok:
+            return False, format_supabase_error(data), saved
+        saved += len(batch)
+    return True, f"Saved {saved} correction history row(s).", saved
+
+
+def get_correction_history_records(user_id: str, client_key: str = "", target_language: str = "", limit: int = 1000) -> List[Dict[str, Any]]:
+    if not user_id or not correction_history_configured():
+        return []
+    query = f"/rest/v1/correction_history?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}"
+    if client_key:
+        query += f"&client_key=eq.{quote(tm_client_key(client_key))}"
+    if target_language:
+        query += f"&target_language=eq.{quote(tm_target_lang_key(target_language))}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def load_correction_history_as_rules(user_id: str, client_key: str = "", target_language: str = "", domain: str = "") -> List[Dict[str, str]]:
+    records = get_correction_history_records(user_id, client_key=client_key, target_language=target_language, limit=2000)
+    corrections: List[Dict[str, str]] = []
+    for r in records:
+        bad = normalize_text(r.get("bad_translation", ""))
+        fixed = normalize_text(r.get("fixed_translation", ""))
+        if not bad or not fixed or bad == fixed:
+            continue
+        corrections.append({
+            "wrong": bad,
+            "correct": fixed,
+            "error_type": r.get("error_type", "Client Correction"),
+            "category": r.get("error_type", "Client Correction"),
+            "severity": r.get("severity", "Major"),
+            "source": f"Correction History · {r.get('client_name') or r.get('client_key') or 'Global'}",
+        })
+    return corrections[:2000]
+
+
+def export_correction_history_csv(records: List[Dict[str, Any]]) -> bytes:
+    cols = [
+        "client_name", "client_key", "source_language", "target_language", "domain",
+        "source_text", "bad_translation", "fixed_translation", "error_type",
+        "severity", "status", "notes", "created_at"
+    ]
+    rows = [{c: r.get(c, "") for c in cols} for r in records]
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def delete_correction_history_scope(user_id: str, client_key: str, target_language: str = "") -> Tuple[bool, str]:
+    if not user_id or not client_key:
+        return False, "Missing user or client scope."
+    path = f"/rest/v1/correction_history?user_id=eq.{user_id}&client_key=eq.{quote(tm_client_key(client_key))}"
+    if target_language:
+        path += f"&target_language=eq.{quote(tm_target_lang_key(target_language))}"
+    ok, data = supabase_delete(path, kind="service")
+    if ok:
+        return True, "Correction history deleted for the selected scope."
+    return False, format_supabase_error(data)
+
+
+def render_correction_history_manager(user_id: str) -> None:
+    st.markdown("### Human Correction History")
+    st.caption("Save approved human corrections so ErrorSweep learns client-specific spelling, grammar, terminology, and style patterns without API keys.")
+
+    records = get_correction_history_records(user_id, limit=1000)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Saved corrections", len(records))
+    c2.metric("Client scopes", len({r.get("client_key") for r in records}))
+    c3.metric("Languages", len({r.get("target_language") for r in records}))
+
+    if records:
+        preview_cols = ["client_name", "target_language", "domain", "bad_translation", "fixed_translation", "error_type", "severity", "created_at"]
+        st.dataframe(pd.DataFrame([{c: r.get(c, "") for c in preview_cols} for r in records[:300]]), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Export correction history CSV",
+            export_correction_history_csv(records),
+            file_name="errorsweep_correction_history_export.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.info("No correction history saved yet. Upload a correction CSV/XLSX below or save corrections from client QA history.")
+
+    st.markdown("#### Upload correction history")
+    st.markdown(
+        """
+        Accepted columns:
+        `source`, `bad_translation` / `wrong`, `fixed_translation` / `correct`,
+        `error_type`, `severity`, `target_language`, `client`, `domain`, `notes`.
+        """
+    )
+    correction_file = st.file_uploader("Upload corrections CSV/XLSX", type=["csv", "xlsx", "xlsm"], key="correction_history_upload")
+    parsed_records: List[Dict[str, Any]] = []
+    if correction_file:
+        try:
+            parsed_records = parse_correction_history_upload(correction_file)
+            st.success(f"Parsed {len(parsed_records)} valid correction row(s).")
+            if parsed_records:
+                st.dataframe(pd.DataFrame(parsed_records).head(100), use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.error(f"Could not parse correction file: {exc}")
+
+    if parsed_records:
+        if st.button("Save parsed corrections", type="primary", use_container_width=True, key="save_correction_history"):
+            ok, msg, _ = save_correction_history_records(user_id, parsed_records)
+            (st.success if ok else st.error)(msg)
+            if ok:
+                st.rerun()
+
+    if records:
+        with st.expander("Delete correction history scope", expanded=False):
+            clients = sorted({r.get("client_key") or "global" for r in records})
+            client_key = st.selectbox("Client/project scope", clients, key="delete_correction_client")
+            langs = [""] + sorted({r.get("target_language") or "auto-detect" for r in records if (r.get("client_key") or "global") == client_key})
+            lang = st.selectbox("Target language scope", langs, format_func=lambda x: "All languages" if not x else x, key="delete_correction_lang")
+            confirm = st.text_input("Type DELETE to confirm", key="delete_correction_confirm")
+            if st.button("Delete selected correction history", key="delete_correction_button", type="primary", use_container_width=True):
+                if confirm != "DELETE":
+                    st.error("Type DELETE to confirm deletion.")
+                else:
+                    ok, msg = delete_correction_history_scope(user_id, client_key, lang)
+                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        st.rerun()
+
+
+def render_memory_rulepacks_page(user_id: str, profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Memory & Rule Packs")
+    st.caption("Manage encrypted translation memory and reusable client rule packs. This page gives users privacy control over saved language data.")
+    tab_memory, tab_rules, tab_corrections, tab_privacy = st.tabs(["Translation Memory", "Saved Rule Packs", "Correction History", "Privacy Controls"])
+
+    with tab_memory:
+        st.markdown("### Secure Translation Memory")
+        if not tm_secret_configured():
+            st.warning("Translation Memory is not active. Add ERRORSWEEP_TM_SECRET in Streamlit Secrets, make sure cryptography is installed, and run the translation memory SQL.")
+        records = get_translation_memory_records(user_id)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saved entries", len(records))
+        c2.metric("Client memories", len({r.get('client_key') for r in records}))
+        c3.metric("Target languages", len({r.get('target_language') for r in records}))
+        summary_df = summarize_translation_memory(records)
+        if not summary_df.empty:
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            st.download_button("Export decrypted memory CSV", export_translation_memory_csv(records), file_name="errorsweep_translation_memory_export.csv", mime="text/csv", use_container_width=True)
+            with st.expander("Delete memory scope", expanded=False):
+                clients = sorted({r.get("client_key") or "global" for r in records})
+                client_key = st.selectbox("Client memory", clients, key="tm_delete_client")
+                langs = [""] + sorted({r.get("target_language") or "auto-detect" for r in records if (r.get("client_key") or "global") == client_key})
+                lang = st.selectbox("Target language scope", langs, format_func=lambda x: "All languages" if not x else x, key="tm_delete_lang")
+                confirm = st.text_input("Type DELETE to confirm", key="tm_delete_confirm")
+                if st.button("Delete selected memory", key="tm_delete_button", type="primary", use_container_width=True):
+                    if confirm != "DELETE":
+                        st.error("Type DELETE to confirm deletion.")
+                    else:
+                        ok, msg = delete_translation_memory_scope(user_id, client_key, lang)
+                        (st.success if ok else st.error)(msg)
+                        if ok:
+                            st.rerun()
+        else:
+            st.info("No saved translation memory yet. Enable 'Save approved translations' inside ErrorSweep or ErrorSweep Pro to start building client memory.")
+
+    with tab_rules:
+        st.markdown("### Saved Rule Packs")
+        packs = get_user_rule_packs(user_id)
+        if packs:
+            rows = []
+            for p in packs:
+                rows.append({
+                    "Name": p.get("name"),
+                    "Client": p.get("client_name"),
+                    "Workflow": p.get("workflow_type"),
+                    "Target": p.get("target_language"),
+                    "Domain": p.get("domain"),
+                    "Glossary": p.get("glossary_count", 0),
+                    "DNT": p.get("dnt_count", 0),
+                    "Chunks": p.get("chunk_count", 0),
+                    "Created": p.get("created_at"),
+                    "Last Used": p.get("last_used_at"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            with st.expander("Delete saved rule pack", expanded=False):
+                opts = {f"{p.get('name')} · {p.get('client_name')} · {p.get('workflow_type')}": p.get("id") for p in packs}
+                label = st.selectbox("Rule pack", list(opts.keys()), key="delete_rule_pack_select")
+                if st.button("Delete rule pack", key="delete_rule_pack_button", use_container_width=True):
+                    ok, msg = delete_rule_pack(user_id, opts[label])
+                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        st.rerun()
+        else:
+            st.info("No saved rule packs yet. Upload a ZIP in ErrorSweep or ErrorSweep Pro, then save it as a reusable pack.")
+
+        st.markdown("### Add rule pack from this page")
+        new_zip = st.file_uploader("Upload Rules ZIP", type=["zip"], key="memory_page_rules_zip")
+        if new_zip:
+            parsed = parse_rules_zip_bytes(new_zip.getvalue())
+            st.write(f"Parsed files: {len(parsed.get('files', []))}; glossary: {len(parsed.get('glossary', []))}; DNT: {len(parsed.get('dnt', []))}; chunks: {len(parsed.get('chunks', []))}")
+            with st.form("memory_page_save_rule_pack_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    name = st.text_input("Rule pack name", value=new_zip.name.rsplit('.', 1)[0])
+                    client_name = st.text_input("Client / project", value="General")
+                    workflow_type = st.selectbox("Workflow type", ["both", "qa", "pro"])
+                with c2:
+                    source_language = st.text_input("Source language", value="")
+                    target_language = st.text_input("Target language", value="")
+                    domain = st.text_input("Domain", value="")
+                submitted = st.form_submit_button("Save Rule Pack", use_container_width=True)
+            if submitted:
+                ok, msg = create_rule_pack(user_id, name, client_name, workflow_type, source_language, target_language, domain, new_zip.name, parsed)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
+
+    with tab_corrections:
+        render_correction_history_manager(user_id)
+
+    with tab_privacy:
+        st.markdown("### Privacy controls")
+        st.markdown("""
+        **How storage works**
+        - Translation Memory is separated by user, client/project memory name, and target language.
+        - Source and target text are encrypted before being stored.
+        - Exact matching uses a one-way source hash, so future files can find approved translations without storing readable text in plain form.
+        - Saving memory is opt-in from the workflow pages.
+        - Correction History stores human-approved corrections for client-specific QA learning.
+
+        **Recommended client policy**
+        - Create a separate memory name for each client/project.
+        - Do not mix confidential clients in the same memory.
+        - Export and delete memory when a client requests it.
+        - Keep ERRORSWEEP_TM_SECRET safe; changing it can make old encrypted memory unreadable.
+        """)
+        st.info("For enterprise clients, add a written privacy statement explaining what is saved, why it is saved, and how they can delete/export it.")
+
 def render_credit_panel(profile: Optional[Dict[str, Any]]) -> None:
     if not profile:
         st.warning("Profile unavailable. Check Supabase setup.")
@@ -2406,7 +4701,7 @@ def logout_user() -> None:
 
 
 def render_login_page() -> None:
-    st.markdown(
+    st.markdown(textwrap.dedent(
         """
         <style>
         .login-wrapper {
@@ -2441,13 +4736,147 @@ def render_login_page() -> None:
             font-size: 12px;
             margin-top: 8px;
         }
-        </style>
+        
+.account-hero {
+    background: linear-gradient(135deg, rgba(8,14,26,.92), rgba(17,23,43,.92));
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 22px;
+    padding: 26px;
+    margin: 8px 0 18px 0;
+    box-shadow: 0 22px 50px rgba(0,0,0,.26);
+}
+.account-hero-grid {
+    display: grid;
+    grid-template-columns: 120px 1.5fr 1fr;
+    gap: 20px;
+    align-items: center;
+}
+.account-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 34px;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, rgba(0,255,136,.9), rgba(56,189,248,.9));
+    box-shadow: 0 16px 30px rgba(14,165,233,.22);
+}
+.account-title {
+    font-size: 30px;
+    line-height: 1.1;
+    font-weight: 800;
+    color: #eef2ff;
+    margin: 0;
+}
+.account-subline {
+    color: #9fb0d6;
+    font-size: 15px;
+    margin-top: 8px;
+}
+.account-badge-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+.account-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .15px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.04);
+    color: #e8ecfb;
+}
+.account-pill.plan { background: rgba(0,255,136,.10); color: #8df2c1; border-color: rgba(0,255,136,.20); }
+.account-pill.role { background: rgba(56,189,248,.10); color: #8fdcff; border-color: rgba(56,189,248,.20); }
+.account-pill.status { background: rgba(250,204,21,.10); color: #fde68a; border-color: rgba(250,204,21,.20); }
+.account-pill.security { background: rgba(139,92,246,.10); color: #d8b4fe; border-color: rgba(139,92,246,.20); }
+.account-kpi-wrap {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 12px;
+}
+.account-kpi {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 16px;
+    padding: 14px;
+}
+.account-kpi-label { color: #90a3c8; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; }
+.account-kpi-value { color: #f8fafc; font-size: 26px; font-weight: 800; margin-top: 4px; }
+.account-kpi-sub { color: #8fa0c3; font-size: 12px; margin-top: 2px; }
+.account-section-title {
+    margin: 6px 0 12px 0;
+    font-size: 22px;
+    font-weight: 800;
+    color: #eef2ff;
+}
+.account-info-card {
+    background: rgba(16, 19, 34, 0.74);
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 12px;
+    min-height: 100%;
+}
+.account-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 14px 18px;
+}
+.account-info-item { min-width: 0; }
+.account-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #86a0c8;
+}
+.account-value {
+    font-size: 15px;
+    color: #edf2ff;
+    font-weight: 600;
+    margin-top: 4px;
+    word-break: break-word;
+}
+.account-soft-note {
+    background: rgba(56,189,248,.07);
+    border: 1px solid rgba(56,189,248,.14);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #a9bbdd;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.account-activity-empty {
+    border: 1px dashed rgba(56,189,248,.2);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    color: #97a8c8;
+    background: rgba(255,255,255,.02);
+}
+@media (max-width: 900px) {
+    .account-hero-grid { grid-template-columns: 1fr; }
+    .account-kpi-wrap, .account-info-grid { grid-template-columns: 1fr; }
+    .account-avatar { width: 84px; height: 84px; font-size: 28px; }
+}
+
+</style>
         <div class="login-wrapper">
             <div class="login-title">ErrorSweep</div>
             <div class="login-subtitle">Secure language automation dashboard</div>
             <div class="login-badge">Account required</div>
         </div>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
@@ -2513,56 +4942,237 @@ def render_login_page() -> None:
             else:
                 st.error(msg)
 
-def render_dashboard() -> None:
+
+# ==========================================================
+# NO-SIDEBAR APPLICATION LAYOUT
+# Everything users need is available from normal pages.
+# The app no longer depends on st.sidebar for logout/settings.
+# ==========================================================
+
+def init_page_state() -> None:
+    defaults = {
+        "es_page": "Dashboard",
+        "es_domain": "Auto-detect",
+        "es_strictness": "Strict",
+        "es_check_whole_file": True,
+        "es_max_segments": 200,
+        "es_batch_size": 20,
+        "es_source_col_hint": "",
+        "es_target_col_hint": "",
+        "es_skip_non_content": True,
+        "es_deep_scan": False,
+        "es_target_language": "Auto-detect",
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def get_page_settings() -> Dict[str, Any]:
+    check_whole_file = bool(st.session_state.get("es_check_whole_file", True))
+    return {
+        "domain": st.session_state.get("es_domain", "Auto-detect"),
+        "strictness": st.session_state.get("es_strictness", "Strict"),
+        "check_whole_file": check_whole_file,
+        "max_segments": 0 if check_whole_file else int(st.session_state.get("es_max_segments", 200)),
+        "batch_size": int(st.session_state.get("es_batch_size", 20)),
+        "source_col_hint": st.session_state.get("es_source_col_hint", ""),
+        "target_col_hint": st.session_state.get("es_target_col_hint", ""),
+        "skip_non_content": bool(st.session_state.get("es_skip_non_content", True)),
+        "deep_scan": bool(st.session_state.get("es_deep_scan", False)),
+        "target_language": st.session_state.get("es_target_language", "Auto-detect"),
+        "openai_model": DEFAULT_OPENAI_MODEL,
+        "gemini_model": DEFAULT_GEMINI_MODEL,
+    }
+
+
+def render_top_account_bar(profile: Optional[Dict[str, Any]]) -> None:
     user = get_current_user()
-    user_id = user.get("id")
-    profile = ensure_profile(user)
-    if profile:
-        st.session_state["sb_profile"] = profile
-
-    with st.sidebar:
-        render_credit_panel(profile)
-        if st.button("Logout", use_container_width=True):
+    email = user.get("email") or st.session_state.get("errorsweep_username", "user")
+    c1, c2, c3, c4 = st.columns([2.2, 1.2, 1.2, 1])
+    with c1:
+        st.caption(f"Signed in as: {email}")
+    with c2:
+        if profile:
+            st.caption(f"Plan: {str(profile.get('plan', 'trial')).title()}")
+    with c3:
+        if profile:
+            st.caption(f"Credits: {remaining_credits(profile)}")
+    with c4:
+        if st.button("Logout", use_container_width=True, key="top_logout_button"):
             logout_user()
-        st.divider()
-
-    if user_id:
-        render_usage_dashboard(user_id)
 
 
-    # ==========================================================
-    # APP UI
-    # ==========================================================
+def render_top_nav() -> str:
+    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Memory & Rules", "Billing", "Account"]
+    if is_admin_user():
+        pages.append("Admin")
+    if st.session_state.get("es_page") not in pages:
+        st.session_state["es_page"] = "Dashboard"
+    return st.radio(
+        "Navigation",
+        pages,
+        key="es_page",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+
+def render_settings_summary(settings: Dict[str, Any]) -> None:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Domain", settings["domain"])
+    c2.metric("Strictness", settings["strictness"])
+    c3.metric("Scan", "Whole file" if settings["check_whole_file"] else str(settings["max_segments"]))
+    c4.metric("Batch", settings["batch_size"])
+    with st.expander("Current settings", expanded=False):
+        st.write(f"Source column hint: {settings['source_col_hint'] or 'Auto-detect'}")
+        st.write(f"Target column hint: {settings['target_col_hint'] or 'Auto-detect'}")
+        st.write(f"Skip non-content sheets: {'Yes' if settings['skip_non_content'] else 'No'}")
+        st.write(f"Deep scan fallback: {'Yes' if settings['deep_scan'] else 'No'}")
+        st.write(f"Target language for Pro: {settings['target_language']}")
+        st.write(f"Managed AI allowed: {'Yes' if managed_ai_allowed() else 'No'}")
+        st.write(f"User language-engine key entered: {'Yes' if bool(get_user_openai_key()) else 'No'}")
+
+
+def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
+    """Render simplified settings directly inside ErrorSweep / ErrorSweep Pro pages."""
+    is_pro = context == "pro"
+    heading = "Translation & review settings" if is_pro else "QA settings"
+    subtitle = (
+        "Keep only the essential controls visible. Advanced extraction, scan, and API options stay collapsed until needed."
+        if is_pro else
+        "Use the simple controls for most QA jobs. Open advanced settings only when a file needs special handling."
+    )
 
     st.markdown(
-        """
-    <div class="hero">
-        <div class="hero-title">ErrorSweep</div>
-        <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent AI review</div>
-        <div class="hero-badge">ErrorSweep = QA only · ErrorSweep Pro = AI translation + independent review</div>
-    </div>
-    """,
+        f"""
+        <div class="es-page-header-card">
+            <h3>{heading}</h3>
+            <p>{subtitle}</p>
+            <div class="es-pill-row">
+                <span class="es-pill green">Simple mode first</span>
+                <span class="es-pill blue">Auto-detect supported</span>
+                <span class="es-pill purple">Advanced options hidden by default</span>
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    task_request = st.text_area(
-        "Vendor request / task instruction (optional)",
-        value="",
-        placeholder="Example: Please do QA on this translated file. / Please translate this file into Telugu.",
-        height=80,
-        help="If you choose Auto Detect, ErrorSweep uses this instruction plus the file layout to decide whether to run QA or Translation."
-    )
+    with st.expander(f"{heading} — essentials", expanded=True):
+        st.markdown("<div class='es-subsection-title'>Main workflow settings</div>", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.selectbox(
+                "Content Domain",
+                [
+                    "Auto-detect",
+                    "Software UI / App Strings",
+                    "Subtitles / Captions",
+                    "Legal / Compliance",
+                    "Medical / Healthcare",
+                    "Marketing / Ad Copy",
+                    "E-learning / Education",
+                    "General",
+                ],
+                key="es_domain",
+            )
+        with c2:
+            st.select_slider(
+                "QA Strictness",
+                options=["Lenient", "Standard", "Strict", "Very Strict"],
+                key="es_strictness",
+            )
 
-    mode_choice = st.radio(
-        "Task mode",
-        ["Auto Detect Task", "ErrorSweep — QA Run + Suggestions", "ErrorSweep Pro — Translate + Review"],
-        horizontal=True,
-    )
+        st.text_input(
+            "Target language / locale",
+            key="es_target_language",
+            placeholder="Example: English, Spanish, French, Hindi, Arabic, ja-JP",
+            help="Needed for global spelling/grammar/style checks. Use Auto-detect only when the target language is unknown.",
+        )
 
-    with st.sidebar:
-        st.markdown("### Product Settings")
+        s1, s2 = st.columns(2)
+        with s1:
+            st.text_input(
+                "Source column name / index (optional)",
+                key="es_source_col_hint",
+                placeholder="Example: Source Text or 2",
+            )
+        with s2:
+            st.text_input(
+                "Target / translation column name / index (optional)",
+                key="es_target_col_hint",
+                placeholder="Example: Translation or 3",
+            )
 
-        domain = st.selectbox(
+        r1, r2 = st.columns(2)
+        with r1:
+            st.checkbox(
+                "Check whole file",
+                key="es_check_whole_file",
+                help="Turn this off only when you want a smaller test run.",
+            )
+        with r2:
+            if st.session_state.get("es_check_whole_file", True):
+                st.info("Full-file mode ON")
+            else:
+                st.number_input("Max total segments", min_value=5, max_value=5000, key="es_max_segments")
+
+    with st.expander("Advanced extraction & scan settings", expanded=False):
+        a1, a2 = st.columns(2)
+        with a1:
+            st.number_input("Segments per AI call", min_value=5, max_value=50, key="es_batch_size")
+            st.checkbox("Skip non-content sheets", key="es_skip_non_content")
+        with a2:
+            st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
+            st.markdown(
+                "<div class='es-soft-card'><p>Use deep scan when source/target columns are difficult to detect automatically. It can take longer on large files.</p></div>",
+                unsafe_allow_html=True,
+            )
+
+    with st.expander("No-API spelling / grammar / style engine", expanded=True):
+        st.checkbox(
+            "Run global spelling, grammar, and style checks",
+            value=True,
+            key="es_enable_languagetool",
+            help="No OpenAI/Gemini key is needed. This uses LanguageTool when available.",
+        )
+        lt1, lt2 = st.columns(2)
+        with lt1:
+            st.selectbox(
+                "Grammar engine mode",
+                ["public", "local"],
+                key="es_languagetool_mode",
+                help="public = no API key but text may be sent to LanguageTool public service; local = private/local LanguageTool if available.",
+            )
+        with lt2:
+            st.number_input("Max chars per segment", min_value=200, max_value=3000, value=1200, step=100, key="es_languagetool_max_chars")
+        st.caption("For best no-API QA, set the target language/locale correctly. Public mode may send text to LanguageTool; for confidential client files use local/private mode or host your own LanguageTool server.")
+
+    with st.expander("Optional API keys", expanded=False):
+        if is_pro:
+            st.caption("Use these only when the client wants translation or review to run through their own provider account. Keys are used only for the current browser session.")
+        else:
+            st.caption("Optional: use your own language-engine key only when you want AI QA suggestions. Offline QA rules work without any API key.")
+        a1, a2 = st.columns(2)
+        with a1:
+            st.text_input("Language-engine API key (optional)", type="password", key="es_user_openai_api_key")
+        with a2:
+            if is_pro:
+                st.text_input("Independent-review API key (optional)", type="password", key="es_user_gemini_api_key")
+            else:
+                st.info("Independent review key is used only in ErrorSweep Pro.")
+        st.caption(f"Managed server AI is {'enabled' if managed_ai_allowed() else 'disabled'} by deployment settings.")
+
+    return get_page_settings()
+
+def render_control_center_page() -> None:
+    st.markdown("## Control Center")
+    st.caption("All controls that were previously in the left panel are now available here.")
+
+    st.markdown("### QA Settings")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.selectbox(
             "Content Domain",
             [
                 "Auto-detect",
@@ -2574,514 +5184,1295 @@ def render_dashboard() -> None:
                 "E-learning / Education",
                 "General",
             ],
+            key="es_domain",
         )
-
-        strictness = st.select_slider(
+    with c2:
+        st.select_slider(
             "QA Strictness",
             options=["Lenient", "Standard", "Strict", "Very Strict"],
-            value="Strict",
+            key="es_strictness",
         )
 
-        check_whole_file = st.checkbox(
-            "Check whole file",
-            value=True,
-            help="When enabled, ErrorSweep extracts and checks every available segment instead of stopping after a fixed limit."
-        )
-        if check_whole_file:
-            max_segments = 0
-            st.caption("Full-file mode is ON. For very large files this can take longer and use more API credits.")
+    st.markdown("### Scan Size")
+    st.checkbox(
+        "Check whole file",
+        key="es_check_whole_file",
+        help="When enabled, ErrorSweep extracts and checks every available segment instead of stopping after a fixed limit.",
+    )
+    if st.session_state.get("es_check_whole_file", True):
+        st.info("Full-file mode is ON. Large files can take longer and may consume more credits/API usage.")
+    else:
+        st.number_input("Max total segments", min_value=5, max_value=5000, key="es_max_segments")
+    st.number_input("Segments per AI call", min_value=5, max_value=50, key="es_batch_size")
+
+    st.markdown("### File Detection")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.text_input("Source column name/index", key="es_source_col_hint", placeholder="Example: Source Text or 2")
+    with d2:
+        st.text_input("Translation column name/index", key="es_target_col_hint", placeholder="Example: Original Translation or 3")
+    st.checkbox("Skip non-content sheets", key="es_skip_non_content")
+    st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
+
+    st.markdown("### ErrorSweep Pro")
+    st.text_input("Default target language", key="es_target_language", placeholder="Required for no-API QA: Spanish, French, Hindi, Arabic, ja-JP")
+
+    st.markdown("### API Cost Control")
+    st.info("API keys are optional. Without keys, ErrorSweep QA still runs in offline rule-based mode. ErrorSweep Pro uses glossary/DNT reference mode unless a language-engine key is provided.")
+    st.text_input("Your language-engine API key (optional, current session only)", type="password", key="es_user_openai_api_key", help="Use this only if you want AI QA or full translation to use your own API account.")
+    st.text_input("Your independent-review API key (optional, current session only)", type="password", key="es_user_gemini_api_key", help="Optional review engine key for independent review.")
+    st.caption(f"Managed server AI is {'enabled' if managed_ai_allowed() else 'disabled'} by deployment settings.")
+
+    st.markdown("### System Status")
+    c1, c2 = st.columns(2)
+    c1.metric("Language Engine", "Configured" if get_openai_client() else "Missing")
+    c2.metric("Review Engine", "Configured" if get_gemini_client() else "Missing")
+    st.caption("If an engine is missing, check Streamlit Secrets. This page replaces the hidden left panel.")
+
+
+def _format_dt(value: Any, with_time: bool = False) -> str:
+    if not value:
+        return "—"
+    try:
+        text = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%d %b %Y, %H:%M UTC" if with_time else "%d %b %Y")
+    except Exception:
+        return str(value)
+
+
+def _initials(name: str) -> str:
+    if not name:
+        return "ES"
+    parts = [p for p in re.split(r"[^A-Za-z0-9]+", name) if p]
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    if parts:
+        return parts[0][:2].upper()
+    return "ES"
+
+
+def _bool_label(flag: bool) -> str:
+    return "Enabled" if flag else "Disabled"
+
+
+def render_account_page(profile: Optional[Dict[str, Any]]) -> None:
+    user = get_current_user()
+    user_id = str(user.get("id") or "")
+    email = user.get("email") or st.session_state.get("errorsweep_username", "user@example.com")
+
+    if not profile:
+        st.warning("Profile unavailable. Please log out and sign in again.")
+        if st.button("Logout", key="account_logout_missing", use_container_width=True):
+            logout_user()
+        return
+
+    settings = get_page_settings()
+    jobs = get_recent_jobs(user_id, limit=6) if user_id else []
+
+    plan_key = normalize_plan(profile.get("plan"))
+    plan_name = PLAN_CATALOG.get(plan_key, PLAN_CATALOG["trial"])["name"]
+    monthly = int(profile.get("monthly_credits") or 0)
+    used = int(profile.get("used_credits") or 0)
+    remaining = max(0, monthly - used)
+    full_name = (profile.get("full_name") or email.split("@")[0]).strip()
+    display_name = full_name.replace(".", " ").replace("_", " ").title()
+    role_label = "Master Access" if is_admin_user() else "Member"
+    status_label = str(profile.get("subscription_status") or "active").replace("_", " ").title()
+    member_since = _format_dt(profile.get("created_at"))
+    last_activity = _format_dt(jobs[0].get("created_at"), with_time=True) if jobs else "No jobs yet"
+    initials = _initials(display_name or email)
+    workflow_mix = sum(1 for j in jobs if str(j.get("workflow", "")).lower().startswith("error"))
+    last_workflow = jobs[0].get("workflow") if jobs else "No recent workflow"
+    credits_used_pct = int(round((used / max(monthly, 1)) * 100)) if monthly else 0
+
+    st.markdown("## Account Overview")
+    st.markdown(f"""
+    <div class="account-hero">
+        <div class="account-hero-grid">
+            <div class="account-avatar">{escape(initials)}</div>
+            <div>
+                <div class="account-title">{escape(display_name)}</div>
+                <div class="account-subline">{escape(email)}</div>
+                <div class="account-badge-row">
+                    <span class="account-pill plan">Plan · {escape(plan_name)}</span>
+                    <span class="account-pill role">Role · {escape(role_label)}</span>
+                    <span class="account-pill status">Status · {escape(status_label)}</span>
+                    <span class="account-pill security">Managed AI · {escape(_bool_label(managed_ai_allowed()))}</span>
+                </div>
+            </div>
+            <div class="account-kpi-wrap">
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Credits Remaining</div>
+                    <div class="account-kpi-value">{remaining}</div>
+                    <div class="account-kpi-sub">of {monthly} monthly credits</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Usage This Cycle</div>
+                    <div class="account-kpi-value">{credits_used_pct}%</div>
+                    <div class="account-kpi-sub">{used} credits consumed</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Recent Activity</div>
+                    <div class="account-kpi-value">{len(jobs)}</div>
+                    <div class="account-kpi-sub">latest 6 jobs tracked</div>
+                </div>
+                <div class="account-kpi">
+                    <div class="account-kpi-label">Member Since</div>
+                    <div class="account-kpi-value" style="font-size:18px;">{escape(member_since)}</div>
+                    <div class="account-kpi-sub">last active {escape(last_activity)}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Current Plan", plan_name)
+    c2.metric("Credits Remaining", remaining)
+    c3.metric("Used Credits", used)
+    c4.metric("Monthly Credits", monthly)
+    st.progress(min(1.0, used / max(monthly, 1)) if monthly else 0.0)
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("### Profile & Access")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Display name</div><div class="account-value">{escape(display_name)}</div></div>
+                <div class="account-info-item"><div class="account-label">Email</div><div class="account-value">{escape(email)}</div></div>
+                <div class="account-info-item"><div class="account-label">Role</div><div class="account-value">{escape(role_label)}</div></div>
+                <div class="account-info-item"><div class="account-label">Account status</div><div class="account-value">{escape(status_label)}</div></div>
+                <div class="account-info-item"><div class="account-label">Member since</div><div class="account-value">{escape(member_since)}</div></div>
+                <div class="account-info-item"><div class="account-label">Last activity</div><div class="account-value">{escape(last_activity)}</div></div>
+                <div class="account-info-item"><div class="account-label">User ID</div><div class="account-value">{escape(user_id or '—')}</div></div>
+                <div class="account-info-item"><div class="account-label">Recent workflow</div><div class="account-value">{escape(str(last_workflow))}</div></div>
+            </div>
+            <div class="account-soft-note">Your account details, plan status, and current access level are shown here. This page is designed as a premium user profile dashboard for clients and internal team members.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with right:
+        st.markdown("### Workflow Preferences")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Content domain</div><div class="account-value">{escape(str(settings['domain']))}</div></div>
+                <div class="account-info-item"><div class="account-label">QA strictness</div><div class="account-value">{escape(str(settings['strictness']))}</div></div>
+                <div class="account-info-item"><div class="account-label">Default target language</div><div class="account-value">{escape(str(settings['target_language']))}</div></div>
+                <div class="account-info-item"><div class="account-label">Batch size</div><div class="account-value">{settings['batch_size']}</div></div>
+                <div class="account-info-item"><div class="account-label">Full-file scan</div><div class="account-value">{escape('On' if settings['check_whole_file'] else 'Off')}</div></div>
+                <div class="account-info-item"><div class="account-label">Deep scan fallback</div><div class="account-value">{escape('On' if settings['deep_scan'] else 'Off')}</div></div>
+                <div class="account-info-item"><div class="account-label">User language engine key</div><div class="account-value">{escape(_bool_label(bool(get_user_openai_key())))}</div></div>
+                <div class="account-info-item"><div class="account-label">Independent review key</div><div class="account-value">{escape(_bool_label(bool(get_user_gemini_key())))}</div></div>
+            </div>
+            <div class="account-soft-note">These are the workflow preferences currently active in this session. Users can fine-tune QA and translation settings inside the ErrorSweep and ErrorSweep Pro pages.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    s1, s2 = st.columns(2)
+    with s1:
+        st.markdown("### Security & Access")
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Login method</div><div class="account-value">Email + password</div></div>
+                <div class="account-info-item"><div class="account-label">Managed AI mode</div><div class="account-value">{escape(_bool_label(managed_ai_allowed()))}</div></div>
+                <div class="account-info-item"><div class="account-label">Admin / master access</div><div class="account-value">{escape('Granted' if is_admin_user() else 'No')}</div></div>
+                <div class="account-info-item"><div class="account-label">Session state</div><div class="account-value">Authenticated</div></div>
+                <div class="account-info-item"><div class="account-label">Billing model</div><div class="account-value">Credits + plan based</div></div>
+                <div class="account-info-item"><div class="account-label">Data processing</div><div class="account-value">Private app workflow</div></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with s2:
+        st.markdown("### Usage Snapshot")
+        qa_jobs = sum(1 for j in jobs if 'qa' in str(j.get('workflow','')).lower() or 'errorsweep' in str(j.get('workflow','')).lower())
+        pro_jobs = sum(1 for j in jobs if 'pro' in str(j.get('workflow','')).lower())
+        st.markdown(f"""
+        <div class="account-info-card">
+            <div class="account-info-grid">
+                <div class="account-info-item"><div class="account-label">Tracked jobs</div><div class="account-value">{len(jobs)}</div></div>
+                <div class="account-info-item"><div class="account-label">QA runs</div><div class="account-value">{qa_jobs}</div></div>
+                <div class="account-info-item"><div class="account-label">Pro runs</div><div class="account-value">{pro_jobs}</div></div>
+                <div class="account-info-item"><div class="account-label">Workflow mix</div><div class="account-value">{workflow_mix} tracked activity items</div></div>
+                <div class="account-info-item"><div class="account-label">Credits consumed</div><div class="account-value">{used}</div></div>
+                <div class="account-info-item"><div class="account-label">Next best action</div><div class="account-value">{escape('Upgrade plan' if remaining <= max(5, monthly * 0.1) else 'Continue working')}</div></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### Actions")
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        if st.button("Go to Billing", use_container_width=True, key="account_go_billing"):
+            st.session_state["es_page"] = "Billing"
+            st.rerun()
+    with a2:
+        if st.button("Open ErrorSweep", use_container_width=True, key="account_go_qa"):
+            st.session_state["es_page"] = "ErrorSweep"
+            st.rerun()
+    with a3:
+        if st.button("Send reset email", use_container_width=True, key="account_reset_email"):
+            ok, msg = auth_send_password_reset(email)
+            (st.success if ok else st.error)(msg)
+    with a4:
+        if st.button("Logout", type="primary", use_container_width=True, key="account_logout_button"):
+            logout_user()
+
+    st.markdown("### Recent activity")
+    if jobs:
+        job_rows = []
+        for j in jobs:
+            job_rows.append({
+                "Created": _format_dt(j.get("created_at"), with_time=True),
+                "Workflow": j.get("workflow", "—"),
+                "File": j.get("file_name") or j.get("filename") or "—",
+                "Status": j.get("status", "—"),
+                "Credits": j.get("credits_used") or j.get("credits") or 0,
+            })
+        st.dataframe(pd.DataFrame(job_rows), use_container_width=True, hide_index=True)
+    else:
+        st.markdown('<div class="account-activity-empty">No activity yet. Run your first QA check or translation workflow to start building account history.</div>', unsafe_allow_html=True)
+
+
+# ==========================================================
+# PAYMENT HISTORY / WEBHOOK STATUS
+# ==========================================================
+
+def payment_events_table_available() -> bool:
+    if not supabase_service_configured():
+        return False
+    ok, data = supabase_get("/rest/v1/payment_events?select=id&limit=1", kind="service")
+    return bool(ok)
+
+
+def get_user_payment_events(profile: Optional[Dict[str, Any]], limit: int = 25) -> List[Dict[str, Any]]:
+    if not profile or not supabase_service_configured():
+        return []
+    user_id = profile.get("id", "")
+    email = profile.get("email", "")
+
+    queries = []
+    if user_id:
+        queries.append(f"/rest/v1/payment_events?user_id=eq.{user_id}&select=*&order=created_at.desc&limit={int(limit)}")
+    if email:
+        queries.append(f"/rest/v1/payment_events?user_email=ilike.{quote(str(email))}&select=*&order=created_at.desc&limit={int(limit)}")
+
+    rows_by_id: Dict[str, Dict[str, Any]] = {}
+    for query in queries:
+        ok, data = supabase_get(query, kind="service")
+        if ok and isinstance(data, list):
+            for row in data:
+                rid = str(row.get("id") or row.get("payment_id") or len(rows_by_id))
+                rows_by_id[rid] = row
+    rows = list(rows_by_id.values())
+    rows.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    return rows[:limit]
+
+
+def admin_list_payment_events(limit: int = 100, email_filter: str = "") -> List[Dict[str, Any]]:
+    if not supabase_service_configured():
+        return []
+    if email_filter.strip():
+        query = f"/rest/v1/payment_events?user_email=ilike.{quote('%' + email_filter.strip() + '%')}&select=*&order=created_at.desc&limit={int(limit)}"
+    else:
+        query = f"/rest/v1/payment_events?select=*&order=created_at.desc&limit={int(limit)}"
+    ok, data = supabase_get(query, kind="service")
+    if ok and isinstance(data, list):
+        return data
+    return []
+
+
+def format_payment_events_for_display(events: List[Dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for event in events:
+        amount = event.get("amount")
+        if amount is not None:
+            try:
+                amount_display = round(float(amount) / 100, 2)
+            except Exception:
+                amount_display = amount
         else:
-            max_segments = st.number_input("Max total segments", min_value=5, max_value=5000, value=200)
-        batch_size = st.number_input("Segments per AI call", min_value=5, max_value=50, value=20)
+            amount_display = ""
+        rows.append({
+            "Date": event.get("created_at", ""),
+            "Email": event.get("user_email", ""),
+            "Plan": event.get("plan", ""),
+            "Credits": event.get("credits", ""),
+            "Amount": amount_display,
+            "Currency": event.get("currency", ""),
+            "Status": event.get("status", ""),
+            "Processed": "Yes" if event.get("processed") else "No",
+            "Payment ID": event.get("payment_id", ""),
+            "Error": event.get("error", ""),
+        })
+    return pd.DataFrame(rows)
 
-        st.divider()
-        st.markdown("### File Detection")
-        source_col_hint = st.text_input("Source column name/index", value="", placeholder="Source Text or 2")
-        target_col_hint = st.text_input("Translation column name/index", value="", placeholder="Original Translation or 3")
-        skip_non_content = st.checkbox("Skip non-content sheets", value=True)
-        deep_scan = st.checkbox("Deep scan if columns are not found", value=False)
 
-        # Models are intentionally hidden from the UI for a cleaner client-facing experience.
-        openai_model = DEFAULT_OPENAI_MODEL
-        gemini_model = DEFAULT_GEMINI_MODEL
+def render_payment_history_section(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("### Payment history")
+    if not payment_events_table_available():
+        st.info("Payment event tracking is not active yet. Run the payment webhook SQL setup in Supabase to enable payment history and automatic plan upgrades.")
+        with st.expander("Supabase SQL setup needed", expanded=False):
+            st.write("Run the Razorpay payment webhook schema SQL in Supabase. This creates the `payment_events` table and payment columns in `profiles`.")
+        return
 
-    openai_client = get_openai_client()
-    gemini_client = get_gemini_client()
+    events = get_user_payment_events(profile, limit=25)
+    if not events:
+        st.info("No payment events found yet. After a successful payment webhook, events will appear here.")
+        return
 
-    if openai_client is None:
-        st.warning("AI service is not configured. Please contact the administrator.")
+    df = format_payment_events_for_display(events)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
-    st.markdown("### Upload")
+    processed = sum(1 for e in events if e.get("processed"))
+    pending = len(events) - processed
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Payment Events", len(events))
+    c2.metric("Processed", processed)
+    c3.metric("Pending / Failed", pending)
+
+
+def render_billing_page(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Billing & Plans")
+    st.caption("Use payment links for MVP billing. If Razorpay webhook is configured, upgrades can be automatic. Manual admin upgrade remains available as backup.")
+
+    if not profile:
+        st.warning("Profile unavailable. Please log out and log in again.")
+        return
+
+    current_plan = normalize_plan(profile.get("plan"))
+    monthly = int(profile.get("monthly_credits") or 0)
+    used = int(profile.get("used_credits") or 0)
+    remaining = max(0, monthly - used)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Current Plan", PLAN_CATALOG[current_plan]["name"])
+    c2.metric("Credits Remaining", remaining)
+    c3.metric("Used Credits", used)
+    c4.metric("Monthly Credits", monthly)
+
+    if monthly > 0:
+        st.progress(min(1.0, used / max(monthly, 1)))
+
+    if remaining <= max(5, monthly * 0.10):
+        st.warning("Credits are low. Upgrade or contact admin to add credits.")
+
+    st.markdown("### Choose a plan")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        with st.container(border=True):
+            render_plan_card("errorsweep", current_plan)
+    with p2:
+        with st.container(border=True):
+            render_plan_card("pro", current_plan)
+    with p3:
+        with st.container(border=True):
+            render_plan_card("agency", current_plan)
+
+    with st.expander("Enterprise / custom plan", expanded=False):
+        render_plan_card("enterprise", current_plan)
+
+    render_payment_history_section(profile)
+
+    st.markdown("### How billing works")
+    st.markdown(
+        """
+        **Preferred automatic flow**
+
+        1. User clicks an upgrade button and completes payment.
+        2. Payment provider sends a webhook to Supabase Edge Function.
+        3. Supabase updates the user's plan and credits automatically.
+        4. User refreshes ErrorSweep and sees upgraded credits.
+
+        **Manual backup flow**
+
+        If webhook is not configured or a payment used a different email, admin can still verify payment manually and upgrade the user from the **Admin** page.
+        """
+    )
+
+    st.markdown("### Credit charging guide")
+    st.dataframe(
+        pd.DataFrame([
+            {"Workflow": "ErrorSweep QA", "Credit rule": "1 credit per 100 segments", "Notes": "Rules ZIP adds 1 credit"},
+            {"Workflow": "ErrorSweep Pro", "Credit rule": "3 credits per 75 segments", "Notes": "Independent review and Rules ZIP may add credits"},
+            {"Workflow": "Offline QA", "Credit rule": "Same app credits apply", "Notes": "API availability does not make runs free"},
+        ]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Secrets to add for payment buttons")
+    st.code(
+        'PAYMENT_LINK_ERRORSWEEP = "https://your-payment-link-for-errorsweep"\n'
+        'PAYMENT_LINK_PRO = "https://your-payment-link-for-pro"\n'
+        'PAYMENT_LINK_AGENCY = "https://your-payment-link-for-agency"\n'
+        'PAYMENT_LINK_ENTERPRISE = "https://your-enterprise-contact-or-payment-link"',
+        language="toml",
+    )
+
+
+def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
+    st.markdown(
+        """
+    <div class="hero">
+        <div class="hero-title">ErrorSweep</div>
+        <div class="hero-sub">QA suggestions, company rules ZIP, translation, and independent review</div>
+        <div class="hero-badge">Top navigation · Workflow settings inside each page · Secure memory manager</div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="note-card">
+        <b>Navigation updated:</b> Each workflow now contains its own settings. ErrorSweep has QA settings; ErrorSweep Pro has translation/review settings and API options.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if user_id:
+        render_usage_dashboard(user_id)
+
+    render_settings_summary(settings)
+
+    st.markdown("### Workflows")
+    st.markdown(
+        """
+        <div class="es-visual-grid">
+          <div class="es-tile"><h4>ErrorSweep</h4><p>QA settings, file detection, offline rules, optional API key, and QA Rules ZIP are all inside this page.</p></div>
+          <div class="es-tile"><h4>ErrorSweep Pro</h4><p>Target language, translation settings, optional API keys, review settings, and Pro Rules ZIP are all inside this page.</p></div>
+          <div class="es-tile"><h4>Billing</h4><p>View credits, plans, and upgrade options without using a sidebar.</p></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_rule_upload(prefix: str, user_id: str = "", workflow_type: str = "both") -> Tuple[Any, Any, Dict[str, Any]]:
     uploaded_file = st.file_uploader(
         "Upload file",
-        type=["xlsx", "csv", "txt", "json", "xml", "xliff", "xlf", "srt", "docx"],
+        type=None,
+        key=f"{prefix}_uploaded_file",
+        help="Upload any file. ErrorSweep will automatically extract text/segments from Excel, Word, PDF, CSV, XLIFF/XML/XLZ, JSON, subtitles, PO/properties, and other text-like files. Binary files without readable text will return an Excel report explaining the issue.",
     )
+
+    saved_rules, selected_pack_id = render_rule_pack_selector(user_id, workflow_type, prefix) if user_id else ({"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}, None)
+
     rules_zip = st.file_uploader(
         "Upload Rules ZIP (optional: style guide, DNT list, glossary, instructions, references)",
         type=["zip"],
+        key=f"{prefix}_rules_zip",
     )
-
-    rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
+    uploaded_rules = {"chunks": [], "glossary": [], "dnt": [], "files": [], "warnings": []}
     if rules_zip:
-        rules = parse_rules_zip_bytes(rules_zip.getvalue())
+        uploaded_rules = parse_rules_zip_bytes(rules_zip.getvalue())
         with st.expander("Rules ZIP summary", expanded=False):
-            st.write(f"Files parsed: {len(rules.get('files', []))}")
-            st.write(f"Rule chunks: {len(rules.get('chunks', []))}")
-            st.write(f"Glossary entries: {len(rules.get('glossary', []))}")
-            st.write(f"DNT entries: {len(rules.get('dnt', []))}")
-            if rules.get("files"):
-                st.write(rules.get("files")[:20])
-            for w in rules.get("warnings", []):
+            st.write(f"Files parsed: {len(uploaded_rules.get('files', []))}")
+            st.write(f"Rule chunks: {len(uploaded_rules.get('chunks', []))}")
+            st.write(f"Glossary entries: {len(uploaded_rules.get('glossary', []))}")
+            st.write(f"DNT entries: {len(uploaded_rules.get('dnt', []))}")
+            if uploaded_rules.get("files"):
+                st.write(uploaded_rules.get("files")[:20])
+            for w in uploaded_rules.get("warnings", []):
                 st.warning(w)
+        render_rule_pack_save_box(user_id, prefix, workflow_type, uploaded_rules, rules_zip.name, default_domain=st.session_state.get("es_domain", ""))
 
-    if mode_choice == "Auto Detect Task" and uploaded_file is not None:
-        requested_task = infer_task_from_request(task_request)
-        if requested_task:
-            effective_task = requested_task
-            effective_reason = "Task detected from vendor request/instruction."
+    # Saved rule pack + uploaded ZIP are merged; uploaded ZIP can supplement/override current run context.
+    rules = merge_rules(saved_rules, uploaded_rules)
+    return uploaded_file, rules_zip or selected_pack_id, rules
+
+
+
+
+# ==========================================================
+# OFFLINE / REFERENCE-ONLY TRANSLATION FALLBACK
+# ==========================================================
+
+def _apply_glossary_replacements(source_text: str, rules: Dict[str, Any]) -> Tuple[str, int]:
+    """Very conservative no-API pre-translation.
+
+    It uses only uploaded glossary terms. This is NOT a full machine translation.
+    It is a safe fallback when no language engine/API key is available.
+    """
+    result = source_text or ""
+    replacements = 0
+    glossary = rules.get("glossary", []) if rules else []
+    # Longest first avoids replacing small substrings before longer terms.
+    glossary_sorted = sorted(glossary, key=lambda g: len(str(g.get("source_term", ""))), reverse=True)
+    for g in glossary_sorted[:1000]:
+        src = normalize_text(g.get("source_term", ""))
+        tgt = normalize_text(g.get("target_term", ""))
+        if not src or not tgt:
+            continue
+        pattern = re.compile(re.escape(src), re.IGNORECASE)
+        result, count = pattern.subn(tgt, result)
+        replacements += count
+    return result, replacements
+
+
+def offline_reference_translate_batch(
+    segments: List[Dict[str, Any]],
+    target_language: str,
+    rules: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """No-API fallback for ErrorSweep Pro.
+
+    Full translation needs a translation engine. When no API is available, this
+    function still keeps the workflow alive by applying uploaded glossary/DNT
+    references and returning safe placeholder output. It never pretends that a
+    full professional translation was produced.
+    """
+    output = []
+    dnt_terms = [normalize_text(d.get("term", "")) for d in (rules.get("dnt", []) if rules else []) if normalize_text(d.get("term", ""))]
+    for seg in segments:
+        loc = seg.get("location", "")
+        source = normalize_text(seg.get("source") or seg.get("text") or "")
+        if not source:
+            output.append({"location": loc, "translation": ""})
+            continue
+        # Preserve placeholders-only, DNT-only, or bracket labels as-is.
+        if source.startswith("[") and source.endswith("]"):
+            translation = source
+        elif any(term and source.strip() == term for term in dnt_terms):
+            translation = source
         else:
-            effective_task, effective_reason = infer_task_from_file(uploaded_file, source_col_hint, target_col_hint)
-        effective_mode_choice = "ErrorSweep — QA Run + Suggestions" if effective_task == "qa" else "ErrorSweep Pro — Translate + Review"
-        st.info(f"Auto detected workflow: {'QA Run' if effective_task == 'qa' else 'Translation + Review'} — {effective_reason}")
-    elif mode_choice == "Auto Detect Task":
-        effective_mode_choice = "ErrorSweep — QA Run + Suggestions"
-        st.info("Upload a file to auto-detect QA vs Translation workflow.")
-    else:
-        effective_mode_choice = mode_choice
+            translation, count = _apply_glossary_replacements(source, rules)
+            # If no glossary replacement happened, keep target blank rather than
+            # copying English as a fake translation.
+            if count == 0:
+                translation = ""
+        output.append({"location": loc, "translation": translation})
+    return output
 
-    # ==========================================================
-    # ERROR SWEEP QA ONLY
-    # ==========================================================
 
-    if effective_mode_choice.startswith("ErrorSweep —"):
-        st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-        st.caption("Use this version for reviewing existing translations. Rules ZIP is optional. Suggestions are guarded to avoid subjective rewrites.")
+def build_offline_translation_review_rows(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> List[Dict[str, Any]]:
+    rows = []
+    for seg in segments:
+        loc = seg.get("location", "")
+        trans = translations_by_loc.get(loc, "")
+        if not trans:
+            rows.append(make_report_row(
+                {**seg, "translation": ""},
+                "Translation Engine Required",
+                "Review",
+                "No offline full translation available",
+                "Provide a language-engine API key or upload a glossary/rule pack with approved translations.",
+                "Offline mode can apply deterministic QA and glossary/DNT references, but it cannot generate full professional translations for arbitrary global languages.",
+                "Offline Reference Mode",
+                "Built-in fallback",
+                "High",
+            ))
+    return rows
 
-        st.markdown("### ErrorSweep Quality Gate")
-        qa_lang_col, qa_gate_col = st.columns(2)
-        with qa_lang_col:
-            st.session_state["qa_target_language"] = st.text_input(
-                "Target language / locale for QA",
-                value=st.session_state.get("qa_target_language", "Auto-detect"),
-                placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP",
-                help="For no-API QA, set this correctly so ErrorSweep can detect untranslated English/Latin leftovers and script issues.",
+def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
+    st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
+    st.caption("Review existing translations with a simpler layout. Only the key controls stay visible, while advanced settings remain tucked away until needed.")
+    settings = render_inline_workflow_settings("qa")
+    render_settings_summary(settings)
+
+    openai_client = get_openai_client()
+    if openai_client is None:
+        st.info("Offline QA mode is available. Deterministic rules, company Rules ZIP, glossary, DNT, placeholders, numbers, spacing, punctuation, and language-specific checks can run without any API key. App credits still apply to generate reports.")
+
+    uploaded_file, rules_zip, rules = render_rule_upload("qa", user_id=user_id, workflow_type="qa")
+    tm_controls = render_translation_memory_controls("qa", default_target_language=settings.get("target_language", ""))
+    history_corrections = load_correction_history_as_rules(
+        user_id,
+        client_key=tm_controls.get("client_key", "global"),
+        target_language=tm_controls.get("target_language", settings.get("target_language", "auto-detect")),
+        domain=settings.get("domain", ""),
+    )
+    if history_corrections:
+        rules.setdefault("corrections", [])
+        rules["corrections"].extend(history_corrections)
+        st.info(f"Loaded {len(history_corrections)} approved correction-history rule(s) for this QA run.")
+
+    st.markdown("### QA run options")
+    q1, q2, q3 = st.columns(3)
+    with q1:
+        run_rules = st.checkbox("Rule-based QA", value=True, key="qa_run_rules")
+    with q2:
+        run_ai = st.checkbox("AI suggestions", value=bool(openai_client), key="qa_run_ai")
+    with q3:
+        output_highlighted = st.checkbox("Highlight Excel output", value=True, key="qa_highlight")
+    with st.expander("Advanced QA options", expanded=False):
+        a1, a2 = st.columns(2)
+        with a1:
+            run_zwnj = st.checkbox("Check ZWNJ / invisible character issues", value=True, key="qa_zwnj")
+        with a2:
+            include_ai_style = st.checkbox("Allow subjective style / terminology suggestions", value=False, key="qa_ai_style")
+
+    run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_qa_no_sidebar")
+
+    if uploaded_file and run:
+        if run_ai and openai_client is None:
+            st.warning("AI QA is unavailable, so ErrorSweep will continue in offline rule-based mode. No API key is required, but app credits are still required for the report.")
+            run_ai = False
+        if not run_rules and not run_ai:
+            st.warning("No checks selected. Turning deterministic offline rules ON so the file can still be reviewed without API keys.")
+            run_rules = True
+
+        start = time.time()
+        status = st.empty()
+        progress = st.progress(0)
+        report_rows: List[Dict[str, Any]] = []
+        logs = []
+        lower = uploaded_file.name.lower()
+        workbook = None
+        cell_map = {}
+        output_bytes = None
+        mime_type = "text/csv"
+        output_name = "errorsweep_report_" + uploaded_file.name
+
+        file_bytes = uploaded_file_bytes(uploaded_file)
+        if lower.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or is_openpyxl_compatible(file_bytes):
+            workbook, segments, cell_map, _, logs = extract_excel_segments(
+                io.BytesIO(file_bytes), settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
             )
-        with qa_gate_col:
-            st.session_state["qa_domain"] = domain
-            strict_quality_gate = st.checkbox(
-                "Strict quality gate (real errors first)",
-                value=True,
-                help="Confirmed errors are shown first. Lower-confidence grammar/style issues are marked Needs Review, not as definite errors.",
-            )
+        elif lower.endswith(".csv"):
+            _, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "qa", int(settings["max_segments"]), settings["deep_scan"])
+        elif lower.endswith(".docx"):
+            _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(settings["max_segments"]), settings["source_col_hint"], settings["target_col_hint"])
+        elif lower.endswith(".pdf"):
+            segments, logs = extract_pdf_segments(uploaded_file, "qa", int(settings["max_segments"]))
+        else:
+            _, segments, logs = extract_text_segments(uploaded_file, "qa", int(settings["max_segments"]))
 
-        q1, q2, q3 = st.columns(3)
-        with q1:
-            run_rules = st.checkbox("Rule-based QA", value=True)
-            run_zwnj = st.checkbox("ZWNJ / invisible character checks", value=True)
-        with q2:
-            run_ai = st.checkbox("AI QA suggestions", value=bool(openai_client))
-            include_ai_style = st.checkbox("Allow subjective AI style/terminology suggestions", value=False)
-        with q3:
-            output_highlighted = st.checkbox("Highlight Excel output", value=True)
+        with st.expander("Extraction log", expanded=True):
+            for log in logs:
+                st.write(log)
+            st.info(f"Found {len(segments)} segment(s) to check. Full-file mode is {'ON' if settings['check_whole_file'] else 'OFF'}.")
 
-        with st.expander("No-API spelling / grammar / style checks", expanded=True):
-            st.session_state["qa_enable_languagetool"] = st.checkbox(
-                "Enable no-API spelling, grammar, and style engine",
-                value=st.session_state.get("qa_enable_languagetool", True),
-                help="Uses LanguageTool if available. Public mode may send text to LanguageTool; local mode needs a private/local LanguageTool server.",
-            )
-            lt1, lt2 = st.columns(2)
-            with lt1:
-                st.session_state["qa_languagetool_mode"] = st.selectbox(
-                    "Grammar engine mode",
-                    ["public", "local"],
-                    index=0 if st.session_state.get("qa_languagetool_mode", "public") == "public" else 1,
-                )
-            with lt2:
-                st.session_state["qa_languagetool_max_chars"] = st.number_input(
-                    "Max chars per segment",
-                    min_value=200,
-                    max_value=3000,
-                    value=int(st.session_state.get("qa_languagetool_max_chars", 1200)),
-                    step=100,
-                )
-            st.caption("For confidential enterprise files, use local/private LanguageTool or self-hosted grammar backend. Public mode is best for testing.")
+        if not segments:
+            st.error("No segments found. Use the settings panel on this page to set source/translation columns or enable deep scan.")
+            st.stop()
 
-        run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file)
+        # App credits are required for every generated report, even when API/AI is unavailable.
+        # API credits and ErrorSweep app credits are separate:
+        # - API credits pay the external language/review engine provider.
+        # - App credits pay for ErrorSweep extraction, rule checks, report generation, storage/logging, and product usage.
+        using_managed_ai = bool(run_ai and openai_client)
+        segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
+            segments, profile, "qa", rules_zip_used=bool(rules_zip), independent_review=False
+        )
+        if not segments:
+            st.error(f"{credit_message} App credits are required for all QA reports, including offline rule-based reports.")
+            st.stop()
+        if "Not enough credits" in credit_message:
+            st.warning(credit_message)
+        else:
+            st.info(credit_message)
+        engine_label = "Offline rules + managed AI QA" if using_managed_ai else "Offline rules only"
+        st.info(f"Engine: {engine_label}. API availability does not block offline QA; app credits still apply.")
 
-        if uploaded_file and run:
-            if run_ai and openai_client is None:
-                st.warning("AI QA is not configured. Continuing with no-API Quality Gate checks.")
-                run_ai = False
+        if run_rules:
+            status.text("Running deterministic checks...")
+            for idx, seg in enumerate(segments, start=1):
+                report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
+                progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
 
-            start = time.time()
-            status = st.empty()
-            progress = st.progress(0)
-            report_rows: List[Dict[str, Any]] = []
-            logs = []
-            lower = uploaded_file.name.lower()
-            workbook = None
-            cell_map = {}
-            output_bytes = None
-            mime_type = "text/csv"
-            output_name = "errorsweep_report_" + uploaded_file.name
+        if tm_controls.get("use"):
+            status.text("Checking secure translation memory...")
+            tm_rows = tm_qa_memory_report_rows(user_id, segments, tm_controls["target_language"], tm_controls["client_key"])
+            if tm_rows:
+                st.info(f"Secure Translation Memory found {len(tm_rows)} exact-match suggestion(s).")
+            report_rows.extend(tm_rows)
 
-            # Extract segments
-            if lower.endswith(".xlsx"):
-                workbook, segments, cell_map, _, logs = extract_excel_segments(
-                    uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), skip_non_content, deep_scan
-                )
-            elif lower.endswith(".csv"):
-                _, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "qa", int(max_segments), deep_scan)
-            elif lower.endswith(".docx"):
-                _, segments, _, logs = extract_docx_segments(uploaded_file, "qa", int(max_segments), source_col_hint, target_col_hint)
-            else:
-                _, segments, logs = extract_text_segments(uploaded_file, "qa", int(max_segments))
-
-            with st.expander("Extraction log", expanded=True):
-                for log in logs:
-                    st.write(log)
-                st.info(f"Found {len(segments)} segment(s) to check. Full-file mode is {'ON' if check_whole_file else 'OFF'}.")
-
-            if not segments:
-                st.error("No segments found. Try setting source/translation column names in the sidebar or enable deep scan.")
-                st.stop()
-
-            credits_needed = calculate_credit_cost("qa", len(segments), rules_zip_used=bool(rules_zip), independent_review=False)
-            can_run, credit_msg = credit_preflight(profile, credits_needed)
-            if not can_run:
-                st.error(credit_msg)
-                st.stop()
-            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
-
-            # Rule engine
-            if run_rules:
-                status.text("Running deterministic checks...")
-                for idx, seg in enumerate(segments, start=1):
-                    report_rows.extend(deterministic_checks(seg, rules, enable_zwnj=run_zwnj))
-                    progress.progress(min(idx / max(len(segments), 1) * 0.35, 0.35))
-
-            # AI QA
-            if run_ai:
-                status.text("Running AI QA suggestions...")
-                total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
-                for b in range(total_batches):
-                    batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                    status.text(f"AI QA batch {b + 1}/{total_batches}...")
-                    report_rows.extend(ai_qa_batch(openai_client, openai_model, batch, rules, domain, strictness, include_ai_style))
-                    progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
-
-            report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
-            if dropped_ai_rows:
-                st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
-
-            progress.progress(1.0)
-            status.text(f"QA complete in {round(time.time() - start, 2)} seconds.")
-
-            # Output
-            if lower.endswith(".xlsx") and workbook is not None:
-                if output_highlighted:
-                    highlight_excel_cells(cell_map, report_rows)
-                issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "QA Status", "Evidence Level", "Action Required", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence", "Autofix Possible", "Rule ID"]
-                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Quality Gate + AI QA")
-                status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
-                add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
-                add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, issue_headers)
-                bio = io.BytesIO()
-                workbook.save(bio)
-                bio.seek(0)
-                output_bytes = bio.getvalue()
-                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                output_name = "errorsweep_reviewed_" + uploaded_file.name
-            else:
-                status_rows = build_segment_status_rows(segments, report_rows, checked_by="Quality Gate + AI QA")
-                output_bytes = build_quality_gate_excel_report(report_rows, status_rows, logs, title="ErrorSweep QA Report")
-                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                output_name = "errorsweep_qa_report_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
-
-            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                user_id=user_id,
-                credits=credits_needed,
-                workflow="qa",
-                file_name=uploaded_file.name,
-                segment_count=len(segments),
-                metadata={"issues": len(report_rows), "rules_zip": bool(rules_zip)},
-            )
-            if not charge_ok:
-                st.error(charge_msg)
-                st.stop()
-            if refreshed_profile:
-                profile = refreshed_profile
-                st.session_state["sb_profile"] = refreshed_profile
-            log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
-            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
-
-            status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Quality Gate + AI QA")
-            st.markdown("### Segment Coverage")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Segments checked", len(status_rows_for_ui))
-            c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
-            c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
-            with st.expander("All Segment Review Preview", expanded=False):
-                st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
-
-            render_report(report_rows, "ErrorSweep QA Report")
-            st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-            st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="all_segment_review.csv", mime="text/csv", use_container_width=True)
-
-    # ==========================================================
-    # ERROR SWEEP PRO — TRANSLATE + REVIEW
-    # ==========================================================
-
-    else:
-        st.markdown("## ErrorSweep Pro — Translate + Review")
-        st.caption("Use this version to translate source content, run an independent review, and export a translated file plus review report.")
-
-        p1, p2, p3 = st.columns(3)
-        with p1:
-            target_language = st.text_input("Target language", value="", placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP")
-            st.session_state["pro_target_language"] = target_language or "Auto-detect"
-        with p2:
-            apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to output", value=False)
-        with p3:
-            review_with_gemini = st.checkbox("Run independent review", value=True)
-
-        run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file)
-
-        if uploaded_file and run_pro:
-            if openai_client is None:
-                st.error("AI service is not configured. Please contact the administrator.")
-                st.stop()
-            if review_with_gemini and gemini_client is None:
-                st.error("Independent review service is not configured. Please contact the administrator or disable independent review.")
-                st.stop()
-
-            start = time.time()
-            status = st.empty()
-            progress = st.progress(0)
-            lower = uploaded_file.name.lower()
-            logs = []
-            workbook = None
-            dataframe = None
-            text_original = None
-            doc = None
-            cell_map = {}
-            translation_col_map = {}
-            para_map = {}
-
-            if lower.endswith(".xlsx"):
-                workbook, segments, cell_map, translation_col_map, logs = extract_excel_segments(
-                    uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), skip_non_content, deep_scan
-                )
-            elif lower.endswith(".csv"):
-                dataframe, segments, logs = extract_csv_segments(uploaded_file, source_col_hint, target_col_hint, "pro", int(max_segments), deep_scan)
-            elif lower.endswith(".docx"):
-                doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(max_segments), source_col_hint, target_col_hint)
-            else:
-                text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(max_segments))
-
-            with st.expander("Extraction log", expanded=True):
-                for log in logs:
-                    st.write(log)
-                st.info(f"Found {len(segments)} segment(s) for translation. Full-file mode is {'ON' if check_whole_file else 'OFF'}.")
-
-            if not segments:
-                st.error("No source segments found. Try setting the source column name/index in the sidebar.")
-                st.stop()
-
-            credits_needed = calculate_credit_cost("pro", len(segments), rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini))
-            can_run, credit_msg = credit_preflight(profile, credits_needed)
-            if not can_run:
-                st.error(credit_msg)
-                st.stop()
-            st.info(f"Estimated credit cost: {credits_needed} credit(s) for {len(segments)} segment(s).")
-
-            # Translation
-            status.text("Translating file...")
-            translations_by_loc: Dict[str, str] = {}
-            total_batches = max(1, (len(segments) + int(batch_size) - 1) // int(batch_size))
+        if using_managed_ai:
+            status.text("Running AI QA suggestions...")
+            total_batches = max(1, (len(segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
             for b in range(total_batches):
-                batch = segments[b * int(batch_size):(b + 1) * int(batch_size)]
+                batch = segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
+                status.text(f"AI QA batch {b + 1}/{total_batches}...")
+                report_rows.extend(ai_qa_batch(openai_client, settings["openai_model"], batch, rules, settings["domain"], settings["strictness"], include_ai_style))
+                progress.progress(0.35 + ((b + 1) / total_batches) * 0.60)
+
+        report_rows, dropped_ai_rows = post_filter_report_rows(report_rows, include_ai_style)
+        if dropped_ai_rows:
+            st.info(f"Filtered {dropped_ai_rows} low-confidence or subjective AI suggestion(s).")
+
+        progress.progress(1.0)
+        status.text(f"QA complete in {round(time.time() - start, 2)} seconds.")
+
+        if lower.endswith(".xlsx") and workbook is not None:
+            if output_highlighted:
+                highlight_excel_cells(cell_map, report_rows)
+            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+            status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
+            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+            add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
+            add_report_sheet_to_workbook(workbook, "ErrorSweep Report", report_rows, issue_headers)
+            bio = io.BytesIO()
+            workbook.save(bio)
+            bio.seek(0)
+            output_bytes = bio.getvalue()
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_reviewed_" + uploaded_file.name
+        else:
+            status_rows = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
+            output_bytes = build_excel_report_bytes(
+                issue_rows=report_rows,
+                status_rows=status_rows,
+                extraction_logs=logs,
+                title="ErrorSweep QA Report",
+            )
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_review_report_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
+
+        refreshed_profile = profile
+        charge_ok, charge_msg, refreshed_profile = consume_user_credits(
+            user_id=user_id,
+            credits=credits_needed,
+            workflow="qa",
+            file_name=uploaded_file.name,
+            segment_count=len(segments),
+            metadata={
+                "issues": len(report_rows),
+                "rules_zip": bool(rules_zip),
+                "engine": "managed_ai" if using_managed_ai else "offline_rules",
+                "api_used": bool(using_managed_ai),
+            },
+        )
+        if not charge_ok:
+            st.error(f"Could not deduct app credits, so the report cannot be released. {charge_msg}")
+            st.stop()
+        if refreshed_profile:
+            st.session_state["sb_profile"] = refreshed_profile
+        st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
+        if tm_controls.get("save"):
+            saved_tm = tm_save_passed_qa_segments(
+                user_id,
+                segments,
+                report_rows,
+                tm_controls["target_language"],
+                tm_controls["client_key"],
+                domain=settings.get("domain", ""),
+            )
+            if saved_tm:
+                st.success(f"Saved {saved_tm} approved/pass segment(s) to encrypted Translation Memory.")
+            elif tm_secret_configured():
+                st.info("No pass segments were saved to Translation Memory for this run.")
+        log_report_record(user_id, "qa", uploaded_file.name, len(segments), len(report_rows), output_name, credits_needed)
+
+        status_rows_for_ui = build_segment_status_rows(segments, report_rows, checked_by="Rule Engine + AI QA")
+        st.markdown("### Segment Coverage")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Segments checked", len(status_rows_for_ui))
+        c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
+        c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
+        with st.expander("All Segment Review Preview", expanded=False):
+            st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
+        render_report(report_rows, "ErrorSweep QA Report")
+        st.download_button("Download ErrorSweep Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
+        st.download_button(
+            "Download Excel QA Report",
+            build_excel_report_bytes(report_rows, status_rows_for_ui, extraction_logs=logs, title="ErrorSweep QA Report"),
+            file_name="errorsweep_qa_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+
+def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
+    st.markdown("## ErrorSweep Pro — Translate + Review")
+    st.caption("Translate, review, and export with a cleaner Pro workflow. Start with the essentials first, then open advanced settings only when required.")
+    settings = render_inline_workflow_settings("pro")
+    render_settings_summary(settings)
+
+    openai_client = get_openai_client()
+    gemini_client = get_gemini_client()
+    if openai_client is None:
+        st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or self-hosted translation engine. App credits still apply to outputs.")
+
+    uploaded_file, rules_zip, rules = render_rule_upload("pro", user_id=user_id, workflow_type="pro")
+
+    target_language = settings.get("target_language", "")
+    tm_controls = render_translation_memory_controls("pro", default_target_language=target_language)
+    history_corrections = load_correction_history_as_rules(
+        user_id,
+        client_key=tm_controls.get("client_key", "global"),
+        target_language=tm_controls.get("target_language", target_language),
+        domain=settings.get("domain", ""),
+    )
+    if history_corrections:
+        rules.setdefault("corrections", [])
+        rules["corrections"].extend(history_corrections)
+        st.info(f"Loaded {len(history_corrections)} correction-history rule(s) for Pro review.")
+
+
+    st.markdown("### Translation run options")
+    p1, p2 = st.columns(2)
+    with p1:
+        review_with_gemini = st.checkbox("Run independent review", value=bool(gemini_client), key="pro_review", disabled=not bool(gemini_client))
+    with p2:
+        apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to final output", value=False, key="pro_apply_review")
+    with st.expander("Advanced Pro options", expanded=False):
+        st.markdown("<div class='es-soft-card'><p>Use independent review when you want a second-pass check. Keep it off for faster translation-only runs.</p></div>", unsafe_allow_html=True)
+
+    run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
+
+    if uploaded_file and run_pro:
+        using_language_engine = bool(openai_client or has_local_translation_engine())
+        if not using_language_engine:
+            st.warning("Offline Reference Mode is active. The app will preserve the file format and apply saved memory/glossary/DNT references where possible. New unmatched source segments will be left blank or marked for translation instead of fake-translated. Full professional translation requires a user API key, managed engine, or self-hosted translation engine. App credits still apply.")
+            review_with_gemini = False
+        if review_with_gemini and gemini_client is None:
+            st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
+            review_with_gemini = False
+        if not target_language.strip():
+            st.error("Please enter the target language in the settings panel on this page.")
+            st.stop()
+
+        start = time.time()
+        status = st.empty()
+        progress = st.progress(0)
+        lower = uploaded_file.name.lower()
+        logs = []
+        workbook = None
+        dataframe = None
+        text_original = None
+        doc = None
+        json_obj = None
+        json_path_map = {}
+        xml_tree = None
+        xml_target_map = {}
+        xlz_package = None
+        xlz_target_map = {}
+        srt_line_map = {}
+        cell_map = {}
+        translation_col_map = {}
+        para_map = {}
+
+        file_bytes = uploaded_file_bytes(uploaded_file)
+        if lower.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or is_openpyxl_compatible(file_bytes):
+            workbook, segments, cell_map, translation_col_map, logs = extract_excel_segments(
+                io.BytesIO(file_bytes), settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["skip_non_content"], settings["deep_scan"]
+            )
+        elif lower.endswith(".csv"):
+            dataframe, segments, logs = extract_csv_segments(uploaded_file, settings["source_col_hint"], settings["target_col_hint"], "pro", int(settings["max_segments"]), settings["deep_scan"])
+        elif lower.endswith(".docx"):
+            doc, segments, para_map, logs = extract_docx_segments(uploaded_file, "pro", int(settings["max_segments"]), settings["source_col_hint"], settings["target_col_hint"])
+        elif lower.endswith(".json"):
+            json_obj, segments, json_path_map, logs = extract_json_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith(".xlz"):
+            xlz_package, segments, xlz_target_map, logs = extract_xlz_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith((".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff")):
+            xml_tree, segments, xml_target_map, logs = extract_xml_xliff_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith(".srt"):
+            text_original, segments, srt_line_map, logs = extract_srt_pro_segments(uploaded_file, int(settings["max_segments"]))
+        elif lower.endswith(".pdf"):
+            segments, logs = extract_pdf_segments(uploaded_file, "pro", int(settings["max_segments"]))
+        else:
+            text_original, segments, logs = extract_text_segments(uploaded_file, "pro", int(settings["max_segments"]))
+
+        with st.expander("Extraction log", expanded=True):
+            for log in logs:
+                st.write(log)
+            st.info(f"Found {len(segments)} segment(s) for translation. Full-file mode is {'ON' if settings['check_whole_file'] else 'OFF'}.")
+
+        if not segments:
+            st.error("No source segments found. Use the settings panel on this page to set the source column name/index.")
+            st.stop()
+
+        # App credits are required for every Pro output, even in Offline Reference Mode.
+        # If API/language-engine credits are unavailable, ErrorSweep Pro can still create a same-format
+        # reference-assisted output, but users must still spend app credits to receive that output.
+        using_managed_pro_engine = bool(openai_client or has_local_translation_engine() or (review_with_gemini and gemini_client))
+        segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
+            segments, profile, "pro", rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini)
+        )
+        if not segments:
+            st.error(f"{credit_message} App credits are required for ErrorSweep Pro outputs, including Offline Reference Mode.")
+            st.stop()
+        if "Not enough credits" in credit_message:
+            st.warning(credit_message)
+        else:
+            st.info(credit_message)
+        if openai_client:
+            engine_label = "Language engine"
+        elif has_local_translation_engine():
+            engine_label = f"Self-hosted translation engine ({get_local_translation_config().get('provider', 'local')})"
+        else:
+            engine_label = "Offline Reference Mode"
+        st.info(f"Engine: {engine_label}. API availability does not block reference-mode output; app credits still apply.")
+
+        status.text("Preparing translations...")
+        translations_by_loc: Dict[str, str] = {}
+        if tm_controls.get("use"):
+            tm_matches = tm_batch_lookup(user_id, segments, tm_controls["target_language"], tm_controls["client_key"])
+            for loc, match in tm_matches.items():
+                translations_by_loc[loc] = match.get("translation", "")
+            if tm_matches:
+                st.success(f"Reused {len(tm_matches)} exact saved translation(s) from encrypted Translation Memory.")
+
+        engine_segments = [seg for seg in segments if seg.get("location") not in translations_by_loc]
+        if engine_segments:
+            status.text("Translating remaining segments...")
+            total_batches = max(1, (len(engine_segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
+            for b in range(total_batches):
+                batch = engine_segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
                 status.text(f"Translation batch {b + 1}/{total_batches}...")
-                result = openai_translate_batch(openai_client, openai_model, batch, target_language, domain, rules)
+                if openai_client:
+                    result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
+                elif has_local_translation_engine():
+                    result = local_translate_batch_adapter(batch, target_language, settings["domain"])
+                else:
+                    result = offline_reference_translate_batch(batch, target_language, rules)
                 for item in result:
                     loc = item.get("location", "")
                     trans = item.get("translation", "")
-                    if loc and trans:
-                        translations_by_loc[loc] = trans
+                    if loc is not None:
+                        translations_by_loc[loc] = trans or ""
                 progress.progress(((b + 1) / total_batches) * 0.45)
+        else:
+            progress.progress(0.45)
 
-            translated_segments = []
+        translated_segments = []
+        for seg in segments:
+            loc = seg["location"]
+            trans = translations_by_loc.get(loc, "")
+            translated_segments.append({**seg, "translation": trans, "text": trans})
+
+        review_rows: List[Dict[str, Any]] = []
+        status.text("Running deterministic review...")
+        for idx, seg in enumerate(translated_segments, start=1):
+            review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
+            progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
+        if not openai_client:
+            review_rows.extend(build_offline_translation_review_rows(segments, translations_by_loc))
+
+        if review_with_gemini:
+            status.text("Running independent review...")
+            total_review_batches = max(1, (len(translated_segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
+            for b in range(total_review_batches):
+                batch = translated_segments[b * int(settings["batch_size"]):(b + 1) * int(settings["batch_size"])]
+                status.text(f"Review batch {b + 1}/{total_review_batches}...")
+                gemini_errors = gemini_review_translations(gemini_client, settings["gemini_model"], batch, target_language, settings["domain"], rules)
+                loc_to_seg = {s["location"]: s for s in batch}
+                for err in gemini_errors:
+                    loc = err.get("location", "")
+                    seg = loc_to_seg.get(loc, {"location": loc, "source": "", "translation": "", "sheet": ""})
+                    review_rows.append(make_report_row(
+                        seg,
+                        err.get("error_type", "Independent Review"),
+                        err.get("severity", "Review"),
+                        err.get("wrong_part", ""),
+                        err.get("suggestion", ""),
+                        err.get("explanation", ""),
+                        "Independent Review",
+                        "Reviewer",
+                        err.get("confidence", "Medium"),
+                    ))
+                    if apply_gemini_suggestions and err.get("suggestion") and loc in translations_by_loc:
+                        translations_by_loc[loc] = err["suggestion"]
+                progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
+
+        status.text("Building output file...")
+        output_bytes = b""
+        output_name = "errorsweep_pro_" + uploaded_file.name
+        mime_type = "text/csv"
+
+        if lower.endswith(".xlsx") and workbook is not None:
             for seg in segments:
                 loc = seg["location"]
-                trans = translations_by_loc.get(loc, "")
-                translated_segments.append({**seg, "translation": trans, "text": trans})
-
-            # Deterministic review of generated translations
-            review_rows: List[Dict[str, Any]] = []
-            status.text("Running deterministic review...")
-            for idx, seg in enumerate(translated_segments, start=1):
-                review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
-                progress.progress(0.45 + (idx / max(len(translated_segments), 1)) * 0.15)
-
-            # Reviewer review
-            if review_with_gemini:
-                status.text("Running independent review...")
-                total_review_batches = max(1, (len(translated_segments) + int(batch_size) - 1) // int(batch_size))
-                for b in range(total_review_batches):
-                    batch = translated_segments[b * int(batch_size):(b + 1) * int(batch_size)]
-                    status.text(f"Review batch {b + 1}/{total_review_batches}...")
-                    gemini_errors = gemini_review_translations(gemini_client, gemini_model, batch, target_language, domain, rules)
-                    loc_to_seg = {s["location"]: s for s in batch}
-                    for err in gemini_errors:
-                        loc = err.get("location", "")
-                        seg = loc_to_seg.get(loc, {"location": loc, "source": "", "translation": "", "sheet": ""})
-                        review_rows.append(make_report_row(
-                            seg,
-                            err.get("error_type", "Independent Review"),
-                            err.get("severity", "Review"),
-                            err.get("wrong_part", ""),
-                            err.get("suggestion", ""),
-                            err.get("explanation", ""),
-                            "Independent Review",
-                            "Reviewer",
-                            err.get("confidence", "Medium"),
-                        ))
-                        if apply_gemini_suggestions and err.get("suggestion") and loc in translations_by_loc:
-                            translations_by_loc[loc] = err["suggestion"]
-                    progress.progress(0.60 + ((b + 1) / total_review_batches) * 0.35)
-
-            # Build translated output
-            status.text("Building output file...")
-            output_bytes = b""
-            output_name = "errorsweep_pro_" + uploaded_file.name
+                if loc in translation_col_map:
+                    ws_name, row_num, col_idx = translation_col_map[loc]
+                    if col_idx is None:
+                        continue
+                    workbook[ws_name].cell(row=row_num, column=col_idx + 1).value = translations_by_loc.get(loc, "")
+            highlight_excel_cells(cell_map, review_rows)
+            issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence"]
+            status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
+            status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
+            add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
+            add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, issue_headers)
+            bio = io.BytesIO()
+            workbook.save(bio)
+            bio.seek(0)
+            output_bytes = bio.getvalue()
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".csv") and dataframe is not None:
+            out_col = "AI Translation"
+            if "AI Translation" not in dataframe.columns:
+                dataframe[out_col] = ""
+            for seg in segments:
+                dataframe.at[seg["row"], out_col] = translations_by_loc.get(seg["location"], "")
+            output_bytes = dataframe.to_csv(index=False).encode("utf-8-sig")
             mime_type = "text/csv"
-
-            if lower.endswith(".xlsx") and workbook is not None:
-                # Write translations to mapped cells.
-                for seg in segments:
-                    loc = seg["location"]
-                    if loc in translation_col_map:
-                        ws_name, row_num, col_idx = translation_col_map[loc]
-                        if col_idx is None:
-                            continue
-                        workbook[ws_name].cell(row=row_num, column=col_idx + 1).value = translations_by_loc.get(loc, "")
-
-                # Highlight cells with review issues.
-                highlight_excel_cells(cell_map, review_rows)
-                issue_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "QA Status", "Evidence Level", "Action Required", "Error Type", "Severity", "Wrong Part", "Suggestion", "Explanation", "Check Source", "Rule Source", "Confidence", "Autofix Possible", "Rule ID"]
-                status_rows = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
-                status_headers = ["Sheet", "Location", "Mode", "Source Text", "Translation", "Review Status", "Issue Count", "Highest Severity", "Error Types", "Suggestion Summary", "Explanation Summary", "Checked By"]
-                add_report_sheet_to_workbook(workbook, "All Segment Review", status_rows, status_headers)
-                add_report_sheet_to_workbook(workbook, "ErrorSweep Pro Review", review_rows, issue_headers)
-                bio = io.BytesIO()
-                workbook.save(bio)
-                bio.seek(0)
-                output_bytes = bio.getvalue()
-                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                output_name = "errorsweep_pro_translated_" + uploaded_file.name
-
-            elif lower.endswith(".csv") and dataframe is not None:
-                # Add/update translation column.
-                out_col = "AI Translation"
-                if "AI Translation" not in dataframe.columns:
-                    dataframe[out_col] = ""
-                for seg in segments:
-                    dataframe.at[seg["row"], out_col] = translations_by_loc.get(seg["location"], "")
-                output_bytes = dataframe.to_csv(index=False).encode("utf-8-sig")
-                mime_type = "text/csv"
-                output_name = "errorsweep_pro_translated_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
-
-            elif lower.endswith(".docx") and doc is not None:
-                # Preserve DOCX layout. If a target table column exists, fill it.
-                # If no target column exists, append translation after each source paragraph.
-                for seg in segments:
-                    target_info = para_map.get(seg["location"])
-                    write_docx_translation_target(target_info, translations_by_loc.get(seg["location"], ""))
-                bio = io.BytesIO()
-                doc.save(bio)
-                bio.seek(0)
-                output_bytes = bio.getvalue()
-                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                output_name = "errorsweep_pro_translated_" + uploaded_file.name
-
-            else:
-                # Text-like files should preserve the user's original pattern, not become a CSV table.
-                if lower.endswith((".txt", ".srt")) and text_original is not None:
-                    output_bytes = build_preserved_text_translation(text_original, segments, translations_by_loc)
-                    mime_type = "text/plain"
-                    output_name = "errorsweep_pro_translated_" + uploaded_file.name
-                else:
-                    # For JSON/XML/XLIFF and other structured text, keep a translation table for safety.
-                    table = []
-                    for seg in segments:
-                        table.append({
-                            "Location": seg["location"],
-                            "Source": seg.get("source") or seg.get("text", ""),
-                            "Translation": translations_by_loc.get(seg["location"], ""),
-                        })
-                    output_bytes = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")
-                    mime_type = "text/csv"
-                    output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
-
-            progress.progress(1.0)
-            status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
-
-            charge_ok, charge_msg, refreshed_profile = consume_user_credits(
-                user_id=user_id,
-                credits=credits_needed,
-                workflow="pro",
-                file_name=uploaded_file.name,
-                segment_count=len(segments),
-                metadata={"review_issues": len(review_rows), "rules_zip": bool(rules_zip), "independent_review": bool(review_with_gemini)},
+            output_name = "errorsweep_pro_translated_" + re.sub(r"\.[^.]+$", ".csv", uploaded_file.name)
+        elif lower.endswith(".docx") and doc is not None:
+            for seg in segments:
+                target_info = para_map.get(seg["location"])
+                write_docx_translation_target(target_info, translations_by_loc.get(seg["location"], ""))
+            bio = io.BytesIO()
+            doc.save(bio)
+            bio.seek(0)
+            output_bytes = bio.getvalue()
+            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".json") and json_obj is not None:
+            output_bytes = build_translated_json_bytes(json_obj, json_path_map, translations_by_loc)
+            mime_type = "application/json"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".xlz") and xlz_package is not None:
+            output_bytes = build_translated_xlz_bytes(xlz_package, xlz_target_map, translations_by_loc)
+            mime_type = "application/zip"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith((".xml", ".xliff", ".xlf", ".sdlxliff", ".mqxliff")) and xml_tree is not None:
+            output_bytes = build_translated_xml_bytes(xml_tree, xml_target_map, translations_by_loc)
+            mime_type = "application/xml"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif lower.endswith(".srt") and text_original is not None:
+            output_bytes = build_translated_srt_bytes(text_original, srt_line_map, translations_by_loc)
+            mime_type = "text/plain"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        elif is_text_like_extension(uploaded_file.name) and text_original is not None:
+            output_bytes = build_preserved_text_translation(text_original, segments, translations_by_loc)
+            mime_type = "text/plain"
+            output_name = "errorsweep_pro_translated_" + uploaded_file.name
+        else:
+            # For PDFs and truly unknown/binary formats, safely return an Excel translation table.
+            # Rebuilding a binary/PDF in the exact same format requires a dedicated renderer and is not safe to fake.
+            table = []
+            for seg in segments:
+                table.append({"Location": seg["location"], "Source": seg.get("source") or seg.get("text", ""), "Translation": translations_by_loc.get(seg["location"], "")})
+            output_bytes = build_excel_report_bytes(
+                issue_rows=[],
+                status_rows=[],
+                extraction_logs=logs + ["Exact same-format rebuild is unavailable for this file type; returned an Excel translation table instead."],
+                translation_rows=table,
+                title="ErrorSweep Pro Translations",
             )
-            if not charge_ok:
-                st.error(charge_msg)
-                st.stop()
-            if refreshed_profile:
-                profile = refreshed_profile
-                st.session_state["sb_profile"] = refreshed_profile
-            log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
-            st.success(f"Credits charged: {credits_needed}. Remaining credits: {remaining_credits(profile)}")
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            output_name = "errorsweep_pro_translations_" + re.sub(r"\.[^.]+$", ".xlsx", uploaded_file.name)
 
-            # Display translation preview and review report.
-            st.markdown("### Translation Preview")
-            preview = []
-            for seg in translated_segments[:50]:
-                preview.append({
-                    "Location": seg["location"],
-                    "Source": truncate(seg.get("source") or seg.get("text", ""), 300),
-                    "Translation": truncate(translations_by_loc.get(seg["location"], ""), 300),
-                })
-            st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+        progress.progress(1.0)
+        status.text(f"Pro workflow complete in {round(time.time() - start, 2)} seconds.")
 
-            status_rows_for_ui = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
-            st.markdown("### Segment Coverage")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Segments translated/reviewed", len(status_rows_for_ui))
-            c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
-            c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
-            with st.expander("All Segment Review Preview", expanded=False):
-                st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
-
-            render_report(review_rows, "Independent Review Report")
-
-            st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
-            st.download_button("Download All Segment Review CSV", report_csv_bytes(status_rows_for_ui), file_name="errorsweep_pro_all_segment_review.csv", mime="text/csv", use_container_width=True)
-            st.download_button("Download Issue Details CSV", report_csv_bytes(review_rows), file_name="errorsweep_pro_issue_details.csv", mime="text/csv", use_container_width=True)
-
-
-    if not uploaded_file:
-        st.markdown(
-            """
-    <div class="empty-state">
-        <div style="font-family:'Space Mono',monospace; color:#a8acc8">Upload a file to begin</div>
-        <div style="font-size:13px; margin-top:8px; color:#6b7280">Supports .xlsx · .csv · .docx · .txt · .xliff · .srt · .json · .xml</div>
-        <div style="font-size:12px; margin-top:12px; color:#6b7280">Optional Rules ZIP can include style guides, DNT lists, glossary files, instructions, and reference documents.</div>
-    </div>
-    """,
-            unsafe_allow_html=True,
+        refreshed_profile = profile
+        charge_ok, charge_msg, refreshed_profile = consume_user_credits(
+            user_id=user_id,
+            credits=credits_needed,
+            workflow="pro",
+            file_name=uploaded_file.name,
+            segment_count=len(segments),
+            metadata={
+                "review_issues": len(review_rows),
+                "rules_zip": bool(rules_zip),
+                "independent_review": bool(review_with_gemini),
+                "engine": "managed_ai" if using_managed_pro_engine else "offline_reference",
+                "api_used": bool(using_managed_pro_engine),
+            },
         )
+        if not charge_ok:
+            st.error(f"Could not deduct app credits, so the output cannot be released. {charge_msg}")
+            st.stop()
+        if refreshed_profile:
+            st.session_state["sb_profile"] = refreshed_profile
+        st.success(f"App credits charged: {credits_needed}. Remaining credits: {remaining_credits(refreshed_profile or profile)}")
+        if tm_controls.get("save"):
+            saved_tm = tm_save_pro_translations(
+                user_id,
+                translated_segments,
+                review_rows,
+                tm_controls["target_language"],
+                tm_controls["client_key"],
+                domain=settings.get("domain", ""),
+            )
+            if saved_tm:
+                st.success(f"Saved {saved_tm} reviewed/pass translation(s) to encrypted Translation Memory.")
+            elif tm_secret_configured():
+                st.info("No reviewed/pass translations were saved to Translation Memory for this run.")
+        log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
+
+        st.markdown("### Translation Preview")
+        preview = []
+        for seg in translated_segments[:50]:
+            preview.append({"Location": seg["location"], "Source": truncate(seg.get("source") or seg.get("text", ""), 300), "Translation": truncate(translations_by_loc.get(seg["location"], ""), 300)})
+        st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+
+        status_rows_for_ui = build_segment_status_rows(translated_segments, review_rows, checked_by="Rules + Independent Review")
+        st.markdown("### Segment Coverage")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Segments translated/reviewed", len(status_rows_for_ui))
+        c2.metric("Segments with issues", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Needs Review"))
+        c3.metric("Segments passed", sum(1 for r in status_rows_for_ui if r.get("Review Status") == "Pass"))
+        with st.expander("All Segment Review Preview", expanded=False):
+            st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
+
+        render_report(review_rows, "Independent Review Report")
+        st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
+        translation_rows_for_report = [
+            {
+                "Location": seg["location"],
+                "Source": truncate(seg.get("source") or seg.get("text", ""), 1000),
+                "Translation": truncate(translations_by_loc.get(seg["location"], ""), 1000),
+            }
+            for seg in translated_segments
+        ]
+        st.download_button(
+            "Download Excel Translation + Review Report",
+            build_excel_report_bytes(
+                issue_rows=review_rows,
+                status_rows=status_rows_for_ui,
+                extraction_logs=logs,
+                translation_rows=translation_rows_for_report,
+                title="ErrorSweep Pro Translation + Review Report",
+            ),
+            file_name="errorsweep_pro_excel_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+
+def render_admin_page(profile: Optional[Dict[str, Any]]) -> None:
+    st.markdown("## Admin — User Management")
+    st.caption("Manage users, plans, credits, and recent jobs. This page is visible only to emails listed in ERRORSWEEP_ADMIN_EMAILS.")
+
+    if not is_admin_user():
+        st.error("You do not have admin access.")
+        return
+
+    if not supabase_service_configured():
+        st.error("Supabase service role is not configured. Add SUPABASE_SERVICE_ROLE_KEY in Streamlit Secrets.")
+        return
+
+    summary = admin_usage_summary()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Users", summary["users"])
+    c2.metric("Recent Jobs", summary["jobs"])
+    c3.metric("Credits Used", summary["credits_used"])
+    c4.metric("Credits Allocated", summary["credits_allocated"])
+
+    st.divider()
+    st.markdown("### Find user")
+    search_email = st.text_input("Search by email", placeholder="user@example.com")
+    profiles = admin_list_profiles(search_email, limit=50)
+
+    if profiles:
+        display_df = pd.DataFrame(profiles)
+        preferred_cols = ["email", "plan", "monthly_credits", "used_credits", "total_files_processed", "created_at", "id"]
+        cols = [col for col in preferred_cols if col in display_df.columns]
+        st.dataframe(display_df[cols], use_container_width=True, hide_index=True)
+    else:
+        st.info("No users found for the current search.")
+
+    st.divider()
+    st.markdown("### Upgrade / adjust credits")
+    with st.form("admin_update_user_form"):
+        target_email = st.text_input("User email to update", value=search_email or "")
+        new_plan = st.selectbox("Plan", ["trial", "errorsweep", "pro", "agency", "enterprise"], index=2)
+        monthly_credits = st.number_input("Monthly credits", min_value=0, max_value=1000000, value=600, step=25)
+        used_credits = st.number_input("Used credits", min_value=0, max_value=1000000, value=0, step=1)
+        reset_used = st.checkbox("Reset used credits to 0", value=True)
+        submitted = st.form_submit_button("Update user", type="primary", use_container_width=True)
+
+    if submitted:
+        target = admin_get_profile_by_email(target_email)
+        if not target:
+            st.error("User profile not found. Ask the user to sign up/login once, then try again.")
+        else:
+            updates = {
+                "plan": new_plan,
+                "monthly_credits": int(monthly_credits),
+                "used_credits": 0 if reset_used else int(used_credits),
+            }
+            ok, msg, refreshed = admin_update_profile(target["id"], updates)
+            if ok:
+                st.success(msg)
+                if refreshed:
+                    st.json({k: refreshed.get(k) for k in ["email", "plan", "monthly_credits", "used_credits"]})
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.markdown("### Add bonus credits")
+    with st.form("admin_bonus_credits_form"):
+        bonus_email = st.text_input("User email", key="bonus_email")
+        bonus = st.number_input("Bonus credits to add to monthly credits", min_value=1, max_value=100000, value=100, step=10)
+        bonus_submit = st.form_submit_button("Add bonus credits", use_container_width=True)
+
+    if bonus_submit:
+        target = admin_get_profile_by_email(bonus_email)
+        if not target:
+            st.error("User profile not found.")
+        else:
+            new_monthly = int(target.get("monthly_credits") or 0) + int(bonus)
+            ok, msg, refreshed = admin_update_profile(target["id"], {"monthly_credits": new_monthly})
+            if ok:
+                st.success(f"Added {bonus} credits. New monthly credits: {new_monthly}")
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.markdown("### Job history")
+    job_email = st.text_input("Filter jobs by user email", value=search_email or "", key="job_email_filter")
+    job_user_id = None
+    if job_email.strip():
+        target = admin_get_profile_by_email(job_email)
+        if target:
+            job_user_id = target.get("id")
+    jobs = admin_list_jobs(user_id=job_user_id, limit=100)
+    if jobs:
+        st.dataframe(pd.DataFrame(jobs), use_container_width=True, hide_index=True)
+    else:
+        st.info("No jobs found.")
+
+    st.divider()
+    st.markdown("### Payment events")
+    payment_filter = st.text_input("Filter payment events by email", value=search_email or "", key="admin_payment_filter")
+    payment_events = admin_list_payment_events(limit=100, email_filter=payment_filter)
+    if payment_events:
+        st.dataframe(format_payment_events_for_display(payment_events), use_container_width=True, hide_index=True)
+        processed_count = sum(1 for e in payment_events if e.get("processed"))
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Events", len(payment_events))
+        p2.metric("Processed", processed_count)
+        p3.metric("Pending / Failed", len(payment_events) - processed_count)
+    else:
+        st.info("No payment events found. If payment webhook is configured, successful payment events will appear here.")
+
+    st.divider()
+    st.markdown("### Master access reminder")
+    st.code('ERRORSWEEP_ADMIN_EMAILS = "your-email@example.com,adapalanaveen401@gmail.com"', language="toml")
+
+
+def render_dashboard() -> None:
+    init_page_state()
+    user = get_current_user()
+    user_id = user.get("id")
+    profile = ensure_profile(user)
+    if profile:
+        st.session_state["sb_profile"] = profile
+
+    render_top_account_bar(profile)
+    page = render_top_nav()
+    settings = get_page_settings()
+
+    if page == "Dashboard":
+        render_dashboard_page(user_id, profile, settings)
+    elif page == "ErrorSweep":
+        render_errorsweep_page(user_id, profile, settings)
+    elif page == "ErrorSweep Pro":
+        render_errorsweep_pro_page(user_id, profile, settings)
+    elif page == "Memory & Rules":
+        render_memory_rulepacks_page(user_id, profile)
+    elif page == "Billing":
+        render_billing_page(profile)
+    elif page == "Account":
+        render_account_page(profile)
+    elif page == "Admin":
+        render_admin_page(profile)
 
 
 if not is_authenticated():
