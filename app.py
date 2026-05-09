@@ -388,6 +388,32 @@ input, textarea { color: #f8fbff !important; }
     .account-avatar { width: 84px; height: 84px; font-size: 28px; }
 }
 
+
+.workflow-hero-card {
+    background: linear-gradient(135deg, rgba(0,255,136,.10), rgba(56,189,248,.07), rgba(139,92,246,.08));
+    border: 1px solid rgba(56,189,248,.18);
+    border-radius: 22px;
+    padding: 22px 24px;
+    margin: 12px 0 18px 0;
+    box-shadow: 0 18px 48px rgba(0,0,0,.20);
+}
+.workflow-hero-card h2 { margin: 0; color: #f8fbff; font-size: 28px; font-weight: 850; }
+.workflow-hero-card p { margin: 8px 0 0 0; color: #aebce0; font-size: 14px; }
+.workflow-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 16px 0; }
+.workflow-step { background: rgba(16,19,34,.76); border: 1px solid rgba(0,255,136,.13); border-radius: 16px; padding: 15px; }
+.workflow-step .num { width: 28px; height: 28px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #00cc6a, #0ea5e9); color: white; font-weight: 900; font-size: 13px; margin-bottom: 8px; }
+.workflow-step h4 { margin: 0 0 4px 0; color: #f8fbff; font-size: 15px; }
+.workflow-step p { margin: 0; color: #9fb0d6; font-size: 12.5px; }
+.simple-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin: 10px 0 16px 0; }
+.simple-status-card { background: rgba(16,19,34,.78); border: 1px solid rgba(56,189,248,.14); border-radius: 14px; padding: 13px 14px; }
+.simple-status-card .label { color: #8da2cc; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; }
+.simple-status-card .value { color: #f8fbff; font-size: 15px; font-weight: 800; margin-top: 3px; }
+.simple-status-card.ready { border-color: rgba(0,255,136,.22); }
+.simple-status-card.warn { border-color: rgba(250,204,21,.28); }
+.simple-status-card.off { border-color: rgba(248,113,113,.25); }
+.simple-advanced-note { background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.14); color: #aab9db; padding: 11px 13px; border-radius: 14px; font-size: 13px; margin: 8px 0; }
+@media (max-width: 900px) { .workflow-steps { grid-template-columns: 1fr; } .simple-status-grid { grid-template-columns: 1fr 1fr; } }
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -5187,37 +5213,92 @@ def render_settings_summary(settings: Dict[str, Any]) -> None:
         st.write(f"User language-engine key entered: {'Yes' if bool(get_user_openai_key()) else 'No'}")
 
 
-def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
-    """Render simplified settings directly inside ErrorSweep / ErrorSweep Pro pages."""
-    is_pro = context == "pro"
-    heading = "Translation & review settings" if is_pro else "QA settings"
-    subtitle = (
-        "Keep only the essential controls visible. Advanced extraction, scan, and API options stay collapsed until needed."
-        if is_pro else
-        "Use the simple controls for most QA jobs. Open advanced settings only when a file needs special handling."
+def render_workflow_hero(title: str, subtitle: str, mode: str) -> None:
+    if mode == "qa":
+        steps = [
+            ("1", "Upload translated file", "Excel, Word, CSV, XLIFF, PDF, JSON, SRT, or text."),
+            ("2", "Add client context", "Use saved rule pack or upload a ZIP with glossary, DNT, style guide, and references."),
+            ("3", "Run QA", "ErrorSweep auto-detects layout, checks rules, and exports an Excel report."),
+        ]
+    else:
+        steps = [
+            ("1", "Upload source file", "The app detects source rows and target/output areas automatically."),
+            ("2", "Choose language + rules", "Pick target language and optionally add memory/rule context."),
+            ("3", "Translate + review", "The app uses memory, glossary, local/managed engine, then quality-gates output."),
+        ]
+    step_html = "".join(
+        f'<div class="workflow-step"><div class="num">{n}</div><h4>{escape(h)}</h4><p>{escape(p)}</p></div>'
+        for n, h, p in steps
     )
-
     st.markdown(
         f"""
-        <div class="es-page-header-card">
-            <h3>{heading}</h3>
-            <p>{subtitle}</p>
-            <div class="es-pill-row">
-                <span class="es-pill green">Simple mode first</span>
-                <span class="es-pill blue">Auto-detect supported</span>
-                <span class="es-pill purple">Advanced options hidden by default</span>
-            </div>
+        <div class="workflow-hero-card">
+            <h2>{escape(title)}</h2>
+            <p>{escape(subtitle)}</p>
         </div>
+        <div class="workflow-steps">{step_html}</div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.expander(f"{heading} — essentials", expanded=True):
-        st.markdown("<div class='es-subsection-title'>Main workflow settings</div>", unsafe_allow_html=True)
+
+def render_engine_status_cards(context: str, openai_client=None, gemini_client=None) -> None:
+    if context == "qa":
+        cards = [
+            ("Rule engine", "ON", "ready"),
+            ("Grammar/style", "ON if available", "ready"),
+            ("Memory", "Optional", "ready"),
+            ("AI suggestions", "Optional", "warn" if openai_client is None else "ready"),
+        ]
+    else:
+        local_ready = has_local_translation_engine() if 'has_local_translation_engine' in globals() else False
+        if openai_client:
+            engine = "Language engine"
+            cls = "ready"
+        elif local_ready:
+            engine = "Self-hosted engine"
+            cls = "ready"
+        else:
+            engine = "Memory / glossary only"
+            cls = "warn"
+        cards = [
+            ("Translation", engine, cls),
+            ("Review", "Available" if gemini_client else "Rules only", "ready" if gemini_client else "warn"),
+            ("Format output", "Same file type", "ready"),
+            ("Memory", "Reuse first", "ready"),
+        ]
+    html = "".join(
+        f'<div class="simple-status-card {cls}"><div class="label">{escape(label)}</div><div class="value">{escape(value)}</div></div>'
+        for label, value, cls in cards
+    )
+    st.markdown(f'<div class="simple-status-grid">{html}</div>', unsafe_allow_html=True)
+
+
+def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
+    """Simple Mode settings. Essential controls visible; everything technical hidden."""
+    is_pro = context == "pro"
+
+    with st.container(border=True):
+        st.markdown("### Simple setup")
         c1, c2 = st.columns(2)
         with c1:
+            if is_pro:
+                st.text_input(
+                    "Target language",
+                    key="es_target_language",
+                    placeholder="Required: Spanish, French, Hindi, Arabic, ja-JP",
+                    help="Required for translation. Example: French, Spanish, Telugu, hi-IN, ar, ja-JP.",
+                )
+            else:
+                st.text_input(
+                    "Target language / locale",
+                    key="es_target_language",
+                    placeholder="Auto-detect, English, Spanish, French, Hindi, Arabic, ja-JP",
+                    help="For best no-API QA, choose the real target language. Auto-detect is okay for formatting-only checks.",
+                )
+        with c2:
             st.selectbox(
-                "Content Domain",
+                "Content domain",
                 [
                     "Auto-detect",
                     "Software UI / App Strings",
@@ -5230,89 +5311,56 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
                 ],
                 key="es_domain",
             )
-        with c2:
+        st.markdown(
+            "<div class='simple-advanced-note'>Most settings are automatic. Open Advanced Settings only if the app does not detect your file layout correctly.</div>",
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("Advanced Settings", expanded=False):
+        st.markdown("#### Quality and scan behavior")
+        a1, a2, a3 = st.columns(3)
+        with a1:
             st.select_slider(
-                "QA Strictness",
+                "QA strictness",
                 options=["Lenient", "Standard", "Strict", "Very Strict"],
                 key="es_strictness",
             )
-
-        st.text_input(
-            "Target language / locale",
-            key="es_target_language",
-            placeholder="Example: English, Spanish, French, Hindi, Arabic, ja-JP",
-            help="Needed for global spelling/grammar/style checks. Use Auto-detect only when the target language is unknown.",
-        )
-
-        s1, s2 = st.columns(2)
-        with s1:
-            st.text_input(
-                "Source column name / index (optional)",
-                key="es_source_col_hint",
-                placeholder="Example: Source Text or 2",
-            )
-        with s2:
-            st.text_input(
-                "Target / translation column name / index (optional)",
-                key="es_target_col_hint",
-                placeholder="Example: Translation or 3",
-            )
-
-        r1, r2 = st.columns(2)
-        with r1:
-            st.checkbox(
-                "Check whole file",
-                key="es_check_whole_file",
-                help="Turn this off only when you want a smaller test run.",
-            )
-        with r2:
-            if st.session_state.get("es_check_whole_file", True):
-                st.info("Full-file mode ON")
-            else:
+        with a2:
+            st.checkbox("Check whole file", key="es_check_whole_file")
+            if not st.session_state.get("es_check_whole_file", True):
                 st.number_input("Max total segments", min_value=5, max_value=5000, key="es_max_segments")
+        with a3:
+            st.number_input("Segments per batch", min_value=5, max_value=50, key="es_batch_size")
 
-    with st.expander("Advanced extraction & scan settings", expanded=False):
-        a1, a2 = st.columns(2)
-        with a1:
-            st.number_input("Segments per AI call", min_value=5, max_value=50, key="es_batch_size")
+        st.markdown("#### File detection hints")
+        d1, d2 = st.columns(2)
+        with d1:
+            st.text_input("Source column name / index", key="es_source_col_hint", placeholder="Example: Source Text or 2")
+        with d2:
+            st.text_input("Target / translation column name / index", key="es_target_col_hint", placeholder="Example: Translation or 3")
+        f1, f2 = st.columns(2)
+        with f1:
             st.checkbox("Skip non-content sheets", key="es_skip_non_content")
-        with a2:
+        with f2:
             st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
-            st.markdown(
-                "<div class='es-soft-card'><p>Use deep scan when source/target columns are difficult to detect automatically. It can take longer on large files.</p></div>",
-                unsafe_allow_html=True,
-            )
 
-    with st.expander("No-API spelling / grammar / style engine", expanded=True):
-        st.checkbox(
-            "Run global spelling, grammar, and style checks",
-            value=True,
-            key="es_enable_languagetool",
-            help="No OpenAI/Gemini key is needed. This uses LanguageTool when available.",
-        )
-        lt1, lt2 = st.columns(2)
-        with lt1:
-            st.selectbox(
-                "Grammar engine mode",
-                ["public", "local"],
-                key="es_languagetool_mode",
-                help="public = no API key but text may be sent to LanguageTool public service; local = private/local LanguageTool if available.",
-            )
-        with lt2:
+        st.markdown("#### No-API spelling / grammar / style")
+        g1, g2, g3 = st.columns(3)
+        with g1:
+            st.checkbox("Run global grammar/style engine", value=True, key="es_enable_languagetool")
+        with g2:
+            st.selectbox("Grammar engine mode", ["public", "local"], key="es_languagetool_mode")
+        with g3:
             st.number_input("Max chars per segment", min_value=200, max_value=3000, value=1200, step=100, key="es_languagetool_max_chars")
-        st.caption("For best no-API QA, set the target language/locale correctly. Public mode may send text to LanguageTool; for confidential client files use local/private mode or host your own LanguageTool server.")
+        st.caption("Public mode can send text to LanguageTool. Use local/private mode for confidential files.")
 
-    with st.expander("Optional API keys", expanded=False):
-        if is_pro:
-            st.caption("Use these only when the client wants translation or review to run through their own provider account. Keys are used only for the current browser session.")
-        else:
-            st.caption("Optional: use your own language-engine key only when you want AI QA suggestions. Offline QA rules work without any API key.")
-        a1, a2 = st.columns(2)
-        with a1:
-            st.text_input("Language-engine API key (optional)", type="password", key="es_user_openai_api_key")
-        with a2:
+        st.markdown("#### Optional user API keys")
+        k1, k2 = st.columns(2)
+        with k1:
+            st.text_input("Language-engine API key", type="password", key="es_user_openai_api_key", placeholder="Optional")
+        with k2:
             if is_pro:
-                st.text_input("Independent-review API key (optional)", type="password", key="es_user_gemini_api_key")
+                st.text_input("Independent-review API key", type="password", key="es_user_gemini_api_key", placeholder="Optional")
             else:
                 st.info("Independent review key is used only in ErrorSweep Pro.")
         st.caption(f"Managed server AI is {'enabled' if managed_ai_allowed() else 'disabled'} by deployment settings.")
@@ -5787,7 +5835,7 @@ def render_dashboard_page(user_id: str, profile: Optional[Dict[str, Any]], setti
     st.markdown(
         """
         <div class="note-card">
-        <b>Navigation updated:</b> Each workflow now contains its own settings. ErrorSweep has QA settings; ErrorSweep Pro has translation/review settings and API options.
+        <b>Simple Mode enabled:</b> ErrorSweep now shows only essential workflow inputs first. Advanced settings are hidden unless needed.
         </div>
         """,
         unsafe_allow_html=True,
@@ -5928,12 +5976,15 @@ def build_offline_translation_review_rows(segments: List[Dict[str, Any]], transl
     return rows
 
 def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
-    st.markdown("## ErrorSweep — QA Run + Correct Suggestions")
-    st.caption("Review existing translations with a simpler layout. Only the key controls stay visible, while advanced settings remain tucked away until needed.")
-    settings = render_inline_workflow_settings("qa")
-    render_settings_summary(settings)
-
+    render_workflow_hero(
+        "ErrorSweep — QA Run",
+        "Upload a translated file, add optional client rules, and get an Excel QA report with real errors first.",
+        "qa",
+    )
     openai_client = get_openai_client()
+    render_engine_status_cards("qa", openai_client=openai_client)
+    settings = render_inline_workflow_settings("qa")
+
     if openai_client is None:
         st.info("Offline QA mode is available. Deterministic rules, company Rules ZIP, glossary, DNT, placeholders, numbers, spacing, punctuation, and language-specific checks can run without any API key. App credits still apply to generate reports.")
 
@@ -5950,22 +6001,24 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
         rules["corrections"].extend(history_corrections)
         st.info(f"Loaded {len(history_corrections)} approved correction-history rule(s) for this QA run.")
 
-    st.markdown("### QA run options")
-    q1, q2, q3 = st.columns(3)
-    with q1:
-        run_rules = st.checkbox("Rule-based QA", value=True, key="qa_run_rules")
-    with q2:
-        run_ai = st.checkbox("AI suggestions", value=bool(openai_client), key="qa_run_ai")
-    with q3:
-        output_highlighted = st.checkbox("Highlight Excel output", value=True, key="qa_highlight")
-    with st.expander("Advanced QA options", expanded=False):
-        a1, a2 = st.columns(2)
+    st.markdown("### Run")
+    # Simple Mode defaults. Users only open advanced controls when needed.
+    run_rules = True
+    run_zwnj = True
+    output_highlighted = True
+    include_ai_style = False
+    run_ai = bool(openai_client and st.session_state.get("qa_run_ai", False))
+    with st.expander("Advanced QA run options", expanded=False):
+        a1, a2, a3 = st.columns(3)
         with a1:
-            run_zwnj = st.checkbox("Check ZWNJ / invisible character issues", value=True, key="qa_zwnj")
+            run_ai = st.checkbox("Enable AI suggestions", value=bool(openai_client and st.session_state.get("qa_run_ai", False)), key="qa_run_ai")
         with a2:
-            include_ai_style = st.checkbox("Allow subjective style / terminology suggestions", value=False, key="qa_ai_style")
+            output_highlighted = st.checkbox("Highlight Excel output", value=True, key="qa_highlight")
+        with a3:
+            include_ai_style = st.checkbox("Allow subjective style suggestions", value=False, key="qa_ai_style")
+        run_zwnj = st.checkbox("Check invisible/ZWNJ character issues", value=True, key="qa_zwnj")
 
-    run = st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_qa_no_sidebar")
+    run = st.button("Run QA", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_qa_no_sidebar")
 
     if uploaded_file and run:
         if run_ai and openai_client is None:
@@ -6140,13 +6193,16 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
 
 
 def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
-    st.markdown("## ErrorSweep Pro — Translate + Review")
-    st.caption("Translate, review, and export with a cleaner Pro workflow. Start with the essentials first, then open advanced settings only when required.")
-    settings = render_inline_workflow_settings("pro")
-    render_settings_summary(settings)
-
+    render_workflow_hero(
+        "ErrorSweep Pro — Translate + Review",
+        "Upload a source file, choose target language, add optional client rules, and export translated output in the same format.",
+        "pro",
+    )
     openai_client = get_openai_client()
     gemini_client = get_gemini_client()
+    render_engine_status_cards("pro", openai_client=openai_client, gemini_client=gemini_client)
+    settings = render_inline_workflow_settings("pro")
+
     if openai_client is None:
         st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or self-hosted translation engine. App credits still apply to outputs.")
 
@@ -6166,16 +6222,18 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         st.info(f"Loaded {len(history_corrections)} correction-history rule(s) for Pro review.")
 
 
-    st.markdown("### Translation run options")
-    p1, p2 = st.columns(2)
-    with p1:
-        review_with_gemini = st.checkbox("Run independent review", value=bool(gemini_client), key="pro_review", disabled=not bool(gemini_client))
-    with p2:
-        apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to final output", value=False, key="pro_apply_review")
-    with st.expander("Advanced Pro options", expanded=False):
-        st.markdown("<div class='es-soft-card'><p>Use independent review when you want a second-pass check. Keep it off for faster translation-only runs.</p></div>", unsafe_allow_html=True)
+    st.markdown("### Run")
+    review_with_gemini = bool(gemini_client)
+    apply_gemini_suggestions = False
+    with st.expander("Advanced Pro run options", expanded=False):
+        p1, p2 = st.columns(2)
+        with p1:
+            review_with_gemini = st.checkbox("Run independent review", value=bool(gemini_client), key="pro_review", disabled=not bool(gemini_client))
+        with p2:
+            apply_gemini_suggestions = st.checkbox("Apply reviewer suggestions to final output", value=False, key="pro_apply_review")
+        st.markdown("<div class='es-soft-card'><p>Independent review is useful for delivery quality. Keep automatic application OFF unless you trust the reviewer output.</p></div>", unsafe_allow_html=True)
 
-    run_pro = st.button("Run ErrorSweep Pro", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
+    run_pro = st.button("Run Translate + Review", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
 
     if uploaded_file and run_pro:
         using_language_engine = bool(openai_client or has_local_translation_engine())
@@ -6185,8 +6243,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         if review_with_gemini and gemini_client is None:
             st.warning("Independent review service is not configured. Independent review will be skipped; deterministic review still runs.")
             review_with_gemini = False
-        if not target_language.strip():
-            st.error("Please enter the target language in the settings panel on this page.")
+        if not target_language.strip() or target_language.strip().lower() in {"auto", "auto-detect", "autodetect"}:
+            st.error("Please enter a real target language before running Pro. Example: Spanish, French, Hindi, Arabic, ja-JP.")
             st.stop()
 
         start = time.time()
