@@ -2216,7 +2216,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v6 import deterministic_checks_v2
+        from qa_engine_global_v7 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -3826,7 +3826,7 @@ def render_translation_memory_controls(context: str, default_target_language: st
             target_language = st.text_input(
                 "Target language / locale for memory",
                 value=default_target_language or st.session_state.get("es_target_language", ""),
-                placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP",
+                placeholder="Required for no-API QA: Spanish, French, Hindi, Arabic, ja-JP",
                 key=f"{prefix}_tm_target_language",
             )
         if not tm_secret_configured():
@@ -4829,10 +4829,10 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
                 unsafe_allow_html=True,
             )
 
-    with st.expander("No-API spelling / grammar / style engine", expanded=False):
+    with st.expander("No-API spelling / grammar / style engine", expanded=True):
         st.checkbox(
             "Run global spelling, grammar, and style checks",
-            value=False,
+            value=True,
             key="es_enable_languagetool",
             help="No OpenAI/Gemini key is needed. This uses LanguageTool when available.",
         )
@@ -4846,7 +4846,7 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
             )
         with lt2:
             st.number_input("Max chars per segment", min_value=200, max_value=3000, value=1200, step=100, key="es_languagetool_max_chars")
-        st.caption("For confidential client files, use local/private mode or host your own LanguageTool server. Public mode is useful for testing without OpenAI/Gemini keys.")
+        st.caption("For best no-API QA, set the target language/locale correctly. Public mode may send text to LanguageTool; for confidential client files use local/private mode or host your own LanguageTool server.")
 
     with st.expander("Optional API keys", expanded=False):
         if is_pro:
@@ -4915,7 +4915,7 @@ def render_control_center_page() -> None:
     st.checkbox("Deep scan if columns are not found", key="es_deep_scan")
 
     st.markdown("### ErrorSweep Pro")
-    st.text_input("Default target language", key="es_target_language", placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP")
+    st.text_input("Default target language", key="es_target_language", placeholder="Required for no-API QA: Spanish, French, Hindi, Arabic, ja-JP")
 
     st.markdown("### API Cost Control")
     st.info("API keys are optional. Without keys, ErrorSweep QA still runs in offline rule-based mode. ErrorSweep Pro uses glossary/DNT reference mode unless a language-engine key is provided.")
