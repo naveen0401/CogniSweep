@@ -8,3 +8,5 @@ pypdf>=5.0.0
 requests>=2.31.0
 
 cryptography>=42.0.0
+
+language-tool-python>=3.0.0

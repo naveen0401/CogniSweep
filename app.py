@@ -2216,13 +2216,16 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v5 import deterministic_checks_v2
+        from qa_engine_global_v6 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
             target_language=st.session_state.get("es_target_language", "Auto-detect"),
             domain=st.session_state.get("es_domain", "Auto-detect"),
             enable_zwnj=enable_zwnj,
+            enable_language_tool=bool(st.session_state.get("es_enable_languagetool", False)),
+            language_tool_mode=str(st.session_state.get("es_languagetool_mode", "public")).lower(),
+            language_tool_max_chars=int(st.session_state.get("es_languagetool_max_chars", 1200)),
         )
     except Exception as exc:
         return [{
@@ -4780,12 +4783,12 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
                 key="es_strictness",
             )
 
-        if is_pro:
-            st.text_input(
-                "Target language",
-                key="es_target_language",
-                placeholder="Example: Spanish, French, Hindi, Arabic, ja-JP",
-            )
+        st.text_input(
+            "Target language / locale",
+            key="es_target_language",
+            placeholder="Example: English, Spanish, French, Hindi, Arabic, ja-JP",
+            help="Needed for global spelling/grammar/style checks. Use Auto-detect only when the target language is unknown.",
+        )
 
         s1, s2 = st.columns(2)
         with s1:
@@ -4825,6 +4828,25 @@ def render_inline_workflow_settings(context: str) -> Dict[str, Any]:
                 "<div class='es-soft-card'><p>Use deep scan when source/target columns are difficult to detect automatically. It can take longer on large files.</p></div>",
                 unsafe_allow_html=True,
             )
+
+    with st.expander("No-API spelling / grammar / style engine", expanded=False):
+        st.checkbox(
+            "Run global spelling, grammar, and style checks",
+            value=False,
+            key="es_enable_languagetool",
+            help="No OpenAI/Gemini key is needed. This uses LanguageTool when available.",
+        )
+        lt1, lt2 = st.columns(2)
+        with lt1:
+            st.selectbox(
+                "Grammar engine mode",
+                ["public", "local"],
+                key="es_languagetool_mode",
+                help="public = no API key but text may be sent to LanguageTool public service; local = private/local LanguageTool if available.",
+            )
+        with lt2:
+            st.number_input("Max chars per segment", min_value=200, max_value=3000, value=1200, step=100, key="es_languagetool_max_chars")
+        st.caption("For confidential client files, use local/private mode or host your own LanguageTool server. Public mode is useful for testing without OpenAI/Gemini keys.")
 
     with st.expander("Optional API keys", expanded=False):
         if is_pro:
