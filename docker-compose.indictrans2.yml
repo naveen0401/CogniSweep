@@ -1,0 +1,29 @@
+services:
+  indictrans2:
+    build:
+      context: .
+      dockerfile: Dockerfile.indictrans2
+    container_name: errorsweep-indictrans2
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      INDICTRANS2_DEVICE: "cpu"
+      INDICTRANS2_MODEL_EN_INDIC: "ai4bharat/indictrans2-en-indic-dist-200M"
+      INDICTRANS2_MODEL_INDIC_EN: "ai4bharat/indictrans2-indic-en-dist-200M"
+      INDICTRANS2_MODEL_INDIC_INDIC: "ai4bharat/indictrans2-indic-indic-dist-320M"
+      INDICTRANS2_BATCH_SIZE: "4"
+      INDICTRANS2_MAX_NEW_TOKENS: "256"
+      HF_HOME: "/models/huggingface"
+      TRANSFORMERS_CACHE: "/models/huggingface"
+    volumes:
+      - indictrans2-models:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  indictrans2-models:
