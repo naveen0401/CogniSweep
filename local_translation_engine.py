@@ -57,6 +57,47 @@ LANGUAGE_CODE_MAP = {
 }
 
 
+
+# ==========================================================
+# Translation safety guard
+# ==========================================================
+PROTECTED_INLINE_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$[A-Za-z_][\w]*|<[^>]+>|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})")
+LOCALIZABLE_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
+LEADING_BULLET_RE = re.compile(r"^(\s*[•∙◦▪▫●○\-–—*]\s*)")
+COMMON_UNIT_RE = re.compile(r"\b(kcal|mins?|sec(?:onds?)?|hrs?|kg|g|mg|km|m|cm|mm|mb|gb|tb|kb|fps|dpi|px|%|°c|°f)\b", re.I)
+
+
+def _restore_safety(source: str, translation: str) -> str:
+    source = str(source or "")
+    translation = str(translation or "")
+    # Restore source placeholders if lost.
+    tokens = []
+    tokens.extend(PROTECTED_INLINE_RE.findall(source))
+    tokens.extend([m.group(0) for m in COMMON_UNIT_RE.finditer(source)])
+    for idx, token in enumerate(tokens):
+        # Restore known marker forms.
+        translation = re.sub(rf"(?i)[_\s]*(?:E\s*S\s*P\s*H\s*{idx}|Z\s*X\s*P\s*H\s*{idx}\s*Z\s*X)[_\s]*", token, translation)
+        if token and token not in translation:
+            translation = (translation + " " + token).strip()
+    # Square-bracketed UI labels can be localized, but the bracket delimiters should remain.
+    # Example: [Welcome Screen] -> [Pantalla de bienvenida] is valid.
+    # We only wrap the entire translated segment when the whole source segment was bracketed.
+    source_brackets = LOCALIZABLE_BRACKET_RE.findall(source)
+    if source_brackets:
+        source_clean = source.strip()
+        trans_clean = translation.strip()
+        if source_clean in source_brackets and len(source_brackets) == 1:
+            if trans_clean and not (trans_clean.startswith("[") and trans_clean.endswith("]")):
+                translation = f"[{trans_clean.strip('[] ')}]"
+
+    bullet = LEADING_BULLET_RE.match(source)
+    if bullet:
+        translation = re.sub(r"^\s*Â\s*", "", translation)
+        if not translation.startswith(bullet.group(1).strip()):
+            translation = bullet.group(1) + translation.lstrip()
+    return translation
+
+
 def normalize_language_code(language: str) -> str:
     value = (language or "").strip().lower()
     if not value:
@@ -198,6 +239,6 @@ def self_hosted_translate_batch(
         translations.extend([""] * (len(segments) - len(translations)))
 
     return [
-        {"location": loc, "translation": trans or ""}
-        for loc, trans in zip(locations, translations)
+        {"location": loc, "translation": _restore_safety(src, trans or "")}
+        for loc, src, trans in zip(locations, texts, translations)
     ]

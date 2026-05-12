@@ -469,7 +469,7 @@ SKIP_SHEET_KEYWORDS = [
     "score card",
 ]
 
-# Language-specific QA rules are now handled by qa_engine_global_v5.py.
+# Language-specific QA rules are now handled by qa_engine_global_v12.py.
 # The Streamlit app shell keeps file extraction/output only.
 
 PLACEHOLDER_PATTERN = re.compile(
@@ -537,13 +537,55 @@ def get_gemini_client():
         return None
 
 
-def get_local_translation_config() -> Dict[str, str]:
-    """Self-hosted / public-fallback translation engine settings.
+# ==========================================================
+# LOCAL / SELF-HOSTED TRANSLATION ROUTER
+# ==========================================================
 
-    For production privacy, use your own LOCAL_TRANSLATION_ENDPOINT.
-    If ALLOW_PUBLIC_TRANSLATION_FALLBACK=true, the app may try a public
-    LibreTranslate-compatible endpoint for testing. That is not recommended for
-    confidential client files and may be rate-limited or unavailable.
+INDIC_TARGET_NAMES = {
+    "assamese", "as", "bengali", "bangla", "bn", "bodo", "brx", "dogri", "doi",
+    "gujarati", "gu", "hindi", "hi", "kannada", "kn", "kashmiri", "ks",
+    "konkani", "kok", "maithili", "mai", "malayalam", "ml", "manipuri", "mni",
+    "marathi", "mr", "nepali", "ne", "odia", "oriya", "or", "punjabi", "pa",
+    "sanskrit", "sa", "santali", "sat", "sindhi", "sd", "tamil", "ta",
+    "telugu", "te", "urdu", "ur",
+}
+
+LIBRE_TARGET_NAMES = {
+    "english", "en", "spanish", "es", "french", "fr", "german", "de", "italian", "it",
+    "portuguese", "pt", "russian", "ru", "arabic", "ar", "chinese", "zh", "japanese", "ja",
+    "korean", "ko", "hindi", "hi",
+}
+
+def _lang_key(language: str) -> str:
+    value = normalize_text(language or "").strip().lower()
+    value = value.replace("_", "-")
+    if not value:
+        return ""
+    return re.split(r"[-,/() ]+", value)[0] if value else ""
+
+
+def is_indic_target_language(language: str) -> bool:
+    value = normalize_text(language or "").strip().lower()
+    key = _lang_key(value)
+    return key in INDIC_TARGET_NAMES or any(name in value for name in INDIC_TARGET_NAMES if len(name) > 2)
+
+
+def is_libre_supported_target_name(language: str) -> bool:
+    value = normalize_text(language or "").strip().lower()
+    key = _lang_key(value)
+    return key in LIBRE_TARGET_NAMES or any(name in value for name in LIBRE_TARGET_NAMES if len(name) > 2)
+
+
+def get_local_translation_config() -> Dict[str, str]:
+    """Backward-compatible single-engine configuration.
+
+    Existing deployments can keep using:
+        LOCAL_TRANSLATION_ENDPOINT
+        LOCAL_TRANSLATION_PROVIDER
+
+    New deployments can use routed engines:
+        LIBRETRANSLATE_ENDPOINT = "http://localhost:5000"
+        INDICTRANS2_ENDPOINT = "http://localhost:8000/translate"
     """
     endpoint = (
         get_secret_value("LOCAL_TRANSLATION_ENDPOINT")
@@ -559,28 +601,205 @@ def get_local_translation_config() -> Dict[str, str]:
         "provider": provider,
         "api_key": str(get_secret_value("LOCAL_TRANSLATION_API_KEY", "") or "").strip(),
         "source_language": str(get_secret_value("LOCAL_TRANSLATION_SOURCE_LANGUAGE", "auto") or "auto").strip(),
+        "label": "Local translation engine",
+        "route": "single",
     }
 
 
-def has_local_translation_engine() -> bool:
-    return bool(get_local_translation_config().get("endpoint"))
+def get_translation_engine_config(target_language: str = "") -> Dict[str, str]:
+    """Select the best self-hosted engine for the selected target language.
+
+    Routing order:
+    1. Indian/Indic languages → IndicTrans2 endpoint if configured.
+    2. Other supported global languages → LibreTranslate endpoint if configured.
+    3. Backward-compatible LOCAL_TRANSLATION_ENDPOINT.
+    """
+    target_language = normalize_text(target_language or "")
+
+    indic_endpoint = (
+        get_secret_value("INDICTRANS2_ENDPOINT")
+        or get_secret_value("INDIC_TRANSLATION_ENDPOINT")
+        or get_secret_value("LOCAL_INDIC_TRANSLATION_ENDPOINT")
+        or ""
+    )
+    libre_endpoint = (
+        get_secret_value("LIBRETRANSLATE_ENDPOINT")
+        or get_secret_value("LIBRETRANSLATE_URL")
+        or ""
+    )
+
+    # If user configured the old LOCAL_TRANSLATION_ENDPOINT as generic, treat it as IndicTrans2-capable.
+    local_cfg = get_local_translation_config()
+    local_endpoint = local_cfg.get("endpoint", "")
+    local_provider = local_cfg.get("provider", "libretranslate")
+
+    if is_indic_target_language(target_language):
+        if indic_endpoint:
+            return {
+                "endpoint": str(indic_endpoint).strip(),
+                "provider": "generic",
+                "api_key": str(get_secret_value("INDICTRANS2_API_KEY", get_secret_value("LOCAL_TRANSLATION_API_KEY", "")) or "").strip(),
+                "source_language": str(get_secret_value("INDICTRANS2_SOURCE_LANGUAGE", get_secret_value("LOCAL_TRANSLATION_SOURCE_LANGUAGE", "English")) or "English").strip(),
+                "label": "IndicTrans2",
+                "route": "indic",
+            }
+        if local_endpoint and local_provider == "generic":
+            cfg = dict(local_cfg)
+            cfg["label"] = "Indic/self-hosted engine"
+            cfg["route"] = "indic-local"
+            return cfg
+
+    if libre_endpoint:
+        return {
+            "endpoint": str(libre_endpoint).strip(),
+            "provider": "libretranslate",
+            "api_key": str(get_secret_value("LIBRETRANSLATE_API_KEY", get_secret_value("LOCAL_TRANSLATION_API_KEY", "")) or "").strip(),
+            "source_language": str(get_secret_value("LIBRETRANSLATE_SOURCE_LANGUAGE", get_secret_value("LOCAL_TRANSLATION_SOURCE_LANGUAGE", "auto")) or "auto").strip(),
+            "label": "LibreTranslate",
+            "route": "libre",
+        }
+
+    if local_endpoint:
+        cfg = dict(local_cfg)
+        cfg["label"] = "Local translation engine"
+        cfg["route"] = "single"
+        return cfg
+
+    return {"endpoint": "", "provider": "", "api_key": "", "source_language": "auto", "label": "No local engine", "route": "none"}
+
+
+def has_local_translation_engine(target_language: str = "") -> bool:
+    return bool(get_translation_engine_config(target_language).get("endpoint"))
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def local_engine_language_list(endpoint: str, provider: str) -> List[str]:
+    """Return supported language names/codes for LibreTranslate-like engines."""
+    if not endpoint or provider != "libretranslate":
+        return []
+    try:
+        base = endpoint.rstrip("/")
+        if base.endswith("/translate"):
+            base = base[: -len("/translate")]
+        url = base if base.endswith("/languages") else f"{base}/languages"
+        res = requests.get(url, timeout=10)
+        if res.status_code >= 400:
+            return []
+        data = res.json()
+        langs = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    if item.get("code"):
+                        langs.append(str(item.get("code")).lower())
+                    if item.get("name"):
+                        langs.append(str(item.get("name")).lower())
+        return sorted(set(langs))
+    except Exception:
+        return []
+
+
+def translation_engine_status(target_language: str = "") -> Dict[str, Any]:
+    cfg = get_translation_engine_config(target_language)
+    endpoint = cfg.get("endpoint", "")
+    provider = cfg.get("provider", "")
+    target = normalize_text(target_language or "")
+    status = "missing"
+    reason = "No self-hosted translation endpoint is configured."
+    supported = True
+
+    if endpoint:
+        status = "ready"
+        reason = f"{cfg.get('label', 'Local engine')} is configured."
+        if provider == "libretranslate":
+            langs = local_engine_language_list(endpoint, provider)
+            key = _lang_key(target)
+            if langs and target and key not in langs and target.lower() not in langs:
+                supported = False
+                status = "unsupported"
+                reason = f"LibreTranslate is configured, but '{target_language}' does not appear in its /languages list."
+        elif provider == "generic" and target and not is_indic_target_language(target):
+            # Generic can still be an NLLB/custom worker, so do not block. Warn only.
+            reason = f"{cfg.get('label', 'Generic engine')} is configured. Verify it supports {target_language}."
+
+    return {
+        "status": status,
+        "supported": supported,
+        "reason": reason,
+        "config": cfg,
+    }
+
+
+def can_use_local_translation_engine(target_language: str = "") -> bool:
+    status = translation_engine_status(target_language)
+    return bool(status.get("config", {}).get("endpoint")) and bool(status.get("supported", True))
+
+
+def render_translation_route_status(target_language: str, openai_client=None, gemini_client=None) -> None:
+    """Show a clear route before users run Pro."""
+    status = translation_engine_status(target_language)
+    cfg = status["config"]
+
+    if openai_client:
+        translation_value = "Managed/User API"
+        cls = "ready"
+        detail = "Primary translation route uses the configured language API."
+    elif status["status"] == "ready":
+        translation_value = cfg.get("label", "Self-hosted engine")
+        cls = "ready"
+        detail = status["reason"]
+    elif status["status"] == "unsupported":
+        translation_value = "Unsupported target"
+        cls = "warn"
+        detail = status["reason"]
+    else:
+        translation_value = "Memory / glossary only"
+        cls = "warn"
+        detail = status["reason"]
+
+    review_value = "Available" if gemini_client else "Rules only"
+    html = f"""
+    <div class="simple-status-grid">
+      <div class="simple-status-card {cls}"><div class="label">Translation route</div><div class="value">{escape(translation_value)}</div></div>
+      <div class="simple-status-card ready"><div class="label">Target language</div><div class="value">{escape(target_language or 'Not set')}</div></div>
+      <div class="simple-status-card {'ready' if gemini_client else 'warn'}"><div class="label">Review</div><div class="value">{escape(review_value)}</div></div>
+      <div class="simple-status-card ready"><div class="label">Memory</div><div class="value">Reuse first</div></div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    if detail:
+        if cls == "ready":
+            st.success(detail)
+        else:
+            st.warning(detail)
 
 
 def local_translate_batch_adapter(segments: List[Dict[str, Any]], target_language: str, domain: str) -> List[Dict[str, str]]:
-    """Call self-hosted translation engine."""
-    cfg = get_local_translation_config()
+    """Call the routed self-hosted translation engine with protected-token guard."""
+    cfg = get_translation_engine_config(target_language)
+    protected_segments = protect_segments_for_translation(segments)
+    original_by_loc = {str(s.get("location", "")): s for s in segments}
     try:
         from local_translation_engine import self_hosted_translate_batch
-        return self_hosted_translate_batch(
-            segments=segments,
+        raw = self_hosted_translate_batch(
+            segments=protected_segments,
             endpoint=cfg["endpoint"],
             provider=cfg["provider"],
             target_language=target_language,
             source_language=cfg["source_language"],
             domain=domain,
             api_key=cfg["api_key"],
-            timeout=120,
+            timeout=180,
         )
+        fixed: List[Dict[str, str]] = []
+        for item in raw:
+            loc = str(item.get("location", ""))
+            original_seg = original_by_loc.get(loc, {"source": ""})
+            fixed.append({
+                "location": loc,
+                "translation": restore_translation_item(original_seg, item.get("translation", "")),
+            })
+        return fixed
     except Exception as exc:
         return [
             {
@@ -605,6 +824,162 @@ def normalize_text(text: Any) -> str:
     text = text.replace("\u200D", "")  # zero width joiner
     text = text.replace("\u00A0", " ")  # non-breaking space
     return text.strip("\n\r")
+
+
+# ==========================================================
+# GLOBAL TRANSLATION SAFETY / PLACEHOLDER GUARD
+# ==========================================================
+
+# Protected content must never be translated by any engine.
+# This is global, not Telugu-specific. It protects variables, placeholders,
+# tags, bullets, URLs, emails, and common units.
+# Square-bracketed UI labels like [Log In] are localizable; the brackets should remain,
+# but the text inside can be translated unless a client rule/DNT says otherwise.
+PROTECTED_INLINE_RE = re.compile(
+    r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$[A-Za-z_][\w]*|<[^>]+>|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})"
+)
+LOCALIZABLE_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
+LEADING_BULLET_RE = re.compile(r"^(\s*[•∙◦▪▫●○\-–—*]\s*)")
+COMMON_UNIT_RE = re.compile(r"\b(kcal|mins?|sec(?:onds?)?|hrs?|kg|g|mg|km|m|cm|mm|mb|gb|tb|kb|fps|dpi|px|%|°c|°f)\b", re.I)
+PROTECT_MARKER_PREFIX = "ZXPH"
+PROTECT_MARKER_SUFFIX = "ZX"
+
+
+def _find_protected_spans(source: str) -> List[Tuple[int, int, str]]:
+    """Return non-overlapping protected spans in source text."""
+    source = normalize_text(source or "")
+    candidates: List[Tuple[int, int, str]] = []
+    for pattern in [PROTECTED_INLINE_RE, COMMON_UNIT_RE]:
+        for m in pattern.finditer(source):
+            token = m.group(0)
+            if token:
+                candidates.append((m.start(), m.end(), token))
+    bullet = LEADING_BULLET_RE.match(source)
+    if bullet:
+        candidates.append((bullet.start(1), bullet.end(1), bullet.group(1)))
+
+    # Prefer longer spans and remove overlaps.
+    candidates.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    accepted: List[Tuple[int, int, str]] = []
+    occupied: List[Tuple[int, int]] = []
+    for start, end, token in candidates:
+        if any(not (end <= os or start >= oe) for os, oe in occupied):
+            continue
+        accepted.append((start, end, token))
+        occupied.append((start, end))
+    accepted.sort(key=lambda x: x[0])
+    return accepted
+
+
+def protect_text_for_translation(source: str) -> Tuple[str, List[str]]:
+    """Replace protected tokens with stable ASCII markers before translation."""
+    source = normalize_text(source or "")
+    spans = _find_protected_spans(source)
+    if not spans:
+        return source, []
+
+    out = []
+    last = 0
+    protected: List[str] = []
+    for idx, (start, end, token) in enumerate(spans):
+        out.append(source[last:start])
+        marker = f"{PROTECT_MARKER_PREFIX}{idx}{PROTECT_MARKER_SUFFIX}"
+        out.append(marker)
+        protected.append(token)
+        last = end
+    out.append(source[last:])
+    return "".join(out), protected
+
+
+def _marker_regex(index: int) -> re.Pattern:
+    # Handles exact marker plus model-distorted variants such as:
+    # ZXPH0ZX, ZX PH 0 ZX, _ _ ESPH0 _ _, ESPH0, Z X P H 0 Z X.
+    return re.compile(
+        rf"(?i)(?:{PROTECT_MARKER_PREFIX}\s*{index}\s*{PROTECT_MARKER_SUFFIX}|"
+        rf"Z\s*X\s*P\s*H\s*{index}\s*Z\s*X|"
+        rf"E\s*S\s*P\s*H\s*{index}|"
+        rf"[_\s]*E\s*S\s*P\s*H\s*{index}[_\s]*|"
+        rf"[_\s]*{PROTECT_MARKER_PREFIX}\s*{index}\s*{PROTECT_MARKER_SUFFIX}[_\s]*)"
+    )
+
+
+def restore_protected_text(source: str, translation: Any) -> str:
+    """Restore protected source tokens after translation.
+
+    This fixes cases where IndicTrans/other local engines change {{email}} into
+    markers like "_ _ ESPH0 _ _". Square-bracketed UI labels are allowed to localize.
+    """
+    source = normalize_text(source or "")
+    translated = normalize_text(translation or "")
+    _, protected = protect_text_for_translation(source)
+    if not protected:
+        # Still fix common bullet encoding issue: ∙ sometimes becomes Â.
+        bullet = LEADING_BULLET_RE.match(source)
+        if bullet and translated.startswith("Â"):
+            return bullet.group(1).strip() + translated[1:]
+        return translated
+
+    # Replace all marker/distorted marker forms with exact original protected token.
+    for idx, token in enumerate(protected):
+        translated = _marker_regex(idx).sub(token, translated)
+
+    # Square-bracketed UI labels are localizable.
+    # Example: [Welcome Screen] -> [வரவேற்பு திரை] is valid.
+    # We do not restore the source English text inside brackets.
+    # If the whole source segment was bracketed and the engine dropped brackets,
+    # wrap the localized result back in brackets to preserve UI-label structure.
+    source_brackets = LOCALIZABLE_BRACKET_RE.findall(source)
+    if source_brackets:
+        source_clean = source.strip()
+        translated_clean = translated.strip()
+        if source_clean in source_brackets and len(source_brackets) == 1:
+            if not (translated_clean.startswith("[") and translated_clean.endswith("]")) and translated_clean:
+                translated = f"[{translated_clean.strip('[] ')}]"
+
+    # Ensure every placeholder/variable/tag/unit from the source is still present.
+    # For placeholders, missing is worse than imperfect position, so append if lost.
+    must_keep = []
+    must_keep.extend(PROTECTED_INLINE_RE.findall(source))
+    # Keep common units only when source has them.
+    must_keep.extend([m.group(0) for m in COMMON_UNIT_RE.finditer(source)])
+    for token in must_keep:
+        if token and token not in translated:
+            # Replace any remaining marker-ish token first; otherwise append.
+            markerish = re.search(r"(?i)[_\s]*(?:E\s*S\s*P\s*H\s*\d+|Z\s*X\s*P\s*H\s*\d+\s*Z\s*X)[_\s]*", translated)
+            if markerish:
+                translated = translated[:markerish.start()] + token + translated[markerish.end():]
+            else:
+                translated = (translated + " " + token).strip()
+
+    # Restore leading bullet/list marker exactly.
+    bullet = LEADING_BULLET_RE.match(source)
+    if bullet:
+        src_bullet = bullet.group(1)
+        # Remove common mojibake from bullets.
+        translated = re.sub(r"^\s*Â\s*", "", translated)
+        if not translated.startswith(src_bullet.strip()):
+            translated = src_bullet + translated.lstrip()
+
+    return translated
+
+
+def protect_segments_for_translation(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    protected_segments: List[Dict[str, Any]] = []
+    for seg in segments:
+        source = normalize_text(seg.get("source") or seg.get("text") or "")
+        protected_source, protected_tokens = protect_text_for_translation(source)
+        new_seg = dict(seg)
+        new_seg["source"] = protected_source
+        new_seg["text"] = protected_source
+        new_seg["_original_source"] = source
+        new_seg["_protected_tokens"] = protected_tokens
+        protected_segments.append(new_seg)
+    return protected_segments
+
+
+def restore_translation_item(original_segment: Dict[str, Any], translation: Any) -> str:
+    source = normalize_text(original_segment.get("source") or original_segment.get("text") or "")
+    return restore_protected_text(source, translation)
 
 
 def decode_text_bytes(data: bytes) -> Tuple[str, str]:
@@ -2429,7 +2804,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v9 import deterministic_checks_v2
+        from qa_engine_global_v12 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -2450,7 +2825,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
             "Error Type": "Rule Engine Warning",
             "Severity": "Review",
             "Wrong Part": "QA Engine v2",
-            "Suggestion": "Check qa_engine_v2.py is present in GitHub and deployment.",
+            "Suggestion": "Check qa_engine_global_v12.py is present in GitHub and deployment.",
             "Explanation": f"Modular rule engine could not run: {str(exc)[:180]}",
             "Check Source": "Rule Engine",
             "Rule Source": "System",
@@ -2619,27 +2994,49 @@ def openai_translate_batch(
     domain: str,
     rules: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    """Translate with strict protected-token preservation.
+
+    This protects global placeholders such as {{email}}, URLs, tags,
+    bullets, and units before sending text to the model, then restores them.
+    Square-bracketed UI labels like [Log In] may be localized; only their bracket structure is checked.
+    """
     if not segments:
         return []
+    protected_segments = protect_segments_for_translation(segments)
+    original_by_loc = {str(s.get("location", "")): s for s in segments}
+
     parts = []
-    for i, seg in enumerate(segments, start=1):
+    expected_locations = []
+    for i, seg in enumerate(protected_segments, start=1):
+        loc = seg.get("location", "")
+        expected_locations.append(loc)
         relevant = retrieve_relevant_rules(seg, rules, 1200) if rules else ""
         parts.append(
             f"[Segment {i}]\n"
-            f"Location: {seg.get('location','')}\n"
+            f"Location: {loc}\n"
             f"Source: {seg.get('source') or seg.get('text','')}\n"
+            f"Protected tokens: {json.dumps(seg.get('_protected_tokens', []), ensure_ascii=False)}\n"
             f"Relevant Company Rules:\n{relevant if relevant else '(none)'}"
         )
 
     instructions = (
-        "You are a professional localization translator. "
-        "Return only valid JSON. Preserve placeholders, numbers, tags, punctuation intent, and product terms."
+        "You are a professional localization translator. Return only valid JSON. "
+        "Never translate, alter, remove, or reorder protected tokens such as ZXPH0ZX, placeholders, variables, tags, URLs, emails, units, or bullets. Square-bracketed UI labels may be localized; keep bracket delimiters where source uses them. "
+        "Preserve placeholders, numbers, tags, punctuation intent, and product terms."
     )
     prompt = f"""
 Translate these segments into {target_language}.
 Domain: {domain}
 
-Use company rules if provided. Keep DNT terms unchanged. Follow glossary terms.
+Critical rules:
+- Return exactly one item per input location.
+- Keep marker tokens like ZXPH0ZX unchanged. They will be restored by the app.
+- Square-bracketed UI labels may be localized. Keep the square brackets when they are used as UI-label delimiters.
+- Keep DNT terms unchanged. Follow glossary terms.
+- Do not return blank translation for non-empty source.
+
+Expected locations:
+{json.dumps(expected_locations, ensure_ascii=False)}
 
 {chr(10).join(parts)}
 
@@ -2652,9 +3049,18 @@ Return ONLY JSON:
 ]
 """
     try:
-        return openai_json(client, model, instructions, prompt, max_output_tokens=4000)
+        raw = openai_json(client, model, instructions, prompt, max_output_tokens=6000)
     except Exception as e:
         return [{"location": "API", "translation": "", "error": str(e)}]
+
+    out = []
+    for item in raw:
+        loc = str(item.get("location", ""))
+        if loc not in original_by_loc:
+            continue
+        restored = restore_translation_item(original_by_loc[loc], item.get("translation", ""))
+        out.append({"location": loc, "translation": restored})
+    return out
 
 
 def gemini_review_translations(
@@ -6207,12 +6613,15 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     render_engine_status_cards("pro", openai_client=openai_client, gemini_client=gemini_client)
     settings = render_inline_workflow_settings("pro")
 
-    if openai_client is None:
+    if openai_client is None and not has_local_translation_engine(settings.get("target_language", "")):
         st.info("No language engine is configured. ErrorSweep Pro will use Offline Reference Mode only. It can reuse saved Translation Memory and uploaded glossary/rule-pack matches, but it cannot create full new professional translations without a user API key, managed engine, or self-hosted translation engine. App credits still apply to outputs.")
+    elif openai_client is None and has_local_translation_engine(settings.get("target_language", "")):
+        st.info("Self-hosted translation engine is configured. ErrorSweep Pro will use Translation Memory first, then the routed local engine for unmatched segments.")
 
     uploaded_file, rules_zip, rules = render_rule_upload("pro", user_id=user_id, workflow_type="pro")
 
     target_language = settings.get("target_language", "")
+    render_translation_route_status(target_language, openai_client=openai_client, gemini_client=gemini_client)
     tm_controls = render_translation_memory_controls("pro", default_target_language=target_language)
     history_corrections = load_correction_history_as_rules(
         user_id,
@@ -6240,7 +6649,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
     run_pro = st.button("Run Translate + Review", type="primary", use_container_width=True, disabled=not uploaded_file, key="run_pro_no_sidebar")
 
     if uploaded_file and run_pro:
-        using_language_engine = bool(openai_client or has_local_translation_engine())
+        using_language_engine = bool(openai_client or can_use_local_translation_engine(target_language))
         if not using_language_engine:
             st.warning("Offline Reference Mode is active. The app will preserve the file format and apply saved memory/glossary/DNT references where possible. New unmatched source segments will be left blank or marked for translation instead of fake-translated. Full professional translation requires a user API key, managed engine, or self-hosted translation engine. App credits still apply.")
             review_with_gemini = False
@@ -6305,7 +6714,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         # App credits are required for every Pro output, even in Offline Reference Mode.
         # If API/language-engine credits are unavailable, ErrorSweep Pro can still create a same-format
         # reference-assisted output, but users must still spend app credits to receive that output.
-        using_managed_pro_engine = bool(openai_client or has_local_translation_engine() or (review_with_gemini and gemini_client))
+        using_managed_pro_engine = bool(openai_client or can_use_local_translation_engine(target_language) or (review_with_gemini and gemini_client))
         segments, credits_needed, credit_message = maybe_limit_segments_to_available_credits(
             segments, profile, "pro", rules_zip_used=bool(rules_zip), independent_review=bool(review_with_gemini)
         )
@@ -6318,8 +6727,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.info(credit_message)
         if openai_client:
             engine_label = "Language engine"
-        elif has_local_translation_engine():
-            engine_label = f"Self-hosted translation engine ({get_local_translation_config().get('provider', 'local')})"
+        elif can_use_local_translation_engine(target_language):
+            engine_label = f"Self-hosted translation engine ({get_translation_engine_config(target_language).get('label', 'local')})"
         else:
             engine_label = "Offline Reference Mode"
         st.info(f"Engine: {engine_label}. API availability does not block reference-mode output; app credits still apply.")
@@ -6342,7 +6751,7 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                 status.text(f"Translation batch {b + 1}/{total_batches}...")
                 if openai_client:
                     result = openai_translate_batch(openai_client, settings["openai_model"], batch, target_language, settings["domain"], rules)
-                elif has_local_translation_engine():
+                elif can_use_local_translation_engine(target_language):
                     result = local_translate_batch_adapter(batch, target_language, settings["domain"])
                 else:
                     result = offline_reference_translate_batch(batch, target_language, rules)
@@ -6350,7 +6759,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                     loc = item.get("location", "")
                     trans = item.get("translation", "")
                     if loc is not None:
-                        translations_by_loc[loc] = trans or ""
+                        original_seg = next((s for s in batch if str(s.get("location", "")) == str(loc)), {"source": ""})
+                        translations_by_loc[loc] = restore_translation_item(original_seg, trans or "")
                 progress.progress(((b + 1) / total_batches) * 0.45)
         else:
             progress.progress(0.45)
