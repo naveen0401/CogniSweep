@@ -236,6 +236,7 @@ def protected_terms_from_rules(rules: Dict[str, Any]) -> List[str]:
             protected.append(src)
         if tgt:
             protected.append(tgt)
+    protected.extend(sorted(COMMON_PROTECTED_UNITS))
     return protected
 
 
@@ -355,6 +356,8 @@ INDIC_MODULES = {
 }
 
 RTL_MODULES = {"arabic", "hebrew"}
+
+COMMON_PROTECTED_UNITS = {"kcal", "mins", "min", "kg", "g", "mg", "km", "m", "cm", "mm", "mb", "gb", "tb", "kb", "fps", "dpi", "px"}
 
 
 # Global language profile map used for offline routing and UI documentation.
@@ -2173,6 +2176,64 @@ def rule_simple_english_grammar_patterns(segment, rules, target_language, domain
                 autofix_possible=True,
                 priority=21,
             ))
+    return findings
+
+
+@registry.register("global.brackets.localized_ui_structure", "Formatting")
+def rule_localized_square_bracket_structure(segment, rules, target_language, domain):
+    """Square-bracketed UI labels can be localized, but bracket delimiters should survive.
+
+    Correct examples:
+    [Welcome Screen] -> [வெல்கம் திரை]
+    Already have an account? [Log In] -> ... [உள்நுழைக]
+
+    Incorrect examples:
+    [Welcome Screen] -> வெல்கம் திரை       # brackets dropped
+    Already have an account? [Log In] -> ... உள்நுழைக  # bracketed action lost
+    """
+    source, target = _seg_texts(segment)
+    src_tokens = re.findall(r"\[[^\[\]\n]{1,120}\]", source or "")
+    if not src_tokens:
+        return []
+
+    tgt_tokens = re.findall(r"\[[^\[\]\n]{1,120}\]", target or "")
+    findings = []
+
+    # If whole source segment is bracketed, target can localize the inside text,
+    # but should still be bracketed.
+    src_clean = (source or "").strip()
+    tgt_clean = (target or "").strip()
+    if len(src_tokens) == 1 and src_clean == src_tokens[0]:
+        if not (tgt_clean.startswith("[") and tgt_clean.endswith("]")):
+            findings.append(QAFinding(
+                "global.brackets.localized_ui_structure",
+                "Formatting",
+                "Minor",
+                "High",
+                src_tokens[0],
+                f"[{tgt_clean.strip('[] ')}]" if tgt_clean else src_tokens[0],
+                "Square-bracketed UI label can be localized, but bracket delimiters should be preserved.",
+                rule_source="Global localization format rules",
+                autofix_possible=True,
+                priority=18,
+            ))
+        return findings
+
+    # For inline bracketed UI actions, do not require exact source text, but require
+    # the same number of bracketed groups unless client rules say otherwise.
+    if len(tgt_tokens) < len(src_tokens):
+        findings.append(QAFinding(
+            "global.brackets.localized_ui_structure",
+            "Formatting",
+            "Minor",
+            "Medium",
+            ", ".join(src_tokens),
+            target,
+            "Source contains bracketed UI/action label(s). The text inside can be localized, but bracketed structure appears missing in target.",
+            rule_source="Global localization format rules",
+            autofix_possible=False,
+            priority=45,
+        ))
     return findings
 
 # ==========================================================
