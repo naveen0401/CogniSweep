@@ -660,6 +660,12 @@ def get_translation_engine_config(target_language: str = "") -> Dict[str, str]:
         }
 
     if local_endpoint:
+        # Do not accidentally send French/Spanish/etc. to an IndicTrans2 generic endpoint.
+        # Generic fallback for non-Indic targets is allowed only when explicitly enabled
+        # for a global worker such as NLLB.
+        allow_generic_all = str(get_secret_value("ALLOW_GENERIC_TRANSLATION_FOR_ALL", "false") or "false").lower() == "true"
+        if local_provider == "generic" and not is_indic_target_language(target_language) and not allow_generic_all:
+            return {"endpoint": "", "provider": "", "api_key": "", "source_language": "auto", "label": "No supported local engine", "route": "none"}
         cfg = dict(local_cfg)
         cfg["label"] = "Local translation engine"
         cfg["route"] = "single"
@@ -733,6 +739,96 @@ def translation_engine_status(target_language: str = "") -> Dict[str, Any]:
 def can_use_local_translation_engine(target_language: str = "") -> bool:
     status = translation_engine_status(target_language)
     return bool(status.get("config", {}).get("endpoint")) and bool(status.get("supported", True))
+
+
+# ==========================================================
+# TARGET-LANGUAGE SAFETY GUARD
+# ==========================================================
+
+INDIC_SCRIPT_RE = re.compile(r"[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]")
+TELUGU_SCRIPT_RE = re.compile(r"[\u0C00-\u0C7F]")
+TAMIL_SCRIPT_RE = re.compile(r"[\u0B80-\u0BFF]")
+DEVANAGARI_SCRIPT_RE = re.compile(r"[\u0900-\u097F]")
+BENGALI_SCRIPT_RE = re.compile(r"[\u0980-\u09FF]")
+KANNADA_SCRIPT_RE = re.compile(r"[\u0C80-\u0CFF]")
+MALAYALAM_SCRIPT_RE = re.compile(r"[\u0D00-\u0D7F]")
+ARABIC_SCRIPT_RE = re.compile(r"[\u0600-\u06FF]")
+HEBREW_SCRIPT_RE = re.compile(r"[\u0590-\u05FF]")
+CJK_SCRIPT_RE = re.compile(r"[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]")
+CYRILLIC_SCRIPT_RE = re.compile(r"[\u0400-\u04FF]")
+GREEK_SCRIPT_RE = re.compile(r"[\u0370-\u03FF]")
+
+LATIN_TARGET_KEYS = {
+    "english", "en", "french", "fr", "spanish", "es", "german", "de",
+    "italian", "it", "portuguese", "pt", "dutch", "nl", "polish", "pl",
+    "turkish", "tr", "vietnamese", "vi", "romanian", "ro", "swedish", "sv",
+    "danish", "da", "norwegian", "no", "finnish", "fi", "czech", "cs",
+}
+
+def target_language_key(language: str) -> str:
+    return _lang_key(normalize_text(language or "").lower())
+
+def looks_like_wrong_script_for_target(text: str, target_language: str) -> bool:
+    """Return True when a translation clearly belongs to another script/language.
+
+    This prevents mistakes like reusing Telugu Translation Memory while the user
+    selected French. It is intentionally conservative: it only rejects obvious
+    script mismatches, not valid brand names or placeholders.
+    """
+    value = normalize_text(text or "")
+    if not value:
+        return True
+    key = target_language_key(target_language)
+
+    # Latin-language targets should not contain full Indic/Arabic/CJK scripts in normal translations.
+    if key in LATIN_TARGET_KEYS:
+        return bool(INDIC_SCRIPT_RE.search(value) or ARABIC_SCRIPT_RE.search(value) or HEBREW_SCRIPT_RE.search(value) or CJK_SCRIPT_RE.search(value))
+
+    # Script-specific targets. If the text has a different major script and no expected script, reject it.
+    expected = None
+    if key in {"telugu", "te", "tel"}:
+        expected = TELUGU_SCRIPT_RE
+    elif key in {"tamil", "ta"}:
+        expected = TAMIL_SCRIPT_RE
+    elif key in {"hindi", "hi", "marathi", "mr", "nepali", "ne", "sanskrit", "sa"}:
+        expected = DEVANAGARI_SCRIPT_RE
+    elif key in {"bengali", "bangla", "bn", "assamese", "as"}:
+        expected = BENGALI_SCRIPT_RE
+    elif key in {"kannada", "kn"}:
+        expected = KANNADA_SCRIPT_RE
+    elif key in {"malayalam", "ml"}:
+        expected = MALAYALAM_SCRIPT_RE
+    elif key in {"arabic", "ar", "urdu", "ur", "persian", "fa", "farsi"}:
+        expected = ARABIC_SCRIPT_RE
+    elif key in {"hebrew", "he"}:
+        expected = HEBREW_SCRIPT_RE
+    elif key in {"russian", "ru", "ukrainian", "uk", "bulgarian", "bg"}:
+        expected = CYRILLIC_SCRIPT_RE
+    elif key in {"greek", "el"}:
+        expected = GREEK_SCRIPT_RE
+
+    if expected is not None:
+        if expected.search(value):
+            return False
+        # Bracket-only labels, numbers, placeholders and very short DNT-like tokens may be allowed, but
+        # large Latin sentences in an Indic/RTL target are wrong-script leftovers.
+        stripped = re.sub(PLACEHOLDER_PATTERN, "", value)
+        stripped = re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "", stripped)
+        latin_words = re.findall(r"[A-Za-z]{3,}", stripped)
+        return len(latin_words) >= 2
+
+    return False
+
+def filter_tm_matches_for_target_language(tm_matches: Dict[str, Dict[str, Any]], target_language: str) -> Tuple[Dict[str, Dict[str, Any]], int]:
+    filtered: Dict[str, Dict[str, Any]] = {}
+    dropped = 0
+    for loc, match in (tm_matches or {}).items():
+        trans = match.get("translation", "")
+        if looks_like_wrong_script_for_target(trans, target_language):
+            dropped += 1
+            continue
+        filtered[loc] = match
+    return filtered, dropped
 
 
 def render_translation_route_status(target_language: str, openai_client=None, gemini_client=None) -> None:
@@ -2804,7 +2900,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v12 import deterministic_checks_v2
+        from qa_engine_global_v13 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -6735,12 +6831,18 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
 
         status.text("Preparing translations...")
         translations_by_loc: Dict[str, str] = {}
+        active_tm_target_language = target_language.strip()
         if tm_controls.get("use"):
-            tm_matches = tm_batch_lookup(user_id, segments, tm_controls["target_language"], tm_controls["client_key"])
+            # Important: Pro Translation Memory must follow the selected target language.
+            # This prevents old Telugu memory from being reused during a French run.
+            tm_matches = tm_batch_lookup(user_id, segments, active_tm_target_language, tm_controls["client_key"])
+            tm_matches, dropped_wrong_lang = filter_tm_matches_for_target_language(tm_matches, active_tm_target_language)
             for loc, match in tm_matches.items():
                 translations_by_loc[loc] = match.get("translation", "")
             if tm_matches:
-                st.success(f"Reused {len(tm_matches)} exact saved translation(s) from encrypted Translation Memory.")
+                st.success(f"Reused {len(tm_matches)} exact saved {active_tm_target_language} translation(s) from encrypted Translation Memory.")
+            if dropped_wrong_lang:
+                st.warning(f"Ignored {dropped_wrong_lang} Translation Memory match(es) because they did not look like {active_tm_target_language}. They will be retranslated by the selected engine.")
 
         engine_segments = [seg for seg in segments if seg.get("location") not in translations_by_loc]
         if engine_segments:
@@ -6916,12 +7018,12 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                 user_id,
                 translated_segments,
                 review_rows,
-                tm_controls["target_language"],
+                target_language.strip(),
                 tm_controls["client_key"],
                 domain=settings.get("domain", ""),
             )
             if saved_tm:
-                st.success(f"Saved {saved_tm} reviewed/pass translation(s) to encrypted Translation Memory.")
+                st.success(f"Saved {saved_tm} reviewed/pass {target_language.strip()} translation(s) to encrypted Translation Memory.")
             elif tm_secret_configured():
                 st.info("No reviewed/pass translations were saved to Translation Memory for this run.")
         log_report_record(user_id, "pro", uploaded_file.name, len(segments), len(review_rows), output_name, credits_needed)
