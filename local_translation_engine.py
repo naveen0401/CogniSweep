@@ -1,38 +1,22 @@
-
 """
-ErrorSweep self-hosted translation adapter.
+ErrorSweep local/self-hosted translation adapter v15.
 
-Purpose:
-- Allows ErrorSweep Pro to translate without OpenAI/Gemini API keys.
-- Works with self-hosted translation engines such as LibreTranslate or a custom NLLB service.
-- Does not store or log text by itself.
-
-Supported providers:
-1) libretranslate
-   Endpoint example: https://your-libretranslate-server.example.com
-   API:
-      POST /translate
-      { q, source, target, format, api_key? }
-
-2) generic
-   Endpoint receives:
-      POST <endpoint>
-      { texts: [...], source_language, target_language, domain }
-   Expected response:
-      { translations: ["...", "..."] }
-      or [{"translation": "..."}, ...]
+Key guarantees for localization files:
+- Curly placeholders / variables / tags / URLs / emails are preserved by the app-level guard.
+- Leading bullets and emoji/icons are preserved exactly, but the following UI text is translated.
+- Whole square-bracket UI labels can be localized inside the brackets: [Log In] -> [Connexion].
+- Output is never intentionally logged or stored by this adapter.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 
 LANGUAGE_CODE_MAP = {
-    # Common LibreTranslate / ISO-ish codes.
     "english": "en", "en": "en",
     "french": "fr", "fr": "fr",
     "spanish": "es", "es": "es",
@@ -52,68 +36,33 @@ LANGUAGE_CODE_MAP = {
     "hindi": "hi", "hi": "hi",
     "telugu": "te", "te": "te",
     "tamil": "ta", "ta": "ta",
+    "malayalam": "ml", "ml": "ml",
+    "kannada": "kn", "kn": "kn",
     "bengali": "bn", "bangla": "bn", "bn": "bn",
     "urdu": "ur", "ur": "ur",
 }
 
-
-
-# ==========================================================
-# Translation safety guard
-# ==========================================================
-PROTECTED_INLINE_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$[A-Za-z_][\w]*|<[^>]+>|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})")
-LOCALIZABLE_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
-LEADING_BULLET_RE = re.compile(r"^(\s*[•∙◦▪▫●○\-–—*]\s*)")
+PROTECTED_INLINE_RE = re.compile(
+    r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$[A-Za-z_][\w]*|<[^>]+>|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})"
+)
 COMMON_UNIT_RE = re.compile(r"\b(kcal|mins?|sec(?:onds?)?|hrs?|kg|g|mg|km|m|cm|mm|mb|gb|tb|kb|fps|dpi|px|%|°c|°f)\b", re.I)
-
-
-def _restore_safety(source: str, translation: str) -> str:
-    source = str(source or "")
-    translation = str(translation or "")
-    # Restore source placeholders if lost.
-    tokens = []
-    tokens.extend(PROTECTED_INLINE_RE.findall(source))
-    tokens.extend([m.group(0) for m in COMMON_UNIT_RE.finditer(source)])
-    for idx, token in enumerate(tokens):
-        # Restore known marker forms.
-        translation = re.sub(rf"(?i)[_\s]*(?:E\s*S\s*P\s*H\s*{idx}|Z\s*X\s*P\s*H\s*{idx}\s*Z\s*X)[_\s]*", token, translation)
-        if token and token not in translation:
-            translation = (translation + " " + token).strip()
-    # Square-bracketed UI labels can be localized, but the bracket delimiters should remain.
-    # Example: [Welcome Screen] -> [Pantalla de bienvenida] is valid.
-    # We only wrap the entire translated segment when the whole source segment was bracketed.
-    source_brackets = LOCALIZABLE_BRACKET_RE.findall(source)
-    if source_brackets:
-        source_clean = source.strip()
-        trans_clean = translation.strip()
-        if source_clean in source_brackets and len(source_brackets) == 1:
-            if trans_clean and not (trans_clean.startswith("[") and trans_clean.endswith("]")):
-                translation = f"[{trans_clean.strip('[] ')}]"
-
-    bullet = LEADING_BULLET_RE.match(source)
-    if bullet:
-        translation = re.sub(r"^\s*Â\s*", "", translation)
-        if not translation.startswith(bullet.group(1).strip()):
-            translation = bullet.group(1) + translation.lstrip()
-    return translation
+# Leading visual markers that should be preserved exactly, not translated.
+LEADING_VISUAL_RE = re.compile(r"^(\s*(?:(?:[•∙◦▪▫●○\-–—*]+)|(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?))+\s*)")
+TRAILING_BULLET_RE = re.compile(r"(\s*[•∙◦▪▫●○]+\s*)+$")
+LOCALIZABLE_BRACKET_RE = re.compile(r"^\[([^\[\]\n]{1,180})\]$")
 
 
 def normalize_language_code(language: str) -> str:
     value = (language or "").strip().lower()
     if not value:
         return "en"
-
-    # fr-FR -> fr, en_US -> en
     short = re.split(r"[-_ ]", value)[0]
     if value in LANGUAGE_CODE_MAP:
         return LANGUAGE_CODE_MAP[value]
     if short in LANGUAGE_CODE_MAP:
         return LANGUAGE_CODE_MAP[short]
-
-    # If user already typed a 2-letter code, pass it through.
     if re.fullmatch(r"[a-z]{2,3}", value):
         return value
-
     return value
 
 
@@ -121,6 +70,68 @@ def _post_json(url: str, payload: Dict[str, Any], timeout: int = 60, headers: Op
     response = requests.post(url, json=payload, headers=headers or {}, timeout=timeout)
     response.raise_for_status()
     return response.json()
+
+
+def _prepare_engine_source(source: str) -> Tuple[str, Dict[str, Any]]:
+    """Strip visual UI wrappers before machine translation and store metadata.
+
+    This avoids engines leaving short UI labels untranslated, e.g.:
+    - ∙Dashboard -> translate Dashboard -> restore ∙
+    - 🏠 Home -> translate Home -> restore 🏠
+    - [Welcome Screen] -> translate Welcome Screen -> restore brackets
+    """
+    original = str(source or "")
+    text = original.strip()
+    meta: Dict[str, Any] = {"prefix": "", "bracketed": False, "original": original}
+
+    visual = LEADING_VISUAL_RE.match(text)
+    if visual:
+        meta["prefix"] = visual.group(1)
+        text = text[visual.end():].lstrip()
+
+    bracket = LOCALIZABLE_BRACKET_RE.fullmatch(text.strip())
+    if bracket:
+        meta["bracketed"] = True
+        text = bracket.group(1).strip()
+
+    # If the remaining core is empty, use original so we do not create blanks.
+    return (text or original), meta
+
+
+def _restore_visual_wrapper(translation: str, meta: Dict[str, Any]) -> str:
+    out = str(translation or "").strip()
+    out = re.sub(r"^\s*Â\s*", "", out).strip()
+    # LibreTranslate sometimes duplicates list bullets at the end: ∙Tableau de bord∙
+    out = TRAILING_BULLET_RE.sub("", out).strip()
+
+    if meta.get("bracketed") and out and not (out.startswith("[") and out.endswith("]")):
+        out = f"[{out.strip('[] ')}]"
+
+    prefix = str(meta.get("prefix") or "")
+    if prefix:
+        stripped = prefix.strip()
+        if stripped and not out.startswith(stripped):
+            out = prefix + out.lstrip()
+    return out
+
+
+def _restore_safety(source: str, translation: str) -> str:
+    """Final safety restore for tokens that must survive translation."""
+    source = str(source or "")
+    out = str(translation or "")
+
+    # Restore app-level protected marker variants into original tokens if possible.
+    # The app performs a second restore with the true original segment, so this is a local safety net.
+    tokens: List[str] = []
+    tokens.extend(PROTECTED_INLINE_RE.findall(source))
+    tokens.extend([m.group(0) for m in COMMON_UNIT_RE.finditer(source)])
+
+    for idx, token in enumerate(tokens):
+        marker_re = re.compile(rf"(?i)[_\s]*(?:E\s*S\s*P\s*H\s*{idx}|Z\s*X\s*P\s*H\s*{idx}\s*Z\s*X|ZXPH\s*{idx}\s*ZX)[_\s]*")
+        out = marker_re.sub(token, out)
+        if token and token not in out:
+            out = (out.rstrip() + " " + token).strip()
+    return out
 
 
 def translate_with_libretranslate(
@@ -134,17 +145,10 @@ def translate_with_libretranslate(
     base = endpoint.rstrip("/")
     url = base if base.endswith("/translate") else f"{base}/translate"
     target = normalize_language_code(target_language)
-    source = normalize_language_code(source_language) if source_language and source_language != "auto" else "auto"
-
-    payload = {
-        "q": text,
-        "source": source,
-        "target": target,
-        "format": "text",
-    }
+    source = normalize_language_code(source_language) if source_language and source_language.lower() != "auto" else "auto"
+    payload = {"q": text, "source": source, "target": target, "format": "text"}
     if api_key:
         payload["api_key"] = api_key
-
     data = _post_json(url, payload, timeout=timeout)
     if isinstance(data, dict):
         return str(data.get("translatedText") or data.get("translation") or "")
@@ -163,7 +167,6 @@ def translate_with_generic_endpoint(
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-
     payload = {
         "texts": texts,
         "source_language": source_language or "auto",
@@ -171,16 +174,13 @@ def translate_with_generic_endpoint(
         "domain": domain,
     }
     data = _post_json(endpoint, payload, timeout=timeout, headers=headers)
-
     if isinstance(data, dict):
         if isinstance(data.get("translations"), list):
             return [str(x.get("translation", x) if isinstance(x, dict) else x) for x in data["translations"]]
         if isinstance(data.get("translated_texts"), list):
             return [str(x) for x in data["translated_texts"]]
-
     if isinstance(data, list):
         return [str(x.get("translation", x) if isinstance(x, dict) else x) for x in data]
-
     return [""] * len(texts)
 
 
@@ -194,20 +194,22 @@ def self_hosted_translate_batch(
     api_key: str = "",
     timeout: int = 120,
 ) -> List[Dict[str, str]]:
-    """Translate a batch of ErrorSweep segments with a self-hosted engine."""
     provider = (provider or "libretranslate").strip().lower()
     endpoint = (endpoint or "").strip()
     if not endpoint:
         return [{"location": s.get("location", ""), "translation": ""} for s in segments]
 
-    texts = [str(s.get("source") or s.get("text") or "") for s in segments]
+    original_texts = [str(s.get("source") or s.get("text") or "") for s in segments]
     locations = [str(s.get("location", "")) for s in segments]
+    prepared = [_prepare_engine_source(t) for t in original_texts]
+    engine_texts = [p[0] for p in prepared]
+    metas = [p[1] for p in prepared]
 
     translations: List[str] = []
     if provider == "generic":
         translations = translate_with_generic_endpoint(
             endpoint=endpoint,
-            texts=texts,
+            texts=engine_texts,
             target_language=target_language,
             source_language=source_language,
             domain=domain,
@@ -215,30 +217,32 @@ def self_hosted_translate_batch(
             timeout=timeout,
         )
     else:
-        # LibreTranslate is usually one text per call.
-        for text in texts:
-            if not text:
+        for engine_text, original_text in zip(engine_texts, original_texts):
+            if not engine_text:
                 translations.append("")
                 continue
             try:
-                translations.append(
-                    translate_with_libretranslate(
-                        endpoint=endpoint,
-                        text=text,
-                        target_language=target_language,
-                        source_language=source_language,
-                        api_key=api_key,
-                        timeout=timeout,
-                    )
+                trans = translate_with_libretranslate(
+                    endpoint=endpoint,
+                    text=engine_text,
+                    target_language=target_language,
+                    source_language=source_language,
+                    api_key=api_key,
+                    timeout=timeout,
                 )
+                # If stripping made the engine fail, retry original once.
+                if not trans and engine_text != original_text:
+                    trans = translate_with_libretranslate(endpoint, original_text, target_language, source_language, api_key, timeout)
+                translations.append(trans or "")
             except Exception:
                 translations.append("")
 
-    # Keep output length aligned to input length.
     if len(translations) < len(segments):
         translations.extend([""] * (len(segments) - len(translations)))
 
-    return [
-        {"location": loc, "translation": _restore_safety(src, trans or "")}
-        for loc, src, trans in zip(locations, texts, translations)
-    ]
+    output: List[Dict[str, str]] = []
+    for loc, src, trans, meta in zip(locations, original_texts, translations, metas):
+        fixed = _restore_visual_wrapper(trans or "", meta)
+        fixed = _restore_safety(src, fixed)
+        output.append({"location": loc, "translation": fixed})
+    return output

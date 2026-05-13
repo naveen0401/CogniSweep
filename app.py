@@ -469,7 +469,7 @@ SKIP_SHEET_KEYWORDS = [
     "score card",
 ]
 
-# Language-specific QA rules are now handled by qa_engine_global_v12.py.
+# Language-specific QA rules are now handled by qa_engine_global_v15.py.
 # The Streamlit app shell keeps file extraction/output only.
 
 PLACEHOLDER_PATTERN = re.compile(
@@ -799,13 +799,81 @@ def translation_engine_live_preflight(target_language: str) -> Tuple[bool, str]:
         return False, f"{label} is not reachable at {health_url}: {str(exc)[:220]}"
 
 
-def missing_translation_segments(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> List[Dict[str, Any]]:
+def _semantic_text_for_coverage(text: str) -> str:
+    """Remove protected-only content before deciding whether a translation is meaningful."""
+    value = normalize_text(text or "")
+    value = PROTECTED_INLINE_RE.sub(" ", value)
+    value = COMMON_UNIT_RE.sub(" ", value)
+    value = EMOJI_RE.sub(" ", value)
+    value = re.sub(r"[\[\]{}()<>•∙◦▪▫●○\-–—*\s\d.,:;!?/\\\"'“”‘’]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _expected_script_regex_for_target(target_language: str):
+    key = target_language_key(target_language)
+    if key in {"telugu", "te", "tel"}:
+        return TELUGU_SCRIPT_RE
+    if key in {"tamil", "ta"}:
+        return TAMIL_SCRIPT_RE
+    if key in {"malayalam", "ml"}:
+        return MALAYALAM_SCRIPT_RE
+    if key in {"kannada", "kn"}:
+        return KANNADA_SCRIPT_RE
+    if key in {"bengali", "bangla", "bn", "assamese", "as"}:
+        return BENGALI_SCRIPT_RE
+    if key in {"hindi", "hi", "marathi", "mr", "nepali", "ne", "sanskrit", "sa"}:
+        return DEVANAGARI_SCRIPT_RE
+    if key in {"arabic", "ar", "urdu", "ur", "persian", "fa", "farsi"}:
+        return ARABIC_SCRIPT_RE
+    if key in {"hebrew", "he"}:
+        return HEBREW_SCRIPT_RE
+    if key in {"russian", "ru", "ukrainian", "uk", "bulgarian", "bg"}:
+        return CYRILLIC_SCRIPT_RE
+    if key in {"greek", "el"}:
+        return GREEK_SCRIPT_RE
+    return None
+
+
+def looks_like_untranslated_or_placeholder_only(source: str, translation: str, target_language: str) -> bool:
+    source = normalize_text(source or "")
+    target = normalize_text(translation or "")
+    if not source:
+        return False
+    if not target:
+        return True
+
+    src_sem = _semantic_text_for_coverage(source)
+    tgt_sem = _semantic_text_for_coverage(target)
+
+    # Placeholder/unit/emoji-only output is not a real translation when source has translatable words.
+    if src_sem and not tgt_sem:
+        return True
+
+    # Exact copied source is normally untranslated, except very short DNT-like tokens.
+    if src_sem and tgt_sem and src_sem == tgt_sem and len(src_sem) > 3:
+        return True
+
+    expected = _expected_script_regex_for_target(target_language)
+    if expected is not None:
+        if expected.search(target):
+            return False
+        # For non-Latin targets, a Latin-only target is a clear leftover.
+        stripped = PROTECTED_INLINE_RE.sub(" ", target)
+        stripped = COMMON_UNIT_RE.sub(" ", stripped)
+        latin_words = re.findall(r"[A-Za-z]{3,}", stripped)
+        source_latin_words = re.findall(r"[A-Za-z]{3,}", source)
+        if latin_words and len(source_latin_words) >= 1:
+            return True
+    return False
+
+
+def missing_translation_segments(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str], target_language: str = "") -> List[Dict[str, Any]]:
     missing = []
     for seg in segments:
         source = normalize_text(seg.get("source") or seg.get("text") or "")
         loc = seg.get("location", "")
         trans = normalize_text(translations_by_loc.get(loc, ""))
-        if source and not trans:
+        if looks_like_untranslated_or_placeholder_only(source, trans, target_language):
             missing.append(seg)
     return missing
 
@@ -1005,6 +1073,8 @@ PROTECTED_INLINE_RE = re.compile(
 )
 LOCALIZABLE_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,120}\]")
 LEADING_BULLET_RE = re.compile(r"^(\s*[•∙◦▪▫●○\-–—*]\s*)")
+EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?")
+LEADING_EMOJI_RE = re.compile(r"^(\s*(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?\s*)+)")
 COMMON_UNIT_RE = re.compile(r"\b(kcal|mins?|sec(?:onds?)?|hrs?|kg|g|mg|km|m|cm|mm|mb|gb|tb|kb|fps|dpi|px|%|°c|°f)\b", re.I)
 PROTECT_MARKER_PREFIX = "ZXPH"
 PROTECT_MARKER_SUFFIX = "ZX"
@@ -1019,9 +1089,9 @@ def _find_protected_spans(source: str) -> List[Tuple[int, int, str]]:
             token = m.group(0)
             if token:
                 candidates.append((m.start(), m.end(), token))
-    bullet = LEADING_BULLET_RE.match(source)
-    if bullet:
-        candidates.append((bullet.start(1), bullet.end(1), bullet.group(1)))
+    # Do not replace bullets/emoji with markers before translation.
+    # Engines translate short UI labels better when punctuation/emoji is left visible;
+    # we restore those symbols after translation instead.
 
     # Prefer longer spans and remove overlaps.
     candidates.sort(key=lambda x: (x[0], -(x[1] - x[0])))
@@ -1068,6 +1138,47 @@ def _marker_regex(index: int) -> re.Pattern:
     )
 
 
+
+
+def _leading_emojis(text: str) -> str:
+    m = LEADING_EMOJI_RE.match(normalize_text(text or ""))
+    return m.group(1).strip() if m else ""
+
+
+def _emoji_tokens(text: str) -> List[str]:
+    return [m.group(0) for m in EMOJI_RE.finditer(normalize_text(text or ""))]
+
+
+def _restore_prefix_symbols(source: str, translated: str) -> str:
+    """Restore leading bullets and emoji/icons without blocking localization.
+
+    Examples:
+    - "🏠 Home" -> "Accueil" becomes "🏠 Accueil"
+    - "∙Dashboard" -> "Tableau de bord∙" becomes "∙Tableau de bord"
+    """
+    source = normalize_text(source or "")
+    translated = normalize_text(translated or "")
+
+    bullet = LEADING_BULLET_RE.match(source)
+    if bullet:
+        src_bullet = bullet.group(1).strip()
+        translated = re.sub(r"^\s*Â\s*", "", translated)
+        # Remove duplicated trailing bullet caused by MT engines.
+        if src_bullet and translated.strip().endswith(src_bullet) and not source.strip().endswith(src_bullet):
+            translated = translated.strip()[:-len(src_bullet)].rstrip()
+        if src_bullet and not translated.strip().startswith(src_bullet):
+            translated = src_bullet + " " + translated.lstrip()
+
+    leading = _leading_emojis(source)
+    if leading and leading not in translated[: max(8, len(leading) + 4)]:
+        translated = leading + " " + translated.lstrip()
+
+    # Preserve non-leading emoji/icons that were completely dropped. Append is safer than losing them.
+    for tok in _emoji_tokens(source):
+        if tok and tok not in translated:
+            translated = (translated.rstrip() + " " + tok).strip()
+    return translated
+
 def restore_protected_text(source: str, translation: Any) -> str:
     """Restore protected source tokens after translation.
 
@@ -1078,11 +1189,7 @@ def restore_protected_text(source: str, translation: Any) -> str:
     translated = normalize_text(translation or "")
     _, protected = protect_text_for_translation(source)
     if not protected:
-        # Still fix common bullet encoding issue: ∙ sometimes becomes Â.
-        bullet = LEADING_BULLET_RE.match(source)
-        if bullet and translated.startswith("Â"):
-            return bullet.group(1).strip() + translated[1:]
-        return translated
+        return _restore_prefix_symbols(source, translated)
 
     # Replace all marker/distorted marker forms with exact original protected token.
     for idx, token in enumerate(protected):
@@ -1116,14 +1223,7 @@ def restore_protected_text(source: str, translation: Any) -> str:
             else:
                 translated = (translated + " " + token).strip()
 
-    # Restore leading bullet/list marker exactly.
-    bullet = LEADING_BULLET_RE.match(source)
-    if bullet:
-        src_bullet = bullet.group(1)
-        # Remove common mojibake from bullets.
-        translated = re.sub(r"^\s*Â\s*", "", translated)
-        if not translated.startswith(src_bullet.strip()):
-            translated = src_bullet + translated.lstrip()
+    translated = _restore_prefix_symbols(source, translated)
 
     return translated
 
@@ -2969,7 +3069,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v14 import deterministic_checks_v2
+        from qa_engine_global_v15 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -2990,7 +3090,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
             "Error Type": "Rule Engine Warning",
             "Severity": "Review",
             "Wrong Part": "QA Engine v2",
-            "Suggestion": "Check qa_engine_global_v12.py is present in GitHub and deployment.",
+            "Suggestion": "Check qa_engine_global_v15.py is present in GitHub and deployment.",
             "Explanation": f"Modular rule engine could not run: {str(exc)[:180]}",
             "Check Source": "Rule Engine",
             "Rule Source": "System",
@@ -6947,10 +7047,10 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             progress.progress(0.45)
 
         # Block bad Pro outputs: after engine/TM/reference pass, every non-empty source must have a translation.
-        missing_after_translation = missing_translation_segments(segments, translations_by_loc)
+        missing_after_translation = missing_translation_segments(segments, translations_by_loc, target_language)
         if missing_after_translation:
             st.error(
-                f"Translation coverage failed: {len(missing_after_translation)} segment(s) are still blank. "
+                f"Translation coverage failed: {len(missing_after_translation)} segment(s) are blank, placeholder-only, or clearly untranslated. "
                 "Download is blocked to avoid delivering an incomplete translated file. "
                 "Check that the selected target language is supported and the local translation engine is running."
             )
