@@ -741,6 +741,75 @@ def can_use_local_translation_engine(target_language: str = "") -> bool:
     return bool(status.get("config", {}).get("endpoint")) and bool(status.get("supported", True))
 
 
+def _endpoint_health_url(endpoint: str, provider: str) -> str:
+    base = (endpoint or "").rstrip("/")
+    if not base:
+        return ""
+    if provider == "libretranslate":
+        if base.endswith("/translate"):
+            base = base[: -len("/translate")]
+        return f"{base}/languages"
+    # generic workers such as IndicTrans2 expose /health beside /translate
+    if base.endswith("/translate"):
+        base = base[: -len("/translate")]
+    return f"{base}/health"
+
+
+def translation_engine_live_preflight(target_language: str) -> Tuple[bool, str]:
+    """Confirm the selected local/self-hosted translation engine is reachable now.
+
+    This prevents Pro from silently producing placeholder-only or blank output when
+    a local engine is configured in code but not actually running.
+    """
+    status = translation_engine_status(target_language)
+    cfg = status.get("config", {}) or {}
+    endpoint = cfg.get("endpoint", "")
+    provider = cfg.get("provider", "")
+    label = cfg.get("label", "Local engine")
+
+    if not endpoint:
+        return False, f"No translation endpoint is configured for {target_language}."
+    if not status.get("supported", True):
+        return False, status.get("reason", f"Configured engine does not support {target_language}.")
+
+    health_url = _endpoint_health_url(endpoint, provider)
+    if not health_url:
+        return False, "Could not build engine health URL."
+
+    try:
+        res = requests.get(health_url, timeout=12)
+        if res.status_code >= 400:
+            return False, f"{label} returned HTTP {res.status_code} at {health_url}."
+        if provider == "libretranslate":
+            data = res.json()
+            langs = []
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        if item.get("code"):
+                            langs.append(str(item.get("code")).lower())
+                        if item.get("name"):
+                            langs.append(str(item.get("name")).lower())
+            key = _lang_key(target_language)
+            if langs and key not in langs and target_language.strip().lower() not in langs:
+                return False, f"LibreTranslate is reachable but does not list target '{target_language}'."
+            return True, f"{label} is reachable and supports {target_language}."
+        return True, f"{label} is reachable at {health_url}."
+    except Exception as exc:
+        return False, f"{label} is not reachable at {health_url}: {str(exc)[:220]}"
+
+
+def missing_translation_segments(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> List[Dict[str, Any]]:
+    missing = []
+    for seg in segments:
+        source = normalize_text(seg.get("source") or seg.get("text") or "")
+        loc = seg.get("location", "")
+        trans = normalize_text(translations_by_loc.get(loc, ""))
+        if source and not trans:
+            missing.append(seg)
+    return missing
+
+
 # ==========================================================
 # TARGET-LANGUAGE SAFETY GUARD
 # ==========================================================
@@ -2900,7 +2969,7 @@ def deterministic_checks(segment: Dict[str, Any], rules: Dict[str, Any], enable_
     the app returns a safe warning row instead of crashing.
     """
     try:
-        from qa_engine_global_v13 import deterministic_checks_v2
+        from qa_engine_global_v14 import deterministic_checks_v2
         return deterministic_checks_v2(
             segment=segment,
             rules=rules,
@@ -6845,6 +6914,16 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                 st.warning(f"Ignored {dropped_wrong_lang} Translation Memory match(es) because they did not look like {active_tm_target_language}. They will be retranslated by the selected engine.")
 
         engine_segments = [seg for seg in segments if seg.get("location") not in translations_by_loc]
+        if engine_segments and not openai_client:
+            engine_ok, engine_msg = translation_engine_live_preflight(target_language)
+            if not engine_ok:
+                st.error(
+                    f"Translation engine is not ready for {target_language}. "
+                    f"{engine_msg} {len(engine_segments)} segment(s) still need machine translation. "
+                    "ErrorSweep Pro will not create a blank/placeholder-only output."
+                )
+                st.stop()
+            st.success(f"Translation engine preflight passed: {engine_msg}")
         if engine_segments:
             status.text("Translating remaining segments...")
             total_batches = max(1, (len(engine_segments) + int(settings["batch_size"]) - 1) // int(settings["batch_size"]))
@@ -6866,6 +6945,21 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
                 progress.progress(((b + 1) / total_batches) * 0.45)
         else:
             progress.progress(0.45)
+
+        # Block bad Pro outputs: after engine/TM/reference pass, every non-empty source must have a translation.
+        missing_after_translation = missing_translation_segments(segments, translations_by_loc)
+        if missing_after_translation:
+            st.error(
+                f"Translation coverage failed: {len(missing_after_translation)} segment(s) are still blank. "
+                "Download is blocked to avoid delivering an incomplete translated file. "
+                "Check that the selected target language is supported and the local translation engine is running."
+            )
+            with st.expander("Missing translation locations", expanded=True):
+                st.dataframe(pd.DataFrame([{
+                    "Location": s.get("location", ""),
+                    "Source": truncate(s.get("source") or s.get("text") or "", 300),
+                } for s in missing_after_translation[:200]]), use_container_width=True, hide_index=True)
+            st.stop()
 
         translated_segments = []
         for seg in segments:
