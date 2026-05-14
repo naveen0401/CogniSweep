@@ -46,6 +46,7 @@ except Exception:
 # ==========================================================
 
 st.set_page_config(page_title="ErrorSweep", layout="wide")
+APP_VERSION = "v16 Human Review MVP"
 
 st.markdown(
     """
@@ -413,6 +414,39 @@ input, textarea { color: #f8fbff !important; }
 .simple-status-card.off { border-color: rgba(248,113,113,.25); }
 .simple-advanced-note { background: rgba(56,189,248,.06); border: 1px solid rgba(56,189,248,.14); color: #aab9db; padding: 11px 13px; border-radius: 14px; font-size: 13px; margin: 8px 0; }
 @media (max-width: 900px) { .workflow-steps { grid-template-columns: 1fr; } .simple-status-grid { grid-template-columns: 1fr 1fr; } }
+
+
+/* Human Review CAT editor */
+.hr-session-card {
+    background: rgba(16, 19, 34, 0.76);
+    border: 1px solid rgba(56,189,248,.16);
+    border-radius: 18px;
+    padding: 16px;
+    margin: 12px 0;
+}
+.hr-pill {
+    display: inline-flex;
+    border-radius: 999px;
+    padding: 6px 10px;
+    margin: 4px 6px 4px 0;
+    background: rgba(56,189,248,.10);
+    border: 1px solid rgba(56,189,248,.18);
+    color: #dff7ff;
+    font-size: 12px;
+    font-weight: 700;
+}
+.hr-pill.approved { background: rgba(0,255,136,.10); border-color: rgba(0,255,136,.22); color: #a7f3d0; }
+.hr-pill.blocked { background: rgba(248,113,113,.10); border-color: rgba(248,113,113,.25); color: #fecaca; }
+.hr-pill.review { background: rgba(250,204,21,.10); border-color: rgba(250,204,21,.22); color: #fde68a; }
+.hr-side-card {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+.hr-side-card h4 { margin: 0 0 8px 0; color: #eef2ff; font-size: 14px; }
+.hr-muted { color: #9fb0d6; font-size: 12px; }
 
 </style>
 """,
@@ -5858,7 +5892,7 @@ def render_top_account_bar(profile: Optional[Dict[str, Any]]) -> None:
 
 
 def render_top_nav() -> str:
-    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Memory & Rules", "Billing", "Account"]
+    pages = ["Dashboard", "ErrorSweep", "ErrorSweep Pro", "Human Review", "Memory & Rules", "Billing", "Account"]
     if is_admin_user():
         pages.append("Admin")
     if st.session_state.get("es_page") not in pages:
@@ -6650,6 +6684,444 @@ def build_offline_translation_review_rows(segments: List[Dict[str, Any]], transl
             ))
     return rows
 
+
+# ==========================================================
+# HUMAN REVIEW MVP — CAT-STYLE EDITOR
+# ==========================================================
+
+def init_human_review_state() -> None:
+    st.session_state.setdefault("human_review_sessions", {})
+    st.session_state.setdefault("es_active_review_session_id", None)
+
+
+def human_review_status_from_issues(issue_count: int) -> str:
+    return "Needs Review" if issue_count else "Draft"
+
+
+def group_issues_by_location(issue_rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in issue_rows or []:
+        loc = str(row.get("Location", "") or "")
+        if loc:
+            grouped.setdefault(loc, []).append(dict(row))
+    return grouped
+
+
+def find_glossary_matches_for_source(source: str, rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    source_l = normalize_text(source).lower()
+    matches = []
+    for g in (rules or {}).get("glossary", [])[:500]:
+        src_term = normalize_text(g.get("source_term", ""))
+        tgt_term = normalize_text(g.get("target_term", ""))
+        if src_term and src_term.lower() in source_l:
+            matches.append({
+                "source_term": src_term,
+                "target_term": tgt_term,
+                "rule_source": g.get("source", "Glossary"),
+            })
+    return matches[:20]
+
+
+def find_dnt_matches_for_source(source: str, rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    source_l = normalize_text(source).lower()
+    matches = []
+    for d in (rules or {}).get("dnt", [])[:500]:
+        term = normalize_text(d.get("term", ""))
+        if term and term.lower() in source_l:
+            matches.append({"term": term, "rule_source": d.get("source", "DNT")})
+    return matches[:20]
+
+
+def review_session_payload(
+    user_id: str,
+    workflow: str,
+    file_name: str,
+    target_language: str,
+    client_key: str,
+    domain: str,
+    segments: List[Dict[str, Any]],
+    issue_rows: List[Dict[str, Any]],
+    rules: Dict[str, Any],
+    translations_by_loc: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    issues_by_loc = group_issues_by_location(issue_rows)
+    now = datetime.now(timezone.utc).isoformat()
+    raw_id = f"{user_id}|{workflow}|{file_name}|{target_language}|{now}|{len(segments)}"
+    session_id = "hr_" + hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:14]
+
+    review_segments = []
+    for idx, seg in enumerate(segments, start=1):
+        loc = str(seg.get("location", ""))
+        source = normalize_text(seg.get("source") or seg.get("text") or "")
+        machine_translation = normalize_text(
+            (translations_by_loc or {}).get(loc, "")
+            or seg.get("translation", "")
+            or ""
+        )
+        seg_issues = issues_by_loc.get(loc, [])
+        review_segments.append({
+            "segment_id": f"{session_id}_{idx}",
+            "index": idx,
+            "location": loc,
+            "sheet": seg.get("sheet", ""),
+            "file_type": seg.get("file_type", ""),
+            "source": source,
+            "machine_translation": machine_translation,
+            "reviewed_translation": machine_translation,
+            "status": human_review_status_from_issues(len(seg_issues)),
+            "comment": "",
+            "issues": seg_issues,
+            "glossary_matches": find_glossary_matches_for_source(source, rules),
+            "dnt_matches": find_dnt_matches_for_source(source, rules),
+            "updated_at": now,
+        })
+
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "workflow": workflow,
+        "file_name": file_name,
+        "target_language": normalize_text(target_language or "Auto-detect"),
+        "client_key": client_key or "global",
+        "domain": domain or "Auto-detect",
+        "created_at": now,
+        "updated_at": now,
+        "status": "In Review",
+        "segments": review_segments,
+        "issue_rows": [dict(r) for r in (issue_rows or [])],
+        "rules_summary": {
+            "glossary_entries": len((rules or {}).get("glossary", [])),
+            "dnt_entries": len((rules or {}).get("dnt", [])),
+            "rule_files": (rules or {}).get("files", [])[:20],
+        },
+    }
+
+
+def save_review_session_to_state(payload: Dict[str, Any]) -> str:
+    init_human_review_state()
+    sid = payload["session_id"]
+    st.session_state["human_review_sessions"][sid] = payload
+    st.session_state["es_active_review_session_id"] = sid
+    return sid
+
+
+def create_human_review_session(
+    user_id: str,
+    workflow: str,
+    file_name: str,
+    target_language: str,
+    client_key: str,
+    domain: str,
+    segments: List[Dict[str, Any]],
+    issue_rows: List[Dict[str, Any]],
+    rules: Dict[str, Any],
+    translations_by_loc: Optional[Dict[str, str]] = None,
+) -> str:
+    payload = review_session_payload(
+        user_id=user_id,
+        workflow=workflow,
+        file_name=file_name,
+        target_language=target_language,
+        client_key=client_key,
+        domain=domain,
+        segments=segments,
+        issue_rows=issue_rows,
+        rules=rules,
+        translations_by_loc=translations_by_loc,
+    )
+    sid = save_review_session_to_state(payload)
+    # Database persistence is intentionally best-effort for MVP.
+    # The SQL file supplied with this release creates durable tables for later production use.
+    return sid
+
+
+def open_human_review_session(session_id: str) -> None:
+    st.session_state["es_active_review_session_id"] = session_id
+    st.session_state["es_page"] = "Human Review"
+
+
+def update_review_segment(session_id: str, segment_id: str, **updates) -> None:
+    session = st.session_state.get("human_review_sessions", {}).get(session_id)
+    if not session:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for seg in session.get("segments", []):
+        if seg.get("segment_id") == segment_id:
+            seg.update(updates)
+            seg["updated_at"] = now
+            break
+    session["updated_at"] = now
+
+
+def review_status_counts(session: Dict[str, Any]) -> Dict[str, int]:
+    counts = {"Draft": 0, "Needs Review": 0, "Approved": 0, "Rejected": 0, "Blocked": 0}
+    for seg in session.get("segments", []):
+        status = seg.get("status", "Draft")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def build_human_review_export_bytes(session: Dict[str, Any]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Review Summary"
+    counts = review_status_counts(session)
+    rows = [
+        ["Metric", "Value"],
+        ["Session ID", session.get("session_id", "")],
+        ["Workflow", session.get("workflow", "")],
+        ["File", session.get("file_name", "")],
+        ["Target Language", session.get("target_language", "")],
+        ["Client/Memory", session.get("client_key", "")],
+        ["Status", session.get("status", "")],
+        ["Total Segments", len(session.get("segments", []))],
+        ["Approved", counts.get("Approved", 0)],
+        ["Needs Review", counts.get("Needs Review", 0)],
+        ["Rejected", counts.get("Rejected", 0)],
+        ["Blocked", counts.get("Blocked", 0)],
+        ["Created", session.get("created_at", "")],
+    ]
+    for row in rows:
+        ws.append(row)
+    style_header(ws)
+
+    ws2 = wb.create_sheet("Segments")
+    headers = [
+        "Index", "Location", "Source", "Machine Translation", "Reviewed Translation",
+        "Status", "Comment", "Issue Count", "Glossary Matches", "DNT Matches", "Updated At"
+    ]
+    ws2.append(headers)
+    for seg in session.get("segments", []):
+        glossary = "; ".join(f"{g.get('source_term')} => {g.get('target_term')}" for g in seg.get("glossary_matches", []))
+        dnt = "; ".join(d.get("term", "") for d in seg.get("dnt_matches", []))
+        ws2.append([
+            seg.get("index", ""),
+            seg.get("location", ""),
+            seg.get("source", ""),
+            seg.get("machine_translation", ""),
+            seg.get("reviewed_translation", ""),
+            seg.get("status", ""),
+            seg.get("comment", ""),
+            len(seg.get("issues", [])),
+            glossary,
+            dnt,
+            seg.get("updated_at", ""),
+        ])
+    style_header(ws2)
+
+    ws3 = wb.create_sheet("Issues")
+    issue_headers = ["Location", "Error Type", "Severity", "Quality Gate", "Wrong Part", "Suggestion", "Explanation", "Rule Source"]
+    ws3.append(issue_headers)
+    for row in session.get("issue_rows", []):
+        ws3.append([safe_report_cell_value(row.get(h, "")) for h in issue_headers])
+    style_header(ws3)
+
+    for sheet in wb.worksheets:
+        for col in sheet.columns:
+            letter = col[0].column_letter
+            max_len = 0
+            for cell in col[:100]:
+                max_len = max(max_len, min(len(str(cell.value or "")), 60))
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            sheet.column_dimensions[letter].width = max(12, min(max_len + 2, 55))
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+def render_glossary_dnt_panel(seg: Dict[str, Any]) -> None:
+    st.markdown('<div class="hr-side-card"><h4>Glossary</h4>', unsafe_allow_html=True)
+    if seg.get("glossary_matches"):
+        for g in seg.get("glossary_matches", []):
+            st.write(f"**{g.get('source_term')}** → {g.get('target_term')}")
+            st.caption(g.get("rule_source", "Glossary"))
+    else:
+        st.caption("No glossary match for this segment.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="hr-side-card"><h4>DNT / protected terms</h4>', unsafe_allow_html=True)
+    if seg.get("dnt_matches"):
+        for d in seg.get("dnt_matches", []):
+            st.write(f"Keep: **{d.get('term')}**")
+            st.caption(d.get("rule_source", "DNT"))
+    else:
+        st.caption("No DNT match for this segment.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_segment_issues_panel(seg: Dict[str, Any]) -> None:
+    st.markdown('<div class="hr-side-card"><h4>QA issues</h4>', unsafe_allow_html=True)
+    issues = seg.get("issues", [])
+    if not issues:
+        st.caption("No QA issue attached to this segment.")
+    for issue in issues[:10]:
+        gate = issue.get("Quality Gate", issue.get("Severity", "Review"))
+        st.markdown(f"**{issue.get('Error Type', 'Issue')}** · {gate}")
+        if issue.get("Wrong Part"):
+            st.caption(f"Issue: {issue.get('Wrong Part')}")
+        if issue.get("Suggestion"):
+            st.caption(f"Suggestion: {issue.get('Suggestion')}")
+        if issue.get("Explanation"):
+            st.caption(issue.get("Explanation"))
+        st.divider()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_human_review_page(user_id: str, profile: Optional[Dict[str, Any]]) -> None:
+    init_human_review_state()
+    st.markdown("## Human Review")
+    st.caption("CAT-style review editor for QA/Pro results. Source stays on the left, editable target on the right, and context appears in the side panel.")
+
+    sessions = st.session_state.get("human_review_sessions", {})
+    if not sessions:
+        st.info("No active review session yet. Run ErrorSweep QA or ErrorSweep Pro, then click **Open Human Review** near the download buttons.")
+        return
+
+    ids = list(sessions.keys())
+    active_id = st.session_state.get("es_active_review_session_id") or ids[-1]
+    if active_id not in sessions:
+        active_id = ids[-1]
+
+    selected_id = st.selectbox(
+        "Review session",
+        options=ids,
+        index=ids.index(active_id),
+        format_func=lambda sid: f"{sessions[sid].get('workflow','')} · {sessions[sid].get('file_name','')} · {sessions[sid].get('target_language','')} · {sid[-6:]}",
+    )
+    st.session_state["es_active_review_session_id"] = selected_id
+    session = sessions[selected_id]
+    counts = review_status_counts(session)
+
+    st.markdown(
+        f"""
+        <div class="hr-session-card">
+            <span class="hr-pill">{escape(session.get('workflow',''))}</span>
+            <span class="hr-pill">{escape(session.get('target_language',''))}</span>
+            <span class="hr-pill">{escape(session.get('file_name',''))}</span>
+            <span class="hr-pill approved">Approved {counts.get('Approved',0)}</span>
+            <span class="hr-pill review">Needs Review {counts.get('Needs Review',0)}</span>
+            <span class="hr-pill blocked">Blocked/Rejected {counts.get('Blocked',0)+counts.get('Rejected',0)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    f1, f2 = st.columns([1, 1])
+    with f1:
+        status_filter = st.selectbox("Filter", ["All", "Needs Review", "Draft", "Approved", "Rejected", "Blocked"], key=f"hr_filter_{selected_id}")
+    with f2:
+        search = st.text_input("Search source/target", key=f"hr_search_{selected_id}", placeholder="Search segment text")
+
+    filtered_segments = []
+    for seg in session.get("segments", []):
+        if status_filter != "All" and seg.get("status") != status_filter:
+            continue
+        if search:
+            stext = f"{seg.get('source','')} {seg.get('reviewed_translation','')} {seg.get('machine_translation','')}".lower()
+            if search.lower() not in stext:
+                continue
+        filtered_segments.append(seg)
+
+    if not filtered_segments:
+        st.warning("No segments match the current filter.")
+        return
+
+    seg_options = [seg["segment_id"] for seg in filtered_segments]
+    current_seg_id = st.selectbox(
+        "Segment",
+        options=seg_options,
+        format_func=lambda sid: next(
+            f"{seg.get('index')}. {seg.get('status')} · {seg.get('location')} · {truncate(seg.get('source',''), 70)}"
+            for seg in filtered_segments if seg["segment_id"] == sid
+        ),
+        key=f"hr_segment_select_{selected_id}",
+    )
+    seg = next(x for x in filtered_segments if x["segment_id"] == current_seg_id)
+
+    left, middle, right = st.columns([1.15, 1.35, 0.9])
+    with left:
+        st.markdown("### Source")
+        st.text_area("Source text", value=seg.get("source", ""), height=250, disabled=True, key=f"hr_source_{current_seg_id}")
+        st.caption(f"Location: {seg.get('location', '')}")
+        st.caption(f"File type: {seg.get('file_type', '')}")
+
+    with middle:
+        st.markdown("### Target review")
+        target_key = f"hr_reviewed_{current_seg_id}"
+        if target_key not in st.session_state:
+            st.session_state[target_key] = seg.get("reviewed_translation") or seg.get("machine_translation", "")
+        reviewed = st.text_area("Editable target", key=target_key, height=250)
+        comment_key = f"hr_comment_{current_seg_id}"
+        if comment_key not in st.session_state:
+            st.session_state[comment_key] = seg.get("comment", "")
+        comment = st.text_area("Reviewer comment", key=comment_key, height=80)
+
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            if st.button("Save", key=f"hr_save_{current_seg_id}", use_container_width=True):
+                update_review_segment(selected_id, current_seg_id, reviewed_translation=reviewed, comment=comment)
+                st.success("Saved segment.")
+        with b2:
+            if st.button("Approve", key=f"hr_approve_{current_seg_id}", type="primary", use_container_width=True):
+                update_review_segment(selected_id, current_seg_id, reviewed_translation=reviewed, comment=comment, status="Approved")
+                st.success("Approved.")
+                st.rerun()
+        with b3:
+            if st.button("Needs rework", key=f"hr_needs_{current_seg_id}", use_container_width=True):
+                update_review_segment(selected_id, current_seg_id, reviewed_translation=reviewed, comment=comment, status="Needs Review")
+                st.warning("Marked Needs Review.")
+                st.rerun()
+        with b4:
+            if st.button("Reject", key=f"hr_reject_{current_seg_id}", use_container_width=True):
+                update_review_segment(selected_id, current_seg_id, reviewed_translation=reviewed, comment=comment, status="Rejected")
+                st.error("Rejected.")
+                st.rerun()
+
+        if st.button("Approve & Save to Translation Memory", key=f"hr_tm_{current_seg_id}", use_container_width=True):
+            if not tm_secret_configured():
+                st.error("Translation Memory encryption is not configured.")
+            else:
+                ok = tm_upsert_translation(
+                    user_id=user_id,
+                    source_text=seg.get("source", ""),
+                    target_text=reviewed,
+                    target_language=session.get("target_language", "Auto-detect"),
+                    client_key=session.get("client_key", "global"),
+                    domain=session.get("domain", ""),
+                    status="human_approved",
+                    metadata={
+                        "review_session_id": selected_id,
+                        "segment_location": seg.get("location", ""),
+                        "workflow": session.get("workflow", ""),
+                    },
+                )
+                if ok:
+                    update_review_segment(selected_id, current_seg_id, reviewed_translation=reviewed, comment=comment, status="Approved")
+                    st.success("Approved and saved to Translation Memory.")
+                    st.rerun()
+                else:
+                    st.error("Could not save this segment to Translation Memory.")
+
+    with right:
+        st.markdown("### Context")
+        render_segment_issues_panel(seg)
+        render_glossary_dnt_panel(seg)
+
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total", len(session.get("segments", [])))
+    c2.metric("Approved", counts.get("Approved", 0))
+    c3.metric("Needs Review", counts.get("Needs Review", 0))
+    st.download_button(
+        "Download Human Review Export",
+        build_human_review_export_bytes(session),
+        file_name=f"human_review_{selected_id}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
 def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], settings: Dict[str, Any]) -> None:
     render_workflow_hero(
         "ErrorSweep — QA Run",
@@ -6864,6 +7336,26 @@ def render_errorsweep_page(user_id: str, profile: Optional[Dict[str, Any]], sett
             file_name="errorsweep_qa_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+        )
+
+        review_session_id = create_human_review_session(
+            user_id=user_id,
+            workflow="qa",
+            file_name=uploaded_file.name,
+            target_language=tm_controls.get("target_language", settings.get("target_language", "Auto-detect")),
+            client_key=tm_controls.get("client_key", "global"),
+            domain=settings.get("domain", ""),
+            segments=segments,
+            issue_rows=report_rows,
+            rules=rules,
+            translations_by_loc=None,
+        )
+        st.button(
+            "Open Human Review",
+            key=f"open_hr_qa_{review_session_id}",
+            use_container_width=True,
+            on_click=open_human_review_session,
+            args=(review_session_id,),
         )
 
 
@@ -7261,6 +7753,26 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             use_container_width=True,
         )
 
+        review_session_id = create_human_review_session(
+            user_id=user_id,
+            workflow="pro",
+            file_name=uploaded_file.name,
+            target_language=target_language.strip(),
+            client_key=tm_controls.get("client_key", "global"),
+            domain=settings.get("domain", ""),
+            segments=translated_segments,
+            issue_rows=review_rows,
+            rules=rules,
+            translations_by_loc=translations_by_loc,
+        )
+        st.button(
+            "Open Human Review",
+            key=f"open_hr_pro_{review_session_id}",
+            use_container_width=True,
+            on_click=open_human_review_session,
+            args=(review_session_id,),
+        )
+
 
 def render_admin_page(profile: Optional[Dict[str, Any]]) -> None:
     st.markdown("## Admin — User Management")
@@ -7392,6 +7904,8 @@ def render_dashboard() -> None:
         render_errorsweep_page(user_id, profile, settings)
     elif page == "ErrorSweep Pro":
         render_errorsweep_pro_page(user_id, profile, settings)
+    elif page == "Human Review":
+        render_human_review_page(user_id, profile)
     elif page == "Memory & Rules":
         render_memory_rulepacks_page(user_id, profile)
     elif page == "Billing":
