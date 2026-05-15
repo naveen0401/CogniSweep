@@ -7,14 +7,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     INDICTRANS2_DEVICE=cpu
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential curl \
+    git \
+    curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
 COPY requirements_indictrans2_worker.txt /app/requirements_indictrans2_worker.txt
-RUN pip install --upgrade pip && pip install --no-cache-dir -r /app/requirements_indictrans2_worker.txt
+
+# CPU-only torch avoids huge CUDA/NVIDIA wheels that filled Codespaces storage.
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install --no-cache-dir -r /app/requirements_indictrans2_worker.txt
 
 COPY indictrans2_worker.py /app/indictrans2_worker.py
 
 EXPOSE 8000
+
 CMD ["uvicorn", "indictrans2_worker:app", "--host", "0.0.0.0", "--port", "8000"]
+
