@@ -5,3 +5,11 @@ __pycache__/
 cloudflared
 *.log
 .DS_Store
+supabase/.temp/
+.env
+.streamlit/secrets.toml
+cloudflared
+cloudflared.exe
+cloudflared*.log
+__pycache__/
+*.pyc
