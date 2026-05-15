@@ -12,15 +12,8 @@ services:
       INDICTRANS2_MODEL_EN_INDIC: "ai4bharat/indictrans2-en-indic-dist-200M"
       INDICTRANS2_MODEL_INDIC_EN: "ai4bharat/indictrans2-indic-en-dist-200M"
       INDICTRANS2_MODEL_INDIC_INDIC: "ai4bharat/indictrans2-indic-indic-dist-320M"
-      INDICTRANS2_BATCH_SIZE: "1"
+      INDICTRANS2_BATCH_SIZE: "4"
       INDICTRANS2_MAX_NEW_TOKENS: "256"
-      INDICTRANS2_NUM_BEAMS: "1"
-      INDICTRANS2_MAX_INPUT_CHARS: "700"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      HF_TOKEN: "${HF_TOKEN}"
-      HUGGINGFACE_HUB_TOKEN: "${HF_TOKEN}"
-      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"
       HF_HOME: "/models/huggingface"
       TRANSFORMERS_CACHE: "/models/huggingface"
     volumes:
@@ -34,4 +27,3 @@ services:
 
 volumes:
   indictrans2-models:
-

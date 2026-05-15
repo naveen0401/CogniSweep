@@ -1,3 +1,4 @@
+cat > docker-compose.libretranslate.yml <<'YAML'
 services:
   libretranslate:
     image: libretranslate/libretranslate:latest
@@ -7,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       LT_UPDATE_MODELS: "true"
-      LT_LOAD_ONLY: "en,fr,es,de,it,pt,ru,ar,zh,ja,ko,hi"
+      LT_LOAD_ONLY: "en,es,fr,de,it,pt,ru,ar,zh,ja,ko,hi"
       ARGOS_CHUNK_TYPE: "MINISBD"
     volumes:
       - libretranslate-models:/home/libretranslate/.local:rw
@@ -20,4 +21,4 @@ services:
 
 volumes:
   libretranslate-models:
-
+YAML
