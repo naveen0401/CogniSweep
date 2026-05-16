@@ -46,7 +46,7 @@ except Exception:
 # ==========================================================
 
 st.set_page_config(page_title="ErrorSweep", layout="wide")
-APP_VERSION = "v16 Human Review MVP"
+APP_VERSION = "v18 Smart Completion Gate"
 
 st.markdown(
     """
@@ -7538,19 +7538,97 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
         else:
             progress.progress(0.45)
 
-        # Block bad Pro outputs: after engine/TM/reference pass, every non-empty source must have a translation.
+        # ==========================================================
+        # Smart Completion Gate
+        # 0 missing -> normal download
+        # 1-12% missing -> allow output, mark unresolved rows, require Human Review
+        # >12% missing -> block output
+        # ==========================================================
+        SMART_REVIEW_THRESHOLD = 0.12
+        NEEDS_REVIEW_MARKER = "⟦NEEDS HUMAN REVIEW⟧"
+        completion_gate_human_review_required = False
+        completion_gate_rows: List[Dict[str, Any]] = []
+
         missing_after_translation = missing_translation_segments(segments, translations_by_loc, target_language)
-        if missing_after_translation:
+        missing_count = len(missing_after_translation)
+        total_count = max(len(segments), 1)
+        missing_rate = missing_count / total_count
+
+        st.session_state["pro_missing_translations"] = missing_after_translation
+        st.session_state["pro_missing_translation_count"] = missing_count
+        st.session_state["pro_total_translation_count"] = total_count
+        st.session_state["pro_missing_translation_rate"] = missing_rate
+        st.session_state["pro_human_review_required"] = False
+        st.session_state["pro_translation_blocked"] = False
+
+        if missing_count == 0:
+            st.success("Translation coverage passed. All required segments received usable translation.")
+
+        elif missing_rate <= SMART_REVIEW_THRESHOLD:
+            completion_gate_human_review_required = True
+            st.session_state["pro_human_review_required"] = True
+
+            st.warning(
+                f"Translation mostly completed, but {missing_count}/{total_count} segment(s) "
+                f"({missing_rate:.1%}) still need Human Review. "
+                "Download is allowed, but this file should not be delivered without review."
+            )
+
+            missing_table = pd.DataFrame([{
+                "Location": s.get("location", ""),
+                "Source": truncate(s.get("source") or s.get("text") or "", 500),
+                "Action": "Needs Human Review",
+            } for s in missing_after_translation[:500]])
+
+            with st.expander("Missing translation locations", expanded=True):
+                st.dataframe(missing_table, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download Missing Segment List",
+                    missing_table.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="missing_translation_segments.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+            # Put a visible marker into the output instead of silently leaving blank rows.
+            # The Human Review editor will find these rows quickly.
+            for seg in missing_after_translation:
+                loc = str(seg.get("location", ""))
+                if loc:
+                    translations_by_loc[loc] = NEEDS_REVIEW_MARKER
+                    completion_gate_rows.append(make_report_row(
+                        {**seg, "translation": NEEDS_REVIEW_MARKER, "text": NEEDS_REVIEW_MARKER},
+                        "Missing Translation",
+                        "Review",
+                        truncate(seg.get("source") or seg.get("text") or "", 300),
+                        "Translate this segment during Human Review.",
+                        "Machine translation did not return a usable target for this segment. Output is allowed because the missing rate is under the review threshold.",
+                        "Smart Completion Gate",
+                        "Human Review Required",
+                        "High",
+                    ))
+
+        else:
+            st.session_state["pro_translation_blocked"] = True
             st.error(
-                f"Translation coverage failed: {len(missing_after_translation)} segment(s) are blank, placeholder-only, or clearly untranslated. "
-                "Download is blocked to avoid delivering an incomplete translated file. "
-                "Check that the selected target language is supported and the local translation engine is running."
+                f"Translation coverage failed: {missing_count}/{total_count} segment(s) "
+                f"({missing_rate:.1%}) are blank, placeholder-only, source-copied, or clearly untranslated. "
+                "Download is blocked to avoid delivering an incomplete translated file."
             )
             with st.expander("Missing translation locations", expanded=True):
-                st.dataframe(pd.DataFrame([{
+                missing_table = pd.DataFrame([{
                     "Location": s.get("location", ""),
-                    "Source": truncate(s.get("source") or s.get("text") or "", 300),
-                } for s in missing_after_translation[:200]]), use_container_width=True, hide_index=True)
+                    "Source": truncate(s.get("source") or s.get("text") or "", 500),
+                    "Action": "Blocked: engine did not translate this segment",
+                } for s in missing_after_translation[:500]])
+                st.dataframe(missing_table, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download Missing Segment List",
+                    missing_table.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="missing_translation_segments.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
             st.stop()
 
         translated_segments = []
@@ -7560,6 +7638,8 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             translated_segments.append({**seg, "translation": trans, "text": trans})
 
         review_rows: List[Dict[str, Any]] = []
+        if completion_gate_rows:
+            review_rows.extend(completion_gate_rows)
         status.text("Running deterministic review...")
         for idx, seg in enumerate(translated_segments, start=1):
             review_rows.extend(deterministic_checks(seg, rules, enable_zwnj=True))
@@ -7730,6 +7810,11 @@ def render_errorsweep_pro_page(user_id: str, profile: Optional[Dict[str, Any]], 
             st.dataframe(pd.DataFrame(status_rows_for_ui).head(200), use_container_width=True, hide_index=True)
 
         render_report(review_rows, "Independent Review Report")
+        if completion_gate_human_review_required:
+            st.warning(
+                "Human Review Required: this output contains unresolved segments marked as "
+                "⟦NEEDS HUMAN REVIEW⟧. Review those rows before final delivery."
+            )
         st.download_button("Download Translated Output", output_bytes, file_name=output_name, mime=mime_type, use_container_width=True)
         translation_rows_for_report = [
             {
