@@ -196,7 +196,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 # Constants and session state
 # ==========================================================
 
-APP_VERSION = "v20 Platform Navigation"
+APP_VERSION = "v21 Full Navigation"
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 SUPPORTED_MAIN_API_LANGUAGES = [
@@ -1078,27 +1078,65 @@ PAGES = [
 
 
 def sidebar_nav() -> str:
+    """Render navigation in both sidebar and main page.
+
+    Some deployments/users may have the sidebar collapsed or hidden. To avoid losing
+    access to pages, this function always renders a visible top navigation bar in
+    the main content area, while also keeping the sidebar navigation when available.
+    """
+    current = st.session_state.active_page if st.session_state.active_page in PAGES else "Dashboard"
+
     with st.sidebar:
         st.markdown("## 🌐 ErrorSweep")
         st.caption(f"{APP_VERSION} · Main API-first")
-        st.markdown(f'<span class="es-badge es-badge-green">{escape(st.session_state.role)}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="es-badge es-badge-green">{escape(str(st.session_state.role))}</span>', unsafe_allow_html=True)
         st.caption(st.session_state.username or "demo user")
         st.divider()
-
-        selected = st.radio(
+        side_selected = st.radio(
             "Workspace",
             PAGES,
-            index=PAGES.index(st.session_state.active_page) if st.session_state.active_page in PAGES else 0,
+            index=PAGES.index(current),
             label_visibility="collapsed",
+            key="sidebar_page_radio",
         )
-        st.session_state.active_page = selected
-
         st.divider()
-        if st.button("Logout", use_container_width=True):
+        if st.button("Logout", use_container_width=True, key="sidebar_logout"):
+            st.session_state.authenticated = False
+            st.rerun()
+        st.caption("Main API first. Local/free engines can be tested later.")
+
+    st.markdown(
+        f"""
+        <div class="es-card" style="margin: 0 0 14px 0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div class="es-metric-label">Workspace Navigation</div>
+              <div style="font-size:20px;font-weight:800;color:#fff;">🌐 ErrorSweep</div>
+              <p>{escape(APP_VERSION)} · signed in as {escape(str(st.session_state.username or 'demo user'))}</p>
+            </div>
+            <span class="es-badge es-badge-green">{escape(str(st.session_state.role))}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    nav_cols = st.columns([3, 1])
+    with nav_cols[0]:
+        top_selected = st.selectbox(
+            "Open page",
+            PAGES,
+            index=PAGES.index(side_selected if side_selected in PAGES else current),
+            key="top_page_select",
+        )
+    with nav_cols[1]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        if st.button("Logout", use_container_width=True, key="top_logout"):
             st.session_state.authenticated = False
             st.rerun()
 
-        st.caption("Optional local/free engines can be tested later. Platform uses main API first.")
+    selected = top_selected or side_selected or current
+    st.session_state.active_page = selected
     return selected
 
 
@@ -1113,17 +1151,26 @@ def page_header(kicker: str, title: str, subtitle: str) -> None:
 
 
 def metric_cards(items: List[Tuple[str, Any, str]]) -> None:
-    html = '<div class="es-grid">'
-    for label, value, caption in items:
-        html += f"""
-        <div class="es-card">
-          <div class="es-metric-label">{escape(str(label))}</div>
-          <div class="es-metric-value">{escape(str(value))}</div>
-          <p>{escape(str(caption))}</p>
-        </div>
-        """
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+    """Render metric cards using native Streamlit containers.
+
+    Earlier builds used a raw HTML grid. Some Streamlit deployments escaped part of
+    that HTML and showed <div> tags to users. Native cards avoid that issue.
+    """
+    if not items:
+        return
+    cols = st.columns(min(4, len(items)))
+    for idx, (label, value, caption) in enumerate(items):
+        with cols[idx % len(cols)]:
+            st.markdown(
+                f"""
+                <div class="es-card">
+                  <div class="es-metric-label">{escape(str(label))}</div>
+                  <div class="es-metric-value">{escape(str(value))}</div>
+                  <p>{escape(str(caption))}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 # ==========================================================
