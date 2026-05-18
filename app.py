@@ -1,1756 +1,1782 @@
 
+from __future__ import annotations
+
+import csv
+import hashlib
 import io
+import json
 import os
 import re
-import json
 import time
 import uuid
 import zipfile
-import hmac
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple, Optional
+from html import escape
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import requests
 import streamlit as st
-from openai import OpenAI
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.comments import Comment
 from docx import Document
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 try:
-    from pypdf import PdfReader
+    from openai import OpenAI
 except Exception:
-    PdfReader = None
+    OpenAI = None
 
 
 # ==========================================================
-# ErrorSweep Platform v19
-# Main API first. Local/Libre/Indic engines are optional later.
+# ErrorSweep Platform v20
+# Main API-first localization platform shell
 # ==========================================================
 
-st.set_page_config(
-    page_title="ErrorSweep Platform",
-    page_icon="🌐",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-APP_VERSION = "v19 Platform Shell"
-DEFAULT_OPENAI_MODEL = os.getenv("ERRORSWEEP_OPENAI_MODEL", "gpt-4o-mini")
-SMART_REVIEW_THRESHOLD = 0.12
-NEEDS_REVIEW_MARKER = "⟦NEEDS HUMAN REVIEW⟧"
-
-SUPPORTED_API_LANGUAGES = [
-    "French", "Spanish", "German", "Italian", "Portuguese",
-    "Telugu", "Hindi", "Tamil", "Malayalam", "Kannada",
-    "Arabic", "Chinese", "Japanese", "Korean", "Russian",
-]
-
-BETA_LOCAL_LANGUAGES = {
-    "LibreTranslate": ["French", "Spanish", "German", "Italian", "Portuguese"],
-    "IndicTrans2": ["Telugu", "Hindi", "Tamil", "Malayalam", "Kannada"],
-}
-
-ROLE_PERMISSIONS = {
-    "Owner": {
-        "dashboard", "projects", "jobs", "qa", "pro", "review", "scorecards",
-        "memory", "team", "billing", "account", "admin", "engine_status"
-    },
-    "Admin": {
-        "dashboard", "projects", "jobs", "qa", "pro", "review", "scorecards",
-        "memory", "team", "account", "admin", "engine_status"
-    },
-    "Project Manager": {
-        "dashboard", "projects", "jobs", "qa", "pro", "review",
-        "scorecards", "memory", "account", "engine_status"
-    },
-    "Translator": {"dashboard", "jobs", "pro", "review", "memory", "account"},
-    "Reviewer": {"dashboard", "jobs", "qa", "review", "scorecards", "memory", "account"},
-    "Client Viewer": {"dashboard", "jobs", "scorecards", "account"},
-    "Billing Admin": {"dashboard", "billing", "account"},
-    "Super Admin": {
-        "dashboard", "projects", "jobs", "qa", "pro", "review", "scorecards",
-        "memory", "team", "billing", "account", "admin", "engine_status"
-    },
-}
-
-PAGE_META = {
-    "Dashboard": ("dashboard", "📊"),
-    "Projects": ("projects", "🗂️"),
-    "Jobs": ("jobs", "🧾"),
-    "ErrorSweep QA": ("qa", "🧹"),
-    "ErrorSweep Pro": ("pro", "🚀"),
-    "Human Review": ("review", "✍️"),
-    "Scorecards": ("scorecards", "🏆"),
-    "Memory & Rules": ("memory", "📚"),
-    "Team & Roles": ("team", "👥"),
-    "Billing": ("billing", "💳"),
-    "Account": ("account", "⚙️"),
-    "Admin": ("admin", "🛡️"),
-    "Engine Status": ("engine_status", "🧪"),
-}
+st.set_page_config(page_title="ErrorSweep", page_icon="🌐", layout="wide")
 
 
 # ==========================================================
 # Visual system
 # ==========================================================
 
-def inject_css() -> None:
-    st.markdown(
-        """
+CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
+:root{
+  --bg:#070913;
+  --panel:#101424;
+  --panel2:#151a2e;
+  --line:rgba(125,145,255,.22);
+  --text:#f5f7fb;
+  --muted:#9aa6c7;
+  --green:#00e785;
+  --cyan:#35bdf7;
+  --purple:#8b5cf6;
+  --red:#ff4d6d;
+  --yellow:#fbbf24;
 }
+
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp {
-    background:
-        radial-gradient(circle at 12% 8%, rgba(16,185,129,0.14), transparent 30%),
-        radial-gradient(circle at 92% 2%, rgba(59,130,246,0.14), transparent 28%),
-        radial-gradient(circle at 52% 105%, rgba(139,92,246,0.12), transparent 36%),
-        #070A12;
-    color: #E5E7EB;
+  background:
+    radial-gradient(circle at 10% 15%, rgba(0,231,133,.14), transparent 28%),
+    radial-gradient(circle at 85% 8%, rgba(53,189,247,.12), transparent 30%),
+    radial-gradient(circle at 50% 100%, rgba(139,92,246,.12), transparent 45%),
+    var(--bg);
+  color: var(--text);
 }
-#MainMenu, header, footer, [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"] {
-    visibility: hidden !important;
-    display: none !important;
+#MainMenu, footer, header, [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stDeployButton"], .stAppDeployButton {
+  visibility: hidden !important;
+  display: none !important;
 }
-.block-container {
-    padding-top: 1.5rem !important;
+section[data-testid="stSidebar"] {
+  background: rgba(8,11,22,.98);
+  border-right: 1px solid rgba(125,145,255,.18);
 }
 .es-hero {
-    position: relative;
-    overflow: hidden;
-    padding: 34px 34px 30px;
-    margin: 0 0 20px;
-    border-radius: 26px;
-    border: 1px solid rgba(59,130,246,0.22);
-    background:
-        linear-gradient(135deg, rgba(16,185,129,0.18), rgba(59,130,246,0.10), rgba(139,92,246,0.12)),
-        rgba(15, 23, 42, 0.78);
-    box-shadow: 0 30px 90px rgba(0,0,0,0.35);
-}
-.es-hero:after {
-    content: "";
-    position: absolute;
-    width: 360px;
-    height: 360px;
-    right: -100px;
-    top: -160px;
-    background: radial-gradient(circle, rgba(34,211,238,0.23), transparent 65%);
+  padding: 32px;
+  border: 1px solid rgba(53,189,247,.22);
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(0,231,133,.12), rgba(53,189,247,.08) 40%, rgba(139,92,246,.18)),
+    rgba(16,20,36,.82);
+  box-shadow: 0 30px 90px rgba(0,0,0,.30);
+  margin: 10px 0 24px 0;
 }
 .es-kicker {
-    display: inline-flex;
-    gap: 8px;
-    align-items: center;
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(16,185,129,0.28);
-    color: #34D399;
-    background: rgba(16,185,129,0.08);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: .3px;
-    text-transform: uppercase;
+  display:inline-block;
+  color: var(--green);
+  background: rgba(0,231,133,.10);
+  border: 1px solid rgba(0,231,133,.28);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-family:'Space Mono', monospace;
+  font-weight: 700;
+  letter-spacing: .6px;
+  text-transform: uppercase;
 }
 .es-title {
-    margin: 14px 0 8px;
-    font-size: 44px;
-    line-height: 1.05;
-    font-weight: 850;
-    letter-spacing: -1.2px;
-    background: linear-gradient(90deg, #F8FAFC, #A7F3D0, #93C5FD);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+  font-size: 38px;
+  line-height: 1.05;
+  font-weight: 800;
+  margin: 18px 0 8px 0;
+  background: linear-gradient(90deg, #fff, #bfffe1 35%, #9bdfff 70%, #d5c8ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
-.es-subtitle {
-    color: #B8C0D9;
-    font-size: 16px;
-    max-width: 920px;
-}
-.es-card {
-    border-radius: 20px;
-    border: 1px solid rgba(148,163,184,0.18);
-    background: rgba(15, 23, 42, 0.72);
-    box-shadow: 0 18px 50px rgba(0,0,0,0.20);
-    padding: 18px;
-}
-.es-card h3, .es-card h4 {
-    margin-top: 0;
+.es-sub {
+  color: #c4cbdf;
+  font-size: 15px;
+  max-width: 980px;
 }
 .es-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-    margin: 16px 0;
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 14px;
+  margin: 14px 0 22px;
 }
-.es-grid-4 {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-    margin: 16px 0;
+.es-grid-3 {
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 14px;
+  margin: 14px 0 22px;
 }
-.es-tile {
-    border-radius: 18px;
-    border: 1px solid rgba(59,130,246,0.18);
-    background: rgba(15,23,42,.66);
-    padding: 16px;
+.es-card {
+  background: rgba(16,20,36,.80);
+  border: 1px solid rgba(125,145,255,.20);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 15px 35px rgba(0,0,0,.18);
 }
-.es-tile .label {
-    font-size: 11px;
-    color: #94A3B8;
-    font-weight: 800;
-    letter-spacing: .6px;
-    text-transform: uppercase;
+.es-card h3,.es-card h4 { margin: 0 0 8px 0; color: #f8fbff; }
+.es-card p { color: var(--muted); margin:0; font-size:13px; }
+.es-metric-label {
+  font-family:'Space Mono', monospace;
+  font-size: 11px;
+  color: #a7b4d8;
+  letter-spacing: .8px;
+  text-transform: uppercase;
 }
-.es-tile .value {
-    margin-top: 5px;
-    font-size: 22px;
-    font-weight: 850;
-    color: #F8FAFC;
+.es-metric-value {
+  font-size: 30px;
+  font-weight: 800;
+  color:#fff;
+  margin: 6px 0;
 }
 .es-badge {
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    padding: 5px 10px;
-    margin: 2px 4px 2px 0;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 700;
-    border: 1px solid rgba(148,163,184,.22);
-    background: rgba(15,23,42,.65);
+  display:inline-block;
+  padding: 4px 10px;
+  border-radius:999px;
+  font-size: 11px;
+  font-weight:700;
+  border:1px solid rgba(125,145,255,.25);
+  color:#dfe7ff;
+  background: rgba(125,145,255,.10);
 }
-.es-badge.green { color:#34D399; border-color:rgba(52,211,153,.35); background:rgba(16,185,129,.08);}
-.es-badge.yellow { color:#FBBF24; border-color:rgba(251,191,36,.35); background:rgba(251,191,36,.08);}
-.es-badge.red { color:#FB7185; border-color:rgba(251,113,133,.35); background:rgba(251,113,133,.08);}
-.es-badge.blue { color:#93C5FD; border-color:rgba(147,197,253,.35); background:rgba(59,130,246,.08);}
-.es-muted { color:#94A3B8; font-size:13px; }
-.es-section-title {
-    margin: 20px 0 10px;
-    font-weight: 850;
-    letter-spacing: -0.4px;
+.es-badge-green { color:#9fffd1; border-color:rgba(0,231,133,.35); background:rgba(0,231,133,.12); }
+.es-badge-yellow { color:#ffe8a3; border-color:rgba(251,191,36,.35); background:rgba(251,191,36,.12); }
+.es-badge-red { color:#ffc2cd; border-color:rgba(255,77,109,.35); background:rgba(255,77,109,.12); }
+.es-two-pane {
+  display:grid;
+  grid-template-columns: 1.1fr 1.1fr .9fr;
+  gap:14px;
+}
+.es-small {
+  font-size:12px;
+  color: var(--muted);
 }
 .stButton > button, .stDownloadButton > button {
-    border-radius: 14px !important;
-    border: 1px solid rgba(16,185,129,0.28) !important;
-    background: linear-gradient(90deg, #10B981, #0EA5E9) !important;
-    color: white !important;
-    font-weight: 800 !important;
+  border-radius: 13px !important;
+  border: 1px solid rgba(0,231,133,.25) !important;
+  background: linear-gradient(90deg, #00c876, #159fe8) !important;
+  color: white !important;
+  font-weight: 800 !important;
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 14px 32px rgba(14,165,233,0.20);
-}
-[data-testid="stMetric"] {
-    border-radius: 18px;
-    border: 1px solid rgba(59,130,246,0.18);
-    background: rgba(15,23,42,.66);
-    padding: 16px;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 35px rgba(0,231,133,.15);
 }
 div[data-testid="stExpander"] {
-    border-radius: 16px !important;
-    border: 1px solid rgba(148,163,184,0.20) !important;
-    background: rgba(15, 23, 42, 0.66) !important;
-}
-.es-editor {
-    border-radius: 18px;
-    border: 1px solid rgba(59,130,246,.22);
-    background: rgba(15,23,42,.68);
-    padding: 14px;
-}
-.es-footer-note {
-    color:#64748B;
-    font-size:12px;
-    padding: 12px 0;
+  border:1px solid rgba(125,145,255,.20)!important;
+  background:rgba(16,20,36,.62)!important;
+  border-radius:14px!important;
 }
 @media (max-width: 1000px) {
-    .es-grid, .es-grid-4 { grid-template-columns: 1fr; }
-    .es-title { font-size: 34px; }
+  .es-grid, .es-grid-3, .es-two-pane { grid-template-columns: 1fr; }
+  .es-title { font-size: 28px; }
 }
 </style>
-""",
-        unsafe_allow_html=True,
-    )
-
-
-def hero(title: str, subtitle: str, kicker: str = "ErrorSweep Platform") -> None:
-    st.markdown(
-        f"""
-<div class="es-hero">
-    <div class="es-kicker">🌐 {kicker}</div>
-    <div class="es-title">{escape_html(title)}</div>
-    <div class="es-subtitle">{escape_html(subtitle)}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-
-def badge(text: str, color: str = "blue") -> str:
-    return f'<span class="es-badge {color}">{escape_html(text)}</span>'
-
-
-def card_html(title: str, body: str, icon: str = "•") -> None:
-    st.markdown(
-        f"""
-<div class="es-card">
-    <h3>{icon} {escape_html(title)}</h3>
-    <div class="es-muted">{body}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-
-def metric_tile(label: str, value: str, sub: str = "") -> str:
-    return f"""
-<div class="es-tile">
-  <div class="label">{escape_html(label)}</div>
-  <div class="value">{escape_html(value)}</div>
-  <div class="es-muted">{escape_html(sub)}</div>
-</div>
 """
-
-
-def escape_html(value: Any) -> str:
-    import html
-    return html.escape("" if value is None else str(value))
+st.markdown(CSS, unsafe_allow_html=True)
 
 
 # ==========================================================
-# Session state
+# Constants and session state
 # ==========================================================
+
+APP_VERSION = "v20 Platform Navigation"
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+SUPPORTED_MAIN_API_LANGUAGES = [
+    "French", "Spanish", "German", "Italian", "Portuguese",
+    "Arabic", "Chinese", "Japanese", "Korean", "Russian",
+    "Telugu", "Hindi", "Tamil", "Malayalam", "Kannada",
+    "Bengali", "Marathi", "Gujarati", "Urdu", "English",
+]
+
+ROLES = [
+    "Owner",
+    "Admin",
+    "Project Manager",
+    "Translator",
+    "Reviewer",
+    "Client Viewer",
+    "Billing Admin",
+    "Super Admin",
+]
+
+QA_CATEGORIES = [
+    "Blank target",
+    "Source copied",
+    "Placeholder",
+    "Number mismatch",
+    "Formatting",
+    "DNT",
+    "Glossary",
+    "Language/script",
+    "AI QA",
+]
+
+PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%[sd]|\$\w+|<[^>]+>)")
+NUMBER_RE = re.compile(r"\d+(?:[.,:]\d+)*")
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u27BF"
+    "\uFE0F"
+    "\u200D"
+    "]+",
+    flags=re.UNICODE,
+)
+
 
 def init_state() -> None:
     defaults = {
         "authenticated": False,
-        "active_role": "Owner",
-        "active_org": "Nawin Corp",
-        "active_project_id": None,
+        "username": "",
+        "role": "Owner",
+        "active_page": "Dashboard",
         "projects": [],
         "jobs": [],
-        "review_sessions": [],
-        "translation_memory": [],
+        "tm_entries": [],
         "glossary": [],
         "dnt_terms": [],
-        "style_guides": [],
-        "team": [
-            {"name": "Naveen", "email": "owner@example.com", "role": "Owner", "status": "Active"},
-        ],
-        "last_output_bytes": None,
-        "last_output_name": "",
-        "last_output_mime": "text/csv",
+        "review_segments": [],
+        "team": [],
+        "current_project_id": "",
+        "last_output": None,
+        "last_report": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
+    if not st.session_state["team"]:
+        st.session_state["team"] = [
+            {"Name": "Platform Owner", "Email": "owner@errorsweep.local", "Role": "Owner", "Status": "Active"},
+            {"Name": "Reviewer Demo", "Email": "reviewer@errorsweep.local", "Role": "Reviewer", "Status": "Invited"},
+        ]
+
+
+init_state()
+
 
 # ==========================================================
-# Secrets / clients / auth
+# Secrets/API helpers
 # ==========================================================
 
-def get_secret(name: str, default: str = "") -> str:
-    if os.getenv(name):
-        return os.getenv(name, default)
+def secret(name: str, default: str = "") -> str:
+    env_val = os.environ.get(name)
+    if env_val:
+        return env_val
     try:
-        value = st.secrets.get(name)
-        if value is not None:
-            return str(value)
+        val = st.secrets.get(name)
+        if val is not None:
+            return str(val)
     except Exception:
         pass
     return default
 
 
-def get_openai_client() -> Optional[OpenAI]:
-    key = get_secret("OPENAI_API_KEY")
-    if not key:
+def allow_demo_login() -> bool:
+    raw = secret("ERRORSWEEP_ALLOW_DEMO_LOGIN", "true").lower().strip()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def get_openai_client():
+    key = secret("OPENAI_API_KEY")
+    if not key or OpenAI is None:
         return None
     try:
-        return OpenAI(api_key=key, timeout=90, max_retries=1)
+        return OpenAI(api_key=key, timeout=80, max_retries=1)
     except Exception:
         return None
 
 
-def supabase_available() -> bool:
-    return bool(get_secret("SUPABASE_URL") and get_secret("SUPABASE_ANON_KEY"))
-
-
-def supabase_url(path: str) -> str:
-    return get_secret("SUPABASE_URL").rstrip("/") + path
-
-
-def supabase_headers(access_token: Optional[str] = None, service: bool = False) -> Dict[str, str]:
-    key = get_secret("SUPABASE_SERVICE_ROLE_KEY") if service else get_secret("SUPABASE_ANON_KEY")
-    token = access_token or key
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-
-def supabase_post(path: str, payload: Dict[str, Any], access_token: Optional[str] = None, service: bool = False) -> Tuple[bool, Any]:
-    try:
-        res = requests.post(supabase_url(path), headers=supabase_headers(access_token, service), json=payload, timeout=30)
-        if res.status_code >= 400:
-            try:
-                return False, res.json()
-            except Exception:
-                return False, res.text
-        try:
-            return True, res.json()
-        except Exception:
-            return True, {}
-    except Exception as exc:
-        return False, str(exc)
-
-
-def format_error(data: Any) -> str:
-    if isinstance(data, dict):
-        for key in ("message", "msg", "error_description", "error"):
-            if data.get(key):
-                return str(data[key])
-        return json.dumps(data)[:500]
-    return str(data)[:500]
-
-
-def render_login() -> None:
-    hero("ErrorSweep", "Secure localization QA, translation review, scorecards, and memory workflows.", "Account required")
-
-    demo_allowed = get_secret("ERRORSWEEP_ALLOW_DEMO_LOGIN", "true").lower() in {"1", "true", "yes"}
-    use_supabase = supabase_available()
-    local_user = get_secret("ERRORSWEEP_USERNAME")
-    local_pass = get_secret("ERRORSWEEP_PASSWORD")
-
-    tab1, tab2, tab3 = st.tabs(["Sign in", "Create account", "Demo access"])
-
-    with tab1:
-        with st.form("login_form"):
-            email = st.text_input("Email / username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Sign in", use_container_width=True, type="primary")
-
-        if submit:
-            if use_supabase and "@" in email:
-                ok, data = supabase_post("/auth/v1/token?grant_type=password", {"email": email.strip().lower(), "password": password})
-                if ok and data.get("access_token"):
-                    st.session_state["authenticated"] = True
-                    st.session_state["user_email"] = data.get("user", {}).get("email", email)
-                    st.session_state["sb_access_token"] = data.get("access_token")
-                    st.success("Signed in.")
-                    st.rerun()
-                else:
-                    st.error(format_error(data))
-            elif local_user and local_pass:
-                if hmac.compare_digest(email.strip(), local_user.strip()) and hmac.compare_digest(password, local_pass):
-                    st.session_state["authenticated"] = True
-                    st.session_state["user_email"] = email.strip()
-                    st.success("Signed in.")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials.")
-            else:
-                st.error("No auth provider is configured. Use Demo access or add Supabase/local credentials.")
-
-    with tab2:
-        st.caption("Supabase sign-up is used when Supabase secrets are configured.")
-        with st.form("signup_form"):
-            full_name = st.text_input("Full name")
-            email = st.text_input("Email", key="signup_email")
-            password = st.text_input("Password", type="password", key="signup_password")
-            confirm = st.text_input("Confirm password", type="password")
-            submit = st.form_submit_button("Create account", use_container_width=True)
-        if submit:
-            if not use_supabase:
-                st.error("Supabase is not configured.")
-            elif password != confirm:
-                st.error("Passwords do not match.")
-            else:
-                ok, data = supabase_post(
-                    "/auth/v1/signup",
-                    {"email": email.strip().lower(), "password": password, "data": {"full_name": full_name}},
-                )
-                if ok:
-                    st.success("Account created. Confirm email if required, then sign in.")
-                else:
-                    st.error(format_error(data))
-
-    with tab3:
-        st.caption("For development and demos only.")
-        if demo_allowed and st.button("Continue as Owner", use_container_width=True):
-            st.session_state["authenticated"] = True
-            st.session_state["user_email"] = "demo@errorsweep.local"
-            st.session_state["active_role"] = "Owner"
-            st.rerun()
-        elif not demo_allowed:
-            st.warning("Demo login disabled by admin.")
-
-
-def require_auth() -> None:
-    if not st.session_state.get("authenticated"):
-        render_login()
-        st.stop()
+def model_name() -> str:
+    return secret("OPENAI_MODEL", DEFAULT_MODEL)
 
 
 # ==========================================================
-# Data helpers
+# General helpers
 # ==========================================================
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 
-def active_project() -> Optional[Dict[str, Any]]:
-    pid = st.session_state.get("active_project_id")
-    for p in st.session_state["projects"]:
-        if p["id"] == pid:
-            return p
-    return st.session_state["projects"][0] if st.session_state["projects"] else None
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\u00A0", " ").replace("\u200B", "").strip()
 
 
-def add_job(job: Dict[str, Any]) -> None:
-    st.session_state["jobs"].insert(0, job)
+def text_hash(text: str) -> str:
+    return hashlib.sha256(clean_text(text).lower().encode("utf-8")).hexdigest()[:16]
 
 
-def can(page: str) -> bool:
-    role = st.session_state.get("active_role", "Owner")
-    return page in ROLE_PERMISSIONS.get(role, set())
+def truncate(text: Any, n: int = 240) -> str:
+    t = clean_text(text)
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+def extract_placeholders(text: str) -> List[str]:
+    return PLACEHOLDER_RE.findall(text or "")
+
+
+def extract_numbers(text: str) -> List[str]:
+    return NUMBER_RE.findall(text or "")
+
+
+def preserve_protected(source: str, translation: str) -> str:
+    """Light post-processing to restore protected tokens/icons if the API dropped them."""
+    output = translation or ""
+
+    for token in extract_placeholders(source):
+        if token and token not in output:
+            output = (output.rstrip() + " " + token).strip()
+
+    src_emojis = EMOJI_RE.findall(source or "")
+    for emoji in src_emojis:
+        if emoji and emoji not in output:
+            output = f"{emoji} {output}".strip()
+
+    # Preserve leading bullet-like marker.
+    leading = re.match(r"^(\s*[•∙·\-\*]\s*)", source or "")
+    if leading:
+        marker = leading.group(1)
+        if marker.strip() and not output.lstrip().startswith(marker.strip()):
+            output = marker + output.lstrip()
+
+    # Preserve bracket wrapper for UI labels.
+    s = clean_text(source)
+    t = clean_text(output)
+    if s.startswith("[") and s.endswith("]") and t and not (t.startswith("[") and t.endswith("]")):
+        output = f"[{t}]"
+
+    return output.strip()
+
+
+def is_bad_translation(source: str, translation: str, target_language: str = "") -> bool:
+    src = clean_text(source)
+    tgt = clean_text(translation)
+    if not src:
+        return False
+    if not tgt:
+        return True
+
+    tokenless = PLACEHOLDER_RE.sub("", tgt)
+    tokenless = NUMBER_RE.sub("", tokenless)
+    tokenless = EMOJI_RE.sub("", tokenless)
+    tokenless = re.sub(r"[\s\[\]{}():;,.!?\"'`~\-–—_/\\|•∙·*]+", "", tokenless)
+    if tokenless == "" and PLACEHOLDER_RE.search(src):
+        return True
+
+    if src.lower() == tgt.lower() and target_language.lower() not in {"english", "en"}:
+        # Allow bracket-only labels to remain if they are product/screen markers? Better mark review.
+        return True
+
+    return False
+
+
+def smart_gate(missing_count: int, total_count: int, threshold: float = 0.12) -> Tuple[str, str]:
+    total = max(total_count, 1)
+    rate = missing_count / total
+    if missing_count == 0:
+        return "pass", "Complete"
+    if rate <= threshold:
+        return "review", f"Human Review Required: {missing_count}/{total} unresolved segment(s)."
+    return "block", f"Blocked: {missing_count}/{total} unresolved segment(s)."
+
+
+def download_excel(df: pd.DataFrame, sheet_name: str = "Report") -> bytes:
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    return bio.getvalue()
+
+
+def safe_dataframe(rows: List[Dict[str, Any]], columns: Optional[List[str]] = None) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    if columns:
+        for c in columns:
+            if c not in df.columns:
+                df[c] = ""
+        return df[columns]
+    return df
 
 
 # ==========================================================
 # File extraction and output
 # ==========================================================
 
-PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|<[^>]+>)")
-NUMBER_RE = re.compile(r"\d+(?:[.,:]\d+)*")
-URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
-EMAIL_RE = re.compile(r"[\w.\-+]+@[\w.\-]+\.[A-Za-z]{2,}")
-EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\ufe0f\u200d]+", re.UNICODE)
-
-SOURCE_HEADER_CANDIDATES = {"source", "source text", "source string", "source segment", "english", "src"}
-TARGET_HEADER_CANDIDATES = {"target", "target text", "translation", "original translation", "translated text", "localized"}
-
-
-def norm(text: Any) -> str:
-    if text is None:
-        return ""
-    return str(text).replace("\u00a0", " ").strip()
+@dataclass
+class ExtractedFile:
+    kind: str
+    name: str
+    segments: List[Dict[str, Any]]
+    raw: Any = None
+    logs: List[str] = None
 
 
-def find_source_target(headers: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    lower = {str(h).strip().lower(): h for h in headers}
-    src = None
-    tgt = None
-    for key, original in lower.items():
-        if key in SOURCE_HEADER_CANDIDATES or "source" in key:
-            src = original
-            break
-    for key, original in lower.items():
-        if key in TARGET_HEADER_CANDIDATES or "translation" in key or "target" in key:
-            tgt = original
-            break
-    return src, tgt
+def detect_columns(headers: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    source_terms = ["source text", "source", "src", "english", "source segment"]
+    target_terms = ["target", "translation", "translated text", "original translation", "target text"]
+
+    normalized = {clean_text(h).lower(): h for h in headers}
+    source_col = None
+    target_col = None
+
+    for key, original in normalized.items():
+        if source_col is None and any(term == key or term in key for term in source_terms):
+            source_col = original
+        if target_col is None and any(term == key or term in key for term in target_terms):
+            target_col = original
+
+    return source_col, target_col
 
 
-def is_translatable_line(text: str) -> bool:
-    t = norm(text)
-    if len(t) < 2:
-        return False
-    if t.lower() in {"source", "target", "source text", "translation", "original translation"}:
-        return False
-    return True
-
-
-def extract_segments(uploaded_file, mode: str = "pro") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    name = uploaded_file.name
-    lower = name.lower()
-    context: Dict[str, Any] = {"file_name": name, "file_type": lower.rsplit(".", 1)[-1] if "." in lower else "txt"}
+def extract_from_xlsx(uploaded_file, mode: str) -> ExtractedFile:
+    wb = load_workbook(uploaded_file)
     segments: List[Dict[str, Any]] = []
+    logs: List[str] = []
 
-    if lower.endswith(".xlsx"):
-        wb = load_workbook(uploaded_file)
-        context["workbook"] = wb
-        context["cell_targets"] = {}
-        for ws in wb.worksheets:
-            rows = list(ws.iter_rows(values_only=False))
-            if not rows:
-                continue
-            best_row = None
-            best_src = None
-            best_tgt = None
-            for i, row in enumerate(rows[:30]):
-                headers = [norm(c.value) for c in row]
-                if not any(headers):
-                    continue
-                src, tgt = find_source_target(headers)
-                score = (2 if src else 0) + (2 if tgt else 0)
-                if src and score >= 2:
-                    best_row = i
-                    best_src = headers.index(src)
-                    best_tgt = headers.index(tgt) if tgt in headers else None
-                    break
-            if best_row is None:
-                continue
-            if mode == "pro" and best_tgt is None:
-                best_tgt = ws.max_column
-                ws.cell(row=best_row + 1, column=best_tgt + 1).value = "AI Translation"
-            for r_idx in range(best_row + 2, ws.max_row + 1):
-                src_val = norm(ws.cell(r_idx, best_src + 1).value)
-                tgt_val = norm(ws.cell(r_idx, best_tgt + 1).value) if best_tgt is not None else ""
-                if not is_translatable_line(src_val):
-                    continue
-                if mode == "qa" and not tgt_val:
-                    continue
-                loc = f"{ws.title}!R{r_idx}"
-                segments.append({
-                    "id": len(segments) + 1,
-                    "location": loc,
-                    "sheet": ws.title,
-                    "row": r_idx,
-                    "source": src_val,
-                    "translation": tgt_val,
-                    "target_cell": (ws.title, r_idx, best_tgt + 1) if best_tgt is not None else None,
-                    "file_type": "xlsx",
-                })
-        return segments, context
+    for ws in wb.worksheets:
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            continue
 
-    if lower.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-        context["dataframe"] = df
-        headers = list(df.columns)
-        src_col, tgt_col = find_source_target(headers)
-        if src_col is None:
-            src_col = headers[0]
-        if mode == "pro" and (tgt_col is None or tgt_col not in df.columns):
-            tgt_col = "AI Translation"
-            df[tgt_col] = ""
-        context["target_column"] = tgt_col
-        for idx, row in df.iterrows():
-            src = norm(row.get(src_col, ""))
-            tgt = norm(row.get(tgt_col, "")) if tgt_col else ""
-            if not is_translatable_line(src):
+        header_row_index = 0
+        source_idx = target_idx = None
+        headers = []
+
+        for i, row in enumerate(rows[:30]):
+            h = [clean_text(v) for v in row]
+            if not any(h):
                 continue
-            if mode == "qa" and not tgt:
+            s_col, t_col = detect_columns(h)
+            if s_col:
+                headers = h
+                header_row_index = i
+                source_idx = h.index(s_col)
+                target_idx = h.index(t_col) if t_col and t_col in h else None
+                break
+
+        if source_idx is None:
+            continue
+
+        if mode == "pro" and target_idx is None:
+            target_idx = len(headers)
+            ws.cell(row=header_row_index + 1, column=target_idx + 1).value = "AI Translation"
+            logs.append(f"{ws.title}: created AI Translation column.")
+        else:
+            logs.append(f"{ws.title}: detected source/target columns.")
+
+        for r_i, row in enumerate(rows[header_row_index + 1 :], start=header_row_index + 2):
+            row_values = list(row)
+            source = clean_text(row_values[source_idx] if source_idx < len(row_values) else "")
+            target = clean_text(row_values[target_idx] if target_idx is not None and target_idx < len(row_values) else "")
+            if not source:
                 continue
+            if mode == "qa" and not target:
+                continue
+            location = f"{ws.title}!R{r_i}"
             segments.append({
                 "id": len(segments) + 1,
-                "location": f"Row {idx + 2}",
-                "row": idx,
-                "source": src,
-                "translation": tgt,
-                "file_type": "csv",
+                "location": location,
+                "sheet": ws.title,
+                "row": r_i,
+                "source": source,
+                "target": target,
+                "translation": target,
+                "target_col": target_idx,
+                "file_type": "xlsx",
             })
-        return segments, context
 
-    if lower.endswith(".docx"):
-        doc = Document(uploaded_file)
-        context["doc"] = doc
-        context["doc_targets"] = {}
-        for table_i, table in enumerate(doc.tables, start=1):
-            header_i = None
-            src_idx = None
-            tgt_idx = None
-            for r_i, row in enumerate(table.rows[:20]):
-                headers = [norm(c.text) for c in row.cells]
-                src, tgt = find_source_target(headers)
-                if src:
-                    header_i = r_i
-                    src_idx = headers.index(src)
-                    tgt_idx = headers.index(tgt) if tgt in headers else None
-                    break
-            if header_i is None:
+    return ExtractedFile("xlsx", uploaded_file.name, segments, raw=wb, logs=logs)
+
+
+def extract_from_csv(uploaded_file, mode: str) -> ExtractedFile:
+    df = pd.read_csv(uploaded_file)
+    source_col, target_col = detect_columns(list(df.columns))
+
+    if source_col is None:
+        # Fallback: first column is source.
+        source_col = df.columns[0]
+    if mode == "pro" and target_col is None:
+        target_col = "AI Translation"
+        df[target_col] = ""
+
+    segments = []
+    for idx, row in df.iterrows():
+        source = clean_text(row.get(source_col, ""))
+        target = clean_text(row.get(target_col, "")) if target_col else ""
+        if not source:
+            continue
+        if mode == "qa" and not target:
+            continue
+        segments.append({
+            "id": len(segments) + 1,
+            "location": f"Row {idx + 2}",
+            "sheet": "CSV",
+            "row": int(idx),
+            "source": source,
+            "target": target,
+            "translation": target,
+            "target_col": target_col,
+            "file_type": "csv",
+        })
+
+    return ExtractedFile("csv", uploaded_file.name, segments, raw=df, logs=[f"CSV: {source_col} → {target_col or 'target not found'}"])
+
+
+def extract_from_docx(uploaded_file, mode: str) -> ExtractedFile:
+    doc = Document(uploaded_file)
+    segments = []
+    locations = {}
+
+    # Prefer tables with source/target columns.
+    for t_i, table in enumerate(doc.tables, start=1):
+        if not table.rows:
+            continue
+        headers = [clean_text(c.text) for c in table.rows[0].cells]
+        source_col, target_col = detect_columns(headers)
+        if not source_col:
+            continue
+        source_idx = headers.index(source_col)
+        target_idx = headers.index(target_col) if target_col and target_col in headers else None
+        if mode == "pro" and target_idx is None:
+            target_idx = len(headers) - 1 if len(headers) > 1 else None
+
+        for r_i, row in enumerate(table.rows[1:], start=2):
+            if source_idx >= len(row.cells):
                 continue
-            for r_i in range(header_i + 1, len(table.rows)):
-                row = table.rows[r_i]
-                if len(row.cells) <= src_idx:
-                    continue
-                src = norm(row.cells[src_idx].text)
-                tgt = norm(row.cells[tgt_idx].text) if tgt_idx is not None and len(row.cells) > tgt_idx else ""
-                if not is_translatable_line(src):
-                    continue
-                if mode == "qa" and not tgt:
-                    continue
-                loc = f"Table {table_i}, Row {r_i + 1}"
-                segments.append({
-                    "id": len(segments) + 1,
-                    "location": loc,
-                    "source": src,
-                    "translation": tgt,
-                    "file_type": "docx",
-                })
-                if tgt_idx is not None:
-                    context["doc_targets"][loc] = row.cells[tgt_idx]
-        if not segments:
-            for i, p in enumerate(doc.paragraphs, start=1):
-                src = norm(p.text)
-                if is_translatable_line(src):
-                    loc = f"Paragraph {i}"
-                    segments.append({
-                        "id": len(segments) + 1,
-                        "location": loc,
-                        "source": src,
-                        "translation": "",
-                        "file_type": "docx",
-                    })
-                    context["doc_targets"][loc] = p
-        return segments, context
+            source = clean_text(row.cells[source_idx].text)
+            target = clean_text(row.cells[target_idx].text) if target_idx is not None and target_idx < len(row.cells) else ""
+            if not source:
+                continue
+            if mode == "qa" and not target:
+                continue
+            loc = f"Table {t_i}, Row {r_i}"
+            segments.append({
+                "id": len(segments) + 1,
+                "location": loc,
+                "sheet": f"Table {t_i}",
+                "row": r_i,
+                "source": source,
+                "target": target,
+                "translation": target,
+                "file_type": "docx",
+            })
+            if target_idx is not None and target_idx < len(row.cells):
+                locations[loc] = row.cells[target_idx]
 
-    raw = uploaded_file.read()
+    if segments:
+        return ExtractedFile("docx", uploaded_file.name, segments, raw=(doc, locations), logs=["DOCX: extracted table segments."])
+
+    # Paragraph fallback.
+    for i, p in enumerate(doc.paragraphs, start=1):
+        source = clean_text(p.text)
+        if len(source) < 2:
+            continue
+        loc = f"Paragraph {i}"
+        segments.append({
+            "id": len(segments) + 1,
+            "location": loc,
+            "sheet": "Document",
+            "row": i,
+            "source": source,
+            "target": "",
+            "translation": "",
+            "file_type": "docx",
+        })
+        locations[loc] = p
+
+    return ExtractedFile("docx", uploaded_file.name, segments, raw=(doc, locations), logs=["DOCX: paragraph fallback mode."])
+
+
+def extract_from_text(uploaded_file, mode: str) -> ExtractedFile:
+    raw = uploaded_file.getvalue()
     try:
         text = raw.decode("utf-8-sig")
     except Exception:
         text = raw.decode("cp1252", errors="replace")
-    context["text"] = text
+
     lines = text.splitlines()
+    segments = []
     for i, line in enumerate(lines, start=1):
-        src = norm(line)
-        if is_translatable_line(src):
-            segments.append({
-                "id": len(segments) + 1,
-                "location": f"Line {i}",
-                "line": i,
-                "source": src,
-                "translation": "",
-                "file_type": "text",
-            })
-    return segments, context
+        value = clean_text(line)
+        if not value:
+            continue
+        if i <= 2 and value.lower() in {"source", "target", "source text", "translation"}:
+            continue
+        segments.append({
+            "id": len(segments) + 1,
+            "location": f"Line {i}",
+            "sheet": "Text",
+            "row": i,
+            "source": value if mode == "pro" else "",
+            "target": value if mode == "qa" else "",
+            "translation": value if mode == "qa" else "",
+            "file_type": "text",
+        })
+
+    return ExtractedFile("text", uploaded_file.name, segments, raw=text, logs=["Text: line extraction mode."])
 
 
-def set_docx_cell_text(cell, text: str) -> None:
-    if hasattr(cell, "paragraphs"):
-        for p in cell.paragraphs:
-            for run in p.runs:
-                run.text = ""
-        if cell.paragraphs:
-            cell.paragraphs[0].add_run(text)
-        else:
-            cell.add_paragraph(text)
+def extract_file(uploaded_file, mode: str = "pro") -> ExtractedFile:
+    name = uploaded_file.name.lower()
+    if name.endswith(".xlsx"):
+        return extract_from_xlsx(uploaded_file, mode)
+    if name.endswith(".csv"):
+        return extract_from_csv(uploaded_file, mode)
+    if name.endswith(".docx"):
+        return extract_from_docx(uploaded_file, mode)
+    return extract_from_text(uploaded_file, mode)
 
 
-def build_output_file(context: Dict[str, Any], segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> Tuple[bytes, str, str]:
-    file_name = context.get("file_name", "output")
-    ftype = context.get("file_type", "csv")
-    base = re.sub(r"\.[^.]+$", "", file_name)
-
-    if ftype == "xlsx":
-        wb = context["workbook"]
-        for seg in segments:
-            tgt = seg.get("target_cell")
-            if tgt:
-                ws, row, col = tgt
-                wb[ws].cell(row=row, column=col).value = translations_by_loc.get(seg["location"], "")
+def build_output_file(extracted: ExtractedFile, translations_by_loc: Dict[str, str]) -> Tuple[bytes, str, str]:
+    name = extracted.name
+    if extracted.kind == "xlsx":
+        wb = extracted.raw
+        for seg in extracted.segments:
+            loc = seg["location"]
+            ws = wb[seg["sheet"]]
+            target_col = seg.get("target_col")
+            if target_col is None:
+                continue
+            ws.cell(row=int(seg["row"]), column=int(target_col) + 1).value = translations_by_loc.get(loc, "")
+        # Add review sheet.
+        if "ErrorSweep Job Summary" in wb.sheetnames:
+            del wb["ErrorSweep Job Summary"]
+        ws = wb.create_sheet("ErrorSweep Job Summary")
+        ws.append(["Location", "Source", "Translation"])
+        for seg in extracted.segments:
+            ws.append([seg["location"], seg["source"], translations_by_loc.get(seg["location"], "")])
+        for cell in ws[1]:
+            cell.fill = PatternFill("solid", fgColor="D9EAF7")
+            cell.font = Font(bold=True)
+        for col in ws.columns:
+            for cell in col:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
         bio = io.BytesIO()
         wb.save(bio)
-        return bio.getvalue(), f"{base}_translated.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return bio.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", f"errorsweep_translated_{name}"
 
-    if ftype == "csv":
-        df = context["dataframe"]
-        target_col = context.get("target_column", "AI Translation")
+    if extracted.kind == "csv":
+        df = extracted.raw
+        target_col = "AI Translation"
         if target_col not in df.columns:
             df[target_col] = ""
-        for seg in segments:
-            df.at[seg["row"], target_col] = translations_by_loc.get(seg["location"], "")
-        return df.to_csv(index=False).encode("utf-8-sig"), f"{base}_translated.csv", "text/csv"
+        for seg in extracted.segments:
+            df.at[int(seg["row"]), target_col] = translations_by_loc.get(seg["location"], "")
+        return df.to_csv(index=False).encode("utf-8-sig"), "text/csv", re.sub(r"\.[^.]+$", ".csv", f"errorsweep_translated_{name}")
 
-    if ftype == "docx":
-        doc = context["doc"]
-        targets = context.get("doc_targets", {})
-        for seg in segments:
+    if extracted.kind == "docx":
+        doc, locations = extracted.raw
+        for seg in extracted.segments:
             loc = seg["location"]
-            tgt_obj = targets.get(loc)
-            translation = translations_by_loc.get(loc, "")
-            if tgt_obj is None:
+            target = translations_by_loc.get(loc, "")
+            obj = locations.get(loc)
+            if obj is None:
                 continue
-            if hasattr(tgt_obj, "runs"):  # paragraph
-                tgt_obj.add_run("\n" + translation)
+            if hasattr(obj, "paragraphs"):
+                # table cell
+                for p in obj.paragraphs:
+                    for run in p.runs:
+                        run.text = ""
+                if obj.paragraphs:
+                    obj.paragraphs[0].add_run(target)
+                else:
+                    obj.add_paragraph(target)
             else:
-                set_docx_cell_text(tgt_obj, translation)
+                # paragraph
+                obj.add_run("\n" + target)
         bio = io.BytesIO()
         doc.save(bio)
-        return bio.getvalue(), f"{base}_translated.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        return bio.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", f"errorsweep_translated_{name}"
 
-    table = []
-    for seg in segments:
-        table.append({
-            "Location": seg["location"],
-            "Source": seg["source"],
-            "Translation": translations_by_loc.get(seg["location"], ""),
-        })
-    return pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig"), f"{base}_translations.csv", "text/csv"
+    # text
+    lines = extracted.raw.splitlines()
+    by_row = {seg["row"]: translations_by_loc.get(seg["location"], "") for seg in extracted.segments}
+    out_lines = []
+    for i, line in enumerate(lines, start=1):
+        out_lines.append(line)
+        if i in by_row and by_row[i]:
+            out_lines.append(by_row[i])
+    return "\n".join(out_lines).encode("utf-8-sig"), "text/plain", f"errorsweep_translated_{name}"
 
 
 # ==========================================================
-# Rule pack
+# Rules, QA, API translation
 # ==========================================================
 
-def parse_rules_zip(uploaded_zip) -> Dict[str, Any]:
-    rules = {"glossary": [], "dnt": [], "style": [], "raw": ""}
+def parse_rules_zip(uploaded_zip) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], str]:
+    glossary: List[Dict[str, str]] = []
+    dnt_terms: List[Dict[str, str]] = []
+    combined = ""
+
     if not uploaded_zip:
-        return rules
+        return glossary, dnt_terms, combined
+
     try:
         zf = zipfile.ZipFile(io.BytesIO(uploaded_zip.getvalue()))
     except Exception:
-        return rules
-    pieces = []
-    for info in zf.infolist()[:40]:
-        if info.is_dir() or info.file_size > 8_000_000:
+        return glossary, dnt_terms, combined
+
+    for info in zf.infolist()[:50]:
+        if info.is_dir():
             continue
         name = info.filename
+        lower = name.lower()
         data = zf.read(info)
         text = ""
-        try:
-            if name.lower().endswith((".txt", ".md", ".json", ".xml", ".csv")):
-                text = data.decode("utf-8", errors="ignore")
-            elif name.lower().endswith(".docx"):
-                doc = Document(io.BytesIO(data))
-                text = "\n".join(p.text for p in doc.paragraphs)
-            elif name.lower().endswith(".pdf") and PdfReader:
-                reader = PdfReader(io.BytesIO(data))
-                text = "\n".join((p.extract_text() or "") for p in reader.pages[:10])
-        except Exception:
-            text = ""
-        if not text.strip():
+        if lower.endswith((".txt", ".md", ".csv")):
+            text = data.decode("utf-8", errors="replace")
+        elif lower.endswith(".xlsx"):
+            try:
+                wb = load_workbook(io.BytesIO(data), data_only=True)
+                parts = []
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows(values_only=True):
+                        vals = [clean_text(v) for v in row if clean_text(v)]
+                        if vals:
+                            parts.append(" | ".join(vals))
+                text = "\n".join(parts)
+            except Exception:
+                text = ""
+        combined += f"\n# {name}\n{text}\n"
+
+        # Very light CSV glossary parsing.
+        if lower.endswith(".csv"):
+            try:
+                df = pd.read_csv(io.StringIO(text))
+                cols = {c.lower(): c for c in df.columns}
+                src_col = next((cols[c] for c in cols if "source" in c or c == "term"), None)
+                tgt_col = next((cols[c] for c in cols if "target" in c or "translation" in c), None)
+                dnt_col = next((cols[c] for c in cols if "dnt" in c or "do not" in c), None)
+                if src_col and tgt_col:
+                    for _, row in df.iterrows():
+                        glossary.append({"Source Term": clean_text(row.get(src_col)), "Target Term": clean_text(row.get(tgt_col)), "Rule Source": name})
+                if dnt_col:
+                    for value in df[dnt_col].dropna().tolist():
+                        dnt_terms.append({"Term": clean_text(value), "Rule Source": name})
+            except Exception:
+                pass
+
+    return glossary, dnt_terms, combined[:6000]
+
+
+def deterministic_qa(segments: List[Dict[str, Any]], glossary: List[Dict[str, str]], dnt_terms: List[Dict[str, str]], target_language: str = "") -> List[Dict[str, Any]]:
+    rows = []
+    for seg in segments:
+        source = seg.get("source", "")
+        target = seg.get("translation") or seg.get("target", "")
+        loc = seg.get("location", "")
+
+        if not target:
+            rows.append({
+                "Location": loc, "Source": source, "Translation": target,
+                "Issue Type": "Blank target", "Severity": "Major",
+                "Suggestion": "Translate this segment or send to Human Review.",
+                "Reason": "Target is blank."
+            })
             continue
-        pieces.append(f"# {name}\n{text[:4000]}")
-        for line in text.splitlines():
-            low = line.lower()
-            if "do not translate" in low or low.startswith("dnt"):
-                rules["dnt"].append({"term": line.split(":")[-1].strip(), "source": name})
-            if "=>" in line:
-                left, right = line.split("=>", 1)
-                rules["glossary"].append({"source": left.strip(), "target": right.strip(), "source_file": name})
-    rules["raw"] = "\n\n".join(pieces)[:12000]
-    return rules
+
+        if clean_text(source).lower() == clean_text(target).lower() and target_language.lower() not in {"english", "en"}:
+            rows.append({
+                "Location": loc, "Source": source, "Translation": target,
+                "Issue Type": "Source copied", "Severity": "Major",
+                "Suggestion": "Review and translate this segment.",
+                "Reason": "Source and target are identical."
+            })
+
+        missing_ph = [p for p in extract_placeholders(source) if p not in extract_placeholders(target)]
+        if missing_ph:
+            rows.append({
+                "Location": loc, "Source": source, "Translation": target,
+                "Issue Type": "Placeholder", "Severity": "Critical",
+                "Suggestion": "Preserve: " + ", ".join(missing_ph),
+                "Reason": "Placeholder(s) from source are missing."
+            })
+
+        missing_num = [n for n in extract_numbers(source) if n not in extract_numbers(target)]
+        if missing_num:
+            rows.append({
+                "Location": loc, "Source": source, "Translation": target,
+                "Issue Type": "Number mismatch", "Severity": "Major",
+                "Suggestion": "Check number(s): " + ", ".join(missing_num),
+                "Reason": "Number(s) from source are missing or changed."
+            })
+
+        for item in dnt_terms:
+            term = item.get("Term", "")
+            if term and term.lower() in source.lower() and term not in target:
+                rows.append({
+                    "Location": loc, "Source": source, "Translation": target,
+                    "Issue Type": "DNT", "Severity": "Major",
+                    "Suggestion": f"Keep '{term}' unchanged.",
+                    "Reason": f"DNT term missing. Rule: {item.get('Rule Source','')}"
+                })
+
+        for item in glossary:
+            src_term = item.get("Source Term", "")
+            tgt_term = item.get("Target Term", "")
+            if src_term and tgt_term and src_term.lower() in source.lower() and tgt_term not in target:
+                rows.append({
+                    "Location": loc, "Source": source, "Translation": target,
+                    "Issue Type": "Glossary", "Severity": "Major",
+                    "Suggestion": tgt_term,
+                    "Reason": f"Glossary target term missing. Rule: {item.get('Rule Source','')}"
+                })
+
+    return rows
 
 
-def rules_text_for_prompt(rules: Dict[str, Any]) -> str:
-    parts = []
-    if st.session_state.get("glossary"):
-        parts.append("Saved Glossary:\n" + "\n".join(f"{g['source']} => {g['target']}" for g in st.session_state["glossary"][:100]))
-    if st.session_state.get("dnt_terms"):
-        parts.append("Saved DNT:\n" + "\n".join(d["term"] for d in st.session_state["dnt_terms"][:100]))
-    if rules.get("raw"):
-        parts.append("Uploaded Rule Pack:\n" + rules["raw"][:8000])
-    return "\n\n".join(parts)
-
-
-# ==========================================================
-# Translation / QA with main API
-# ==========================================================
-
-def mask_protected(text: str) -> Tuple[str, Dict[str, str]]:
-    tokens = {}
-    def repl(m):
-        key = f"ZXQ{len(tokens)}QXZ"
-        tokens[key] = m.group(0)
-        return key
-    combined = re.compile(
-        f"({URL_RE.pattern}|{EMAIL_RE.pattern}|{PLACEHOLDER_RE.pattern})",
-        re.UNICODE,
-    )
-    return combined.sub(repl, text), tokens
-
-
-def unmask_protected(text: str, tokens: Dict[str, str], source: str = "") -> str:
-    out = text or ""
-    for key, value in tokens.items():
-        out = re.sub(re.escape(key), value, out, flags=re.IGNORECASE)
-        if value not in out:
-            out += " " + value
-    # Preserve leading emojis/icons if model dropped them.
-    src_emoji = EMOJI_RE.findall(source or "")
-    for e in src_emoji:
-        if e and e not in out:
-            out = e + " " + out.lstrip()
-    return re.sub(r"[ \t]{2,}", " ", out).strip()
-
-
-def parse_json_array(text: str) -> List[Dict[str, Any]]:
-    if not text:
-        return []
-    cleaned = re.sub(r"^```json\s*|\s*```$", "", text.strip(), flags=re.I)
-    start = cleaned.find("[")
-    end = cleaned.rfind("]")
-    if start >= 0 and end > start:
-        cleaned = cleaned[start:end+1]
-    try:
-        data = json.loads(cleaned)
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-
-def call_openai_json(client: OpenAI, instructions: str, prompt: str, max_tokens: int = 4000) -> List[Dict[str, Any]]:
+def ai_json_call(system: str, prompt: str, max_tokens: int = 6000) -> Any:
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
     response = client.responses.create(
-        model=DEFAULT_OPENAI_MODEL,
-        instructions=instructions,
+        model=model_name(),
+        instructions=system,
         input=prompt,
         max_output_tokens=max_tokens,
     )
-    return parse_json_array(response.output_text)
+    text = getattr(response, "output_text", "") or ""
+    text = re.sub(r"^```json\s*", "", text.strip(), flags=re.I)
+    text = re.sub(r"^```\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    return json.loads(text)
 
 
-def translate_batch_api(client: OpenAI, batch: List[Dict[str, Any]], target_language: str, domain: str, rules_text: str) -> List[Dict[str, str]]:
-    prepared = []
-    token_maps = {}
-    for i, seg in enumerate(batch, start=1):
-        masked, tokens = mask_protected(seg["source"])
-        token_maps[seg["location"]] = (tokens, seg["source"])
-        prepared.append(f"[{i}]\nLocation: {seg['location']}\nSource: {masked}")
+def translate_with_main_api(segments: List[Dict[str, Any]], target_language: str, domain: str, rule_context: str = "") -> Dict[str, str]:
+    output: Dict[str, str] = {}
+    batch_size = int(secret("ERRORSWEEP_API_BATCH_SIZE", "20") or 20)
 
-    prompt = f"""
-Translate the following localization strings into {target_language}.
-
+    for start in range(0, len(segments), batch_size):
+        batch = segments[start:start + batch_size]
+        payload = [
+            {
+                "location": seg["location"],
+                "source": seg["source"],
+            }
+            for seg in batch
+        ]
+        prompt = f"""
+Translate these localization segments into {target_language}.
 Domain: {domain}
 
-Client rules, glossary, DNT, and style notes:
-{rules_text if rules_text else "(none)"}
-
-Critical rules:
-- Preserve all placeholder tokens exactly, including ZXQ0QXZ style masked tokens.
-- Preserve URLs, emails, numbers, units, HTML/XML tags, and product names.
-- Preserve leading bullets/icons/emojis.
-- Square-bracket UI labels can be localized inside brackets.
-- Return JSON only.
-
-Segments:
-{chr(10).join(prepared)}
-
-Return:
-[
-  {{"location":"exact location","translation":"translated text"}}
-]
-"""
-    instructions = "You are a senior software localization translator. Return only a valid JSON array."
-    raw = call_openai_json(client, instructions, prompt, max_tokens=5000)
-    results = []
-    for item in raw:
-        loc = str(item.get("location", ""))
-        translation = str(item.get("translation", ""))
-        if loc:
-            tokens, source = token_maps.get(loc, ({}, ""))
-            translation = unmask_protected(translation, tokens, source)
-            results.append({"location": loc, "translation": translation})
-    return results
-
-
-def qa_batch_api(client: OpenAI, batch: List[Dict[str, Any]], domain: str, rules_text: str) -> List[Dict[str, Any]]:
-    parts = []
-    for i, seg in enumerate(batch, start=1):
-        parts.append(
-            f"[{i}]\nLocation: {seg['location']}\nSource: {seg.get('source','')}\nTarget: {seg.get('translation','')}"
-        )
-    prompt = f"""
-Review these localization segments.
-
-Domain: {domain}
 Rules:
-{rules_text if rules_text else "(none)"}
+- Preserve placeholders exactly, e.g. {{{{email}}}}, {{{{user_name}}}}.
+- Preserve numbers and units.
+- Preserve emoji/icons and leading bullet characters.
+- Preserve bracket structure for UI labels, but localize the text inside brackets.
+- Do not add commentary.
+- Return only JSON array with location and translation.
 
-Find only real localization QA issues:
-- missing/changed placeholders, URLs, emails, tags, numbers, units
-- source copied to target
-- untranslated target
-- wrong language or mixed script
-- glossary/DNT violations
-- accuracy, terminology, grammar, punctuation, or formatting defects
-
-Do not flag personal preference.
+Company rules context:
+{rule_context or "(none)"}
 
 Segments:
-{chr(10).join(parts)}
+{json.dumps(payload, ensure_ascii=False)}
+"""
+        try:
+            data = ai_json_call(
+                "You are a professional localization translation engine. Return only valid JSON.",
+                prompt,
+                max_tokens=7000,
+            )
+        except Exception as exc:
+            st.error(f"Main API translation failed: {exc}")
+            data = []
 
-Return JSON only:
+        for item in data if isinstance(data, list) else []:
+            loc = clean_text(item.get("location", ""))
+            tr = clean_text(item.get("translation", ""))
+            source = next((s["source"] for s in batch if s["location"] == loc), "")
+            if loc:
+                output[loc] = preserve_protected(source, tr)
+
+    return output
+
+
+def qa_with_main_api(segments: List[Dict[str, Any]], target_language: str, domain: str, rule_context: str = "") -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    batch_size = int(secret("ERRORSWEEP_API_BATCH_SIZE", "20") or 20)
+
+    for start in range(0, len(segments), batch_size):
+        batch = segments[start:start + batch_size]
+        payload = [
+            {
+                "location": seg["location"],
+                "source": seg.get("source", ""),
+                "translation": seg.get("translation") or seg.get("target", ""),
+            }
+            for seg in batch
+        ]
+        prompt = f"""
+Review the following localization segments for real errors.
+Target language: {target_language}
+Domain: {domain}
+
+Only flag real issues:
+- Accuracy / omission / addition
+- Grammar / spelling
+- Source copied
+- Placeholder or number errors
+- DNT/glossary/style guide violations
+- Unexpected mixed script
+- Formatting issues
+
+Do not invent errors or rewrite acceptable translations.
+
+Company rules:
+{rule_context or "(none)"}
+
+Segments:
+{json.dumps(payload, ensure_ascii=False)}
+
+Return only JSON:
 [
   {{
-    "location": "exact location",
-    "error_type": "Accuracy|Terminology|Placeholder|Number|Formatting|Language|DNT|Glossary|Grammar|Style",
-    "severity": "Critical|Major|Minor|Review",
-    "wrong_part": "exact issue",
-    "suggestion": "fix",
-    "explanation": "short reason"
+    "location": "...",
+    "issue_type": "Accuracy|Grammar|Spelling|Placeholder|Number|DNT|Glossary|Formatting|Mixed Script|Style",
+    "severity": "Minor|Major|Critical|Review",
+    "wrong_part": "...",
+    "suggestion": "...",
+    "reason": "..."
   }}
 ]
 """
-    instructions = "You are ErrorSweep, a conservative localization QA reviewer. Return only valid JSON."
-    return call_openai_json(client, instructions, prompt, max_tokens=5000)
-
-
-def deterministic_issues(seg: Dict[str, Any], rules: Dict[str, Any]) -> List[Dict[str, Any]]:
-    source = seg.get("source", "")
-    target = seg.get("translation", "")
-    rows = []
-    if not target.strip():
-        rows.append(issue_row(seg, "Completeness", "Critical", "Blank target", "Translate this segment.", "Target is blank."))
-        return rows
-
-    for ph in PLACEHOLDER_RE.findall(source):
-        if ph not in target:
-            rows.append(issue_row(seg, "Placeholder", "Major", ph, f"Keep {ph}", "Placeholder from source is missing."))
-    for n in NUMBER_RE.findall(source):
-        if n not in target:
-            rows.append(issue_row(seg, "Number", "Major", n, f"Keep number {n}", "Number from source is missing or changed."))
-
-    if source.strip().lower() == target.strip().lower() and re.search(r"[A-Za-z]{3,}", source):
-        rows.append(issue_row(seg, "Language", "Major", target, "Translate instead of copying source.", "Target appears copied from source."))
-
-    for d in st.session_state.get("dnt_terms", []):
-        term = d.get("term", "")
-        if term and term in source and term not in target:
-            rows.append(issue_row(seg, "DNT", "Major", term, f"Keep {term}", "DNT term changed or omitted."))
-
-    for g in st.session_state.get("glossary", []):
-        src = g.get("source", "")
-        tgt = g.get("target", "")
-        if src and tgt and src.lower() in source.lower() and tgt not in target:
-            rows.append(issue_row(seg, "Glossary", "Major", src, tgt, "Glossary target term missing."))
-
-    return rows
-
-
-def issue_row(seg: Dict[str, Any], error_type: str, severity: str, wrong: str, suggestion: str, explanation: str) -> Dict[str, Any]:
-    return {
-        "Location": seg.get("location", ""),
-        "Source": seg.get("source", ""),
-        "Translation": seg.get("translation", ""),
-        "Error Type": error_type,
-        "Severity": severity,
-        "Wrong Part": wrong,
-        "Suggestion": suggestion,
-        "Explanation": explanation,
-    }
-
-
-def is_bad_translation(source: str, target: str) -> bool:
-    s = norm(source)
-    t = norm(target)
-    if not t:
-        return True
-    if t == NEEDS_REVIEW_MARKER:
-        return True
-    stripped = PLACEHOLDER_RE.sub("", t)
-    stripped = NUMBER_RE.sub("", stripped)
-    stripped = re.sub(r"[\s\[\]{}():;,.!?\"'`~\-–—_/\\|•∙·*]+", "", stripped)
-    if stripped == "" and len(re.sub(r"\W+", "", s)) > 3:
-        return True
-    if s.lower() == t.lower() and re.search(r"[A-Za-z]{3,}", s):
-        return True
-    return False
-
-
-def smart_completion_gate(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str]) -> Tuple[bool, bool, List[Dict[str, str]], float]:
-    missing = []
-    for seg in segments:
-        loc = seg["location"]
-        target = translations_by_loc.get(loc, "")
-        if is_bad_translation(seg["source"], target):
-            missing.append({
-                "Location": loc,
-                "Source": seg["source"],
-                "Current Translation": target,
-                "Action": "Human Review required",
+        try:
+            data = ai_json_call(
+                "You are ErrorSweep, a conservative localization QA engine. Return only valid JSON.",
+                prompt,
+                max_tokens=6500,
+            )
+        except Exception as exc:
+            rows.append({
+                "Location": "API",
+                "Source": "",
+                "Translation": "",
+                "Issue Type": "API warning",
+                "Severity": "Review",
+                "Suggestion": "Retry this job.",
+                "Reason": str(exc)[:400],
             })
-    missing_rate = len(missing) / max(len(segments), 1)
-    if not missing:
-        return True, False, missing, missing_rate
-    if missing_rate <= SMART_REVIEW_THRESHOLD:
-        for item in missing:
-            translations_by_loc[item["Location"]] = NEEDS_REVIEW_MARKER
-        return True, True, missing, missing_rate
-    return False, False, missing, missing_rate
+            data = []
 
+        loc_map = {seg["location"]: seg for seg in batch}
+        for item in data if isinstance(data, list) else []:
+            loc = clean_text(item.get("location", ""))
+            seg = loc_map.get(loc, {})
+            rows.append({
+                "Location": loc,
+                "Source": seg.get("source", ""),
+                "Translation": seg.get("translation") or seg.get("target", ""),
+                "Issue Type": item.get("issue_type", "AI QA"),
+                "Severity": item.get("severity", "Review"),
+                "Wrong Part": item.get("wrong_part", ""),
+                "Suggestion": item.get("suggestion", ""),
+                "Reason": item.get("reason", ""),
+            })
 
-# ==========================================================
-# Reports
-# ==========================================================
-
-def dataframe_download(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
-
-
-def issues_excel(issues: List[Dict[str, Any]], status_rows: List[Dict[str, Any]]) -> bytes:
-    bio = io.BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        pd.DataFrame(status_rows).to_excel(writer, index=False, sheet_name="All Segment Review")
-        pd.DataFrame(issues).to_excel(writer, index=False, sheet_name="Issue Details")
-    return bio.getvalue()
-
-
-def make_status_rows(segments: List[Dict[str, Any]], translations_by_loc: Dict[str, str], issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    issues_by_loc = {}
-    for issue in issues:
-        issues_by_loc.setdefault(issue.get("Location", ""), []).append(issue)
-    rows = []
-    for seg in segments:
-        loc = seg["location"]
-        target = translations_by_loc.get(loc, seg.get("translation", ""))
-        irows = issues_by_loc.get(loc, [])
-        rows.append({
-            "Location": loc,
-            "Source": seg["source"],
-            "Translation": target,
-            "Review Status": "Needs Review" if irows or target == NEEDS_REVIEW_MARKER else "Pass",
-            "Issue Count": len(irows),
-            "Highest Severity": highest_severity(irows),
-            "Error Types": "; ".join(sorted({x.get("Error Type", "") for x in irows})),
-        })
     return rows
 
 
-def highest_severity(rows: List[Dict[str, Any]]) -> str:
-    order = {"Critical": 4, "Major": 3, "Minor": 2, "Review": 1}
-    if not rows:
-        return "Pass"
-    return max((r.get("Severity", "Review") for r in rows), key=lambda x: order.get(x, 1))
+# ==========================================================
+# Navigation / auth
+# ==========================================================
+
+def login_page() -> None:
+    st.markdown("""
+    <div class="es-hero">
+      <span class="es-kicker">Account required</span>
+      <div class="es-title">ErrorSweep</div>
+      <div class="es-sub">Secure localization QA, translation review, scorecards, and memory workflows.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["Sign in", "Create account", "Demo access"])
+
+    with tab1:
+        username = st.text_input("Email / username")
+        password = st.text_input("Password", type="password")
+        if st.button("Sign in", type="primary", use_container_width=True):
+            configured_user = secret("ERRORSWEEP_USERNAME", "admin")
+            configured_pass = secret("ERRORSWEEP_PASSWORD", "")
+            if configured_pass and username == configured_user and password == configured_pass:
+                st.session_state.authenticated = True
+                st.session_state.username = username
+                st.session_state.role = "Owner"
+                st.rerun()
+            elif allow_demo_login() and not configured_pass:
+                st.session_state.authenticated = True
+                st.session_state.username = username or "demo@errorsweep.local"
+                st.session_state.role = "Owner"
+                st.rerun()
+            else:
+                st.error("Invalid credentials. Use Demo access while building or configure ERRORSWEEP_USERNAME / ERRORSWEEP_PASSWORD.")
+
+    with tab2:
+        st.info("Account creation will be connected to Supabase/Auth in the next backend sprint.")
+        name = st.text_input("Full name")
+        email = st.text_input("Email")
+        if st.button("Create demo account", use_container_width=True):
+            st.session_state.authenticated = True
+            st.session_state.username = email or name or "new-user@errorsweep.local"
+            st.session_state.role = "Owner"
+            st.rerun()
+
+    with tab3:
+        st.write("Use this while building the platform.")
+        if st.button("Enter demo workspace", type="primary", use_container_width=True, disabled=not allow_demo_login()):
+            st.session_state.authenticated = True
+            st.session_state.username = "demo@errorsweep.local"
+            st.session_state.role = "Owner"
+            st.rerun()
+        if not allow_demo_login():
+            st.warning("Demo login is disabled. Set ERRORSWEEP_ALLOW_DEMO_LOGIN=true to enable it.")
 
 
-# ==========================================================
-# Sidebar/navigation
-# ==========================================================
+PAGES = [
+    "Dashboard",
+    "Projects",
+    "Jobs",
+    "ErrorSweep QA",
+    "ErrorSweep Pro",
+    "Human Review",
+    "Scorecards",
+    "Memory & Rules",
+    "Team & Roles",
+    "Billing",
+    "Account",
+    "Admin",
+    "Engine Status",
+]
+
 
 def sidebar_nav() -> str:
     with st.sidebar:
         st.markdown("## 🌐 ErrorSweep")
-        st.caption(APP_VERSION)
+        st.caption(f"{APP_VERSION} · Main API-first")
+        st.markdown(f'<span class="es-badge es-badge-green">{escape(st.session_state.role)}</span>', unsafe_allow_html=True)
+        st.caption(st.session_state.username or "demo user")
+        st.divider()
 
-        role = st.selectbox("Active role", list(ROLE_PERMISSIONS.keys()), index=list(ROLE_PERMISSIONS.keys()).index(st.session_state.get("active_role", "Owner")))
-        st.session_state["active_role"] = role
+        selected = st.radio(
+            "Workspace",
+            PAGES,
+            index=PAGES.index(st.session_state.active_page) if st.session_state.active_page in PAGES else 0,
+            label_visibility="collapsed",
+        )
+        st.session_state.active_page = selected
 
+        st.divider()
         if st.button("Logout", use_container_width=True):
-            st.session_state["authenticated"] = False
+            st.session_state.authenticated = False
             st.rerun()
 
-        st.divider()
-        pages = []
-        for label, (perm, icon) in PAGE_META.items():
-            if can(perm):
-                pages.append(f"{icon} {label}")
+        st.caption("Optional local/free engines can be tested later. Platform uses main API first.")
+    return selected
 
-        selected = st.radio("Navigation", pages, label_visibility="collapsed")
-        page = selected.split(" ", 1)[1]
 
-        st.divider()
-        project = active_project()
-        st.caption("Active workspace")
-        st.write(f"**{st.session_state.get('active_org','Organization')}**")
-        if project:
-            st.write(f"Project: **{project['name']}**")
-        else:
-            st.info("Create a project to organize jobs.")
+def page_header(kicker: str, title: str, subtitle: str) -> None:
+    st.markdown(f"""
+    <div class="es-hero">
+      <span class="es-kicker">{escape(kicker)}</span>
+      <div class="es-title">{escape(title)}</div>
+      <div class="es-sub">{escape(subtitle)}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        st.divider()
-        st.caption("Main engine")
-        if get_secret("OPENAI_API_KEY"):
-            st.markdown(badge("Main API connected", "green"), unsafe_allow_html=True)
-        else:
-            st.markdown(badge("Main API missing", "red"), unsafe_allow_html=True)
 
-    return page
+def metric_cards(items: List[Tuple[str, Any, str]]) -> None:
+    html = '<div class="es-grid">'
+    for label, value, caption in items:
+        html += f"""
+        <div class="es-card">
+          <div class="es-metric-label">{escape(str(label))}</div>
+          <div class="es-metric-value">{escape(str(value))}</div>
+          <p>{escape(str(caption))}</p>
+        </div>
+        """
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ==========================================================
 # Pages
 # ==========================================================
 
-def page_dashboard() -> None:
-    hero("Localization operations hub", "Manage projects, translation jobs, QA reports, human review, scorecards, and translation memory from one workspace.", "Dashboard")
-
-    total_jobs = len(st.session_state["jobs"])
-    total_projects = len(st.session_state["projects"])
-    total_tm = len(st.session_state["translation_memory"])
-    review_pending = sum(1 for s in st.session_state["review_sessions"] if s.get("status") != "Completed")
-
-    st.markdown(
-        f"""
-<div class="es-grid-4">
-{metric_tile("Projects", str(total_projects), "client/product workspaces")}
-{metric_tile("Jobs", str(total_jobs), "QA / Pro / Scorecard")}
-{metric_tile("TM entries", str(total_tm), "approved translations")}
-{metric_tile("Pending review", str(review_pending), "segments or sessions")}
-</div>
-""",
-        unsafe_allow_html=True,
+def dashboard_page() -> None:
+    page_header(
+        "Dashboard",
+        "Localization operations hub",
+        "Manage projects, translation jobs, QA reports, human review, scorecards, and translation memory from one workspace.",
     )
 
+    metric_cards([
+        ("Projects", len(st.session_state.projects), "client/product workspaces"),
+        ("Jobs", len(st.session_state.jobs), "QA / Pro / Scorecard"),
+        ("TM Entries", len(st.session_state.tm_entries), "approved translations"),
+        ("Pending Review", len([s for s in st.session_state.review_segments if s.get("Status") != "Approved"]), "segments or sessions"),
+    ])
+
     st.markdown("### Recommended next steps")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        card_html("Create a project", "Set source/target languages, domain, and reusable rules.", "🗂️")
-    with c2:
-        card_html("Run QA or Pro", "Upload a bilingual file or source file and generate review-ready output.", "🚀")
-    with c3:
-        card_html("Open Human Review", "Approve corrected segments and save only verified translations to TM.", "✍️")
+    st.markdown("""
+    <div class="es-grid-3">
+      <div class="es-card"><h3>🗂️ Create a project</h3><p>Set source/target languages, domain, and reusable rules.</p></div>
+      <div class="es-card"><h3>🚀 Run QA or Pro</h3><p>Upload a bilingual file or source file and generate review-ready output.</p></div>
+      <div class="es-card"><h3>✍️ Open Human Review</h3><p>Approve corrected segments and save only verified translations to TM.</p></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("### Recent jobs")
-    if st.session_state["jobs"]:
-        st.dataframe(pd.DataFrame(st.session_state["jobs"][:12]), use_container_width=True, hide_index=True)
+    if st.session_state.jobs:
+        st.dataframe(pd.DataFrame(st.session_state.jobs).tail(10), use_container_width=True, hide_index=True)
     else:
         st.info("No jobs yet.")
 
 
-def page_projects() -> None:
-    hero("Projects", "Create localization workspaces for products, clients, domains, and target languages.", "Project management")
+def projects_page() -> None:
+    page_header("Projects", "Project workspaces", "Create client/product workspaces and attach languages, domain, rules, and memory.")
 
     with st.form("create_project"):
-        c1, c2 = st.columns(2)
-        name = c1.text_input("Project name", placeholder="Mobile App UI")
-        domain = c2.selectbox("Domain", ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"])
-        source_lang = c1.selectbox("Source language", ["English", "Telugu", "Hindi", "French", "Spanish"])
-        targets = c2.multiselect("Target languages", SUPPORTED_API_LANGUAGES, default=["French"])
-        submit = st.form_submit_button("Create project", use_container_width=True, type="primary")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name = st.text_input("Project name", placeholder="Mobile App UI")
+            organization = st.text_input("Organization", placeholder="Nawin Corp")
+        with c2:
+            source_lang = st.selectbox("Source language", SUPPORTED_MAIN_API_LANGUAGES, index=SUPPORTED_MAIN_API_LANGUAGES.index("English"))
+            targets = st.multiselect("Target languages", SUPPORTED_MAIN_API_LANGUAGES, default=["French"])
+        with c3:
+            domain = st.selectbox("Domain", ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"])
+            status = st.selectbox("Status", ["Active", "Draft", "Paused"])
 
-    if submit and name:
-        project = {
-            "id": new_id("project"),
-            "name": name,
-            "domain": domain,
-            "source_language": source_lang,
-            "target_languages": ", ".join(targets),
-            "created_at": now_iso(),
-            "status": "Active",
-        }
-        st.session_state["projects"].insert(0, project)
-        st.session_state["active_project_id"] = project["id"]
-        st.success("Project created.")
+        if st.form_submit_button("Create project", type="primary", use_container_width=True):
+            if not name:
+                st.error("Project name is required.")
+            else:
+                project = {
+                    "Project ID": new_id("prj"),
+                    "Project": name,
+                    "Organization": organization or "Default Organization",
+                    "Source": source_lang,
+                    "Targets": ", ".join(targets) if targets else "",
+                    "Domain": domain,
+                    "Status": status,
+                    "Created": now_iso(),
+                }
+                st.session_state.projects.append(project)
+                st.success("Project created.")
 
-    if st.session_state["projects"]:
-        st.dataframe(pd.DataFrame(st.session_state["projects"]), use_container_width=True, hide_index=True)
-        options = {p["name"]: p["id"] for p in st.session_state["projects"]}
-        selected = st.selectbox("Set active project", list(options.keys()))
-        if st.button("Use selected project", use_container_width=True):
-            st.session_state["active_project_id"] = options[selected]
-            st.rerun()
+    st.markdown("### Project list")
+    if st.session_state.projects:
+        st.dataframe(pd.DataFrame(st.session_state.projects), use_container_width=True, hide_index=True)
     else:
-        st.info("No projects created yet.")
+        st.info("Create your first project.")
 
 
-def page_jobs() -> None:
-    hero("Jobs", "Track every upload, QA run, Pro translation, human review, and scorecard in one place.", "Workflow history")
-    if not st.session_state["jobs"]:
-        st.info("No jobs yet.")
-        return
-    df = pd.DataFrame(st.session_state["jobs"])
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button("Download job history CSV", dataframe_download(df), file_name="errorsweep_jobs.csv", mime="text/csv", use_container_width=True)
+def jobs_page() -> None:
+    page_header("Jobs", "Job center", "Track QA, Pro translation, Human Review, and Scorecard jobs.")
+
+    if st.session_state.jobs:
+        df = pd.DataFrame(st.session_state.jobs)
+        status_filter = st.multiselect("Filter status", sorted(df["Status"].dropna().unique().tolist()), default=[])
+        if status_filter:
+            df = df[df["Status"].isin(status_filter)]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No jobs yet. Run QA, Pro, or a Scorecard to create jobs.")
 
 
-def page_qa() -> None:
-    hero("ErrorSweep QA", "Review existing translations against placeholders, numbers, DNT, glossary, and API-based QA.", "QA workflow")
-    render_upload_workflow(mode="qa")
+def qa_page() -> None:
+    page_header("ErrorSweep QA", "QA run + suggestions", "Review existing translations against deterministic checks, company rules, and main API QA.")
+
+    uploaded = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt"], key="qa_upload")
+    rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="qa_rules")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        target_language = st.selectbox("Target language", SUPPORTED_MAIN_API_LANGUAGES, index=SUPPORTED_MAIN_API_LANGUAGES.index("French"))
+    with c2:
+        domain = st.selectbox("Domain", ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"], key="qa_domain")
+    with c3:
+        run_ai = st.checkbox("Run main API QA", value=True)
+
+    if st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=uploaded is None):
+        glossary, dnt, rule_context = parse_rules_zip(rules_zip)
+        extracted = extract_file(uploaded, mode="qa")
+        st.session_state.glossary.extend(glossary)
+        st.session_state.dnt_terms.extend(dnt)
+
+        if not extracted.segments:
+            st.error("No bilingual segments found. Check file columns: Source / Target or Source Text / Original Translation.")
+            return
+
+        base_rows = deterministic_qa(extracted.segments, glossary + st.session_state.glossary, dnt + st.session_state.dnt_terms, target_language)
+        ai_rows = []
+        if run_ai:
+            ai_rows = qa_with_main_api(extracted.segments, target_language, domain, rule_context)
+
+        rows = base_rows + ai_rows
+        job = {
+            "Job ID": new_id("job"),
+            "Type": "QA",
+            "File": uploaded.name,
+            "Project": "",
+            "Target": target_language,
+            "Segments": len(extracted.segments),
+            "Issues": len(rows),
+            "Status": "Needs Review" if rows else "Completed",
+            "Created": now_iso(),
+        }
+        st.session_state.jobs.append(job)
+
+        # Seed review.
+        for seg in extracted.segments:
+            st.session_state.review_segments.append({
+                "Review ID": new_id("rev"),
+                "Job ID": job["Job ID"],
+                "Location": seg["location"],
+                "Source": seg["source"],
+                "Target": seg.get("translation") or seg.get("target", ""),
+                "Status": "Needs Review" if any(r.get("Location") == seg["location"] for r in rows) else "Pass",
+                "Comment": "",
+                "Target Language": target_language,
+            })
+
+        st.success("QA completed.")
+        st.markdown("### QA Report")
+        if rows:
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.download_button("Download QA report CSV", df.to_csv(index=False).encode("utf-8-sig"), "errorsweep_qa_report.csv", "text/csv", use_container_width=True)
+            st.download_button("Download QA report Excel", download_excel(df, "QA Report"), "errorsweep_qa_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        else:
+            st.success("No issues found.")
 
 
-def page_pro() -> None:
-    hero("ErrorSweep Pro", "Translate source content using the main API, run QA, and send uncertain rows to Human Review.", "Translation workflow")
-    render_upload_workflow(mode="pro")
+def pro_page() -> None:
+    page_header("ErrorSweep Pro", "Translate + QA + Human Review", "Use main API translation first, then route uncertain segments to Human Review.")
 
-
-def render_upload_workflow(mode: str) -> None:
-    client = get_openai_client()
-    if client is None:
-        st.error("Main API is not configured. Add OPENAI_API_KEY in Streamlit secrets.")
-        return
-
-    project = active_project()
-    default_target = "French"
-    default_domain = project["domain"] if project else "Software UI"
+    uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt"], key="pro_upload")
+    rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
 
     c1, c2, c3 = st.columns(3)
-    domain = c1.selectbox("Domain", ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"], index=["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"].index(default_domain) if default_domain in ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"] else 0)
-    target_language = c2.selectbox("Target language", SUPPORTED_API_LANGUAGES, index=SUPPORTED_API_LANGUAGES.index(default_target))
-    batch_size = c3.number_input("Batch size", min_value=5, max_value=50, value=20)
+    with c1:
+        target_language = st.selectbox("Target language", SUPPORTED_MAIN_API_LANGUAGES, index=SUPPORTED_MAIN_API_LANGUAGES.index("French"), key="pro_tgt")
+    with c2:
+        domain = st.selectbox("Domain", ["Software UI", "Marketing", "Legal", "Medical", "E-learning", "General"], key="pro_domain")
+    with c3:
+        review_threshold = st.slider("Allow with review threshold", 1, 25, 12, help="If unresolved rate is under this %, output is allowed but Human Review is required.")
 
-    uploaded = st.file_uploader("Upload file", type=["xlsx", "csv", "docx", "txt", "json", "xml", "xlf", "xliff"], key=f"{mode}_upload")
-    rules_zip = st.file_uploader("Upload Rules ZIP (optional)", type=["zip"], key=f"{mode}_rules")
-    rules = parse_rules_zip(rules_zip) if rules_zip else {"raw": "", "glossary": [], "dnt": []}
-    rules_text = rules_text_for_prompt(rules)
+    if st.button("Run Translate + Review", type="primary", use_container_width=True, disabled=uploaded is None):
+        glossary, dnt, rule_context = parse_rules_zip(rules_zip)
+        extracted = extract_file(uploaded, mode="pro")
+        st.session_state.glossary.extend(glossary)
+        st.session_state.dnt_terms.extend(dnt)
 
-    if rules_zip:
-        with st.expander("Rule pack summary", expanded=False):
-            st.write(f"Glossary-like entries: {len(rules.get('glossary', []))}")
-            st.write(f"DNT-like entries: {len(rules.get('dnt', []))}")
-            st.text_area("Rule context preview", rules.get("raw", "")[:2000], height=160)
+        if not extracted.segments:
+            st.error("No source segments found.")
+            return
 
-    run_label = "Run QA" if mode == "qa" else "Run Translate + Review"
-    if st.button(run_label, type="primary", use_container_width=True, disabled=uploaded is None):
-        if uploaded is None:
-            st.stop()
+        with st.spinner("Translating with main API..."):
+            translations_by_loc = translate_with_main_api(extracted.segments, target_language, domain, rule_context)
 
-        start = time.time()
-        segments, context = extract_segments(uploaded, mode=mode)
-        if not segments:
-            st.error("No usable segments found.")
-            st.stop()
+        translated_segments = []
+        missing = []
+        for seg in extracted.segments:
+            tr = preserve_protected(seg["source"], translations_by_loc.get(seg["location"], ""))
+            if is_bad_translation(seg["source"], tr, target_language):
+                missing.append({"Location": seg["location"], "Source": seg["source"], "Translation": tr})
+                tr = "⟦NEEDS HUMAN REVIEW⟧"
+            translations_by_loc[seg["location"]] = tr
+            translated_segments.append({**seg, "translation": tr, "target": tr})
 
-        st.success(f"Extracted {len(segments)} segment(s).")
-        progress = st.progress(0)
-        status = st.empty()
-
-        translations_by_loc = {seg["location"]: seg.get("translation", "") for seg in segments}
-        issues: List[Dict[str, Any]] = []
-        human_review_required = False
-        missing_rows: List[Dict[str, str]] = []
-        output_bytes = b""
-        output_name = ""
-        output_mime = "text/csv"
-
-        if mode == "pro":
-            for b, i in enumerate(range(0, len(segments), int(batch_size)), start=1):
-                batch = segments[i:i + int(batch_size)]
-                status.text(f"Translation batch {b}...")
-                try:
-                    results = translate_batch_api(client, batch, target_language, domain, rules_text)
-                    for item in results:
-                        translations_by_loc[item["location"]] = item["translation"]
-                except Exception as exc:
-                    st.warning(f"Translation batch failed: {exc}")
-                progress.progress(min(0.45, (i + len(batch)) / len(segments) * 0.45))
-
-            allow_download, human_review_required, missing_rows, missing_rate = smart_completion_gate(segments, translations_by_loc)
-            if not allow_download:
-                st.error(
-                    f"Translation coverage failed: {len(missing_rows)}/{len(segments)} segment(s) "
-                    f"({missing_rate:.1%}) are blank, placeholder-only, or clearly untranslated. Download blocked."
-                )
-                st.dataframe(pd.DataFrame(missing_rows), use_container_width=True, hide_index=True)
-                add_job({
-                    "id": new_id("job"),
-                    "type": "Pro Translation",
-                    "file": uploaded.name,
-                    "target": target_language,
-                    "status": "Blocked",
-                    "segments": len(segments),
-                    "issues": len(missing_rows),
-                    "created_at": now_iso(),
-                })
-                st.stop()
-            elif human_review_required:
-                st.warning(
-                    f"Translation mostly completed, but {len(missing_rows)}/{len(segments)} segment(s) "
-                    f"({missing_rate:.1%}) need Human Review. Download is allowed for review, not final delivery."
-                )
-                st.dataframe(pd.DataFrame(missing_rows), use_container_width=True, hide_index=True)
-
-            translated_segments = [{**seg, "translation": translations_by_loc.get(seg["location"], "")} for seg in segments]
+        gate, message = smart_gate(len(missing), len(extracted.segments), review_threshold / 100)
+        if gate == "pass":
+            st.success(message)
+            status = "Completed"
+        elif gate == "review":
+            st.warning(message)
+            status = "Needs Human Review"
         else:
-            translated_segments = segments
+            st.error(message)
+            status = "Blocked"
 
-        # Deterministic + API QA
-        for seg in translated_segments:
-            issues.extend(deterministic_issues(seg, rules))
-        progress.progress(0.60)
-        for b, i in enumerate(range(0, len(translated_segments), int(batch_size)), start=1):
-            batch = translated_segments[i:i + int(batch_size)]
-            status.text(f"QA batch {b}...")
-            try:
-                issues.extend(qa_batch_api(client, batch, domain, rules_text))
-            except Exception as exc:
-                st.warning(f"QA batch failed: {exc}")
-            progress.progress(min(0.95, 0.60 + (i + len(batch)) / len(translated_segments) * 0.35))
+        review_rows = deterministic_qa(translated_segments, glossary + st.session_state.glossary, dnt + st.session_state.dnt_terms, target_language)
 
-        progress.progress(1.0)
-        status.text(f"Completed in {round(time.time() - start, 1)} seconds.")
+        # Add main API QA only if the file is not fully blocked.
+        if gate != "block":
+            with st.spinner("Running main API QA..."):
+                review_rows.extend(qa_with_main_api(translated_segments, target_language, domain, rule_context))
 
-        status_rows = make_status_rows(translated_segments, translations_by_loc, issues)
-
-        if mode == "pro":
-            output_bytes, output_name, output_mime = build_output_file(context, segments, translations_by_loc)
-        else:
-            output_bytes = issues_excel(issues, status_rows)
-            output_name = f"errorsweep_qa_{re.sub(r'\\.[^.]+$', '', uploaded.name)}.xlsx"
-            output_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        output_bytes, mime, output_name = build_output_file(extracted, translations_by_loc)
 
         job = {
-            "id": new_id("job"),
-            "type": "QA" if mode == "qa" else "Pro Translation",
-            "file": uploaded.name,
-            "target": target_language if mode == "pro" else "",
-            "status": "Needs Human Review" if human_review_required or issues else "Completed",
-            "segments": len(segments),
-            "issues": len(issues) + len(missing_rows),
-            "created_at": now_iso(),
+            "Job ID": new_id("job"),
+            "Type": "Pro",
+            "File": uploaded.name,
+            "Project": "",
+            "Target": target_language,
+            "Segments": len(extracted.segments),
+            "Issues": len(review_rows),
+            "Status": status,
+            "Created": now_iso(),
         }
-        add_job(job)
+        st.session_state.jobs.append(job)
 
-        review_session = {
-            "id": new_id("review"),
-            "job_id": job["id"],
-            "name": f"{job['type']} · {uploaded.name}",
-            "target_language": target_language,
-            "status": "Needs Review" if human_review_required or issues else "Completed",
-            "segments": [
-                {
-                    "Location": seg["location"],
-                    "Source": seg["source"],
-                    "Target": translations_by_loc.get(seg["location"], seg.get("translation", "")),
-                    "Status": "Needs Review" if translations_by_loc.get(seg["location"], "") == NEEDS_REVIEW_MARKER else "Draft",
-                    "Comment": "",
-                }
-                for seg in segments
-            ],
-            "created_at": now_iso(),
-        }
-        st.session_state["review_sessions"].insert(0, review_session)
+        st.session_state.review_segments = [
+            s for s in st.session_state.review_segments
+            if s.get("Job ID") != job["Job ID"]
+        ]
+        for seg in translated_segments:
+            unresolved = seg["translation"] == "⟦NEEDS HUMAN REVIEW⟧" or any(r.get("Location") == seg["location"] for r in review_rows)
+            st.session_state.review_segments.append({
+                "Review ID": new_id("rev"),
+                "Job ID": job["Job ID"],
+                "Location": seg["location"],
+                "Source": seg["source"],
+                "Target": seg["translation"],
+                "Status": "Needs Review" if unresolved else "Machine Translated",
+                "Comment": "",
+                "Target Language": target_language,
+            })
 
-        st.markdown("### Results")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Segments", len(segments))
-        c2.metric("Issues", len(issues))
-        c3.metric("Review required", "Yes" if human_review_required or issues else "No")
+        st.markdown("### Translation preview")
+        st.dataframe(pd.DataFrame([
+            {"Location": s["location"], "Source": truncate(s["source"]), "Translation": truncate(s["translation"])}
+            for s in translated_segments[:100]
+        ]), use_container_width=True, hide_index=True)
 
-        st.dataframe(pd.DataFrame(status_rows).head(200), use_container_width=True, hide_index=True)
+        if missing:
+            with st.expander("Unresolved segments", expanded=True):
+                st.dataframe(pd.DataFrame(missing), use_container_width=True, hide_index=True)
 
-        if issues:
-            with st.expander("Issue details", expanded=True):
-                st.dataframe(pd.DataFrame(issues), use_container_width=True, hide_index=True)
+        if gate != "block":
+            if gate == "review":
+                st.warning("Human Review Required before delivery. Open the Human Review page to resolve marked segments.")
+            st.download_button("Download translated output", output_bytes, output_name, mime, use_container_width=True)
+            st.download_button("Download issue report", pd.DataFrame(review_rows).to_csv(index=False).encode("utf-8-sig"), "errorsweep_pro_issue_report.csv", "text/csv", use_container_width=True)
 
-        if human_review_required or issues:
-            st.warning("Human Review is recommended before final delivery.")
-            if st.button("Open Human Review", use_container_width=True):
-                st.session_state["nav_override"] = "Human Review"
-                st.rerun()
-
-        st.download_button("Download Output", output_bytes, output_name, output_mime, use_container_width=True)
-        st.download_button("Download Segment Review CSV", dataframe_download(pd.DataFrame(status_rows)), "segment_review.csv", "text/csv", use_container_width=True)
+        if st.button("Open Human Review", use_container_width=True):
+            st.session_state.active_page = "Human Review"
+            st.rerun()
 
 
-def page_human_review() -> None:
-    hero("Human Review", "CAT-style review workspace with source, editable target, QA issues, glossary, DNT, and TM context.", "Reviewer workspace")
+def human_review_page() -> None:
+    page_header("Human Review", "CAT-style segment editor", "Edit target text, review QA issues, apply glossary/TM, approve segments, and save verified translations.")
 
-    sessions = st.session_state["review_sessions"]
-    if not sessions:
-        st.info("No review sessions yet. Run QA or Pro first.")
+    if not st.session_state.review_segments:
+        st.info("No review segments yet. Run ErrorSweep QA or Pro first.")
         return
 
-    session_names = [f"{s['name']} · {s['id']}" for s in sessions]
-    selected_label = st.selectbox("Review session", session_names)
-    session = sessions[session_names.index(selected_label)]
-    segments = session["segments"]
+    df = pd.DataFrame(st.session_state.review_segments)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        job_filter = st.selectbox("Job", ["All"] + sorted(df["Job ID"].dropna().unique().tolist()))
+    with c2:
+        status_filter = st.selectbox("Status", ["All"] + sorted(df["Status"].dropna().unique().tolist()))
+    with c3:
+        search = st.text_input("Search source/target")
 
-    idx = st.number_input("Segment", min_value=1, max_value=max(len(segments), 1), value=1) - 1
-    seg = segments[idx]
+    filtered = df.copy()
+    if job_filter != "All":
+        filtered = filtered[filtered["Job ID"] == job_filter]
+    if status_filter != "All":
+        filtered = filtered[filtered["Status"] == status_filter]
+    if search:
+        filtered = filtered[
+            filtered["Source"].astype(str).str.contains(search, case=False, na=False)
+            | filtered["Target"].astype(str).str.contains(search, case=False, na=False)
+        ]
 
-    left, center, right = st.columns([1.2, 1.4, 1.0])
+    st.markdown("### Segment list")
+    st.dataframe(filtered[["Review ID", "Job ID", "Location", "Status", "Source", "Target"]], use_container_width=True, hide_index=True)
+
+    review_ids = filtered["Review ID"].tolist()
+    if not review_ids:
+        return
+
+    selected_id = st.selectbox("Open segment", review_ids)
+    segment_index = next((i for i, s in enumerate(st.session_state.review_segments) if s["Review ID"] == selected_id), None)
+    if segment_index is None:
+        return
+
+    seg = st.session_state.review_segments[segment_index]
+
+    st.markdown("### Editor")
+    left, center, right = st.columns([1.1, 1.1, .85])
     with left:
         st.markdown("#### Source")
-        st.text_area("Source text", seg["Source"], height=220, disabled=True)
-        st.markdown(badge(f"Location: {seg['Location']}", "blue"), unsafe_allow_html=True)
+        st.text_area("Source text", value=seg["Source"], height=220, disabled=True, label_visibility="collapsed")
+        st.caption(f"{seg['Location']} · {seg['Target Language']}")
+
     with center:
         st.markdown("#### Target")
-        edited = st.text_area("Editable target", seg["Target"], height=220)
-        c1, c2, c3 = st.columns(3)
-        if c1.button("Save", use_container_width=True):
-            seg["Target"] = edited
-            seg["Status"] = "Saved"
-            st.success("Saved.")
-        if c2.button("Approve", use_container_width=True):
-            seg["Target"] = edited
-            seg["Status"] = "Approved"
-            st.success("Approved.")
-        if c3.button("Needs Rework", use_container_width=True):
-            seg["Target"] = edited
-            seg["Status"] = "Needs Rework"
-            st.warning("Marked needs rework.")
-        comment = st.text_input("Reviewer comment", value=seg.get("Comment", ""))
-        if st.button("Save comment", use_container_width=True):
-            seg["Comment"] = comment
-            st.success("Comment saved.")
+        edited = st.text_area("Target text", value=seg["Target"], height=220, label_visibility="collapsed")
+        status = st.selectbox("Review status", ["Needs Review", "Machine Translated", "Approved", "Rejected", "Needs Rework", "Pass"], index=0 if seg["Status"] not in ["Approved", "Rejected", "Needs Rework", "Pass", "Machine Translated"] else ["Needs Review", "Machine Translated", "Approved", "Rejected", "Needs Rework", "Pass"].index(seg["Status"]))
+        comment = st.text_area("Reviewer comment", value=seg.get("Comment", ""), height=90)
 
-        if st.button("Approve & Save to TM", use_container_width=True, type="primary"):
-            seg["Target"] = edited
-            seg["Status"] = "Approved"
-            st.session_state["translation_memory"].insert(0, {
-                "source": seg["Source"],
-                "target": edited,
-                "target_language": session.get("target_language", ""),
-                "project": active_project()["name"] if active_project() else "",
-                "approved_at": now_iso(),
-                "approved_by": st.session_state.get("user_email", "reviewer"),
+        c1, c2 = st.columns(2)
+        if c1.button("Save segment", use_container_width=True):
+            st.session_state.review_segments[segment_index]["Target"] = edited
+            st.session_state.review_segments[segment_index]["Status"] = status
+            st.session_state.review_segments[segment_index]["Comment"] = comment
+            st.success("Segment saved.")
+        if c2.button("Approve & Save to TM", type="primary", use_container_width=True):
+            st.session_state.review_segments[segment_index]["Target"] = edited
+            st.session_state.review_segments[segment_index]["Status"] = "Approved"
+            st.session_state.review_segments[segment_index]["Comment"] = comment
+            st.session_state.tm_entries.append({
+                "TM ID": new_id("tm"),
+                "Source Hash": text_hash(seg["Source"]),
+                "Source": seg["Source"],
+                "Target": edited,
+                "Target Language": seg["Target Language"],
+                "Domain": "",
+                "Approved By": st.session_state.username,
+                "Created": now_iso(),
             })
-            st.success("Approved and saved to TM.")
+            st.success("Approved and saved to Translation Memory.")
 
     with right:
-        st.markdown("#### Context")
-        st.markdown("**Glossary**")
-        matching_glossary = [g for g in st.session_state["glossary"] if g.get("source", "").lower() in seg["Source"].lower()]
-        if matching_glossary:
-            st.dataframe(pd.DataFrame(matching_glossary), use_container_width=True, hide_index=True)
+        st.markdown("#### Assist panel")
+        st.markdown('<span class="es-badge es-badge-green">Glossary</span>', unsafe_allow_html=True)
+        glossary_matches = [g for g in st.session_state.glossary if g.get("Source Term", "").lower() in seg["Source"].lower()]
+        if glossary_matches:
+            st.dataframe(pd.DataFrame(glossary_matches), use_container_width=True, hide_index=True)
         else:
             st.caption("No glossary matches.")
 
-        st.markdown("**DNT**")
-        matching_dnt = [d for d in st.session_state["dnt_terms"] if d.get("term", "").lower() in seg["Source"].lower()]
-        if matching_dnt:
-            st.dataframe(pd.DataFrame(matching_dnt), use_container_width=True, hide_index=True)
+        st.markdown('<span class="es-badge es-badge-yellow">TM matches</span>', unsafe_allow_html=True)
+        tm_matches = [t for t in st.session_state.tm_entries if t.get("Source Hash") == text_hash(seg["Source"]) or t.get("Source", "").lower() == seg["Source"].lower()]
+        if tm_matches:
+            st.dataframe(pd.DataFrame(tm_matches), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No exact TM matches.")
+
+        st.markdown('<span class="es-badge es-badge-red">DNT</span>', unsafe_allow_html=True)
+        dnt_matches = [d for d in st.session_state.dnt_terms if d.get("Term", "").lower() in seg["Source"].lower()]
+        if dnt_matches:
+            st.dataframe(pd.DataFrame(dnt_matches), use_container_width=True, hide_index=True)
         else:
             st.caption("No DNT matches.")
 
-        st.markdown("**TM matches**")
-        tm_matches = [tm for tm in st.session_state["translation_memory"] if tm.get("source", "").strip().lower() == seg["Source"].strip().lower()]
-        if tm_matches:
-            st.dataframe(pd.DataFrame(tm_matches[:5]), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No exact TM match.")
-
-    st.markdown("### Session progress")
-    df = pd.DataFrame(segments)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button("Download Human Review CSV", dataframe_download(df), "human_review_export.csv", "text/csv", use_container_width=True)
+    st.markdown("### Export")
+    export_df = pd.DataFrame(st.session_state.review_segments)
+    st.download_button("Download Human Review CSV", export_df.to_csv(index=False).encode("utf-8-sig"), "human_review_segments.csv", "text/csv", use_container_width=True)
 
 
-def page_scorecards() -> None:
-    hero("Translator Scorecards", "Compare translator output against reviewer/final output and generate quality scores.", "LQA scoring")
+def scorecards_page() -> None:
+    page_header("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output and generate vendor quality scorecards.")
 
-    st.info("Upload files with Source and Translation/Target columns, or simple CSV/XLSX tables.")
-    c1, c2 = st.columns(2)
-    translator_file = c1.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="translator_file")
-    reviewer_file = c2.file_uploader("Reviewer / final file", type=["xlsx", "csv", "docx", "txt"], key="reviewer_file")
+    source_file = st.file_uploader("Source file", type=["xlsx", "csv", "docx", "txt"], key="score_src")
+    translator_file = st.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="score_trans")
+    reviewer_file = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_rev")
 
-    if st.button("Generate Scorecard", use_container_width=True, type="primary", disabled=not (translator_file and reviewer_file)):
-        t_segments, _ = extract_segments(translator_file, mode="qa")
-        r_segments, _ = extract_segments(reviewer_file, mode="qa")
+    if st.button("Generate Scorecard", type="primary", use_container_width=True, disabled=not (translator_file and reviewer_file)):
+        trans = extract_file(translator_file, mode="qa")
+        rev = extract_file(reviewer_file, mode="qa")
+
         rows = []
         total_penalty = 0
-        changed = 0
-        for i, t in enumerate(t_segments):
-            r = r_segments[i] if i < len(r_segments) else {}
-            trans = t.get("translation") or t.get("source", "")
-            final = r.get("translation") or r.get("source", "")
-            source = t.get("source") or r.get("source", "")
-            if norm(trans) == norm(final):
-                severity = "Pass"
-                penalty = 0
-                change_type = "Unchanged"
-            else:
-                changed += 1
-                penalty = 1
+        total = min(len(trans.segments), len(rev.segments))
+        for i in range(total):
+            t_seg = trans.segments[i]
+            r_seg = rev.segments[i]
+            translator = t_seg.get("translation") or t_seg.get("target") or t_seg.get("source", "")
+            reviewer = r_seg.get("translation") or r_seg.get("target") or r_seg.get("source", "")
+            changed = clean_text(translator) != clean_text(reviewer)
+            penalty = 0
+            severity = "Pass"
+            category = "No change"
+            if changed:
+                # Simple MVP scoring.
+                penalty = 2
                 severity = "Minor"
-                change_type = "Changed"
-                if not trans.strip() or PLACEHOLDER_RE.findall(source) != PLACEHOLDER_RE.findall(final):
-                    severity = "Major"
-                    penalty = 5
-                if not final.strip():
-                    severity = "Critical"
+                category = "Reviewer changed translation"
+                if extract_placeholders(translator) != extract_placeholders(reviewer):
                     penalty = 10
+                    severity = "Critical"
+                    category = "Placeholder/formatting"
+                elif len(translator) < max(1, len(reviewer) * 0.35):
+                    penalty = 5
+                    severity = "Major"
+                    category = "Omission / incompleteness"
             total_penalty += penalty
             rows.append({
                 "Segment": i + 1,
-                "Source": source,
-                "Translator Translation": trans,
-                "Reviewer Translation": final,
-                "Change Type": change_type,
+                "Source": t_seg.get("source") or r_seg.get("source", ""),
+                "Translator": translator,
+                "Reviewer": reviewer,
+                "Changed": "Yes" if changed else "No",
+                "Category": category,
                 "Severity": severity,
                 "Penalty": penalty,
             })
 
-        score = max(0, round(100 - (total_penalty / max(len(rows), 1) * 3), 2))
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Score", f"{score}/100")
-        c2.metric("Segments", len(rows))
-        c3.metric("Changed", changed)
-        c4.metric("Penalty", total_penalty)
+        score = max(0, round(100 - (total_penalty / max(total, 1)), 2))
+        job = {
+            "Job ID": new_id("job"),
+            "Type": "Scorecard",
+            "File": translator_file.name,
+            "Project": "",
+            "Target": "",
+            "Segments": total,
+            "Issues": sum(1 for r in rows if r["Changed"] == "Yes"),
+            "Status": "Completed",
+            "Created": now_iso(),
+        }
+        st.session_state.jobs.append(job)
+
+        metric_cards([
+            ("Quality Score", score, "100 is best"),
+            ("Segments Compared", total, "translator vs reviewer"),
+            ("Changed", sum(1 for r in rows if r["Changed"] == "Yes"), "reviewer edits"),
+            ("Penalty", total_penalty, "weighted penalty"),
+        ])
         df = pd.DataFrame(rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
-        bio = io.BytesIO()
-        with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-            pd.DataFrame([{"Score": score, "Segments": len(rows), "Changed": changed, "Penalty": total_penalty}]).to_excel(writer, index=False, sheet_name="Summary")
-            df.to_excel(writer, index=False, sheet_name="Segment Comparison")
-        st.download_button("Download Scorecard", bio.getvalue(), "translator_scorecard.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button("Download Scorecard Excel", download_excel(df, "Scorecard"), "errorsweep_scorecard.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 
-def page_memory_rules() -> None:
-    hero("Memory & Rules", "Manage translation memory, glossary, do-not-translate terms, and client rule packs.", "Knowledge base")
+def memory_rules_page() -> None:
+    page_header("Memory & Rules", "Translation memory, glossary, DNT, and client rules", "Manage approved terminology and reusable corrections.")
 
-    tab_tm, tab_glossary, tab_dnt, tab_style = st.tabs(["Translation Memory", "Glossary", "DNT", "Style Guides"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Translation Memory", "Glossary", "DNT", "Rule Pack Upload"])
 
-    with tab_tm:
-        st.markdown("### Approved Translation Memory")
-        if st.session_state["translation_memory"]:
-            st.dataframe(pd.DataFrame(st.session_state["translation_memory"]), use_container_width=True, hide_index=True)
+    with tab1:
+        st.markdown("### Translation Memory")
+        if st.session_state.tm_entries:
+            st.dataframe(pd.DataFrame(st.session_state.tm_entries), use_container_width=True, hide_index=True)
         else:
-            st.info("No approved TM entries yet.")
-        with st.form("manual_tm"):
-            source = st.text_input("Source")
-            target = st.text_input("Target")
-            lang = st.selectbox("Target language", SUPPORTED_API_LANGUAGES)
+            st.info("No TM entries yet. Approve segments in Human Review to build TM.")
+        with st.form("add_tm"):
+            source = st.text_area("Source")
+            target = st.text_area("Target")
+            lang = st.selectbox("Target language", SUPPORTED_MAIN_API_LANGUAGES, key="tm_lang")
             if st.form_submit_button("Add TM entry", use_container_width=True):
                 if source and target:
-                    st.session_state["translation_memory"].insert(0, {"source": source, "target": target, "target_language": lang, "approved_at": now_iso()})
-                    st.success("TM added.")
+                    st.session_state.tm_entries.append({
+                        "TM ID": new_id("tm"),
+                        "Source Hash": text_hash(source),
+                        "Source": source,
+                        "Target": target,
+                        "Target Language": lang,
+                        "Domain": "",
+                        "Approved By": st.session_state.username,
+                        "Created": now_iso(),
+                    })
+                    st.success("TM entry added.")
 
-    with tab_glossary:
-        with st.form("glossary_form"):
-            source = st.text_input("Source term")
-            target = st.text_input("Target term")
-            notes = st.text_input("Notes")
+    with tab2:
+        st.markdown("### Glossary")
+        with st.form("add_glossary"):
+            s = st.text_input("Source term")
+            t = st.text_input("Target term")
+            src = st.text_input("Rule source", value="Manual")
             if st.form_submit_button("Add glossary term", use_container_width=True):
-                if source and target:
-                    st.session_state["glossary"].insert(0, {"source": source, "target": target, "notes": notes})
+                if s and t:
+                    st.session_state.glossary.append({"Source Term": s, "Target Term": t, "Rule Source": src})
                     st.success("Glossary term added.")
-        if st.session_state["glossary"]:
-            st.dataframe(pd.DataFrame(st.session_state["glossary"]), use_container_width=True, hide_index=True)
+        if st.session_state.glossary:
+            st.dataframe(pd.DataFrame(st.session_state.glossary), use_container_width=True, hide_index=True)
 
-    with tab_dnt:
-        with st.form("dnt_form"):
-            term = st.text_input("Do-not-translate term")
-            reason = st.text_input("Reason")
+    with tab3:
+        st.markdown("### Do Not Translate")
+        with st.form("add_dnt"):
+            term = st.text_input("DNT term")
+            src = st.text_input("Rule source", value="Manual")
             if st.form_submit_button("Add DNT term", use_container_width=True):
                 if term:
-                    st.session_state["dnt_terms"].insert(0, {"term": term, "reason": reason})
+                    st.session_state.dnt_terms.append({"Term": term, "Rule Source": src})
                     st.success("DNT term added.")
-        if st.session_state["dnt_terms"]:
-            st.dataframe(pd.DataFrame(st.session_state["dnt_terms"]), use_container_width=True, hide_index=True)
+        if st.session_state.dnt_terms:
+            st.dataframe(pd.DataFrame(st.session_state.dnt_terms), use_container_width=True, hide_index=True)
 
-    with tab_style:
-        st.text_area("Style guide notes", height=220, key="style_guide_notes")
-        st.caption("These notes will be used as project/client style context in future persistent storage.")
+    with tab4:
+        rules_zip = st.file_uploader("Upload rules ZIP", type=["zip"], key="rules_manager_zip")
+        if rules_zip and st.button("Parse and save rules", use_container_width=True):
+            glossary, dnt, context = parse_rules_zip(rules_zip)
+            st.session_state.glossary.extend(glossary)
+            st.session_state.dnt_terms.extend(dnt)
+            st.success(f"Loaded {len(glossary)} glossary term(s) and {len(dnt)} DNT term(s).")
 
 
-def page_team_roles() -> None:
-    hero("Team & Roles", "Manage access levels for owners, admins, project managers, translators, reviewers, and clients.", "Access control")
+def team_roles_page() -> None:
+    page_header("Team & Roles", "Role-based access shell", "Define team members, roles, and access boundaries.")
 
-    with st.form("add_member"):
+    permission_rows = [
+        {"Action": "Create projects", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
+        {"Action": "Run Pro translation", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "Limited", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Approve segments", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Save to TM", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Billing", "Owner": "Yes", "Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
+    ]
+    st.markdown("### Permission matrix")
+    st.dataframe(pd.DataFrame(permission_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("### Team")
+    with st.form("invite_user"):
         c1, c2, c3 = st.columns(3)
         name = c1.text_input("Name")
         email = c2.text_input("Email")
-        role = c3.selectbox("Role", list(ROLE_PERMISSIONS.keys()))
-        submit = st.form_submit_button("Add team member", use_container_width=True)
-    if submit and name and email:
-        st.session_state["team"].append({"name": name, "email": email, "role": role, "status": "Invited"})
-        st.success("Team member added.")
-
-    st.dataframe(pd.DataFrame(st.session_state["team"]), use_container_width=True, hide_index=True)
-
-    st.markdown("### Permission matrix")
-    pages = list(PAGE_META.keys())
-    matrix = []
-    for role, perms in ROLE_PERMISSIONS.items():
-        row = {"Role": role}
-        for label in pages:
-            perm, _ = PAGE_META[label]
-            row[label] = "Yes" if perm in perms else "No"
-        matrix.append(row)
-    st.dataframe(pd.DataFrame(matrix), use_container_width=True, hide_index=True)
+        role = c3.selectbox("Role", ROLES)
+        if st.form_submit_button("Add / invite user", use_container_width=True):
+            if name and email:
+                st.session_state.team.append({"Name": name, "Email": email, "Role": role, "Status": "Invited"})
+                st.success("User added.")
+    st.dataframe(pd.DataFrame(st.session_state.team), use_container_width=True, hide_index=True)
 
 
-def page_billing() -> None:
-    hero("Billing", "Plans, usage, and credits. Billing integration can connect to Razorpay/Stripe later.", "Commercial")
-    st.markdown(
-        """
-<div class="es-grid">
-  <div class="es-card"><h3>Starter</h3><p class="es-muted">QA reports, rule packs, and limited Pro jobs.</p><h2>₹0 / testing</h2></div>
-  <div class="es-card"><h3>Pro</h3><p class="es-muted">Pro translation, human review, TM, scorecards.</p><h2>Coming soon</h2></div>
-  <div class="es-card"><h3>Enterprise</h3><p class="es-muted">Private deployment, SSO, audit logs, custom engines.</p><h2>Custom</h2></div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+def billing_page() -> None:
+    page_header("Billing", "Plans and usage", "Billing shell for credits, invoices, and plan limits.")
+
+    metric_cards([
+        ("Plan", "Demo", "billing integration pending"),
+        ("Credits", "Unlimited", "during platform build"),
+        ("Invoices", "0", "not configured"),
+        ("Gateway", "Razorpay/Stripe", "future integration"),
+    ])
+    st.info("Billing can be connected after project/jobs/review workflows are stable.")
 
 
-def page_account() -> None:
-    hero("Account", "Profile, security, workspace, and session settings.", "Settings")
-    st.write("Signed in as:", st.session_state.get("user_email", "demo"))
-    st.write("Active role:", st.session_state.get("active_role"))
-    st.write("Organization:", st.session_state.get("active_org"))
-    if st.button("Clear local demo data", use_container_width=True):
-        for key in ("projects", "jobs", "review_sessions", "translation_memory", "glossary", "dnt_terms"):
-            st.session_state[key] = []
-        st.success("Local demo data cleared.")
+def account_page() -> None:
+    page_header("Account", "Workspace profile", "Manage user profile and workspace settings.")
+
+    with st.form("account_settings"):
+        username = st.text_input("Signed in as", value=st.session_state.username)
+        role = st.selectbox("Role", ROLES, index=ROLES.index(st.session_state.role) if st.session_state.role in ROLES else 0)
+        org = st.text_input("Organization", value="Default Organization")
+        if st.form_submit_button("Save account settings", use_container_width=True):
+            st.session_state.username = username
+            st.session_state.role = role
+            st.success("Account settings saved.")
 
 
-def page_admin() -> None:
-    hero("Admin", "System configuration, platform controls, diagnostics, and future tenant administration.", "Admin")
-    st.markdown("### Configuration")
-    rows = [
-        {"Setting": "OPENAI_API_KEY", "Status": "Configured" if get_secret("OPENAI_API_KEY") else "Missing"},
-        {"Setting": "SUPABASE_URL", "Status": "Configured" if get_secret("SUPABASE_URL") else "Missing"},
-        {"Setting": "LIBRETRANSLATE_ENDPOINT", "Status": "Optional / configured" if get_secret("LIBRETRANSLATE_ENDPOINT") else "Optional / empty"},
-        {"Setting": "INDICTRANS2_ENDPOINT", "Status": "Optional / configured" if get_secret("INDICTRANS2_ENDPOINT") else "Optional / empty"},
-    ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+def admin_page() -> None:
+    page_header("Admin", "Platform admin", "System settings, diagnostics, and future admin controls.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### System state")
+        st.json({
+            "version": APP_VERSION,
+            "projects": len(st.session_state.projects),
+            "jobs": len(st.session_state.jobs),
+            "tm_entries": len(st.session_state.tm_entries),
+            "review_segments": len(st.session_state.review_segments),
+            "openai_configured": bool(secret("OPENAI_API_KEY")),
+        })
+    with c2:
+        st.markdown("### Maintenance")
+        if st.button("Clear demo jobs/review only", use_container_width=True):
+            st.session_state.jobs = []
+            st.session_state.review_segments = []
+            st.success("Jobs and review sessions cleared.")
+        if st.button("Clear all demo workspace data", use_container_width=True):
+            for key in ["projects", "jobs", "tm_entries", "glossary", "dnt_terms", "review_segments"]:
+                st.session_state[key] = []
+            st.success("Demo workspace cleared.")
 
 
-def page_engine_status() -> None:
-    hero("Engine Status", "The main API is primary. LibreTranslate and IndicTrans2 are optional connectors for later performance testing.", "Engine registry")
+def engine_status_page() -> None:
+    page_header("Engine Status", "Translation engine registry", "Main API is primary. Local/free engines are optional and can be tested later.")
 
     rows = []
     rows.append({
         "Engine": "Main API",
-        "Endpoint": "OpenAI API",
-        "Status": "Ready" if get_secret("OPENAI_API_KEY") else "Missing key",
-        "Used For": "QA, Pro translation, review",
+        "Purpose": "Primary translation and QA",
+        "Endpoint": "OpenAI Responses API",
+        "Status": "Ready" if secret("OPENAI_API_KEY") else "Missing API key",
+        "Production": "Yes",
     })
 
-    libre = get_secret("LIBRETRANSLATE_ENDPOINT")
-    if libre:
-        try:
-            r = requests.get(libre.rstrip("/") + "/languages", timeout=10)
-            status = f"HTTP {r.status_code}"
-        except Exception as exc:
-            status = f"Error: {exc}"
-    else:
-        status = "Not configured"
-    rows.append({"Engine": "LibreTranslate", "Endpoint": libre or "", "Status": status, "Used For": "Optional later"})
+    libre = secret("LIBRETRANSLATE_ENDPOINT")
+    rows.append({
+        "Engine": "LibreTranslate",
+        "Purpose": "Optional low-cost MT",
+        "Endpoint": libre or "(not configured)",
+        "Status": "Optional / not required",
+        "Production": "Later",
+    })
 
-    indic = get_secret("INDICTRANS2_ENDPOINT")
-    if indic:
-        base = indic.replace("/translate", "").rstrip("/")
-        try:
-            r = requests.get(base + "/health", timeout=10)
-            status = f"HTTP {r.status_code}"
-        except Exception as exc:
-            status = f"Error: {exc}"
-    else:
-        status = "Not configured"
-    rows.append({"Engine": "IndicTrans2", "Endpoint": indic or "", "Status": status, "Used For": "Optional later"})
+    indic = secret("INDICTRANS2_ENDPOINT")
+    rows.append({
+        "Engine": "IndicTrans2",
+        "Purpose": "Optional Indic MT",
+        "Endpoint": indic or "(not configured)",
+        "Status": "Blocked until /translate is reliable",
+        "Production": "Later",
+    })
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    st.info("For now, build and test the platform with the Main API. Re-enable local/free engines only after their direct /translate tests are stable.")
+    st.markdown("### Direct engine note")
+    st.warning("Do not depend on temporary trycloudflare URLs for production. Engines should be added later through stable server endpoints.")
 
 
 # ==========================================================
-# Main
+# App router
 # ==========================================================
 
-def main() -> None:
-    inject_css()
-    init_state()
-    require_auth()
-
-    if "nav_override" in st.session_state:
-        page = st.session_state.pop("nav_override")
+def render_app() -> None:
+    page = sidebar_nav()
+    if page == "Dashboard":
+        dashboard_page()
+    elif page == "Projects":
+        projects_page()
+    elif page == "Jobs":
+        jobs_page()
+    elif page == "ErrorSweep QA":
+        qa_page()
+    elif page == "ErrorSweep Pro":
+        pro_page()
+    elif page == "Human Review":
+        human_review_page()
+    elif page == "Scorecards":
+        scorecards_page()
+    elif page == "Memory & Rules":
+        memory_rules_page()
+    elif page == "Team & Roles":
+        team_roles_page()
+    elif page == "Billing":
+        billing_page()
+    elif page == "Account":
+        account_page()
+    elif page == "Admin":
+        admin_page()
+    elif page == "Engine Status":
+        engine_status_page()
     else:
-        page = sidebar_nav()
-
-    page_func = {
-        "Dashboard": page_dashboard,
-        "Projects": page_projects,
-        "Jobs": page_jobs,
-        "ErrorSweep QA": page_qa,
-        "ErrorSweep Pro": page_pro,
-        "Human Review": page_human_review,
-        "Scorecards": page_scorecards,
-        "Memory & Rules": page_memory_rules,
-        "Team & Roles": page_team_roles,
-        "Billing": page_billing,
-        "Account": page_account,
-        "Admin": page_admin,
-        "Engine Status": page_engine_status,
-    }.get(page, page_dashboard)
-
-    page_func()
-
-    st.markdown(f'<div class="es-footer-note">ErrorSweep {APP_VERSION} · Main API-first platform mode · Local/free engines optional.</div>', unsafe_allow_html=True)
+        dashboard_page()
 
 
-if __name__ == "__main__":
-    main()
+if not st.session_state.authenticated:
+    login_page()
+else:
+    render_app()
+
