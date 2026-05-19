@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import base64
+import csv
 import difflib
 import hashlib
+import hmac
 import io
 import json
 import os
 import re
+import time
 import uuid
-import zipfile
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,24 +19,75 @@ import pandas as pd
 import streamlit as st
 from docx import Document
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
 
 try:
     from openai import OpenAI
-except Exception:  # pragma: no cover
+except Exception:
     OpenAI = None
 
-
 # ==========================================================
-# ErrorSweep Platform v22
-# Website-first localization platform shell
+# ErrorSweep Platform v24
+# Platform-owner console + workspace-user separation
 # ==========================================================
 
-st.set_page_config(page_title="ErrorSweep", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="ErrorSweep",
+    page_icon="🌐",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-APP_VERSION = "v23 Owner/User Accounts"
+APP_VERSION = "v24 Owner Console"
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-NEEDS_REVIEW_MARKER = "⟦NEEDS HUMAN REVIEW⟧"
+SESSION_QUERY_KEY = "es_session"
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+WORKSPACE_PAGES = [
+    "Dashboard",
+    "Projects",
+    "Jobs",
+    "ErrorSweep QA",
+    "ErrorSweep Pro",
+    "Human Review",
+    "Scorecards",
+    "Memory & Rules",
+    "Team & Roles",
+    "Billing",
+    "Account",
+]
+
+OWNER_ONLY_PAGES = [
+    "Owner Console",
+    "Payments Received",
+    "User Access Matrix",
+    "All Workspaces",
+    "Platform Settings",
+    "Platform Audit Logs",
+]
+
+ALL_PAGES = OWNER_ONLY_PAGES + WORKSPACE_PAGES
+
+ROLES = [
+    "Platform Owner",
+    "Workspace Owner",
+    "Workspace Admin",
+    "Project Manager",
+    "Translator",
+    "Reviewer",
+    "Client Viewer",
+    "Billing Admin",
+]
+
+ROLE_ACCESS = {
+    "Platform Owner": OWNER_ONLY_PAGES + WORKSPACE_PAGES,
+    "Workspace Owner": WORKSPACE_PAGES,
+    "Workspace Admin": [p for p in WORKSPACE_PAGES if p not in {"Billing"}],
+    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Scorecards", "Memory & Rules", "Account"],
+    "Translator": ["Dashboard", "Jobs", "ErrorSweep Pro", "Human Review", "Memory & Rules", "Account"],
+    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Human Review", "Scorecards", "Memory & Rules", "Account"],
+    "Client Viewer": ["Dashboard", "Jobs", "Scorecards", "Account"],
+    "Billing Admin": ["Dashboard", "Billing", "Account"],
+}
 
 SUPPORTED_LANGUAGES = [
     "French", "Spanish", "German", "Italian", "Portuguese", "Arabic", "Chinese",
@@ -47,55 +100,16 @@ DOMAINS = [
     "Subtitles", "Gaming", "Finance", "General",
 ]
 
-PAGES = [
-    "Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review",
-    "Scorecards", "Memory & Rules", "Team & Roles", "Billing", "Account", "Admin", "Platform Owner Console",
-]
-
-PLATFORM_ROLES = ["Platform Owner"]
-WORKSPACE_ROLES = ["Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin"]
-ROLES = PLATFORM_ROLES + WORKSPACE_ROLES
-
-PAGE_ACCESS = {
-    "Dashboard": set(ROLES),
-    "Projects": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"},
-    "Jobs": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer"},
-    "ErrorSweep QA": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
-    "ErrorSweep Pro": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"},
-    "Human Review": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer"},
-    "Scorecards": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
-    "Memory & Rules": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
-    "Team & Roles": {"Platform Owner", "Workspace Owner", "Workspace Admin"},
-    "Billing": {"Platform Owner", "Workspace Owner", "Billing Admin"},
-    "Account": set(ROLES),
-    "Admin": {"Workspace Owner", "Workspace Admin"},
-    "Platform Owner Console": {"Platform Owner"},
-}
-
-def is_platform_owner() -> bool:
-    return st.session_state.get("account_type") == "platform_owner" or st.session_state.get("role") == "Platform Owner"
-
-def available_pages() -> List[str]:
-    role = st.session_state.get("role", "Client Viewer")
-    pages = [p for p in PAGES if role in PAGE_ACCESS.get(p, set())]
-    return pages or ["Dashboard", "Account"]
-
-def can_access(page: str) -> bool:
-    return st.session_state.get("role", "Client Viewer") in PAGE_ACCESS.get(page, set())
-
 PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%[sd]|\$\w+|<[^>]+>)")
 NUMBER_RE = re.compile(r"\d+(?:[.,:]\d+)*")
-EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]+", flags=re.UNICODE)
-
 
 # ==========================================================
-# Visual system
+# Styling
 # ==========================================================
 
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
-
 :root{
   --bg:#070913;
   --panel:#101424;
@@ -109,226 +123,123 @@ CSS = """
   --red:#ff4d6d;
   --yellow:#fbbf24;
 }
-
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+html, body, [class*="css"] { font-family:'DM Sans', sans-serif; }
 .stApp {
   background:
-    radial-gradient(circle at 12% 18%, rgba(0,231,133,.13), transparent 28%),
-    radial-gradient(circle at 88% 10%, rgba(53,189,247,.12), transparent 30%),
-    radial-gradient(circle at 52% 100%, rgba(139,92,246,.11), transparent 45%),
+    radial-gradient(circle at 10% 16%, rgba(0,231,133,.12), transparent 30%),
+    radial-gradient(circle at 90% 10%, rgba(53,189,247,.11), transparent 32%),
+    radial-gradient(circle at 52% 100%, rgba(139,92,246,.12), transparent 45%),
     var(--bg);
-  color: var(--text);
+  color:var(--text);
 }
 #MainMenu, footer, header, [data-testid="stToolbar"], [data-testid="stDecoration"],
 [data-testid="stDeployButton"], .stAppDeployButton, [data-testid="stStatusWidget"] {
-  visibility: hidden !important;
-  display: none !important;
+  visibility:hidden!important; display:none!important;
 }
-section[data-testid="stSidebar"] { display:none !important; }
-.block-container { padding-top: 28px !important; max-width: 1480px !important; }
-
-.es-shell { max-width: 1480px; margin: 0 auto; }
-.es-topbar {
-  background: rgba(16,20,36,.78);
-  border: 1px solid rgba(125,145,255,.20);
-  border-radius: 22px;
-  padding: 18px 22px;
-  margin-bottom: 16px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.22);
-}
-.es-brand-row { display:flex; align-items:center; justify-content:space-between; gap: 18px; flex-wrap:wrap; }
-.es-brand { font-size: 21px; font-weight: 900; color:#fff; letter-spacing:-.3px; }
-.es-brand small { display:block; color:var(--muted); font-size:12px; font-weight:500; margin-top:4px; }
-.es-pill {
-  display:inline-block;
-  padding: 5px 11px;
-  border-radius: 999px;
-  color: #9fffd1;
-  background: rgba(0,231,133,.10);
-  border: 1px solid rgba(0,231,133,.28);
-  font-family:'Space Mono', monospace;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .4px;
-  text-transform: uppercase;
+section[data-testid="stSidebar"] { display:none!important; }
+.block-container { padding-top:28px!important; max-width:1480px!important; }
+.es-card {
+  background:rgba(16,20,36,.78);
+  border:1px solid rgba(125,145,255,.20);
+  border-radius:22px;
+  padding:20px 22px;
+  box-shadow:0 20px 60px rgba(0,0,0,.22);
 }
 .es-hero {
-  padding: 34px;
-  border: 1px solid rgba(53,189,247,.22);
-  border-radius: 26px;
   background:
-    linear-gradient(135deg, rgba(0,231,133,.12), rgba(53,189,247,.08) 42%, rgba(139,92,246,.18)),
-    rgba(16,20,36,.82);
-  box-shadow: 0 30px 90px rgba(0,0,0,.30);
-  margin: 18px 0 24px 0;
+    linear-gradient(135deg, rgba(0,231,133,.14), rgba(53,189,247,.08) 45%, rgba(139,92,246,.18)),
+    rgba(16,20,36,.80);
+  border:1px solid rgba(53,189,247,.28);
+  border-radius:24px;
+  padding:32px;
+  margin:18px 0 22px 0;
 }
-.es-kicker {
-  display:inline-block;
-  color: var(--green);
-  background: rgba(0,231,133,.10);
-  border: 1px solid rgba(0,231,133,.28);
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 11px;
-  font-family:'Space Mono', monospace;
-  font-weight: 700;
-  letter-spacing: .6px;
-  text-transform: uppercase;
+.es-eyebrow {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:5px 11px; border-radius:999px;
+  color:#9fffd1; background:rgba(0,231,133,.10);
+  border:1px solid rgba(0,231,133,.25);
+  font-family:'Space Mono', monospace; font-size:12px; font-weight:700;
+  text-transform:uppercase;
 }
-.es-title {
-  font-size: 38px;
-  line-height: 1.05;
-  font-weight: 900;
-  margin: 18px 0 8px 0;
-  background: linear-gradient(90deg, #fff, #bfffe1 35%, #9bdfff 70%, #d5c8ff);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+.es-title {font-size:36px; line-height:1.05; font-weight:900; letter-spacing:-.7px; margin:16px 0 8px 0;}
+.es-sub {color:#c5d0f0; font-size:15px; max-width:860px;}
+.es-brand-row {display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;}
+.es-brand {font-size:22px; font-weight:900;}
+.es-brand small {display:block; color:var(--muted); font-size:12px; font-weight:500; margin-top:4px;}
+.es-pill {display:inline-block; padding:5px 11px; border-radius:999px; color:#9fffd1; background:rgba(0,231,133,.10); border:1px solid rgba(0,231,133,.25); font-size:12px; font-weight:800;}
+.es-pill-yellow {display:inline-block; padding:5px 11px; border-radius:999px; color:#fde68a; background:rgba(251,191,36,.10); border:1px solid rgba(251,191,36,.25); font-size:12px; font-weight:800;}
+.es-grid-4 {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin:12px 0 18px 0;}
+.es-grid-3 {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin:12px 0 18px 0;}
+.es-metric {background:rgba(16,20,36,.76); border:1px solid rgba(125,145,255,.18); border-radius:18px; padding:17px; min-height:104px;}
+.es-label {font-family:'Space Mono', monospace; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#aab4df;}
+.es-value {font-size:28px; font-weight:900; margin-top:8px; color:#fff;}
+.es-help {color:#9aa6c7; font-size:13px; margin-top:5px;}
+.es-section-title {font-size:24px; font-weight:900; margin:22px 0 12px 0;}
+.es-note {background:rgba(31,41,85,.65); color:#b7c7ff; padding:13px 16px; border-radius:14px; border:1px solid rgba(125,145,255,.16); margin:10px 0;}
+.es-danger {background:rgba(255,77,109,.12); border:1px solid rgba(255,77,109,.25); color:#ffd1dc; padding:13px 16px; border-radius:14px; margin:10px 0;}
+.es-ok {background:rgba(0,231,133,.10); border:1px solid rgba(0,231,133,.25); color:#bafbd7; padding:13px 16px; border-radius:14px; margin:10px 0;}
+button[kind="primary"], .stButton > button, .stDownloadButton > button {
+  border-radius:14px!important;
+  border:1px solid rgba(0,231,133,.25)!important;
+  background:linear-gradient(90deg,#00cc6a,#0ea5e9)!important;
+  color:white!important; font-weight:800!important;
 }
-.es-sub { color: #c4cbdf; font-size: 15px; max-width: 980px; }
-.es-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:14px; margin:14px 0 22px; }
-.es-grid-3 { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; margin:14px 0 22px; }
-.es-card {
-  background: rgba(16,20,36,.80);
-  border: 1px solid rgba(125,145,255,.20);
-  border-radius: 17px;
-  padding: 18px;
-  box-shadow: 0 15px 35px rgba(0,0,0,.18);
+.stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"], .stNumberInput input {
+  border-radius:12px!important;
 }
-.es-card h3,.es-card h4 { margin:0 0 8px 0; color:#f8fbff; }
-.es-card p { color:var(--muted); margin:0; font-size:13px; }
-.es-metric-label { font-family:'Space Mono', monospace; font-size:11px; color:#a7b4d8; letter-spacing:.8px; text-transform:uppercase; }
-.es-metric-value { font-size:30px; font-weight:900; color:#fff; margin: 6px 0; }
-.es-badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:800; border:1px solid rgba(125,145,255,.25); color:#dfe7ff; background:rgba(125,145,255,.10); }
-.es-badge-green { color:#9fffd1; border-color:rgba(0,231,133,.35); background:rgba(0,231,133,.12); }
-.es-badge-yellow { color:#ffe8a3; border-color:rgba(251,191,36,.35); background:rgba(251,191,36,.12); }
-.es-badge-red { color:#ffc2cd; border-color:rgba(255,77,109,.35); background:rgba(255,77,109,.12); }
-.es-badge-cyan { color:#b9ebff; border-color:rgba(53,189,247,.35); background:rgba(53,189,247,.12); }
-.es-note { background:rgba(33,44,84,.72); border:1px solid rgba(125,145,255,.20); border-radius:14px; padding:14px 16px; color:#c7d3ff; }
-.es-cat-layout { display:grid; grid-template-columns: 0.95fr 1.15fr 0.85fr; gap:16px; align-items:start; }
-.es-segment-list { max-height: 620px; overflow:auto; padding-right:4px; }
-.es-seg-item { padding:12px; border:1px solid rgba(125,145,255,.16); border-radius:13px; margin-bottom:10px; background:rgba(16,20,36,.74); }
-.es-seg-source { color:#f7fbff; font-size:13px; line-height:1.35; margin-top:8px; }
-.es-assist-box { border:1px solid rgba(125,145,255,.20); border-radius:14px; padding:13px; background:rgba(16,20,36,.74); margin-bottom:12px; }
-.es-footer-note { color:#7d8bad; font-size:12px; margin-top:22px; }
-.stButton > button, .stDownloadButton > button {
-  border-radius: 13px !important;
-  border: 1px solid rgba(0,231,133,.25) !important;
-  background: linear-gradient(90deg, #00c876, #159fe8) !important;
-  color: white !important;
-  font-weight: 800 !important;
-}
-.stButton > button:hover, .stDownloadButton > button:hover { transform:translateY(-1px); box-shadow:0 16px 35px rgba(0,231,133,.15); }
-div[data-testid="stExpander"] { border:1px solid rgba(125,145,255,.20)!important; background:rgba(16,20,36,.62)!important; border-radius:14px!important; }
-[data-testid="stFileUploader"] { background:rgba(16,20,36,.72); border:1px solid rgba(125,145,255,.18); border-radius:14px; padding:12px; }
-@media (max-width: 1000px) {
-  .es-grid, .es-grid-3, .es-cat-layout { grid-template-columns: 1fr; }
-  .es-title { font-size: 28px; }
-}
+[data-testid="stFileUploader"] {background:rgba(16,20,36,.72); border:1px solid rgba(125,145,255,.16); border-radius:16px; padding:8px 12px;}
+@media (max-width: 900px){ .es-grid-4,.es-grid-3{grid-template-columns:1fr;} .es-title{font-size:30px;} }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-
 # ==========================================================
-# State
-# ==========================================================
-
-def init_state() -> None:
-    defaults = {
-        "authenticated": False,
-        "username": "",
-        "role": "Client Viewer",
-        "account_type": "workspace_user",
-        "organization_name": "Demo Workspace",
-        "active_page": "Dashboard",
-        "projects": [],
-        "jobs": [],
-        "tm_entries": [],
-        "glossary": [],
-        "dnt_terms": [],
-        "review_segments": [],
-        "team": [],
-        "workspaces": [],
-        "admin_flags": {"demo_mode": True, "billing_enabled": False, "allow_demo_users": True},
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-    if not st.session_state.team:
-        st.session_state.team = [
-            {"Name": "Workspace Owner", "Email": "owner@demo-workspace.local", "Role": "Workspace Owner", "Status": "Active"},
-            {"Name": "Reviewer Demo", "Email": "reviewer@demo-workspace.local", "Role": "Reviewer", "Status": "Invited"},
-            {"Name": "Translator Demo", "Email": "translator@demo-workspace.local", "Role": "Translator", "Status": "Invited"},
-        ]
-    if not st.session_state.workspaces:
-        st.session_state.workspaces = [
-            {"Workspace": "Demo Workspace", "Owner": "owner@demo-workspace.local", "Plan": "Demo", "Status": "Active", "Users": len(st.session_state.team)},
-        ]
-
-init_state()
-
-
-# ==========================================================
-# Secrets / API
-# ==========================================================
-
-def secret(name: str, default: str = "") -> str:
-    env_val = os.environ.get(name)
-    if env_val:
-        return env_val
-    try:
-        val = st.secrets.get(name)
-        if val is not None:
-            return str(val)
-    except Exception:
-        pass
-    return default
-
-
-def allow_demo_login() -> bool:
-    return secret("ERRORSWEEP_ALLOW_DEMO_LOGIN", "true").lower().strip() in {"1", "true", "yes", "on"}
-
-
-def get_openai_client():
-    key = secret("OPENAI_API_KEY")
-    if not key or OpenAI is None:
-        return None
-    try:
-        return OpenAI(api_key=key, timeout=90, max_retries=1)
-    except Exception:
-        return None
-
-
-def model_name() -> str:
-    return secret("OPENAI_MODEL", DEFAULT_MODEL)
-
-
-# ==========================================================
-# General helpers
+# Small helpers
 # ==========================================================
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def today_label() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+def secret(name: str, default: str = "") -> str:
+    if os.environ.get(name):
+        return os.environ.get(name, default)
+    try:
+        value = st.secrets.get(name, default)
+        return value if value is not None else default
+    except Exception:
+        return default
+
+
+def allow_demo_login() -> bool:
+    return str(secret("ERRORSWEEP_ALLOW_DEMO_LOGIN", "true")).lower() in {"1", "true", "yes", "on"}
 
 
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).replace("\u00A0", " ").replace("\u200B", "").strip()
+    return str(value).replace("\u00A0", " ").strip()
+
+
+def safe_df(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
+    return safe_df(rows).to_csv(index=False).encode("utf-8-sig")
 
 
 def text_hash(text: str) -> str:
-    return hashlib.sha256(clean_text(text).lower().encode("utf-8")).hexdigest()[:16]
-
-
-def truncate(text: Any, n: int = 220) -> str:
-    t = clean_text(text)
-    return t if len(t) <= n else t[: n - 1] + "…"
+    return hashlib.sha256((text or "").strip().lower().encode("utf-8")).hexdigest()[:16]
 
 
 def extract_placeholders(text: str) -> List[str]:
@@ -339,17 +250,313 @@ def extract_numbers(text: str) -> List[str]:
     return NUMBER_RE.findall(text or "")
 
 
-def parse_json_array(text: str) -> List[Dict[str, Any]]:
+def is_owner() -> bool:
+    return st.session_state.get("role") == "Platform Owner"
+
+
+def has_page_access(page: str) -> bool:
+    return page in ROLE_ACCESS.get(st.session_state.get("role", "Client Viewer"), [])
+
+
+def format_money(amount: float, currency: str = "USD") -> str:
+    symbol = {"USD": "$", "EUR": "€", "INR": "₹", "GBP": "£"}.get(currency, currency + " ")
+    return f"{symbol}{amount:,.2f}"
+
+
+def htmlesc(value: Any) -> str:
+    return escape(str(value))
+
+# ==========================================================
+# Session persistence
+# ==========================================================
+
+def session_secret() -> str:
+    return (
+        secret("ERRORSWEEP_SESSION_SECRET", "")
+        or secret("ERRORSWEEP_OWNER_PASSWORD", "")
+        or secret("OPENAI_API_KEY", "")
+        or "errorsweep-development-session-secret"
+    )
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    padding = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode((text + padding).encode("utf-8"))
+
+
+def make_session_token(username: str, role: str, workspace_id: str) -> str:
+    payload = {
+        "u": username,
+        "r": role,
+        "w": workspace_id,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + SESSION_MAX_AGE_SECONDS,
+    }
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    sig = hmac.new(session_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def verify_session_token(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        body, sig = token.split(".", 1)
+        expected = hmac.new(session_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_unb64(body).decode("utf-8"))
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def set_url_session() -> None:
+    try:
+        st.query_params[SESSION_QUERY_KEY] = make_session_token(
+            st.session_state.username,
+            st.session_state.role,
+            st.session_state.workspace_id,
+        )
+    except Exception:
+        pass
+
+
+def clear_url_session() -> None:
+    try:
+        if SESSION_QUERY_KEY in st.query_params:
+            del st.query_params[SESSION_QUERY_KEY]
+    except Exception:
+        pass
+
+# ==========================================================
+# Initial state
+# ==========================================================
+
+def init_state() -> None:
+    defaults = {
+        "authenticated": False,
+        "username": "",
+        "role": "Client Viewer",
+        "workspace_id": "ws_demo",
+        "workspace_name": "Demo Workspace",
+        "active_page": "Dashboard",
+        "projects": [],
+        "jobs": [],
+        "review_segments": [],
+        "tm_entries": [],
+        "glossary": [],
+        "dnt_terms": [],
+        "team": [],
+        "platform_payments": [],
+        "platform_workspaces": [],
+        "platform_users": [],
+        "platform_audit_logs": [],
+        "feature_flags": {},
+        "owner_notes": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+    if not st.session_state.platform_workspaces:
+        st.session_state.platform_workspaces = [
+            {"Workspace ID": "ws_demo", "Workspace": "Demo Workspace", "Owner Email": "admin@client.local", "Plan": "Trial", "Status": "Active", "Users": 4, "Jobs": 0, "Created": today_label()},
+            {"Workspace ID": "ws_acme", "Workspace": "Acme Localization", "Owner Email": "pm@acme.local", "Plan": "Pro", "Status": "Active", "Users": 7, "Jobs": 18, "Created": (datetime.now() - timedelta(days=16)).strftime("%Y-%m-%d")},
+        ]
+    if not st.session_state.platform_users:
+        st.session_state.platform_users = [
+            {"User ID": "u_owner", "Email": "owner@errorsweep.local", "Name": "Platform Owner", "Workspace": "Platform", "Role": "Platform Owner", "Plan": "Internal", "Status": "Active", "Last Login": now_iso(), "Allowed Pages": ", ".join(OWNER_ONLY_PAGES + WORKSPACE_PAGES)},
+            {"User ID": "u_admin", "Email": "admin@client.local", "Name": "Workspace Admin", "Workspace": "Demo Workspace", "Role": "Workspace Admin", "Plan": "Trial", "Status": "Active", "Last Login": now_iso(), "Allowed Pages": ", ".join(ROLE_ACCESS["Workspace Admin"])},
+            {"User ID": "u_reviewer", "Email": "reviewer@client.local", "Name": "Reviewer", "Workspace": "Demo Workspace", "Role": "Reviewer", "Plan": "Trial", "Status": "Active", "Last Login": "", "Allowed Pages": ", ".join(ROLE_ACCESS["Reviewer"])},
+            {"User ID": "u_client", "Email": "client@client.local", "Name": "Client Viewer", "Workspace": "Demo Workspace", "Role": "Client Viewer", "Plan": "Trial", "Status": "Active", "Last Login": "", "Allowed Pages": ", ".join(ROLE_ACCESS["Client Viewer"])},
+        ]
+    if not st.session_state.platform_payments:
+        st.session_state.platform_payments = [
+            {"Payment ID": "pay_demo_001", "Date": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"), "Workspace": "Acme Localization", "User Email": "pm@acme.local", "Plan": "Pro", "Amount": 29.00, "Currency": "USD", "Gateway": "Manual", "Status": "Paid", "Access Granted": "Pro"},
+            {"Payment ID": "pay_demo_002", "Date": (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d"), "Workspace": "Beta Agency", "User Email": "owner@beta.local", "Plan": "Agency", "Amount": 99.00, "Currency": "USD", "Gateway": "Manual", "Status": "Pending", "Access Granted": "Pending"},
+        ]
+    if not st.session_state.feature_flags:
+        st.session_state.feature_flags = {
+            "Main API Translation": True,
+            "Human Review": True,
+            "Scorecards": True,
+            "Self-hosted engines": False,
+            "Billing collection": False,
+            "Public registration": False,
+        }
+    if not st.session_state.team:
+        st.session_state.team = [
+            {"Name": "Workspace Admin", "Email": "admin@client.local", "Role": "Workspace Admin", "Status": "Active"},
+            {"Name": "Reviewer", "Email": "reviewer@client.local", "Role": "Reviewer", "Status": "Invited"},
+        ]
+
+
+def log_audit(action: str, detail: str) -> None:
+    st.session_state.platform_audit_logs.insert(0, {
+        "Time": now_iso(),
+        "Actor": st.session_state.get("username", "system"),
+        "Role": st.session_state.get("role", "system"),
+        "Action": action,
+        "Detail": detail,
+    })
+
+
+def restore_session_from_url() -> None:
+    if st.session_state.get("authenticated"):
+        return
+    try:
+        token = st.query_params.get(SESSION_QUERY_KEY, "")
+    except Exception:
+        token = ""
+    if isinstance(token, list):
+        token = token[0] if token else ""
+    if not token:
+        return
+    payload = verify_session_token(str(token))
+    if not payload:
+        clear_url_session()
+        return
+    sign_in(payload.get("u", "user@errorsweep.local"), payload.get("r", "Client Viewer"), payload.get("w", "ws_demo"), remember=False)
+
+
+def sign_in(username: str, role: str, workspace_id: str = "ws_demo", remember: bool = True) -> None:
+    st.session_state.authenticated = True
+    st.session_state.username = username
+    st.session_state.role = role if role in ROLES else "Client Viewer"
+    st.session_state.workspace_id = workspace_id
+    ws = next((w for w in st.session_state.platform_workspaces if w.get("Workspace ID") == workspace_id), None)
+    st.session_state.workspace_name = ws.get("Workspace", "Demo Workspace") if ws else "Demo Workspace"
+    st.session_state.active_page = "Owner Console" if role == "Platform Owner" else "Dashboard"
+    if remember:
+        set_url_session()
+    log_audit("Sign in", f"{username} signed in as {role}")
+
+
+def logout() -> None:
+    log_audit("Logout", f"{st.session_state.get('username', '')} logged out")
+    for key in ["authenticated", "username", "role", "workspace_id", "workspace_name", "active_page"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    clear_url_session()
+    st.rerun()
+
+# ==========================================================
+# File extraction
+# ==========================================================
+
+def read_uploaded_text(file) -> str:
+    data = file.getvalue()
+    for enc in ["utf-8-sig", "utf-8", "cp1252", "latin-1"]:
+        try:
+            return data.decode(enc)
+        except Exception:
+            pass
+    return data.decode("utf-8", errors="replace")
+
+
+def detect_cols(headers: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    lows = {str(h).strip().lower(): h for h in headers}
+    src = None
+    tgt = None
+    for k, v in lows.items():
+        if src is None and any(x in k for x in ["source", "english", "src"]):
+            src = v
+        if tgt is None and any(x in k for x in ["target", "translation", "translated", "original translation"]):
+            tgt = v
+    return src, tgt
+
+
+def extract_segments_from_file(file, assume_source_only: bool = False) -> List[Dict[str, Any]]:
+    name = file.name.lower()
+    segments: List[Dict[str, Any]] = []
+    if name.endswith(".xlsx"):
+        wb = load_workbook(io.BytesIO(file.getvalue()), data_only=True)
+        for ws in wb.worksheets:
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                continue
+            headers = [clean_text(x) for x in rows[0]]
+            src_col, tgt_col = detect_cols(headers)
+            if src_col and src_col in headers:
+                si = headers.index(src_col)
+                ti = headers.index(tgt_col) if tgt_col and tgt_col in headers else None
+                for ridx, row in enumerate(rows[1:], start=2):
+                    src = clean_text(row[si] if si < len(row) else "")
+                    tgt = clean_text(row[ti] if ti is not None and ti < len(row) else "")
+                    if src or tgt:
+                        segments.append({"Segment ID": len(segments)+1, "Location": f"{ws.title}!R{ridx}", "Source": src or tgt, "Target": "" if assume_source_only else tgt, "Status": "Untranslated" if not tgt else "Existing", "Match": ""})
+            else:
+                for ridx, row in enumerate(rows, start=1):
+                    vals = [clean_text(x) for x in row if clean_text(x)]
+                    if vals:
+                        segments.append({"Segment ID": len(segments)+1, "Location": f"{ws.title}!R{ridx}", "Source": vals[0], "Target": "", "Status": "Untranslated", "Match": ""})
+    elif name.endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(file.getvalue()))
+        src_col, tgt_col = detect_cols(list(df.columns))
+        if not src_col:
+            src_col = df.columns[0]
+        for i, row in df.iterrows():
+            src = clean_text(row.get(src_col, ""))
+            tgt = clean_text(row.get(tgt_col, "")) if tgt_col else ""
+            if src or tgt:
+                segments.append({"Segment ID": len(segments)+1, "Location": f"Row {i+2}", "Source": src or tgt, "Target": "" if assume_source_only else tgt, "Status": "Untranslated" if not tgt else "Existing", "Match": ""})
+    elif name.endswith(".docx"):
+        doc = Document(io.BytesIO(file.getvalue()))
+        for tidx, table in enumerate(doc.tables, start=1):
+            if not table.rows:
+                continue
+            headers = [clean_text(c.text) for c in table.rows[0].cells]
+            src_col, tgt_col = detect_cols(headers)
+            if src_col:
+                si = headers.index(src_col)
+                ti = headers.index(tgt_col) if tgt_col and tgt_col in headers else None
+                for ridx, row in enumerate(table.rows[1:], start=2):
+                    src = clean_text(row.cells[si].text if si < len(row.cells) else "")
+                    tgt = clean_text(row.cells[ti].text if ti is not None and ti < len(row.cells) else "")
+                    if src or tgt:
+                        segments.append({"Segment ID": len(segments)+1, "Location": f"Table {tidx}, Row {ridx}", "Source": src or tgt, "Target": "" if assume_source_only else tgt, "Status": "Untranslated" if not tgt else "Existing", "Match": ""})
+        if not segments:
+            for i, p in enumerate(doc.paragraphs, start=1):
+                txt = clean_text(p.text)
+                if txt:
+                    segments.append({"Segment ID": len(segments)+1, "Location": f"Paragraph {i}", "Source": txt, "Target": "", "Status": "Untranslated", "Match": ""})
+    else:
+        text = read_uploaded_text(file)
+        nonempty = [clean_text(x) for x in text.splitlines() if clean_text(x)]
+        for i, line in enumerate(nonempty, start=1):
+            if line.lower() in {"source", "target", "translation"}:
+                continue
+            segments.append({"Segment ID": len(segments)+1, "Location": f"Line {i}", "Source": line, "Target": "", "Status": "Untranslated", "Match": ""})
+    return segments
+
+# ==========================================================
+# API functions
+# ==========================================================
+
+def openai_client():
+    if OpenAI is None:
+        return None
+    key = secret("OPENAI_API_KEY", "")
+    if not key:
+        return None
+    return OpenAI(api_key=key)
+
+
+def parse_json_list(text: str) -> List[Dict[str, Any]]:
     if not text:
         return []
     t = text.strip()
-    t = re.sub(r"^```json\s*", "", t, flags=re.I)
-    t = re.sub(r"^```\s*", "", t)
-    t = re.sub(r"\s*```$", "", t)
-    start = t.find("[")
-    end = t.rfind("]")
+    t = re.sub(r"^```json\s*", "", t, flags=re.I).strip()
+    t = re.sub(r"^```\s*", "", t).strip()
+    t = re.sub(r"\s*```$", "", t).strip()
+    start, end = t.find("["), t.rfind("]")
     if start >= 0 and end > start:
-        t = t[start:end + 1]
+        t = t[start:end+1]
     try:
         data = json.loads(t)
         return data if isinstance(data, list) else []
@@ -357,1306 +564,657 @@ def parse_json_array(text: str) -> List[Dict[str, Any]]:
         return []
 
 
-def preserve_protected(source: str, translation: str) -> str:
-    output = translation or ""
-    for token in extract_placeholders(source):
-        if token and token not in output:
-            output = (output.rstrip() + " " + token).strip()
-    for emoji in EMOJI_RE.findall(source or ""):
-        if emoji and emoji not in output:
-            output = f"{emoji} {output}".strip()
-    leading = re.match(r"^(\s*[•∙·\-\*]\s*)", source or "")
-    if leading:
-        marker = leading.group(1)
-        if marker.strip() and not output.lstrip().startswith(marker.strip()):
-            output = marker + output.lstrip()
-    s = clean_text(source)
-    t = clean_text(output)
-    if s.startswith("[") and s.endswith("]") and t and not (t.startswith("[") and t.endswith("]")):
-        output = f"[{t}]"
-    return output.strip()
+def api_translate_segments(segments: List[Dict[str, Any]], target_language: str, domain: str, rules_text: str = "") -> List[Dict[str, Any]]:
+    client = openai_client()
+    if client is None:
+        raise RuntimeError("Main API key is not configured.")
+    rows = []
+    batch_size = 20
+    for start in range(0, len(segments), batch_size):
+        batch = segments[start:start+batch_size]
+        payload = "\n".join([f"[{x['Segment ID']}] {x['Source']}" for x in batch])
+        prompt = f"""
+Translate these localization segments into {target_language}.
+Domain: {domain}
+Rules: {rules_text or 'None'}
+Preserve placeholders like {{{{name}}}}, numbers, tags, URLs, emojis, and bracket structure.
+Return ONLY JSON array: [{{"segment_id": 1, "translation": "...", "status": "MT", "match": "MT"}}]
+Segments:
+{payload}
+"""
+        resp = client.responses.create(
+            model=secret("OPENAI_MODEL", DEFAULT_MODEL),
+            instructions="You are a professional localization translator. Return valid JSON only.",
+            input=prompt,
+            max_output_tokens=3500,
+        )
+        data = parse_json_list(resp.output_text)
+        by_id = {int(item.get("segment_id", -1)): item for item in data if str(item.get("segment_id", "")).isdigit()}
+        for seg in batch:
+            item = by_id.get(int(seg["Segment ID"]), {})
+            rows.append({
+                **seg,
+                "Target": item.get("translation", ""),
+                "Status": item.get("status", "MT") or "MT",
+                "Match": item.get("match", "MT") or "MT",
+            })
+    return rows
 
 
-def is_bad_translation(source: str, translation: str, target_language: str = "") -> bool:
-    src = clean_text(source)
-    tgt = clean_text(translation)
-    if not src:
-        return False
-    if not tgt:
-        return True
-    tokenless = PLACEHOLDER_RE.sub("", tgt)
-    tokenless = NUMBER_RE.sub("", tokenless)
-    tokenless = EMOJI_RE.sub("", tokenless)
-    tokenless = re.sub(r"[\s\[\]{}():;,.!?\"'`~\-–—_/\\|•∙·*]+", "", tokenless)
-    if tokenless == "" and (PLACEHOLDER_RE.search(src) or len(src) > 4):
-        return True
-    if src.lower() == tgt.lower() and target_language.lower() not in {"english", "en"}:
-        return True
-    return False
+def run_simple_qa(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    for seg in segments:
+        src = seg.get("Source", "")
+        tgt = seg.get("Target", "")
+        if not tgt:
+            issues.append({"Segment ID": seg["Segment ID"], "Location": seg["Location"], "Issue": "Blank target", "Severity": "Major", "Suggestion": "Translate or review this segment."})
+            continue
+        for ph in extract_placeholders(src):
+            if ph not in tgt:
+                issues.append({"Segment ID": seg["Segment ID"], "Location": seg["Location"], "Issue": "Missing placeholder", "Severity": "Critical", "Suggestion": f"Preserve {ph}."})
+        for num in extract_numbers(src):
+            if num not in tgt:
+                issues.append({"Segment ID": seg["Segment ID"], "Location": seg["Location"], "Issue": "Missing number", "Severity": "Major", "Suggestion": f"Check number {num}."})
+        if src.strip().lower() == tgt.strip().lower() and len(src.strip()) > 3:
+            issues.append({"Segment ID": seg["Segment ID"], "Location": seg["Location"], "Issue": "Source copied", "Severity": "Review", "Suggestion": "Confirm translation is not source copy."})
+    return issues
 
 
-def infer_domain_from_texts(texts: List[str]) -> str:
-    combined = " ".join(texts[:80]).lower()
-    if any(k in combined for k in ["dashboard", "settings", "password", "upload", "button", "screen", "login", "menu"]):
+def domain_auto_detect(segments: List[Dict[str, Any]]) -> str:
+    sample = " ".join([x.get("Source", "") for x in segments[:20]]).lower()
+    if any(x in sample for x in ["dashboard", "settings", "password", "upload", "account"]):
         return "Software UI"
-    if any(k in combined for k in ["terms", "contract", "liability", "clause", "agreement"]):
-        return "Legal"
-    if any(k in combined for k in ["doctor", "patient", "dose", "medicine", "clinical"]):
-        return "Medical"
-    if any(k in combined for k in ["sale", "offer", "campaign", "brand", "audience"]):
-        return "Marketing"
-    if any(k in combined for k in ["lesson", "course", "student", "module", "quiz"]):
-        return "E-learning"
-    if any(k in combined for k in ["subtitle", "caption", "speaker", "srt"]):
-        return "Subtitles"
+    if any(x in sample for x in ["invoice", "payment", "bank", "amount"]):
+        return "Finance"
+    if any(x in sample for x in ["workout", "fitness", "calories"]):
+        return "General"
     return "General"
 
+# ==========================================================
+# Rendering helpers
+# ==========================================================
 
-def smart_gate(missing_count: int, total_count: int, threshold: float = 0.12) -> Tuple[str, str]:
-    total = max(total_count, 1)
-    rate = missing_count / total
-    if missing_count == 0:
-        return "pass", "Complete"
-    if rate <= threshold:
-        return "review", f"Human Review Required: {missing_count}/{total} unresolved segment(s)."
-    return "block", f"Blocked: {missing_count}/{total} unresolved segment(s)."
-
-
-def download_excel(df: pd.DataFrame, sheet_name: str = "Report") -> bytes:
-    bio = io.BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-    return bio.getvalue()
-
-
-def metric_cards(items: List[Tuple[str, Any, str]]) -> None:
-    if not items:
-        return
-    cols = st.columns(min(4, len(items)))
-    for idx, (label, value, caption) in enumerate(items):
-        with cols[idx % len(cols)]:
-            st.markdown(
-                f"""
-                <div class="es-card">
-                  <div class="es-metric-label">{escape(str(label))}</div>
-                  <div class="es-metric-value">{escape(str(value))}</div>
-                  <p>{escape(str(caption))}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-def page_header(kicker: str, title: str, subtitle: str) -> None:
+def page_header(label: str, title: str, subtitle: str) -> None:
     st.markdown(
         f"""
         <div class="es-hero">
-          <span class="es-kicker">{escape(kicker)}</span>
-          <div class="es-title">{escape(title)}</div>
-          <div class="es-sub">{escape(subtitle)}</div>
+          <span class="es-eyebrow">{htmlesc(label)}</span>
+          <div class="es-title">{htmlesc(title)}</div>
+          <div class="es-sub">{htmlesc(subtitle)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-# ==========================================================
-# File extraction
-# ==========================================================
-
-@dataclass
-class ExtractedFile:
-    kind: str
-    name: str
-    segments: List[Dict[str, Any]]
-    raw: Any = None
-    logs: Optional[List[str]] = None
+def metric_cards(items: List[Tuple[str, Any, str]], columns: int = 4) -> None:
+    klass = "es-grid-4" if columns == 4 else "es-grid-3"
+    html = [f'<div class="{klass}">']
+    for label, value, help_text in items:
+        html.append(f'<div class="es-metric"><div class="es-label">{htmlesc(label)}</div><div class="es-value">{htmlesc(value)}</div><div class="es-help">{htmlesc(help_text)}</div></div>')
+    html.append("</div>")
+    st.markdown("\n".join(html), unsafe_allow_html=True)
 
 
-def detect_columns(headers: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    source_terms = ["source text", "source", "src", "english", "source segment", "source string"]
-    target_terms = ["target", "translation", "translated text", "original translation", "target text", "reviewer", "final"]
-    source_col = None
-    target_col = None
-    for original in headers:
-        key = clean_text(original).lower()
-        if source_col is None and any(term == key or term in key for term in source_terms):
-            source_col = original
-        if target_col is None and any(term == key or term in key for term in target_terms):
-            target_col = original
-    return source_col, target_col
+def allowed_pages() -> List[str]:
+    role = st.session_state.get("role", "Client Viewer")
+    return ROLE_ACCESS.get(role, ROLE_ACCESS["Client Viewer"])
 
 
-def extract_from_xlsx(uploaded_file, mode: str = "review") -> ExtractedFile:
-    wb = load_workbook(uploaded_file)
-    segments: List[Dict[str, Any]] = []
-    logs: List[str] = []
-    locations: Dict[str, Any] = {}
-
-    for ws in wb.worksheets:
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            continue
-        source_idx = target_idx = None
-        header_row_index = 0
-        headers: List[str] = []
-        for i, row in enumerate(rows[:35]):
-            h = [clean_text(v) for v in row]
-            if not any(h):
-                continue
-            s_col, t_col = detect_columns(h)
-            if s_col or t_col or len([x for x in h if x]) >= 2:
-                headers = h
-                header_row_index = i
-                if s_col and s_col in h:
-                    source_idx = h.index(s_col)
-                else:
-                    source_idx = 0
-                if t_col and t_col in h:
-                    target_idx = h.index(t_col)
-                elif len(h) > 1:
-                    target_idx = 1
-                break
-        if source_idx is None:
-            continue
-
-        logs.append(f"{ws.title}: extracted source/target rows.")
-        for r_i, row in enumerate(rows[header_row_index + 1:], start=header_row_index + 2):
-            row_values = list(row)
-            source = clean_text(row_values[source_idx] if source_idx < len(row_values) else "")
-            target = clean_text(row_values[target_idx] if target_idx is not None and target_idx < len(row_values) else "")
-            if not source and not target:
-                continue
-            loc = f"{ws.title}!R{r_i}"
-            segments.append({
-                "id": len(segments) + 1,
-                "location": loc,
-                "sheet": ws.title,
-                "row": r_i,
-                "source": source,
-                "target": target,
-                "translation": target,
-                "target_col": target_idx,
-                "file_type": "xlsx",
-                "origin_status": "Existing" if target else "Untranslated",
-            })
-            if target_idx is not None:
-                locations[loc] = (ws.title, r_i, target_idx)
-
-    return ExtractedFile("xlsx", uploaded_file.name, segments, raw={"workbook": wb, "locations": locations}, logs=logs)
-
-
-def extract_from_csv(uploaded_file, mode: str = "review") -> ExtractedFile:
-    df = pd.read_csv(uploaded_file)
-    if df.empty:
-        return ExtractedFile("csv", uploaded_file.name, [], raw=df, logs=["CSV is empty."])
-    source_col, target_col = detect_columns(list(df.columns))
-    source_col = source_col or df.columns[0]
-    if target_col is None:
-        target_col = df.columns[1] if len(df.columns) > 1 else "Target"
-        if target_col not in df.columns:
-            df[target_col] = ""
-
-    segments: List[Dict[str, Any]] = []
-    for idx, row in df.iterrows():
-        source = clean_text(row.get(source_col, ""))
-        target = clean_text(row.get(target_col, ""))
-        if not source and not target:
-            continue
-        segments.append({
-            "id": len(segments) + 1,
-            "location": f"Row {idx + 2}",
-            "sheet": "CSV",
-            "row": int(idx),
-            "source": source,
-            "target": target,
-            "translation": target,
-            "target_col": target_col,
-            "file_type": "csv",
-            "origin_status": "Existing" if target else "Untranslated",
-        })
-    return ExtractedFile("csv", uploaded_file.name, segments, raw=df, logs=[f"CSV: {source_col} → {target_col}"])
-
-
-def extract_from_docx(uploaded_file, mode: str = "review") -> ExtractedFile:
-    doc = Document(uploaded_file)
-    segments: List[Dict[str, Any]] = []
-    locations: Dict[str, Any] = {}
-
-    for t_i, table in enumerate(doc.tables, start=1):
-        if not table.rows:
-            continue
-        headers = [clean_text(c.text) for c in table.rows[0].cells]
-        source_col, target_col = detect_columns(headers)
-        if not source_col and len(headers) < 2:
-            continue
-        source_idx = headers.index(source_col) if source_col and source_col in headers else 0
-        target_idx = headers.index(target_col) if target_col and target_col in headers else (1 if len(headers) > 1 else None)
-        for r_i, row in enumerate(table.rows[1:], start=2):
-            source = clean_text(row.cells[source_idx].text) if source_idx < len(row.cells) else ""
-            target = clean_text(row.cells[target_idx].text) if target_idx is not None and target_idx < len(row.cells) else ""
-            if not source and not target:
-                continue
-            loc = f"Table {t_i}, Row {r_i}"
-            segments.append({
-                "id": len(segments) + 1,
-                "location": loc,
-                "sheet": f"Table {t_i}",
-                "row": r_i,
-                "source": source,
-                "target": target,
-                "translation": target,
-                "file_type": "docx",
-                "origin_status": "Existing" if target else "Untranslated",
-            })
-            if target_idx is not None and target_idx < len(row.cells):
-                locations[loc] = row.cells[target_idx]
-    if segments:
-        return ExtractedFile("docx", uploaded_file.name, segments, raw={"doc": doc, "locations": locations}, logs=["DOCX: extracted table segments."])
-
-    for i, p in enumerate(doc.paragraphs, start=1):
-        text = clean_text(p.text)
-        if not text:
-            continue
-        loc = f"Paragraph {i}"
-        segments.append({
-            "id": len(segments) + 1,
-            "location": loc,
-            "sheet": "Document",
-            "row": i,
-            "source": text,
-            "target": "",
-            "translation": "",
-            "file_type": "docx",
-            "origin_status": "Untranslated",
-        })
-        locations[loc] = p
-    return ExtractedFile("docx", uploaded_file.name, segments, raw={"doc": doc, "locations": locations}, logs=["DOCX: paragraph fallback."])
-
-
-def extract_from_text(uploaded_file, mode: str = "review") -> ExtractedFile:
-    raw = uploaded_file.getvalue()
-    try:
-        text = raw.decode("utf-8-sig")
-    except Exception:
-        text = raw.decode("cp1252", errors="replace")
-    lines = text.splitlines()
-    segments: List[Dict[str, Any]] = []
-
-    # If the file is a Source/Target two-column plain text template, every non-empty
-    # source line is a source-only segment. This supports direct Human Review upload.
-    for i, line in enumerate(lines, start=1):
-        value = clean_text(line)
-        if not value:
-            continue
-        if i <= 2 and value.lower() in {"source", "target", "source text", "translation"}:
-            continue
-        segments.append({
-            "id": len(segments) + 1,
-            "location": f"Line {i}",
-            "sheet": "Text",
-            "row": i,
-            "source": value,
-            "target": "",
-            "translation": "",
-            "file_type": "text",
-            "origin_status": "Untranslated",
-        })
-    return ExtractedFile("text", uploaded_file.name, segments, raw=text, logs=["Text: extracted editable lines."])
-
-
-def extract_file(uploaded_file, mode: str = "review") -> ExtractedFile:
-    name = uploaded_file.name.lower()
-    if name.endswith(".xlsx"):
-        return extract_from_xlsx(uploaded_file, mode)
-    if name.endswith(".csv"):
-        return extract_from_csv(uploaded_file, mode)
-    if name.endswith(".docx"):
-        return extract_from_docx(uploaded_file, mode)
-    return extract_from_text(uploaded_file, mode)
-
-
-def build_review_export(segments: List[Dict[str, Any]]) -> bytes:
-    df = pd.DataFrame(segments)
-    columns = ["Location", "Status", "Match", "Source", "Target", "Comment", "Target Language"]
-    rows = []
-    for seg in segments:
-        rows.append({
-            "Location": seg.get("location", seg.get("Location", "")),
-            "Status": seg.get("Status", seg.get("status", "")),
-            "Match": seg.get("Match", seg.get("match", "")),
-            "Source": seg.get("Source", seg.get("source", "")),
-            "Target": seg.get("Target", seg.get("target", "")),
-            "Comment": seg.get("Comment", seg.get("comment", "")),
-            "Target Language": seg.get("Target Language", seg.get("target_language", "")),
-        })
-    return pd.DataFrame(rows, columns=columns).to_csv(index=False).encode("utf-8-sig")
-
-
-def build_output_file(extracted: ExtractedFile, translations_by_loc: Dict[str, str]) -> Tuple[bytes, str, str]:
-    name = extracted.name
-    if extracted.kind == "xlsx":
-        wb = extracted.raw["workbook"]
-        locations = extracted.raw["locations"]
-        for loc, target in translations_by_loc.items():
-            if loc in locations:
-                ws_name, row_num, col_idx = locations[loc]
-                wb[ws_name].cell(row=int(row_num), column=int(col_idx) + 1).value = target
-        bio = io.BytesIO()
-        wb.save(bio)
-        return bio.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", f"errorsweep_output_{name}"
-
-    if extracted.kind == "csv":
-        df = extracted.raw
-        col = "Reviewed Translation"
-        if col not in df.columns:
-            df[col] = ""
-        for seg in extracted.segments:
-            df.at[int(seg["row"]), col] = translations_by_loc.get(seg["location"], "")
-        return df.to_csv(index=False).encode("utf-8-sig"), "text/csv", re.sub(r"\.[^.]+$", ".csv", f"errorsweep_output_{name}")
-
-    if extracted.kind == "docx":
-        doc = extracted.raw["doc"]
-        locations = extracted.raw["locations"]
-        for loc, target in translations_by_loc.items():
-            obj = locations.get(loc)
-            if obj is None:
-                continue
-            if hasattr(obj, "paragraphs"):
-                for p in obj.paragraphs:
-                    for run in p.runs:
-                        run.text = ""
-                if obj.paragraphs:
-                    obj.paragraphs[0].add_run(target)
-                else:
-                    obj.add_paragraph(target)
-            else:
-                obj.add_run("\n" + target)
-        bio = io.BytesIO()
-        doc.save(bio)
-        return bio.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", f"errorsweep_output_{name}"
-
-    # Text output: source followed by reviewed target.
-    rows = []
-    for seg in extracted.segments:
-        rows.append(seg.get("source", ""))
-        target = translations_by_loc.get(seg["location"], "")
-        if target:
-            rows.append(target)
-    return "\n".join(rows).encode("utf-8-sig"), "text/plain", f"errorsweep_output_{name}"
-
-
-# ==========================================================
-# Rules, TM, QA, API
-# ==========================================================
-
-def parse_rules_zip(uploaded_zip) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], str]:
-    glossary: List[Dict[str, str]] = []
-    dnt_terms: List[Dict[str, str]] = []
-    combined = ""
-    if not uploaded_zip:
-        return glossary, dnt_terms, combined
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(uploaded_zip.getvalue()))
-    except Exception:
-        return glossary, dnt_terms, combined
-
-    for info in zf.infolist()[:50]:
-        if info.is_dir():
-            continue
-        name = info.filename
-        lower = name.lower()
-        data = zf.read(info)
-        text = ""
-        if lower.endswith((".txt", ".md", ".csv")):
-            text = data.decode("utf-8", errors="replace")
-        elif lower.endswith(".xlsx"):
-            try:
-                wb = load_workbook(io.BytesIO(data), data_only=True)
-                parts = []
-                for ws in wb.worksheets:
-                    for row in ws.iter_rows(values_only=True):
-                        vals = [clean_text(v) for v in row if clean_text(v)]
-                        if vals:
-                            parts.append(" | ".join(vals))
-                text = "\n".join(parts)
-            except Exception:
-                text = ""
-        combined += f"\n# {name}\n{text}\n"
-        if lower.endswith(".csv"):
-            try:
-                df = pd.read_csv(io.StringIO(text))
-                cols = {str(c).lower(): c for c in df.columns}
-                src_col = next((cols[c] for c in cols if "source" in c or c == "term"), None)
-                tgt_col = next((cols[c] for c in cols if "target" in c or "translation" in c), None)
-                dnt_col = next((cols[c] for c in cols if "dnt" in c or "do not" in c), None)
-                if src_col and tgt_col:
-                    for _, row in df.iterrows():
-                        s = clean_text(row.get(src_col, ""))
-                        t = clean_text(row.get(tgt_col, ""))
-                        if s and t:
-                            glossary.append({"Source Term": s, "Target Term": t, "Rule Source": name})
-                if dnt_col:
-                    for value in df[dnt_col].fillna("").tolist():
-                        term = clean_text(value)
-                        if term:
-                            dnt_terms.append({"Term": term, "Rule Source": name})
-            except Exception:
-                pass
-    return glossary, dnt_terms, combined[:6000]
-
-
-def best_tm_match(source: str) -> Tuple[str, str]:
-    if not source or not st.session_state.tm_entries:
-        return "No match", ""
-    src_norm = clean_text(source).lower()
-    exact = [t for t in st.session_state.tm_entries if clean_text(t.get("Source", "")).lower() == src_norm]
-    if exact:
-        # 101% = context/exact source match in this MVP.
-        return "101%", exact[-1].get("Target", "")
-    best_score = 0.0
-    best_target = ""
-    for item in st.session_state.tm_entries:
-        candidate = clean_text(item.get("Source", ""))
-        score = difflib.SequenceMatcher(None, src_norm, candidate.lower()).ratio()
-        if score > best_score:
-            best_score = score
-            best_target = item.get("Target", "")
-    if best_score >= 0.85:
-        return "100%", best_target
-    if best_score >= 0.55:
-        return f"{round(best_score * 100)}% fuzzy", best_target
-    return "No match", ""
-
-
-def status_for_segment(source: str, target: str, origin_status: str = "") -> str:
-    match, tm_target = best_tm_match(source)
-    if match in {"101%", "100%"}:
-        return match
-    if "fuzzy" in match:
-        return match
-    if target and origin_status == "MT":
-        return "MT"
-    if target:
-        return "Existing"
-    return "Untranslated"
-
-
-def deterministic_qa(segments: List[Dict[str, Any]], glossary: List[Dict[str, str]], dnt_terms: List[Dict[str, str]], target_language: str = "") -> List[Dict[str, Any]]:
-    rows = []
-    for seg in segments:
-        source = seg.get("source") or seg.get("Source", "")
-        target = seg.get("translation") or seg.get("target") or seg.get("Target", "")
-        loc = seg.get("location") or seg.get("Location", "")
-        if not target:
-            rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "Blank target", "Severity": "Major", "Suggestion": "Translate or send to Human Review.", "Reason": "Target is blank."})
-            continue
-        if clean_text(source).lower() == clean_text(target).lower() and target_language.lower() not in {"english", "en"}:
-            rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "Source copied", "Severity": "Major", "Suggestion": "Review and translate this segment.", "Reason": "Source and target are identical."})
-        missing_ph = [p for p in extract_placeholders(source) if p not in extract_placeholders(target)]
-        if missing_ph:
-            rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "Placeholder", "Severity": "Critical", "Suggestion": "Preserve: " + ", ".join(missing_ph), "Reason": "Placeholder(s) from source are missing."})
-        missing_num = [n for n in extract_numbers(source) if n not in extract_numbers(target)]
-        if missing_num:
-            rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "Number mismatch", "Severity": "Major", "Suggestion": "Check number(s): " + ", ".join(missing_num), "Reason": "Number(s) from source are missing or changed."})
-        for item in dnt_terms:
-            term = item.get("Term", "")
-            if term and term.lower() in source.lower() and term not in target:
-                rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "DNT", "Severity": "Major", "Suggestion": f"Keep '{term}' unchanged.", "Reason": f"DNT term missing. Rule: {item.get('Rule Source','')}"})
-        for item in glossary:
-            src_term = item.get("Source Term", "")
-            tgt_term = item.get("Target Term", "")
-            if src_term and tgt_term and src_term.lower() in source.lower() and tgt_term not in target:
-                rows.append({"Location": loc, "Source": source, "Translation": target, "Issue Type": "Glossary", "Severity": "Major", "Suggestion": tgt_term, "Reason": f"Glossary target term missing. Rule: {item.get('Rule Source','')}"})
-    return rows
-
-
-def ai_json_call(system: str, prompt: str, max_tokens: int = 6000) -> List[Dict[str, Any]]:
-    client = get_openai_client()
-    if client is None:
-        raise RuntimeError("Main API is not configured.")
-    response = client.responses.create(
-        model=model_name(),
-        instructions=system,
-        input=prompt,
-        max_output_tokens=max_tokens,
-    )
-    text = getattr(response, "output_text", "") or ""
-    return parse_json_array(text)
-
-
-def translate_with_main_api(segments: List[Dict[str, Any]], target_language: str, domain: str, rule_context: str = "") -> Dict[str, str]:
-    output: Dict[str, str] = {}
-    batch_size = int(secret("ERRORSWEEP_API_BATCH_SIZE", "20") or 20)
-    for start in range(0, len(segments), batch_size):
-        batch = segments[start:start + batch_size]
-        payload = [{"location": seg["location"], "source": seg["source"]} for seg in batch]
-        prompt = f"""
-Translate these localization segments into {target_language}.
-Domain: {domain}
-
-Rules:
-- Preserve placeholders exactly, e.g. {{{{email}}}}, {{{{user_name}}}}.
-- Preserve numbers and units.
-- Preserve emoji/icons and leading bullet characters.
-- Preserve bracket structure for UI labels, but localize the text inside brackets.
-- Return only JSON array with location and translation.
-
-Company rules context:
-{rule_context or "(none)"}
-
-Segments:
-{json.dumps(payload, ensure_ascii=False)}
-"""
-        try:
-            data = ai_json_call("You are a professional localization translation engine. Return only valid JSON.", prompt, max_tokens=7000)
-        except Exception as exc:
-            st.error(f"Main API translation failed: {exc}")
-            data = []
-        for item in data if isinstance(data, list) else []:
-            loc = clean_text(item.get("location", ""))
-            tr = clean_text(item.get("translation", ""))
-            source = next((s["source"] for s in batch if s["location"] == loc), "")
-            if loc:
-                output[loc] = preserve_protected(source, tr)
-    return output
-
-
-def qa_with_main_api(segments: List[Dict[str, Any]], target_language: str, domain: str, rule_context: str = "") -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    if get_openai_client() is None:
-        return rows
-    batch_size = int(secret("ERRORSWEEP_API_BATCH_SIZE", "20") or 20)
-    for start in range(0, len(segments), batch_size):
-        batch = segments[start:start + batch_size]
-        payload = [{"location": seg["location"], "source": seg.get("source", ""), "translation": seg.get("translation") or seg.get("target", "")} for seg in batch]
-        prompt = f"""
-Review the following localization segments for real errors.
-Target language: {target_language}
-Domain: {domain}
-Company rules: {rule_context or "(none)"}
-Segments: {json.dumps(payload, ensure_ascii=False)}
-Return only JSON array with location, issue_type, severity, wrong_part, suggestion, reason.
-"""
-        try:
-            data = ai_json_call("You are ErrorSweep, a conservative localization QA engine. Return only valid JSON.", prompt, max_tokens=6500)
-        except Exception as exc:
-            rows.append({"Location": "API", "Source": "", "Translation": "", "Issue Type": "API warning", "Severity": "Review", "Suggestion": "Retry this job.", "Reason": str(exc)[:400]})
-            data = []
-        loc_map = {seg["location"]: seg for seg in batch}
-        for item in data if isinstance(data, list) else []:
-            loc = clean_text(item.get("location", ""))
-            seg = loc_map.get(loc, {})
-            rows.append({
-                "Location": loc,
-                "Source": seg.get("source", ""),
-                "Translation": seg.get("translation") or seg.get("target", ""),
-                "Issue Type": item.get("issue_type", "AI QA"),
-                "Severity": item.get("severity", "Review"),
-                "Wrong Part": item.get("wrong_part", ""),
-                "Suggestion": item.get("suggestion", ""),
-                "Reason": item.get("reason", ""),
-            })
-    return rows
-
-
-# ==========================================================
-# Navigation/auth
-# ==========================================================
-
-def login_page() -> None:
-    page_header("Account required", "ErrorSweep", "Secure localization QA, translation review, scorecards, and memory workflows.")
-    st.info("Use Platform Owner for product/admin operations. Use Workspace User for client/team workflows.")
-
-    tab_owner, tab_user, tab_demo = st.tabs(["Platform owner", "Workspace user", "Demo access"])
-
-    with tab_owner:
-        st.markdown("### Platform owner sign in")
-        owner_user = st.text_input("Owner email / username", key="owner_login_user")
-        owner_pass = st.text_input("Owner password", type="password", key="owner_login_pass")
-        if st.button("Sign in as platform owner", type="primary", use_container_width=True):
-            expected_user = secret("ERRORSWEEP_OWNER_USERNAME", secret("ERRORSWEEP_USERNAME", "owner"))
-            expected_pass = secret("ERRORSWEEP_OWNER_PASSWORD", secret("ERRORSWEEP_PASSWORD", ""))
-            if expected_pass and owner_user == expected_user and owner_pass == expected_pass:
-                st.session_state.authenticated = True
-                st.session_state.username = owner_user
-                st.session_state.role = "Platform Owner"
-                st.session_state.account_type = "platform_owner"
-                st.session_state.organization_name = "ErrorSweep Platform"
-                st.session_state.active_page = "Platform Owner Console"
-                st.rerun()
-            elif allow_demo_login() and not expected_pass:
-                st.session_state.authenticated = True
-                st.session_state.username = owner_user or "platform-owner@errorsweep.local"
-                st.session_state.role = "Platform Owner"
-                st.session_state.account_type = "platform_owner"
-                st.session_state.organization_name = "ErrorSweep Platform"
-                st.session_state.active_page = "Platform Owner Console"
-                st.rerun()
-            else:
-                st.error("Invalid platform owner credentials.")
-
-    with tab_user:
-        st.markdown("### Workspace user sign in")
-        user_email = st.text_input("User email / username", key="workspace_login_user")
-        user_pass = st.text_input("Password", type="password", key="workspace_login_pass")
-        if st.button("Sign in to workspace", type="primary", use_container_width=True):
-            expected_user = secret("ERRORSWEEP_USERNAME", "admin")
-            expected_pass = secret("ERRORSWEEP_PASSWORD", "")
-            default_role = secret("ERRORSWEEP_DEFAULT_ROLE", "Workspace Owner")
-            if default_role not in WORKSPACE_ROLES:
-                default_role = "Workspace Owner"
-            if expected_pass and user_email == expected_user and user_pass == expected_pass:
-                st.session_state.authenticated = True
-                st.session_state.username = user_email
-                st.session_state.role = default_role
-                st.session_state.account_type = "workspace_user"
-                st.session_state.organization_name = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
-                st.session_state.active_page = "Dashboard"
-                st.rerun()
-            elif allow_demo_login() and not expected_pass:
-                st.session_state.authenticated = True
-                st.session_state.username = user_email or "workspace-admin@demo-workspace.local"
-                st.session_state.role = "Workspace Owner"
-                st.session_state.account_type = "workspace_user"
-                st.session_state.organization_name = "Demo Workspace"
-                st.session_state.active_page = "Dashboard"
-                st.rerun()
-            else:
-                st.error("Invalid workspace credentials.")
-
-    with tab_demo:
-        st.markdown("### Demo access")
-        demo_role = st.selectbox(
-            "Demo role",
-            ["Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin"],
-            index=1,
-        )
-        demo_name = st.text_input("Demo email", value="demo@errorsweep.local")
-        if st.button("Enter demo workspace", type="primary", use_container_width=True, disabled=not allow_demo_login()):
-            st.session_state.authenticated = True
-            st.session_state.username = demo_name or "demo@errorsweep.local"
-            st.session_state.role = demo_role
-            st.session_state.account_type = "platform_owner" if demo_role == "Platform Owner" else "workspace_user"
-            st.session_state.organization_name = "ErrorSweep Platform" if demo_role == "Platform Owner" else "Demo Workspace"
-            st.session_state.active_page = "Platform Owner Console" if demo_role == "Platform Owner" else "Dashboard"
-            st.rerun()
-
-def top_nav() -> str:
-    pages = available_pages()
-    current = st.session_state.active_page if st.session_state.active_page in pages else pages[0]
-    st.session_state.active_page = current
-    account_label = "Platform owner" if is_platform_owner() else "Workspace user"
-    org = st.session_state.get("organization_name", "Workspace")
+def render_top_nav() -> str:
+    pages = allowed_pages()
+    current = st.session_state.get("active_page", pages[0])
+    if current not in pages:
+        current = pages[0]
+    account_badge = "Owner" if is_owner() else st.session_state.get("role", "User")
     st.markdown(
         f"""
-        <div class="es-topbar">
+        <div class="es-card">
           <div class="es-brand-row">
-            <div class="es-brand">🌐 ErrorSweep <small>{escape(APP_VERSION)} · {escape(account_label)} · {escape(org)} · signed in as {escape(str(st.session_state.username or 'demo user'))}</small></div>
-            <span class="es-pill">{escape(str(st.session_state.role))}</span>
+            <div class="es-brand">🌐 ErrorSweep <small>{APP_VERSION} · signed in as {htmlesc(st.session_state.get('username',''))} · workspace: {htmlesc(st.session_state.get('workspace_name',''))}</small></div>
+            <span class="es-pill">{htmlesc(account_badge)}</span>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     c1, c2 = st.columns([5, 1])
-    selected = c1.selectbox("Open page", pages, index=pages.index(current), label_visibility="visible")
-    if c2.button("Logout", use_container_width=True):
-        st.session_state.authenticated = False
-        st.session_state.username = ""
-        st.session_state.role = "Client Viewer"
-        st.session_state.account_type = "workspace_user"
-        st.session_state.active_page = "Dashboard"
-        st.rerun()
+    with c1:
+        selected = st.selectbox("Open page", pages, index=pages.index(current), key="nav_page")
+    with c2:
+        st.write("")
+        st.write("")
+        if st.button("Logout", use_container_width=True):
+            logout()
     st.session_state.active_page = selected
     return selected
 
+# ==========================================================
+# Login
+# ==========================================================
 
-def access_denied_page(page: str) -> None:
-    page_header("Access restricted", page, "Your current role does not have permission to open this workspace area.")
-    st.warning(f"Signed in as {st.session_state.get('role', 'User')}. Ask a workspace owner or platform owner for access.")
+def login_page() -> None:
+    page_header("Account required", "ErrorSweep", "Platform-owner controls are separated from workspace-user workflows.")
+    tab_owner, tab_user, tab_demo = st.tabs(["Platform owner", "Workspace user", "Demo access"])
 
+    with tab_owner:
+        st.markdown('<div class="es-note">The platform owner account is the only account that can see all payments, all users, all workspaces, feature flags, and platform audit logs.</div>', unsafe_allow_html=True)
+        with st.form("owner_login"):
+            u = st.text_input("Owner email / username", value="")
+            p = st.text_input("Owner password", type="password")
+            if st.form_submit_button("Sign in as platform owner", use_container_width=True):
+                expected_u = secret("ERRORSWEEP_OWNER_USERNAME", secret("ERRORSWEEP_USERNAME", "owner@errorsweep.local"))
+                expected_p = secret("ERRORSWEEP_OWNER_PASSWORD", secret("ERRORSWEEP_PASSWORD", ""))
+                if expected_p and hmac.compare_digest(u.strip(), expected_u.strip()) and hmac.compare_digest(p, expected_p):
+                    sign_in(u.strip(), "Platform Owner", "platform")
+                    st.rerun()
+                elif allow_demo_login() and not expected_p:
+                    sign_in("owner@errorsweep.local", "Platform Owner", "platform")
+                    st.rerun()
+                else:
+                    st.error("Invalid owner credentials. Use Demo access while building, or configure owner secrets.")
+
+    with tab_user:
+        with st.form("user_login"):
+            u = st.text_input("User email / username", key="user_u")
+            p = st.text_input("User password", type="password", key="user_p")
+            if st.form_submit_button("Sign in as workspace user", use_container_width=True):
+                expected_u = secret("ERRORSWEEP_USER_USERNAME", "admin@client.local")
+                expected_p = secret("ERRORSWEEP_USER_PASSWORD", "")
+                default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Admin")
+                if expected_p and hmac.compare_digest(u.strip(), expected_u.strip()) and hmac.compare_digest(p, expected_p):
+                    sign_in(u.strip(), default_role if default_role in ROLES else "Workspace Admin", "ws_demo")
+                    st.rerun()
+                elif allow_demo_login() and not expected_p:
+                    sign_in("admin@client.local", "Workspace Admin", "ws_demo")
+                    st.rerun()
+                else:
+                    st.error("Invalid workspace credentials.")
+
+    with tab_demo:
+        if allow_demo_login():
+            st.markdown("Choose a demo role. Owner-only pages will appear only for Platform Owner.")
+            role = st.selectbox("Demo role", ROLES, index=0)
+            if st.button("Enter demo workspace", use_container_width=True):
+                username = "owner@errorsweep.local" if role == "Platform Owner" else f"{role.lower().replace(' ', '.')}@client.local"
+                workspace_id = "platform" if role == "Platform Owner" else "ws_demo"
+                sign_in(username, role, workspace_id)
+                st.rerun()
+        else:
+            st.warning("Demo access is disabled.")
 
 # ==========================================================
-# Pages
+# Platform owner-only pages
+# ==========================================================
+
+def owner_console_page() -> None:
+    if not is_owner():
+        restricted_page("Owner Console")
+        return
+    page_header("Platform owner only", "Owner command center", "See payments received, all users, access levels, workspaces, platform usage, and private owner controls.")
+    payments = st.session_state.platform_payments
+    paid_total = sum(float(p.get("Amount", 0)) for p in payments if str(p.get("Status", "")).lower() == "paid")
+    pending_total = sum(float(p.get("Amount", 0)) for p in payments if str(p.get("Status", "")).lower() == "pending")
+    metric_cards([
+        ("Payments received", format_money(paid_total), "paid payments across all workspaces"),
+        ("Pending payments", format_money(pending_total), "manual or gateway pending"),
+        ("Active workspaces", sum(1 for w in st.session_state.platform_workspaces if w.get("Status") == "Active"), "customer/client workspaces"),
+        ("Users", len(st.session_state.platform_users), "all platform users"),
+    ])
+
+    c1, c2 = st.columns([1.15, 1])
+    with c1:
+        st.markdown("### Recent payments received")
+        st.dataframe(pd.DataFrame(payments), use_container_width=True, hide_index=True)
+        st.download_button("Download payment ledger", csv_bytes(payments), "errorsweep_payment_ledger.csv", "text/csv", use_container_width=True)
+    with c2:
+        st.markdown("### User access snapshot")
+        access = [{"Email": u["Email"], "Workspace": u["Workspace"], "Role": u["Role"], "Plan": u["Plan"], "Status": u["Status"]} for u in st.session_state.platform_users]
+        st.dataframe(pd.DataFrame(access), use_container_width=True, hide_index=True)
+        st.markdown('<div class="es-note">These records are visible only from the platform owner account. Workspace users cannot access this console.</div>', unsafe_allow_html=True)
+
+    st.markdown("### Owner quick actions")
+    a, b, c = st.columns(3)
+    if a.button("Add demo payment", use_container_width=True):
+        st.session_state.platform_payments.insert(0, {
+            "Payment ID": new_id("pay"), "Date": today_label(), "Workspace": "Demo Workspace", "User Email": "admin@client.local", "Plan": "Pro", "Amount": 29.00, "Currency": "USD", "Gateway": "Manual", "Status": "Paid", "Access Granted": "Pro"
+        })
+        log_audit("Owner payment entry", "Added demo payment")
+        st.rerun()
+    if b.button("Add audit event", use_container_width=True):
+        log_audit("Owner note", "Manual owner audit event added")
+        st.rerun()
+    if c.button("Export owner data", use_container_width=True):
+        st.info("Use the export buttons in Payments, User Access Matrix, and All Workspaces.")
+
+
+def payments_received_page() -> None:
+    if not is_owner():
+        restricted_page("Payments Received")
+        return
+    page_header("Owner only", "Payments received", "A private ledger of payments, subscriptions, plan grants, and gateway status across all workspaces.")
+    with st.expander("Add manual payment / payment adjustment", expanded=False):
+        with st.form("add_payment"):
+            c1, c2, c3 = st.columns(3)
+            workspace = c1.text_input("Workspace", value="Demo Workspace")
+            email = c2.text_input("User email", value="admin@client.local")
+            plan = c3.selectbox("Plan", ["Trial", "Pro", "Agency", "Enterprise", "Custom"])
+            c4, c5, c6 = st.columns(3)
+            amount = c4.number_input("Amount", min_value=0.0, value=29.0, step=1.0)
+            currency = c5.selectbox("Currency", ["USD", "INR", "EUR", "GBP"])
+            status = c6.selectbox("Status", ["Paid", "Pending", "Failed", "Refunded"])
+            if st.form_submit_button("Save payment", use_container_width=True):
+                st.session_state.platform_payments.insert(0, {
+                    "Payment ID": new_id("pay"), "Date": today_label(), "Workspace": workspace, "User Email": email,
+                    "Plan": plan, "Amount": float(amount), "Currency": currency, "Gateway": "Manual", "Status": status,
+                    "Access Granted": plan if status == "Paid" else "Pending",
+                })
+                log_audit("Payment saved", f"{status} {currency} {amount} for {workspace}")
+                st.success("Payment saved to owner ledger.")
+    df = pd.DataFrame(st.session_state.platform_payments)
+    if not df.empty:
+        status_filter = st.multiselect("Filter by status", sorted(df["Status"].unique()), default=list(sorted(df["Status"].unique())))
+        df = df[df["Status"].isin(status_filter)]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.download_button("Download payment ledger CSV", df.to_csv(index=False).encode("utf-8-sig"), "payments_received.csv", "text/csv", use_container_width=True)
+
+
+def user_access_matrix_page() -> None:
+    if not is_owner():
+        restricted_page("User Access Matrix")
+        return
+    page_header("Owner only", "User access matrix", "Review which user has what access, role, plan, status, last login, and allowed pages.")
+    users = st.session_state.platform_users
+    with st.expander("Add or update platform user", expanded=False):
+        with st.form("add_platform_user"):
+            c1, c2, c3 = st.columns(3)
+            name = c1.text_input("Name")
+            email = c2.text_input("Email")
+            workspace = c3.text_input("Workspace", value="Demo Workspace")
+            c4, c5, c6 = st.columns(3)
+            role = c4.selectbox("Role", ROLES, index=1)
+            plan = c5.selectbox("Plan", ["Trial", "Pro", "Agency", "Enterprise", "Internal"])
+            status = c6.selectbox("Status", ["Active", "Invited", "Suspended"])
+            if st.form_submit_button("Save user access", use_container_width=True):
+                users.insert(0, {"User ID": new_id("usr"), "Email": email, "Name": name, "Workspace": workspace, "Role": role, "Plan": plan, "Status": status, "Last Login": "", "Allowed Pages": ", ".join(ROLE_ACCESS.get(role, []))})
+                log_audit("User access updated", f"{email} set to {role} in {workspace}")
+                st.success("User access saved.")
+    df = pd.DataFrame(users)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.download_button("Download user access matrix", df.to_csv(index=False).encode("utf-8-sig"), "user_access_matrix.csv", "text/csv", use_container_width=True)
+
+
+def all_workspaces_page() -> None:
+    if not is_owner():
+        restricted_page("All Workspaces")
+        return
+    page_header("Owner only", "All workspaces", "Private platform-level view of every client workspace, plan, user count, and job volume.")
+    with st.expander("Create workspace", expanded=False):
+        with st.form("create_owner_workspace"):
+            name = st.text_input("Workspace name")
+            owner = st.text_input("Owner email")
+            plan = st.selectbox("Plan", ["Trial", "Pro", "Agency", "Enterprise"])
+            if st.form_submit_button("Create workspace", use_container_width=True):
+                st.session_state.platform_workspaces.insert(0, {"Workspace ID": new_id("ws"), "Workspace": name, "Owner Email": owner, "Plan": plan, "Status": "Active", "Users": 1, "Jobs": 0, "Created": today_label()})
+                log_audit("Workspace created", f"{name} created by owner")
+                st.success("Workspace created.")
+    df = pd.DataFrame(st.session_state.platform_workspaces)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.download_button("Download workspace list", df.to_csv(index=False).encode("utf-8-sig"), "all_workspaces.csv", "text/csv", use_container_width=True)
+
+
+def platform_settings_page() -> None:
+    if not is_owner():
+        restricted_page("Platform Settings")
+        return
+    page_header("Owner only", "Platform settings", "Global feature flags, plan access controls, registration settings, and platform-level switches.")
+    st.markdown("### Feature flags")
+    for flag, current in list(st.session_state.feature_flags.items()):
+        st.session_state.feature_flags[flag] = st.toggle(flag, value=bool(current), key=f"flag_{flag}")
+    st.markdown("### Plan defaults")
+    plan_rows = [
+        {"Plan": "Trial", "Users": 1, "Projects": 1, "Monthly Jobs": 10, "Human Review": "Yes", "Scorecards": "No"},
+        {"Plan": "Pro", "Users": 3, "Projects": 5, "Monthly Jobs": 100, "Human Review": "Yes", "Scorecards": "Yes"},
+        {"Plan": "Agency", "Users": 20, "Projects": 50, "Monthly Jobs": 1000, "Human Review": "Yes", "Scorecards": "Yes"},
+        {"Plan": "Enterprise", "Users": "Custom", "Projects": "Custom", "Monthly Jobs": "Custom", "Human Review": "Yes", "Scorecards": "Yes"},
+    ]
+    st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
+    st.markdown('<div class="es-note">These settings are intentionally owner-only. Workspace users cannot see or change platform-wide feature flags.</div>', unsafe_allow_html=True)
+
+
+def platform_audit_logs_page() -> None:
+    if not is_owner():
+        restricted_page("Platform Audit Logs")
+        return
+    page_header("Owner only", "Platform audit logs", "Private event trail for sign-ins, payment updates, workspace creation, role changes, and owner actions.")
+    df = pd.DataFrame(st.session_state.platform_audit_logs)
+    if df.empty:
+        st.info("No audit events yet.")
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.download_button("Download audit log", df.to_csv(index=False).encode("utf-8-sig"), "platform_audit_log.csv", "text/csv", use_container_width=True)
+
+
+def restricted_page(page_name: str) -> None:
+    page_header("Restricted", page_name, "This page is visible only to the platform owner account.")
+    st.markdown('<div class="es-danger">This workspace user account cannot access platform-owner information such as payment ledgers, all-user access, all-workspace data, or platform feature controls.</div>', unsafe_allow_html=True)
+
+# ==========================================================
+# Workspace/user pages
 # ==========================================================
 
 def dashboard_page() -> None:
-    page_header("Dashboard", "Localization operations hub", "Manage projects, jobs, QA reports, human review, scorecards, and translation memory from one workspace.")
+    page_header("Dashboard", "Localization operations hub", "Manage projects, jobs, review work, scorecards, and memory from one workspace.")
     metric_cards([
-        ("Projects", len(st.session_state.projects), "client/product workspaces"),
+        ("Projects", len(st.session_state.projects), "workspace projects"),
         ("Jobs", len(st.session_state.jobs), "QA / Pro / Scorecard"),
         ("TM Entries", len(st.session_state.tm_entries), "approved translations"),
-        ("Pending Review", len([s for s in st.session_state.review_segments if s.get("Status") != "Approved"]), "segments or sessions"),
+        ("Pending review", len([x for x in st.session_state.review_segments if x.get("Status") != "Approved"]), "segments"),
     ])
     st.markdown("### Recommended next steps")
-    st.markdown("""
-    <div class="es-grid-3">
-      <div class="es-card"><h3>🗂️ Create a project</h3><p>Set languages, domain, and reusable rules.</p></div>
-      <div class="es-card"><h3>🚀 Run QA or Pro</h3><p>Generate review-ready output with the main API.</p></div>
-      <div class="es-card"><h3>✍️ Human Review</h3><p>Upload files directly, edit segments, and save verified translations to TM.</p></div>
-    </div>
-    """, unsafe_allow_html=True)
+    metric_cards([
+        ("1", "Create a project", "Set languages, domain, and rules."),
+        ("2", "Run QA or Pro", "Generate segments and review-ready jobs."),
+        ("3", "Human Review", "Approve corrections and save verified TM."),
+    ], columns=3)
     st.markdown("### Recent jobs")
     if st.session_state.jobs:
-        st.dataframe(pd.DataFrame(st.session_state.jobs).tail(10), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(st.session_state.jobs[:10]), use_container_width=True, hide_index=True)
     else:
         st.info("No jobs yet.")
 
 
 def projects_page() -> None:
-    page_header("Projects", "Project workspaces", "Create client/product workspaces and attach languages, domain, rules, and memory.")
-    with st.form("create_project"):
-        c1, c2, c3 = st.columns(3)
-        name = c1.text_input("Project name", placeholder="Mobile App UI")
-        organization = c1.text_input("Organization", placeholder="Nawin Corp")
-        source_lang = c2.selectbox("Source language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("English"))
-        targets = c2.multiselect("Target languages", SUPPORTED_LANGUAGES, default=["French"])
-        domain = c3.selectbox("Domain", DOMAINS[1:], index=0)
-        status = c3.selectbox("Status", ["Active", "Draft", "Paused"])
-        if st.form_submit_button("Create project", type="primary", use_container_width=True):
-            if not name:
-                st.error("Project name is required.")
-            else:
-                st.session_state.projects.append({
-                    "Project ID": new_id("prj"), "Project": name, "Organization": organization or "Default Organization",
-                    "Source": source_lang, "Targets": ", ".join(targets), "Domain": domain,
-                    "Status": status, "Created": now_iso(),
-                })
+    page_header("Projects", "Project workspaces", "Create client/product workspaces with source language, target languages, domain, and rules.")
+    with st.form("project_form"):
+        c1, c2 = st.columns(2)
+        name = c1.text_input("Project name")
+        client = c2.text_input("Client / product")
+        source = c1.selectbox("Source language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("English"))
+        target = c2.multiselect("Target languages", SUPPORTED_LANGUAGES, default=["French"])
+        domain = st.selectbox("Default domain", DOMAINS, index=DOMAINS.index("Software UI"))
+        if st.form_submit_button("Create project", use_container_width=True):
+            if name:
+                st.session_state.projects.insert(0, {"Project ID": new_id("prj"), "Project": name, "Client": client, "Source": source, "Targets": ", ".join(target), "Domain": domain, "Owner": st.session_state.username, "Created": today_label()})
+                log_audit("Project created", name)
                 st.success("Project created.")
-    st.markdown("### Project list")
     if st.session_state.projects:
         st.dataframe(pd.DataFrame(st.session_state.projects), use_container_width=True, hide_index=True)
     else:
-        st.info("Create your first project.")
+        st.info("No projects yet.")
 
 
 def jobs_page() -> None:
-    page_header("Jobs", "Job center", "Track QA, Pro translation, Human Review, and Scorecard jobs.")
+    page_header("Jobs", "Workflow history", "Track QA, Pro, Human Review, and Scorecard jobs created in this workspace.")
     if st.session_state.jobs:
-        df = pd.DataFrame(st.session_state.jobs)
-        status_filter = st.multiselect("Filter status", sorted(df["Status"].dropna().unique().tolist()), default=[])
-        if status_filter:
-            df = df[df["Status"].isin(status_filter)]
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(st.session_state.jobs), use_container_width=True, hide_index=True)
+        st.download_button("Download jobs CSV", csv_bytes(st.session_state.jobs), "jobs.csv", "text/csv", use_container_width=True)
     else:
-        st.info("No jobs yet. Run QA, Pro, Human Review, or Scorecard to create jobs.")
+        st.info("No jobs yet.")
 
 
 def qa_page() -> None:
-    page_header("ErrorSweep QA", "QA run + suggestions", "Review existing translations against deterministic checks, company rules, and main API QA.")
-    uploaded = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt"], key="qa_upload")
-    rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="qa_rules")
-    c1, c2, c3 = st.columns(3)
-    target_language = c1.selectbox("Target language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("French"), key="qa_lang")
-    domain = c2.selectbox("Domain", DOMAINS, key="qa_domain")
-    run_ai = c3.checkbox("Run main API QA", value=True)
-    if st.button("Run ErrorSweep QA", type="primary", use_container_width=True, disabled=uploaded is None):
-        glossary, dnt, rule_context = parse_rules_zip(rules_zip)
-        extracted = extract_file(uploaded, mode="qa")
-        if domain == "Auto-detect":
-            domain = infer_domain_from_texts([s.get("source") or s.get("target", "") for s in extracted.segments])
-        segments = extracted.segments
-        if not segments:
-            st.error("No reviewable segments found.")
-            return
-        rows = deterministic_qa(segments, glossary + st.session_state.glossary, dnt + st.session_state.dnt_terms, target_language)
-        if run_ai:
-            rows.extend(qa_with_main_api(segments, target_language, domain, rule_context))
-        job = {"Job ID": new_id("job"), "Type": "QA", "File": uploaded.name, "Project": "", "Target": target_language, "Segments": len(segments), "Issues": len(rows), "Status": "Needs Review" if rows else "Completed", "Created": now_iso()}
-        st.session_state.jobs.append(job)
-        for seg in segments:
-            st.session_state.review_segments.append({
-                "Review ID": new_id("rev"), "Job ID": job["Job ID"], "Location": seg["location"], "Source": seg.get("source", ""),
-                "Target": seg.get("target", ""), "Status": "Needs Review" if any(r.get("Location") == seg["location"] for r in rows) else "Pass",
-                "Match": status_for_segment(seg.get("source", ""), seg.get("target", ""), seg.get("origin_status", "")),
-                "Comment": "", "Target Language": target_language,
-            })
-        st.success("QA completed and Human Review session prepared.")
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            st.download_button("Download QA report", pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig"), "errorsweep_qa_report.csv", "text/csv", use_container_width=True)
-        else:
-            st.success("No deterministic/API issues found.")
+    page_header("ErrorSweep QA", "Quality review", "Upload an existing bilingual file and generate deterministic QA findings.")
+    file = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt"], key="qa_upload")
+    if st.button("Run QA", type="primary", use_container_width=True, disabled=file is None):
+        segments = extract_segments_from_file(file, assume_source_only=False)
+        issues = run_simple_qa(segments)
+        job = {"Job ID": new_id("job"), "Type": "QA", "File": file.name, "Segments": len(segments), "Issues": len(issues), "Status": "Completed", "Created": now_iso()}
+        st.session_state.jobs.insert(0, job)
+        st.session_state.review_segments = segments
+        log_audit("QA job", f"{file.name}: {len(segments)} segments, {len(issues)} issues")
+        st.success("QA completed. Segments are available in Human Review.")
+        metric_cards([("Segments", len(segments), "checked"), ("Issues", len(issues), "found"), ("Status", "Completed", "sent to Human Review")], columns=3)
+        if issues:
+            st.dataframe(pd.DataFrame(issues), use_container_width=True, hide_index=True)
+            st.download_button("Download QA report", csv_bytes(issues), "qa_report.csv", "text/csv", use_container_width=True)
 
 
 def pro_page() -> None:
-    page_header("ErrorSweep Pro", "Translate + QA + Human Review", "Use the main API first, then route uncertain segments to Human Review.")
-    uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "json", "xml", "xlf", "xliff", "srt"], key="pro_upload")
-    rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
-    c1, c2, c3 = st.columns([1, 1, 1])
-    target_language = c1.selectbox("Target language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("French"), key="pro_lang")
-    domain = c2.selectbox("Domain", DOMAINS, key="pro_domain")
-    review_threshold = c3.slider("Allow with review threshold", min_value=0, max_value=25, value=12, help="If unresolved rows are below this percent, download is allowed but Human Review is required.")
-    run_ai_review = st.checkbox("Run main API QA after translation", value=True)
-    if st.button("Run Translate + Review", type="primary", use_container_width=True, disabled=uploaded is None):
-        if get_openai_client() is None:
-            st.error("Main API is not configured. Human Review can still be used without API from the Human Review page.")
+    page_header("ErrorSweep Pro", "Translate + QA + Human Review", "Use the main API to translate, run safeguards, and route uncertain segments to review.")
+    st.markdown('<div class="es-note">Source/bilingual file is required for Pro translation. For Scorecards and Human Review, the separate source file is optional.</div>', unsafe_allow_html=True)
+    file = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt"], key="pro_upload")
+    c1, c2, c3 = st.columns(3)
+    target = c1.selectbox("Target language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("French"))
+    domain = c2.selectbox("Domain", DOMAINS, index=0)
+    review_threshold = c3.slider("Allow with review threshold", 0, 30, 12)
+    run = st.button("Run Translate + Review", type="primary", use_container_width=True, disabled=file is None)
+    if run and file:
+        segments = extract_segments_from_file(file, assume_source_only=True)
+        actual_domain = domain_auto_detect(segments) if domain == "Auto-detect" else domain
+        try:
+            with st.spinner("Translating with main API..."):
+                translated = api_translate_segments(segments, target, actual_domain)
+        except Exception as exc:
+            st.error(str(exc))
             return
-        glossary, dnt, rule_context = parse_rules_zip(rules_zip)
-        extracted = extract_file(uploaded, mode="pro")
-        if not extracted.segments:
-            st.error("No source segments found.")
-            return
-        if domain == "Auto-detect":
-            domain = infer_domain_from_texts([s.get("source", "") for s in extracted.segments])
-            st.info(f"Domain auto-detected as: {domain}")
-        with st.spinner("Translating with main API..."):
-            translations_by_loc = translate_with_main_api(extracted.segments, target_language, domain, rule_context)
-        translated_segments = []
-        missing = []
-        for seg in extracted.segments:
-            tr = translations_by_loc.get(seg["location"], "")
-            if is_bad_translation(seg.get("source", ""), tr, target_language):
-                missing.append({"Location": seg["location"], "Source": seg.get("source", ""), "Reason": "Blank, copied, placeholder-only, or invalid output"})
-                tr = NEEDS_REVIEW_MARKER
-                translations_by_loc[seg["location"]] = tr
-            translated_segments.append({**seg, "translation": tr, "target": tr, "origin_status": "MT"})
-        gate, message = smart_gate(len(missing), len(extracted.segments), review_threshold / 100)
-        if gate == "pass":
-            st.success(message)
-            status = "Completed"
-        elif gate == "review":
-            st.warning(message)
-            status = "Needs Human Review"
-        else:
-            st.error(message)
-            status = "Blocked"
-        review_rows = deterministic_qa(translated_segments, glossary + st.session_state.glossary, dnt + st.session_state.dnt_terms, target_language)
-        if gate != "block" and run_ai_review:
-            with st.spinner("Running main API QA..."):
-                review_rows.extend(qa_with_main_api(translated_segments, target_language, domain, rule_context))
-        output_bytes, mime, output_name = build_output_file(extracted, translations_by_loc)
-        job = {"Job ID": new_id("job"), "Type": "Pro", "File": uploaded.name, "Project": "", "Target": target_language, "Segments": len(extracted.segments), "Issues": len(review_rows), "Status": status, "Created": now_iso()}
-        st.session_state.jobs.append(job)
-        for seg in translated_segments:
-            unresolved = seg["translation"] == NEEDS_REVIEW_MARKER or any(r.get("Location") == seg["location"] for r in review_rows)
-            st.session_state.review_segments.append({
-                "Review ID": new_id("rev"), "Job ID": job["Job ID"], "Location": seg["location"], "Source": seg["source"], "Target": seg["translation"],
-                "Status": "Needs Review" if unresolved else "MT", "Match": status_for_segment(seg.get("source", ""), seg.get("translation", ""), "MT"),
-                "Comment": "", "Target Language": target_language,
-            })
-        st.markdown("### Translation preview")
-        st.dataframe(pd.DataFrame([{"Location": s["location"], "Source": truncate(s["source"]), "Translation": truncate(s["translation"])} for s in translated_segments[:100]]), use_container_width=True, hide_index=True)
-        if missing:
-            with st.expander("Unresolved segments", expanded=True):
-                st.dataframe(pd.DataFrame(missing), use_container_width=True, hide_index=True)
-        if gate != "block":
-            if gate == "review":
-                st.warning("Human Review Required before delivery.")
-            st.download_button("Download translated output", output_bytes, output_name, mime, use_container_width=True)
-            st.download_button("Download issue report", pd.DataFrame(review_rows).to_csv(index=False).encode("utf-8-sig"), "errorsweep_pro_issue_report.csv", "text/csv", use_container_width=True)
-        if st.button("Open Human Review", use_container_width=True):
-            st.session_state.active_page = "Human Review"
-            st.rerun()
+        issues = run_simple_qa(translated)
+        missing = [x for x in translated if not clean_text(x.get("Target"))]
+        missing_rate = len(missing) / max(len(translated), 1)
+        status = "Completed" if not missing else ("Needs Human Review" if missing_rate <= review_threshold / 100 else "Blocked")
+        st.session_state.review_segments = translated
+        st.session_state.jobs.insert(0, {"Job ID": new_id("job"), "Type": "Pro", "File": file.name, "Language": target, "Domain": actual_domain, "Segments": len(translated), "Issues": len(issues), "Status": status, "Created": now_iso()})
+        log_audit("Pro job", f"{file.name}: {target}, {status}")
+        metric_cards([("Segments", len(translated), "translated"), ("Missing", len(missing), "needs review"), ("Domain", actual_domain, "auto-detected" if domain == "Auto-detect" else "selected"), ("Status", status, "workflow result")])
+        st.dataframe(pd.DataFrame(translated), use_container_width=True, hide_index=True)
+        if status == "Blocked":
+            st.markdown('<div class="es-danger">Too many blank/unusable segments. Output is blocked until reviewed.</div>', unsafe_allow_html=True)
+        elif status == "Needs Human Review":
+            st.markdown('<div class="es-note">Output is allowed for internal review. Open Human Review before delivery.</div>', unsafe_allow_html=True)
+        st.download_button("Download translation table", csv_bytes(translated), "translated_segments.csv", "text/csv", use_container_width=True)
 
 
-def load_review_file_into_session(uploaded, target_language: str) -> None:
-    extracted = extract_file(uploaded, mode="review")
-    job_id = new_id("job")
-    st.session_state.jobs.append({"Job ID": job_id, "Type": "Human Review", "File": uploaded.name, "Project": "", "Target": target_language, "Segments": len(extracted.segments), "Issues": 0, "Status": "In Review", "Created": now_iso()})
-    for seg in extracted.segments:
-        st.session_state.review_segments.append({
-            "Review ID": new_id("rev"), "Job ID": job_id, "Location": seg["location"], "Source": seg.get("source", ""), "Target": seg.get("target", ""),
-            "Status": "Existing" if seg.get("target") else "Needs Review", "Match": status_for_segment(seg.get("source", ""), seg.get("target", ""), seg.get("origin_status", "")),
-            "Comment": "", "Target Language": target_language,
-        })
+def best_tm_match(source: str) -> Tuple[str, str]:
+    if not st.session_state.tm_entries:
+        return "", ""
+    choices = [x.get("Source", "") for x in st.session_state.tm_entries]
+    match = difflib.get_close_matches(source, choices, n=1, cutoff=0.40)
+    if not match:
+        return "", ""
+    entry = next((x for x in st.session_state.tm_entries if x.get("Source") == match[0]), None)
+    if not entry:
+        return "", ""
+    ratio = int(difflib.SequenceMatcher(None, source.lower(), match[0].lower()).ratio() * 100)
+    label = "101%" if source == match[0] else ("100%" if ratio >= 98 else f"{ratio}% fuzzy")
+    return entry.get("Target", ""), label
 
 
 def human_review_page() -> None:
-    page_header("Human Review", "CAT-style segment editor", "Upload a file directly, edit target boxes, view glossary/DNT/TM matches, and approve verified translations.")
-    with st.expander("Upload file directly for Human Review", expanded=not bool(st.session_state.review_segments)):
-        c1, c2 = st.columns([2, 1])
-        review_upload = c1.file_uploader("Upload source/bilingual/reviewer file", type=["xlsx", "csv", "docx", "txt"], key="hr_direct_upload")
-        target_language = c2.selectbox("Target language", SUPPORTED_LANGUAGES, index=SUPPORTED_LANGUAGES.index("French"), key="hr_lang")
-        if st.button("Load into Human Review", type="primary", use_container_width=True, disabled=review_upload is None):
-            load_review_file_into_session(review_upload, target_language)
-            st.success("File loaded into Human Review.")
-            st.rerun()
-
+    page_header("Human Review", "CAT-style segment editor", "Upload a file directly or open a generated job. Edit target text, see TM/glossary/DNT, and approve verified translations.")
+    upload = st.file_uploader("Direct upload for Human Review", type=["xlsx", "csv", "docx", "txt"], key="hr_direct_upload")
+    if upload and st.button("Load file into Human Review", use_container_width=True):
+        st.session_state.review_segments = extract_segments_from_file(upload, assume_source_only=False)
+        log_audit("Human Review upload", upload.name)
+        st.success("File loaded into Human Review.")
     if not st.session_state.review_segments:
-        st.info("No review segments yet. Upload a file above or run ErrorSweep QA/Pro first.")
+        st.info("No review segments yet. Upload a file here or run ErrorSweep QA / Pro first.")
         return
 
-    df = pd.DataFrame(st.session_state.review_segments)
-    fc1, fc2, fc3 = st.columns(3)
-    job_filter = fc1.selectbox("Job", ["All"] + sorted(df["Job ID"].dropna().unique().tolist()))
-    status_filter = fc2.selectbox("Status", ["All"] + sorted(df["Status"].dropna().unique().tolist()))
-    search = fc3.text_input("Search source/target")
-    filtered = df.copy()
-    if job_filter != "All":
-        filtered = filtered[filtered["Job ID"] == job_filter]
-    if status_filter != "All":
-        filtered = filtered[filtered["Status"] == status_filter]
-    if search:
-        filtered = filtered[filtered["Source"].astype(str).str.contains(search, case=False, na=False) | filtered["Target"].astype(str).str.contains(search, case=False, na=False)]
-    if filtered.empty:
-        st.info("No matching segments.")
-        return
+    segments = st.session_state.review_segments
+    for seg in segments:
+        if not seg.get("Status"):
+            seg["Status"] = "Untranslated" if not seg.get("Target") else "Existing"
+        if not seg.get("Match"):
+            _, label = best_tm_match(seg.get("Source", ""))
+            seg["Match"] = label or seg.get("Status", "")
 
-    selected_id = st.session_state.get("selected_review_id") or filtered.iloc[0]["Review ID"]
-    if selected_id not in filtered["Review ID"].tolist():
-        selected_id = filtered.iloc[0]["Review ID"]
-
-    st.markdown("### Review workspace")
-    left, center, right = st.columns([0.95, 1.15, 0.85])
+    left, center, right = st.columns([1.1, 1.6, 1.0])
     with left:
-        st.markdown("#### Source segments")
-        st.markdown('<div class="es-segment-list">', unsafe_allow_html=True)
-        for _, row in filtered.head(250).iterrows():
-            rid = row["Review ID"]
-            selected = rid == selected_id
-            badge_class = "es-badge-green" if row.get("Status") == "Approved" else ("es-badge-yellow" if "fuzzy" in str(row.get("Match", "")).lower() else "es-badge-cyan")
-            label = f"{row.get('Location','')} · {row.get('Match','')} · {row.get('Status','')}"
-            if st.button(label, key=f"open_{rid}", use_container_width=True):
-                st.session_state.selected_review_id = rid
-                st.rerun()
-            st.markdown(f"""
-            <div class="es-seg-item" style="border-color:{'rgba(0,231,133,.55)' if selected else 'rgba(125,145,255,.16)'}">
-              <span class="es-badge {badge_class}">{escape(str(row.get('Match','')))}</span>
-              <div class="es-seg-source">{escape(truncate(row.get('Source',''), 210))}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    idx = next((i for i, s in enumerate(st.session_state.review_segments) if s["Review ID"] == selected_id), None)
-    if idx is None:
-        return
-    seg = st.session_state.review_segments[idx]
-
+        st.markdown("### Source segments")
+        labels = [f"{s['Segment ID']}. {s.get('Match') or s.get('Status')} · {s.get('Source','')[:70]}" for s in segments]
+        idx = st.radio("Select segment", range(len(segments)), format_func=lambda i: labels[i], label_visibility="collapsed")
+    seg = segments[idx]
     with center:
-        st.markdown("#### Target editor")
-        st.caption(f"{seg.get('Location','')} · {seg.get('Target Language','')} · {seg.get('Match','')}")
-        st.text_area("Source", value=seg.get("Source", ""), height=150, disabled=True)
-        edited = st.text_area("Target", value=seg.get("Target", ""), height=190)
-        status_options = ["Needs Review", "MT", "Existing", "101%", "100%", "Fuzzy", "Approved", "Rejected", "Needs Rework"]
-        current_status = seg.get("Status", "Needs Review")
-        status = st.selectbox("Segment status", status_options, index=status_options.index(current_status) if current_status in status_options else 0)
-        comment = st.text_area("Reviewer comment", value=seg.get("Comment", ""), height=80)
-        b1, b2, b3 = st.columns(3)
-        if b1.button("Save", use_container_width=True):
-            st.session_state.review_segments[idx].update({"Target": edited, "Status": status, "Comment": comment})
-            st.success("Segment saved.")
-        if b2.button("Approve", type="primary", use_container_width=True):
-            st.session_state.review_segments[idx].update({"Target": edited, "Status": "Approved", "Comment": comment})
-            st.success("Segment approved.")
-        if b3.button("Approve + TM", use_container_width=True):
-            st.session_state.review_segments[idx].update({"Target": edited, "Status": "Approved", "Comment": comment})
-            st.session_state.tm_entries.append({"TM ID": new_id("tm"), "Source Hash": text_hash(seg.get("Source", "")), "Source": seg.get("Source", ""), "Target": edited, "Target Language": seg.get("Target Language", ""), "Domain": "", "Approved By": st.session_state.username, "Created": now_iso()})
+        st.markdown(f"### Segment {seg['Segment ID']} · {seg.get('Status','')}")
+        st.caption(seg.get("Location", ""))
+        st.text_area("Source", value=seg.get("Source", ""), height=140, disabled=True)
+        new_target = st.text_area("Target", value=seg.get("Target", ""), height=170, key=f"target_{seg['Segment ID']}")
+        status = st.selectbox("Segment status", ["MT", "Existing", "Needs Review", "Approved", "Rejected", "Needs Rework", "100%", "101%", "Fuzzy %", "Untranslated"], index=0 if seg.get("Status") not in ["Approved", "Rejected", "Needs Rework"] else ["MT", "Existing", "Needs Review", "Approved", "Rejected", "Needs Rework", "100%", "101%", "Fuzzy %", "Untranslated"].index(seg.get("Status")))
+        c1, c2, c3 = st.columns(3)
+        if c1.button("Save segment", use_container_width=True):
+            seg["Target"] = new_target
+            seg["Status"] = status
+            st.success("Saved.")
+        if c2.button("Approve", use_container_width=True):
+            seg["Target"] = new_target
+            seg["Status"] = "Approved"
+            st.success("Approved.")
+        if c3.button("Approve + Save TM", use_container_width=True):
+            seg["Target"] = new_target
+            seg["Status"] = "Approved"
+            st.session_state.tm_entries.insert(0, {"TM ID": new_id("tm"), "Source Hash": text_hash(seg.get("Source", "")), "Source": seg.get("Source", ""), "Target": new_target, "Language": "", "Approved By": st.session_state.username, "Created": now_iso()})
+            log_audit("TM saved", f"Segment {seg['Segment ID']} approved and saved to TM")
             st.success("Approved and saved to TM.")
-
     with right:
-        st.markdown("#### Glossary · DNT · TM")
-        source = seg.get("Source", "")
-        glossary_matches = [g for g in st.session_state.glossary if g.get("Source Term", "").lower() in source.lower()]
-        dnt_matches = [d for d in st.session_state.dnt_terms if d.get("Term", "").lower() in source.lower()]
-        match, tm_target = best_tm_match(source)
-        st.markdown('<div class="es-assist-box"><span class="es-badge es-badge-green">TM match</span>', unsafe_allow_html=True)
-        st.write(match)
+        st.markdown("### Matches & rules")
+        tm_target, tm_label = best_tm_match(seg.get("Source", ""))
         if tm_target:
-            st.text_area("TM target", value=tm_target, height=90, disabled=True, label_visibility="collapsed")
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="es-assist-box"><span class="es-badge es-badge-cyan">Glossary</span>', unsafe_allow_html=True)
-        if glossary_matches:
-            st.dataframe(pd.DataFrame(glossary_matches), use_container_width=True, hide_index=True)
+            st.markdown(f'<div class="es-ok"><b>TM {tm_label}</b><br>{htmlesc(tm_target)}</div>', unsafe_allow_html=True)
         else:
-            st.caption("No glossary matches.")
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="es-assist-box"><span class="es-badge es-badge-red">DNT</span>', unsafe_allow_html=True)
-        if dnt_matches:
-            st.dataframe(pd.DataFrame(dnt_matches), use_container_width=True, hide_index=True)
+            st.info("No TM match.")
+        st.markdown("#### Glossary")
+        matches = [g for g in st.session_state.glossary if g.get("Source Term", "").lower() in seg.get("Source", "").lower()]
+        if matches:
+            st.dataframe(pd.DataFrame(matches), use_container_width=True, hide_index=True)
         else:
-            st.caption("No DNT matches.")
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.caption("No glossary hits.")
+        st.markdown("#### DNT")
+        dnt_hits = [d for d in st.session_state.dnt_terms if d.get("Term", "").lower() in seg.get("Source", "").lower()]
+        if dnt_hits:
+            st.dataframe(pd.DataFrame(dnt_hits), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No DNT hits.")
 
-    st.markdown("### Bulk target grid")
-    bulk_df = pd.DataFrame(st.session_state.review_segments)
-    edited_df = st.data_editor(bulk_df[["Review ID", "Location", "Match", "Status", "Source", "Target", "Comment"]], use_container_width=True, hide_index=True, disabled=["Review ID", "Location", "Match", "Source"])
-    if st.button("Save bulk grid changes", use_container_width=True):
-        by_id = {row["Review ID"]: row for _, row in edited_df.iterrows()}
-        for i, row in enumerate(st.session_state.review_segments):
-            rid = row["Review ID"]
-            if rid in by_id:
-                st.session_state.review_segments[i]["Target"] = str(by_id[rid].get("Target", ""))
-                st.session_state.review_segments[i]["Status"] = str(by_id[rid].get("Status", ""))
-                st.session_state.review_segments[i]["Comment"] = str(by_id[rid].get("Comment", ""))
-        st.success("Bulk changes saved.")
-    st.download_button("Download Human Review CSV", build_review_export(st.session_state.review_segments), "human_review_segments.csv", "text/csv", use_container_width=True)
+    st.markdown("### Bulk review grid")
+    edited = st.data_editor(pd.DataFrame(segments), use_container_width=True, hide_index=True, num_rows="fixed", key="review_grid")
+    if st.button("Save bulk grid", use_container_width=True):
+        st.session_state.review_segments = edited.to_dict("records")
+        st.success("Bulk grid saved.")
+    st.download_button("Download reviewed segments", edited.to_csv(index=False).encode("utf-8-sig"), "reviewed_segments.csv", "text/csv", use_container_width=True)
 
 
 def scorecards_page() -> None:
-    page_header("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output and generate vendor quality scorecards. Source file is optional.")
-    source_file = st.file_uploader("Source file (optional)", type=["xlsx", "csv", "docx", "txt"], key="score_src")
-    translator_file = st.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="score_trans")
-    reviewer_file = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_rev")
-    if st.button("Generate Scorecard", type="primary", use_container_width=True, disabled=not (translator_file and reviewer_file)):
-        src = extract_file(source_file, mode="review") if source_file else None
-        trans = extract_file(translator_file, mode="review")
-        rev = extract_file(reviewer_file, mode="review")
+    page_header("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output. Source file is optional.")
+    src = st.file_uploader("Source file (optional)", type=["xlsx", "csv", "docx", "txt"], key="score_src")
+    trans = st.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="score_trans")
+    rev = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_rev")
+    if st.button("Generate Scorecard", type="primary", use_container_width=True, disabled=(trans is None or rev is None)):
+        trans_seg = extract_segments_from_file(trans, assume_source_only=False)
+        rev_seg = extract_segments_from_file(rev, assume_source_only=False)
+        src_seg = extract_segments_from_file(src, assume_source_only=True) if src else []
         rows = []
         total_penalty = 0
-        total = min(len(trans.segments), len(rev.segments))
-        for i in range(total):
-            t_seg = trans.segments[i]
-            r_seg = rev.segments[i]
-            source = src.segments[i].get("source", "") if src and i < len(src.segments) else (t_seg.get("source") or r_seg.get("source", ""))
-            translator = t_seg.get("translation") or t_seg.get("target") or t_seg.get("source", "")
-            reviewer = r_seg.get("translation") or r_seg.get("target") or r_seg.get("source", "")
-            changed = clean_text(translator) != clean_text(reviewer)
-            penalty = 0
-            severity = "Pass"
-            category = "No change"
-            if changed:
-                penalty = 2
-                severity = "Minor"
-                category = "Reviewer changed translation"
-                if extract_placeholders(translator) != extract_placeholders(reviewer):
-                    penalty = 10
-                    severity = "Critical"
-                    category = "Placeholder/formatting"
-                elif len(clean_text(translator)) < max(1, len(clean_text(reviewer)) * 0.35):
-                    penalty = 5
-                    severity = "Major"
-                    category = "Omission / incompleteness"
+        max_len = max(len(trans_seg), len(rev_seg))
+        for i in range(max_len):
+            t = trans_seg[i] if i < len(trans_seg) else {}
+            r = rev_seg[i] if i < len(rev_seg) else {}
+            s = src_seg[i].get("Source", "") if i < len(src_seg) else t.get("Source", r.get("Source", ""))
+            old = t.get("Target", t.get("Source", ""))
+            new = r.get("Target", r.get("Source", ""))
+            changed = clean_text(old) != clean_text(new)
+            penalty = 0 if not changed else (5 if len(str(old)) > 0 else 10)
             total_penalty += penalty
-            rows.append({"Segment": i + 1, "Source": source, "Translator": translator, "Reviewer": reviewer, "Changed": "Yes" if changed else "No", "Category": category, "Severity": severity, "Penalty": penalty})
-        score = max(0, round(100 - (total_penalty / max(total, 1)), 2))
-        job = {"Job ID": new_id("job"), "Type": "Scorecard", "File": translator_file.name, "Project": "", "Target": "", "Segments": total, "Issues": sum(1 for r in rows if r["Changed"] == "Yes"), "Status": "Completed", "Created": now_iso()}
-        st.session_state.jobs.append(job)
-        metric_cards([("Quality Score", score, "100 is best"), ("Segments", total, "compared rows"), ("Changed", sum(1 for r in rows if r["Changed"] == "Yes"), "reviewer edits"), ("Penalty", total_penalty, "weighted penalty")])
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        st.download_button("Download Scorecard Excel", download_excel(df, "Scorecard"), "errorsweep_scorecard.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            rows.append({"Segment ID": i+1, "Source": s, "Translator": old, "Reviewer": new, "Changed": "Yes" if changed else "No", "Severity": "Major" if penalty >= 5 else "Pass", "Penalty": penalty})
+        score = max(0, 100 - total_penalty)
+        metric_cards([("Score", f"{score}/100", "quality score"), ("Changed", sum(1 for r in rows if r["Changed"] == "Yes"), "segments"), ("Penalty", total_penalty, "total points")], columns=3)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.download_button("Download scorecard", csv_bytes(rows), "translator_scorecard.csv", "text/csv", use_container_width=True)
+        st.session_state.jobs.insert(0, {"Job ID": new_id("job"), "Type": "Scorecard", "File": trans.name, "Segments": len(rows), "Issues": sum(1 for r in rows if r["Changed"] == "Yes"), "Status": "Completed", "Created": now_iso()})
 
 
 def memory_rules_page() -> None:
-    page_header("Memory & Rules", "Translation memory, glossary, DNT, and rule packs", "Manage approved terminology and reusable corrections.")
-    tab1, tab2, tab3, tab4 = st.tabs(["Translation Memory", "Glossary", "DNT", "Rule Pack Upload"])
-    with tab1:
-        if st.session_state.tm_entries:
-            st.dataframe(pd.DataFrame(st.session_state.tm_entries), use_container_width=True, hide_index=True)
-        else:
-            st.info("No TM entries yet. Approve segments in Human Review to build TM.")
-        with st.form("add_tm"):
+    page_header("Memory & Rules", "Translation memory, glossary, and DNT", "Manage reusable knowledge for review and future jobs.")
+    tab_tm, tab_glossary, tab_dnt = st.tabs(["Translation Memory", "Glossary", "DNT"])
+    with tab_tm:
+        st.dataframe(pd.DataFrame(st.session_state.tm_entries), use_container_width=True, hide_index=True)
+        with st.form("manual_tm"):
             source = st.text_area("Source")
             target = st.text_area("Target")
-            lang = st.selectbox("Target language", SUPPORTED_LANGUAGES, key="tm_lang")
-            if st.form_submit_button("Add TM entry", use_container_width=True):
-                if source and target:
-                    st.session_state.tm_entries.append({"TM ID": new_id("tm"), "Source Hash": text_hash(source), "Source": source, "Target": target, "Target Language": lang, "Domain": "", "Approved By": st.session_state.username, "Created": now_iso()})
-                    st.success("TM entry added.")
-    with tab2:
-        with st.form("add_glossary"):
+            if st.form_submit_button("Add TM", use_container_width=True) and source and target:
+                st.session_state.tm_entries.insert(0, {"TM ID": new_id("tm"), "Source Hash": text_hash(source), "Source": source, "Target": target, "Language": "", "Approved By": st.session_state.username, "Created": now_iso()})
+                st.success("TM added.")
+    with tab_glossary:
+        st.dataframe(pd.DataFrame(st.session_state.glossary), use_container_width=True, hide_index=True)
+        with st.form("manual_gloss"):
             s = st.text_input("Source term")
             t = st.text_input("Target term")
-            src = st.text_input("Rule source", value="Manual")
-            if st.form_submit_button("Add glossary term", use_container_width=True) and s and t:
-                st.session_state.glossary.append({"Source Term": s, "Target Term": t, "Rule Source": src})
+            if st.form_submit_button("Add glossary", use_container_width=True) and s and t:
+                st.session_state.glossary.insert(0, {"Source Term": s, "Target Term": t, "Rule Source": "Manual"})
                 st.success("Glossary term added.")
-        if st.session_state.glossary:
-            st.dataframe(pd.DataFrame(st.session_state.glossary), use_container_width=True, hide_index=True)
-    with tab3:
-        with st.form("add_dnt"):
+    with tab_dnt:
+        st.dataframe(pd.DataFrame(st.session_state.dnt_terms), use_container_width=True, hide_index=True)
+        with st.form("manual_dnt"):
             term = st.text_input("DNT term")
-            src = st.text_input("Rule source", value="Manual")
-            if st.form_submit_button("Add DNT term", use_container_width=True) and term:
-                st.session_state.dnt_terms.append({"Term": term, "Rule Source": src})
+            if st.form_submit_button("Add DNT", use_container_width=True) and term:
+                st.session_state.dnt_terms.insert(0, {"Term": term, "Rule Source": "Manual"})
                 st.success("DNT term added.")
-        if st.session_state.dnt_terms:
-            st.dataframe(pd.DataFrame(st.session_state.dnt_terms), use_container_width=True, hide_index=True)
-    with tab4:
-        rules_zip = st.file_uploader("Upload rules ZIP", type=["zip"], key="rules_manager_zip")
-        if rules_zip and st.button("Parse and save rules", use_container_width=True):
-            glossary, dnt, _ = parse_rules_zip(rules_zip)
-            st.session_state.glossary.extend(glossary)
-            st.session_state.dnt_terms.extend(dnt)
-            st.success(f"Loaded {len(glossary)} glossary term(s) and {len(dnt)} DNT term(s).")
 
 
 def team_roles_page() -> None:
-    page_header("Team & Roles", "Workspace user access", "Invite users, assign workspace roles, and keep platform-owner controls separate.")
-    permission_rows = [
-        {"Action": "Create projects", "Platform Owner": "All workspaces", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
-        {"Action": "Run Pro translation", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
-        {"Action": "Human Review editing", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "Assigned only", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Approve segments", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Save to TM", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Billing", "Platform Owner": "View all", "Workspace Owner": "Yes", "Workspace Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
-        {"Action": "Platform settings", "Platform Owner": "Yes", "Workspace Owner": "No", "Workspace Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
-    ]
-    st.dataframe(pd.DataFrame(permission_rows), use_container_width=True, hide_index=True)
-    if st.session_state.role not in {"Platform Owner", "Workspace Owner", "Workspace Admin"}:
-        st.info("Your role can view permissions but cannot invite or modify users.")
+    if st.session_state.role not in {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"}:
+        page_header("Team & Roles", "Restricted", "Only workspace managers can invite or edit team roles.")
+        st.warning("You cannot manage team roles from this account.")
         return
-    with st.form("invite_user"):
+    page_header("Team & Roles", "Workspace access", "Manage only this workspace team. Platform-wide user access is visible only in the owner console.")
+    with st.form("team_add"):
         c1, c2, c3 = st.columns(3)
         name = c1.text_input("Name")
         email = c2.text_input("Email")
-        role_options = WORKSPACE_ROLES if not is_platform_owner() else ROLES
-        role = c3.selectbox("Role", role_options)
-        if st.form_submit_button("Add / invite user", use_container_width=True) and name and email:
-            st.session_state.team.append({"Name": name, "Email": email, "Role": role, "Status": "Invited"})
-            st.success("User added.")
+        role = c3.selectbox("Role", [r for r in ROLES if r != "Platform Owner"])
+        if st.form_submit_button("Add user", use_container_width=True) and email:
+            st.session_state.team.insert(0, {"Name": name, "Email": email, "Role": role, "Status": "Invited"})
+            st.success("Workspace user added.")
     st.dataframe(pd.DataFrame(st.session_state.team), use_container_width=True, hide_index=True)
 
+
 def billing_page() -> None:
-    page_header("Billing", "Plans and usage", "Plan limits, credit history, invoices, and payment gateway setup.")
-    plans = [
-        ("Trial", "Demo", "Internal testing while platform is built"),
-        ("Pro", "Coming soon", "API translation + QA + Human Review"),
-        ("Agency", "Coming soon", "Projects, team roles, scorecards, and TM"),
-        ("Enterprise", "Custom", "Private workflows and admin controls"),
-    ]
-    metric_cards(plans)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("### Usage")
-        metric_cards([("Credits", "Unlimited", "during build"), ("Jobs", len(st.session_state.jobs), "current workspace")])
-    with c2:
-        st.markdown("### Invoices")
-        st.info("Invoices and Razorpay/Stripe integration will be connected after the core project/job/review workflow is stable.")
-        st.dataframe(pd.DataFrame(columns=["Invoice", "Date", "Amount", "Status"]), use_container_width=True, hide_index=True)
+    page_header("Billing", "Workspace billing", "Workspace users see only their own workspace plan and invoices. Platform-wide payments are owner-only.")
+    metric_cards([("Plan", "Trial", "workspace plan"), ("Credits", "Unlimited", "during build"), ("Invoices", 0, "workspace invoices"), ("Gateway", "Pending", "future integration")])
+    st.markdown('<div class="es-note">Only the platform owner can see the complete payments received ledger across all customers.</div>', unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(columns=["Invoice", "Date", "Amount", "Status"]), use_container_width=True, hide_index=True)
 
 
 def account_page() -> None:
-    page_header("Account", "Profile and workspace context", "View your account type, role, and workspace membership.")
-    metric_cards([
-        ("Account Type", "Platform Owner" if is_platform_owner() else "Workspace User", "permission boundary"),
-        ("Role", st.session_state.role, "current access level"),
-        ("Workspace", st.session_state.get("organization_name", "Workspace"), "active organization"),
-        ("Email", st.session_state.username or "demo", "signed-in identity"),
-    ])
-    st.markdown("### Profile")
-    with st.form("account_settings"):
-        username = st.text_input("Email / username", value=st.session_state.username)
-        org = st.text_input("Organization", value=st.session_state.get("organization_name", "Demo Workspace"), disabled=not is_platform_owner() and st.session_state.role not in {"Workspace Owner", "Workspace Admin"})
-        timezone = st.text_input("Time zone", value="Asia/Kolkata")
-        st.caption("Roles are assigned from Team & Roles or Platform Owner Console. Regular users cannot self-upgrade.")
-        if st.form_submit_button("Save profile", use_container_width=True):
-            st.session_state.username = username
-            if not (not is_platform_owner() and st.session_state.role not in {"Workspace Owner", "Workspace Admin"}):
-                st.session_state.organization_name = org
-            st.success("Profile saved.")
-    if is_platform_owner():
-        st.markdown("### Owner demo role switcher")
-        new_role = st.selectbox("Preview workspace as role", ROLES, index=ROLES.index(st.session_state.role) if st.session_state.role in ROLES else 0)
-        if st.button("Switch current demo role", use_container_width=True):
-            st.session_state.role = new_role
-            st.session_state.account_type = "platform_owner" if new_role == "Platform Owner" else "workspace_user"
-            st.session_state.active_page = "Platform Owner Console" if new_role == "Platform Owner" else "Dashboard"
-            st.rerun()
-
-def admin_page() -> None:
-    page_header("Admin", "Workspace admin", "Workspace-level settings only. Platform-owner controls are kept separate.")
-    if st.session_state.role not in {"Workspace Owner", "Workspace Admin"}:
-        access_denied_page("Admin")
-        return
-    st.markdown("### Workspace controls")
-    c1, c2 = st.columns(2)
-    st.session_state.admin_flags["allow_demo_users"] = c1.toggle("Allow demo workspace users", value=bool(st.session_state.admin_flags.get("allow_demo_users", True)))
-    st.session_state.admin_flags["billing_enabled"] = c2.toggle("Billing enabled for this workspace", value=bool(st.session_state.admin_flags.get("billing_enabled", False)))
-    st.markdown("### Workspace summary")
-    metric_cards([("Projects", len(st.session_state.projects), "workspace projects"), ("Jobs", len(st.session_state.jobs), "workspace jobs"), ("TM", len(st.session_state.tm_entries), "approved entries"), ("Review", len(st.session_state.review_segments), "segments")])
-    st.markdown("### Maintenance")
-    c1, c2 = st.columns(2)
-    if c1.button("Clear jobs/review only", use_container_width=True):
-        st.session_state.jobs = []
-        st.session_state.review_segments = []
-        st.success("Jobs and review sessions cleared.")
-    if c2.button("Clear workspace demo data", use_container_width=True):
-        for key in ["projects", "jobs", "tm_entries", "glossary", "dnt_terms", "review_segments"]:
-            st.session_state[key] = []
-        st.success("Workspace demo data cleared.")
-    st.info("Technical connector names, API secrets, and platform-level controls are hidden from workspace users.")
-
-
-def platform_owner_console_page() -> None:
-    page_header("Platform Owner Console", "Global platform control", "Manage workspaces, plans, global settings, and product-level diagnostics.")
-    if not is_platform_owner():
-        access_denied_page("Platform Owner Console")
-        return
-    metric_cards([
-        ("Workspaces", len(st.session_state.workspaces), "customer organizations"),
-        ("Users", len(st.session_state.team), "demo users in current data"),
-        ("Jobs", len(st.session_state.jobs), "current session jobs"),
-        ("Mode", "Build", "billing and engines optional"),
-    ])
-    tab1, tab2, tab3, tab4 = st.tabs(["Workspaces", "Plans", "Feature Flags", "Security"])
-    with tab1:
-        with st.form("create_workspace"):
-            c1, c2, c3 = st.columns(3)
-            workspace = c1.text_input("Workspace name")
-            owner = c2.text_input("Owner email")
-            plan = c3.selectbox("Plan", ["Trial", "Pro", "Agency", "Enterprise"])
-            if st.form_submit_button("Create workspace", use_container_width=True) and workspace:
-                st.session_state.workspaces.append({"Workspace": workspace, "Owner": owner, "Plan": plan, "Status": "Active", "Users": 1})
-                st.success("Workspace created.")
-        st.dataframe(pd.DataFrame(st.session_state.workspaces), use_container_width=True, hide_index=True)
-    with tab2:
-        st.dataframe(pd.DataFrame([
-            {"Plan": "Trial", "Credits": "Demo", "Projects": 1, "Human Review": "Yes", "Scorecards": "Limited"},
-            {"Plan": "Pro", "Credits": "Monthly", "Projects": 5, "Human Review": "Yes", "Scorecards": "Yes"},
-            {"Plan": "Agency", "Credits": "High volume", "Projects": "Unlimited", "Human Review": "Yes", "Scorecards": "Yes"},
-            {"Plan": "Enterprise", "Credits": "Custom", "Projects": "Custom", "Human Review": "Yes", "Scorecards": "Yes"},
-        ]), use_container_width=True, hide_index=True)
-    with tab3:
-        st.session_state.admin_flags["main_api_required"] = st.toggle("Main API required for Pro translation", value=True)
-        st.session_state.admin_flags["show_local_engine_options"] = st.toggle("Show local/free engine options to users", value=False)
-        st.session_state.admin_flags["scorecards_enabled"] = st.toggle("Enable scorecards", value=True)
-        st.session_state.admin_flags["human_review_enabled"] = st.toggle("Enable Human Review", value=True)
-        st.caption("Local/free engine names remain hidden unless explicitly enabled here.")
-    with tab4:
-        st.info("Production security roadmap: Supabase Auth, organization IDs, row-level security, audit logs, SSO, and owner-only impersonation.")
-        st.dataframe(pd.DataFrame([
-            {"Control": "Owner/user account separation", "Status": "MVP implemented"},
-            {"Control": "Workspace-level admin", "Status": "MVP implemented"},
-            {"Control": "Role-based page filtering", "Status": "MVP implemented"},
-            {"Control": "Persistent database permissions", "Status": "Next Supabase sprint"},
-        ]), use_container_width=True, hide_index=True)
-
+    page_header("Account", "Profile", "View your account identity, role, and workspace access.")
+    metric_cards([("Email", st.session_state.username, "signed-in account"), ("Role", st.session_state.role, "access level"), ("Workspace", st.session_state.workspace_name, "current workspace")], columns=3)
+    st.markdown("### Pages you can access")
+    st.dataframe(pd.DataFrame({"Page": allowed_pages()}), use_container_width=True, hide_index=True)
 
 # ==========================================================
 # Router
 # ==========================================================
 
 def render_app() -> None:
-    page = top_nav()
-    if not can_access(page):
-        access_denied_page(page)
-    elif page == "Dashboard":
-        dashboard_page()
-    elif page == "Projects":
-        projects_page()
-    elif page == "Jobs":
-        jobs_page()
-    elif page == "ErrorSweep QA":
-        qa_page()
-    elif page == "ErrorSweep Pro":
-        pro_page()
-    elif page == "Human Review":
-        human_review_page()
-    elif page == "Scorecards":
-        scorecards_page()
-    elif page == "Memory & Rules":
-        memory_rules_page()
-    elif page == "Team & Roles":
-        team_roles_page()
-    elif page == "Billing":
-        billing_page()
-    elif page == "Account":
-        account_page()
-    elif page == "Admin":
-        admin_page()
-    elif page == "Platform Owner Console":
-        platform_owner_console_page()
-    else:
-        dashboard_page()
+    page = st.session_state.get("active_page", "Dashboard")
+    if page not in allowed_pages():
+        st.session_state.active_page = allowed_pages()[0]
+    page = render_top_nav()
+    routes = {
+        "Owner Console": owner_console_page,
+        "Payments Received": payments_received_page,
+        "User Access Matrix": user_access_matrix_page,
+        "All Workspaces": all_workspaces_page,
+        "Platform Settings": platform_settings_page,
+        "Platform Audit Logs": platform_audit_logs_page,
+        "Dashboard": dashboard_page,
+        "Projects": projects_page,
+        "Jobs": jobs_page,
+        "ErrorSweep QA": qa_page,
+        "ErrorSweep Pro": pro_page,
+        "Human Review": human_review_page,
+        "Scorecards": scorecards_page,
+        "Memory & Rules": memory_rules_page,
+        "Team & Roles": team_roles_page,
+        "Billing": billing_page,
+        "Account": account_page,
+    }
+    routes.get(page, dashboard_page)()
+    st.markdown(f'<div class="es-help" style="margin-top:40px;">ErrorSweep {APP_VERSION} · Main API first · Platform-owner private controls separated from workspace users.</div>', unsafe_allow_html=True)
 
 
-    st.markdown('<div class="es-footer-note">ErrorSweep website platform shell · Main API first · Local/free engines hidden until production-ready.</div>', unsafe_allow_html=True)
-
-
-if not st.session_state.authenticated:
+init_state()
+restore_session_from_url()
+if not st.session_state.get("authenticated"):
     login_page()
 else:
     render_app()
