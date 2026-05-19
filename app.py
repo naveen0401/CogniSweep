@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
 
 st.set_page_config(page_title="ErrorSweep", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
 
-APP_VERSION = "v22 Website Platform"
+APP_VERSION = "v23 Owner/User Accounts"
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 NEEDS_REVIEW_MARKER = "⟦NEEDS HUMAN REVIEW⟧"
 
@@ -49,10 +49,39 @@ DOMAINS = [
 
 PAGES = [
     "Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review",
-    "Scorecards", "Memory & Rules", "Team & Roles", "Billing", "Account", "Admin",
+    "Scorecards", "Memory & Rules", "Team & Roles", "Billing", "Account", "Admin", "Platform Owner Console",
 ]
 
-ROLES = ["Owner", "Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "Super Admin"]
+PLATFORM_ROLES = ["Platform Owner"]
+WORKSPACE_ROLES = ["Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin"]
+ROLES = PLATFORM_ROLES + WORKSPACE_ROLES
+
+PAGE_ACCESS = {
+    "Dashboard": set(ROLES),
+    "Projects": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"},
+    "Jobs": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer"},
+    "ErrorSweep QA": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
+    "ErrorSweep Pro": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"},
+    "Human Review": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer"},
+    "Scorecards": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
+    "Memory & Rules": {"Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Reviewer"},
+    "Team & Roles": {"Platform Owner", "Workspace Owner", "Workspace Admin"},
+    "Billing": {"Platform Owner", "Workspace Owner", "Billing Admin"},
+    "Account": set(ROLES),
+    "Admin": {"Workspace Owner", "Workspace Admin"},
+    "Platform Owner Console": {"Platform Owner"},
+}
+
+def is_platform_owner() -> bool:
+    return st.session_state.get("account_type") == "platform_owner" or st.session_state.get("role") == "Platform Owner"
+
+def available_pages() -> List[str]:
+    role = st.session_state.get("role", "Client Viewer")
+    pages = [p for p in PAGES if role in PAGE_ACCESS.get(p, set())]
+    return pages or ["Dashboard", "Account"]
+
+def can_access(page: str) -> bool:
+    return st.session_state.get("role", "Client Viewer") in PAGE_ACCESS.get(page, set())
 
 PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%[sd]|\$\w+|<[^>]+>)")
 NUMBER_RE = re.compile(r"\d+(?:[.,:]\d+)*")
@@ -208,7 +237,9 @@ def init_state() -> None:
     defaults = {
         "authenticated": False,
         "username": "",
-        "role": "Owner",
+        "role": "Client Viewer",
+        "account_type": "workspace_user",
+        "organization_name": "Demo Workspace",
         "active_page": "Dashboard",
         "projects": [],
         "jobs": [],
@@ -217,7 +248,8 @@ def init_state() -> None:
         "dnt_terms": [],
         "review_segments": [],
         "team": [],
-        "admin_flags": {"demo_mode": True, "billing_enabled": False, "engine_names_visible": False},
+        "workspaces": [],
+        "admin_flags": {"demo_mode": True, "billing_enabled": False, "allow_demo_users": True},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -225,8 +257,13 @@ def init_state() -> None:
 
     if not st.session_state.team:
         st.session_state.team = [
-            {"Name": "Platform Owner", "Email": "owner@errorsweep.local", "Role": "Owner", "Status": "Active"},
-            {"Name": "Reviewer Demo", "Email": "reviewer@errorsweep.local", "Role": "Reviewer", "Status": "Invited"},
+            {"Name": "Workspace Owner", "Email": "owner@demo-workspace.local", "Role": "Workspace Owner", "Status": "Active"},
+            {"Name": "Reviewer Demo", "Email": "reviewer@demo-workspace.local", "Role": "Reviewer", "Status": "Invited"},
+            {"Name": "Translator Demo", "Email": "translator@demo-workspace.local", "Role": "Translator", "Status": "Invited"},
+        ]
+    if not st.session_state.workspaces:
+        st.session_state.workspaces = [
+            {"Workspace": "Demo Workspace", "Owner": "owner@demo-workspace.local", "Plan": "Demo", "Status": "Active", "Users": len(st.session_state.team)},
         ]
 
 init_state()
@@ -929,60 +966,115 @@ Return only JSON array with location, issue_type, severity, wrong_part, suggesti
 
 def login_page() -> None:
     page_header("Account required", "ErrorSweep", "Secure localization QA, translation review, scorecards, and memory workflows.")
-    tab1, tab2, tab3 = st.tabs(["Sign in", "Create account", "Demo access"])
-    with tab1:
-        username = st.text_input("Email / username")
-        password = st.text_input("Password", type="password")
-        if st.button("Sign in", type="primary", use_container_width=True):
-            configured_user = secret("ERRORSWEEP_USERNAME", "admin")
-            configured_pass = secret("ERRORSWEEP_PASSWORD", "")
-            if configured_pass and username == configured_user and password == configured_pass:
+    st.info("Use Platform Owner for product/admin operations. Use Workspace User for client/team workflows.")
+
+    tab_owner, tab_user, tab_demo = st.tabs(["Platform owner", "Workspace user", "Demo access"])
+
+    with tab_owner:
+        st.markdown("### Platform owner sign in")
+        owner_user = st.text_input("Owner email / username", key="owner_login_user")
+        owner_pass = st.text_input("Owner password", type="password", key="owner_login_pass")
+        if st.button("Sign in as platform owner", type="primary", use_container_width=True):
+            expected_user = secret("ERRORSWEEP_OWNER_USERNAME", secret("ERRORSWEEP_USERNAME", "owner"))
+            expected_pass = secret("ERRORSWEEP_OWNER_PASSWORD", secret("ERRORSWEEP_PASSWORD", ""))
+            if expected_pass and owner_user == expected_user and owner_pass == expected_pass:
                 st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.role = "Owner"
+                st.session_state.username = owner_user
+                st.session_state.role = "Platform Owner"
+                st.session_state.account_type = "platform_owner"
+                st.session_state.organization_name = "ErrorSweep Platform"
+                st.session_state.active_page = "Platform Owner Console"
                 st.rerun()
-            elif allow_demo_login() and not configured_pass:
+            elif allow_demo_login() and not expected_pass:
                 st.session_state.authenticated = True
-                st.session_state.username = username or "demo@errorsweep.local"
-                st.session_state.role = "Owner"
+                st.session_state.username = owner_user or "platform-owner@errorsweep.local"
+                st.session_state.role = "Platform Owner"
+                st.session_state.account_type = "platform_owner"
+                st.session_state.organization_name = "ErrorSweep Platform"
+                st.session_state.active_page = "Platform Owner Console"
                 st.rerun()
             else:
-                st.error("Invalid credentials. Use Demo access while building or configure credentials.")
-    with tab2:
-        st.info("Account creation will connect to Supabase/Auth in the backend sprint.")
-        name = st.text_input("Full name")
-        email = st.text_input("Email")
-        if st.button("Create demo account", use_container_width=True):
-            st.session_state.authenticated = True
-            st.session_state.username = email or name or "new-user@errorsweep.local"
-            st.session_state.role = "Owner"
-            st.rerun()
-    with tab3:
-        st.write("Use this while building the platform.")
+                st.error("Invalid platform owner credentials.")
+
+    with tab_user:
+        st.markdown("### Workspace user sign in")
+        user_email = st.text_input("User email / username", key="workspace_login_user")
+        user_pass = st.text_input("Password", type="password", key="workspace_login_pass")
+        if st.button("Sign in to workspace", type="primary", use_container_width=True):
+            expected_user = secret("ERRORSWEEP_USERNAME", "admin")
+            expected_pass = secret("ERRORSWEEP_PASSWORD", "")
+            default_role = secret("ERRORSWEEP_DEFAULT_ROLE", "Workspace Owner")
+            if default_role not in WORKSPACE_ROLES:
+                default_role = "Workspace Owner"
+            if expected_pass and user_email == expected_user and user_pass == expected_pass:
+                st.session_state.authenticated = True
+                st.session_state.username = user_email
+                st.session_state.role = default_role
+                st.session_state.account_type = "workspace_user"
+                st.session_state.organization_name = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
+                st.session_state.active_page = "Dashboard"
+                st.rerun()
+            elif allow_demo_login() and not expected_pass:
+                st.session_state.authenticated = True
+                st.session_state.username = user_email or "workspace-admin@demo-workspace.local"
+                st.session_state.role = "Workspace Owner"
+                st.session_state.account_type = "workspace_user"
+                st.session_state.organization_name = "Demo Workspace"
+                st.session_state.active_page = "Dashboard"
+                st.rerun()
+            else:
+                st.error("Invalid workspace credentials.")
+
+    with tab_demo:
+        st.markdown("### Demo access")
+        demo_role = st.selectbox(
+            "Demo role",
+            ["Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin"],
+            index=1,
+        )
+        demo_name = st.text_input("Demo email", value="demo@errorsweep.local")
         if st.button("Enter demo workspace", type="primary", use_container_width=True, disabled=not allow_demo_login()):
             st.session_state.authenticated = True
-            st.session_state.username = "demo@errorsweep.local"
-            st.session_state.role = "Owner"
+            st.session_state.username = demo_name or "demo@errorsweep.local"
+            st.session_state.role = demo_role
+            st.session_state.account_type = "platform_owner" if demo_role == "Platform Owner" else "workspace_user"
+            st.session_state.organization_name = "ErrorSweep Platform" if demo_role == "Platform Owner" else "Demo Workspace"
+            st.session_state.active_page = "Platform Owner Console" if demo_role == "Platform Owner" else "Dashboard"
             st.rerun()
 
-
 def top_nav() -> str:
-    current = st.session_state.active_page if st.session_state.active_page in PAGES else "Dashboard"
+    pages = available_pages()
+    current = st.session_state.active_page if st.session_state.active_page in pages else pages[0]
+    st.session_state.active_page = current
+    account_label = "Platform owner" if is_platform_owner() else "Workspace user"
+    org = st.session_state.get("organization_name", "Workspace")
     st.markdown(
         f"""
         <div class="es-topbar">
           <div class="es-brand-row">
-            <div class="es-brand">🌐 ErrorSweep <small>{escape(APP_VERSION)} · signed in as {escape(str(st.session_state.username or 'demo user'))}</small></div>
+            <div class="es-brand">🌐 ErrorSweep <small>{escape(APP_VERSION)} · {escape(account_label)} · {escape(org)} · signed in as {escape(str(st.session_state.username or 'demo user'))}</small></div>
             <span class="es-pill">{escape(str(st.session_state.role))}</span>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    # Website-style visible navigation. No hidden sidebar dependency.
-    selected = st.radio("Navigation", PAGES, index=PAGES.index(current), horizontal=True, label_visibility="collapsed")
+    c1, c2 = st.columns([5, 1])
+    selected = c1.selectbox("Open page", pages, index=pages.index(current), label_visibility="visible")
+    if c2.button("Logout", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.username = ""
+        st.session_state.role = "Client Viewer"
+        st.session_state.account_type = "workspace_user"
+        st.session_state.active_page = "Dashboard"
+        st.rerun()
     st.session_state.active_page = selected
     return selected
+
+
+def access_denied_page(page: str) -> None:
+    page_header("Access restricted", page, "Your current role does not have permission to open this workspace area.")
+    st.warning(f"Signed in as {st.session_state.get('role', 'User')}. Ask a workspace owner or platform owner for access.")
 
 
 # ==========================================================
@@ -1382,25 +1474,30 @@ def memory_rules_page() -> None:
 
 
 def team_roles_page() -> None:
-    page_header("Team & Roles", "Role-based access shell", "Define team members, roles, and access boundaries.")
+    page_header("Team & Roles", "Workspace user access", "Invite users, assign workspace roles, and keep platform-owner controls separate.")
     permission_rows = [
-        {"Action": "Create projects", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
-        {"Action": "Run Pro translation", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "Limited", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Approve segments", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Save to TM", "Owner": "Yes", "Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
-        {"Action": "Billing", "Owner": "Yes", "Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
+        {"Action": "Create projects", "Platform Owner": "All workspaces", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
+        {"Action": "Run Pro translation", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "No", "Client": "No"},
+        {"Action": "Human Review editing", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "Assigned only", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Approve segments", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Save to TM", "Platform Owner": "Yes", "Workspace Owner": "Yes", "Workspace Admin": "Yes", "PM": "Yes", "Translator": "No", "Reviewer": "Yes", "Client": "No"},
+        {"Action": "Billing", "Platform Owner": "View all", "Workspace Owner": "Yes", "Workspace Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
+        {"Action": "Platform settings", "Platform Owner": "Yes", "Workspace Owner": "No", "Workspace Admin": "No", "PM": "No", "Translator": "No", "Reviewer": "No", "Client": "No"},
     ]
     st.dataframe(pd.DataFrame(permission_rows), use_container_width=True, hide_index=True)
+    if st.session_state.role not in {"Platform Owner", "Workspace Owner", "Workspace Admin"}:
+        st.info("Your role can view permissions but cannot invite or modify users.")
+        return
     with st.form("invite_user"):
         c1, c2, c3 = st.columns(3)
         name = c1.text_input("Name")
         email = c2.text_input("Email")
-        role = c3.selectbox("Role", ROLES)
+        role_options = WORKSPACE_ROLES if not is_platform_owner() else ROLES
+        role = c3.selectbox("Role", role_options)
         if st.form_submit_button("Add / invite user", use_container_width=True) and name and email:
             st.session_state.team.append({"Name": name, "Email": email, "Role": role, "Status": "Invited"})
             st.success("User added.")
     st.dataframe(pd.DataFrame(st.session_state.team), use_container_width=True, hide_index=True)
-
 
 def billing_page() -> None:
     page_header("Billing", "Plans and usage", "Plan limits, credit history, invoices, and payment gateway setup.")
@@ -1422,38 +1519,100 @@ def billing_page() -> None:
 
 
 def account_page() -> None:
-    page_header("Account", "Workspace profile", "Manage user profile and workspace settings.")
+    page_header("Account", "Profile and workspace context", "View your account type, role, and workspace membership.")
+    metric_cards([
+        ("Account Type", "Platform Owner" if is_platform_owner() else "Workspace User", "permission boundary"),
+        ("Role", st.session_state.role, "current access level"),
+        ("Workspace", st.session_state.get("organization_name", "Workspace"), "active organization"),
+        ("Email", st.session_state.username or "demo", "signed-in identity"),
+    ])
+    st.markdown("### Profile")
     with st.form("account_settings"):
-        username = st.text_input("Signed in as", value=st.session_state.username)
-        role = st.selectbox("Role", ROLES, index=ROLES.index(st.session_state.role) if st.session_state.role in ROLES else 0)
-        org = st.text_input("Organization", value="Default Organization")
+        username = st.text_input("Email / username", value=st.session_state.username)
+        org = st.text_input("Organization", value=st.session_state.get("organization_name", "Demo Workspace"), disabled=not is_platform_owner() and st.session_state.role not in {"Workspace Owner", "Workspace Admin"})
         timezone = st.text_input("Time zone", value="Asia/Kolkata")
-        if st.form_submit_button("Save account settings", use_container_width=True):
+        st.caption("Roles are assigned from Team & Roles or Platform Owner Console. Regular users cannot self-upgrade.")
+        if st.form_submit_button("Save profile", use_container_width=True):
             st.session_state.username = username
-            st.session_state.role = role
-            st.success("Account settings saved.")
-
+            if not (not is_platform_owner() and st.session_state.role not in {"Workspace Owner", "Workspace Admin"}):
+                st.session_state.organization_name = org
+            st.success("Profile saved.")
+    if is_platform_owner():
+        st.markdown("### Owner demo role switcher")
+        new_role = st.selectbox("Preview workspace as role", ROLES, index=ROLES.index(st.session_state.role) if st.session_state.role in ROLES else 0)
+        if st.button("Switch current demo role", use_container_width=True):
+            st.session_state.role = new_role
+            st.session_state.account_type = "platform_owner" if new_role == "Platform Owner" else "workspace_user"
+            st.session_state.active_page = "Platform Owner Console" if new_role == "Platform Owner" else "Dashboard"
+            st.rerun()
 
 def admin_page() -> None:
-    page_header("Admin", "Platform admin", "Clean workspace controls, feature flags, and maintenance tasks.")
-    st.markdown("### Feature controls")
-    c1, c2, c3 = st.columns(3)
-    st.session_state.admin_flags["demo_mode"] = c1.toggle("Demo mode", value=bool(st.session_state.admin_flags.get("demo_mode", True)))
-    st.session_state.admin_flags["billing_enabled"] = c2.toggle("Billing enabled", value=bool(st.session_state.admin_flags.get("billing_enabled", False)))
-    st.session_state.admin_flags["engine_names_visible"] = c3.toggle("Show engine diagnostics", value=bool(st.session_state.admin_flags.get("engine_names_visible", False)))
+    page_header("Admin", "Workspace admin", "Workspace-level settings only. Platform-owner controls are kept separate.")
+    if st.session_state.role not in {"Workspace Owner", "Workspace Admin"}:
+        access_denied_page("Admin")
+        return
+    st.markdown("### Workspace controls")
+    c1, c2 = st.columns(2)
+    st.session_state.admin_flags["allow_demo_users"] = c1.toggle("Allow demo workspace users", value=bool(st.session_state.admin_flags.get("allow_demo_users", True)))
+    st.session_state.admin_flags["billing_enabled"] = c2.toggle("Billing enabled for this workspace", value=bool(st.session_state.admin_flags.get("billing_enabled", False)))
     st.markdown("### Workspace summary")
-    metric_cards([("Projects", len(st.session_state.projects), "saved in session"), ("Jobs", len(st.session_state.jobs), "current workspace"), ("TM", len(st.session_state.tm_entries), "approved entries"), ("Review", len(st.session_state.review_segments), "segments")])
+    metric_cards([("Projects", len(st.session_state.projects), "workspace projects"), ("Jobs", len(st.session_state.jobs), "workspace jobs"), ("TM", len(st.session_state.tm_entries), "approved entries"), ("Review", len(st.session_state.review_segments), "segments")])
     st.markdown("### Maintenance")
     c1, c2 = st.columns(2)
-    if c1.button("Clear demo jobs/review only", use_container_width=True):
+    if c1.button("Clear jobs/review only", use_container_width=True):
         st.session_state.jobs = []
         st.session_state.review_segments = []
         st.success("Jobs and review sessions cleared.")
-    if c2.button("Clear all demo workspace data", use_container_width=True):
+    if c2.button("Clear workspace demo data", use_container_width=True):
         for key in ["projects", "jobs", "tm_entries", "glossary", "dnt_terms", "review_segments"]:
             st.session_state[key] = []
-        st.success("Demo workspace cleared.")
-    st.info("Technical connector names and secrets are intentionally hidden from user-facing pages.")
+        st.success("Workspace demo data cleared.")
+    st.info("Technical connector names, API secrets, and platform-level controls are hidden from workspace users.")
+
+
+def platform_owner_console_page() -> None:
+    page_header("Platform Owner Console", "Global platform control", "Manage workspaces, plans, global settings, and product-level diagnostics.")
+    if not is_platform_owner():
+        access_denied_page("Platform Owner Console")
+        return
+    metric_cards([
+        ("Workspaces", len(st.session_state.workspaces), "customer organizations"),
+        ("Users", len(st.session_state.team), "demo users in current data"),
+        ("Jobs", len(st.session_state.jobs), "current session jobs"),
+        ("Mode", "Build", "billing and engines optional"),
+    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["Workspaces", "Plans", "Feature Flags", "Security"])
+    with tab1:
+        with st.form("create_workspace"):
+            c1, c2, c3 = st.columns(3)
+            workspace = c1.text_input("Workspace name")
+            owner = c2.text_input("Owner email")
+            plan = c3.selectbox("Plan", ["Trial", "Pro", "Agency", "Enterprise"])
+            if st.form_submit_button("Create workspace", use_container_width=True) and workspace:
+                st.session_state.workspaces.append({"Workspace": workspace, "Owner": owner, "Plan": plan, "Status": "Active", "Users": 1})
+                st.success("Workspace created.")
+        st.dataframe(pd.DataFrame(st.session_state.workspaces), use_container_width=True, hide_index=True)
+    with tab2:
+        st.dataframe(pd.DataFrame([
+            {"Plan": "Trial", "Credits": "Demo", "Projects": 1, "Human Review": "Yes", "Scorecards": "Limited"},
+            {"Plan": "Pro", "Credits": "Monthly", "Projects": 5, "Human Review": "Yes", "Scorecards": "Yes"},
+            {"Plan": "Agency", "Credits": "High volume", "Projects": "Unlimited", "Human Review": "Yes", "Scorecards": "Yes"},
+            {"Plan": "Enterprise", "Credits": "Custom", "Projects": "Custom", "Human Review": "Yes", "Scorecards": "Yes"},
+        ]), use_container_width=True, hide_index=True)
+    with tab3:
+        st.session_state.admin_flags["main_api_required"] = st.toggle("Main API required for Pro translation", value=True)
+        st.session_state.admin_flags["show_local_engine_options"] = st.toggle("Show local/free engine options to users", value=False)
+        st.session_state.admin_flags["scorecards_enabled"] = st.toggle("Enable scorecards", value=True)
+        st.session_state.admin_flags["human_review_enabled"] = st.toggle("Enable Human Review", value=True)
+        st.caption("Local/free engine names remain hidden unless explicitly enabled here.")
+    with tab4:
+        st.info("Production security roadmap: Supabase Auth, organization IDs, row-level security, audit logs, SSO, and owner-only impersonation.")
+        st.dataframe(pd.DataFrame([
+            {"Control": "Owner/user account separation", "Status": "MVP implemented"},
+            {"Control": "Workspace-level admin", "Status": "MVP implemented"},
+            {"Control": "Role-based page filtering", "Status": "MVP implemented"},
+            {"Control": "Persistent database permissions", "Status": "Next Supabase sprint"},
+        ]), use_container_width=True, hide_index=True)
 
 
 # ==========================================================
@@ -1462,7 +1621,9 @@ def admin_page() -> None:
 
 def render_app() -> None:
     page = top_nav()
-    if page == "Dashboard":
+    if not can_access(page):
+        access_denied_page(page)
+    elif page == "Dashboard":
         dashboard_page()
     elif page == "Projects":
         projects_page()
@@ -1486,8 +1647,11 @@ def render_app() -> None:
         account_page()
     elif page == "Admin":
         admin_page()
+    elif page == "Platform Owner Console":
+        platform_owner_console_page()
     else:
         dashboard_page()
+
 
     st.markdown('<div class="es-footer-note">ErrorSweep website platform shell · Main API first · Local/free engines hidden until production-ready.</div>', unsafe_allow_html=True)
 
