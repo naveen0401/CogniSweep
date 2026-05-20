@@ -205,12 +205,3 @@ if __name__ == "__main__":
     print("Using model:", route.model)
     print("Using base_url:", route.base_url)
 
-    items, usage = ai_json_items(
-        system_prompt="You are a helpful assistant that extracts error types from logs.",
-        user_prompt="Extract error types from this log: '2024-01-01 ERROR Something bad happened'",
-        route=route,
-        temperature=0.0,
-        max_tokens=100,
-    )
-    print("Extracted items:", items)
-    print("Usage info:", usage)

@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
+
+try:
+    from managed_ai_router import ai_json_items, select_ai_route
+except Exception:
+    ai_json_items = None
+    select_ai_route = None
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -28,12 +34,12 @@ from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v28
-# Website-style localization platform shell
+# ErrorSweep Platform v29
+# Website-style localization platform shell + Managed AI / Keyless AI routing
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v28 Website Platform + Excel Scorecard"
+APP_VERSION = "v29 Platform + Managed AI"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -525,6 +531,7 @@ def init_state() -> None:
             {"email": "reviewer@errorsweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "plan": "Trial", "status": "Active"},
         ],
         "audit_logs": [],
+        "ai_usage_events": [],
         "selected_review_index": 0,
         "selected_subtitle_index": 0,
         "subtitle_editor_active": False,
@@ -885,40 +892,152 @@ def openai_client() -> Optional[OpenAI]:
     return OpenAI(api_key=key)
 
 
+def current_ai_route_label() -> str:
+    """Small safe label for UI. Do not expose base URLs or tokens to normal users."""
+    if st.session_state.get("byo_openai_api_key"):
+        return "BYO key active"
+    if secret("ERRORSWEEP_MANAGED_AI_BASE_URL", ""):
+        return "AI included in workspace"
+    if secret("OPENAI_API_KEY", ""):
+        return "Platform AI active"
+    return "AI not configured"
+
+
+def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
+    """Session-level MVP usage log. Later this can be saved in Supabase ai_usage_events."""
+    st.session_state.setdefault("ai_usage_events", [])
+    st.session_state.ai_usage_events.insert(0, {
+        "time": now_stamp() if "now_stamp" in globals() else datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "purpose": purpose,
+        "provider": usage.get("provider", "unknown"),
+        "model": usage.get("model", ""),
+        "managed": usage.get("managed", False),
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "success": usage.get("success", False),
+        "error": usage.get("error", ""),
+        "segments": segment_count,
+    })
+
+
 def call_main_api_translate(texts: List[str], target_language: str, domain: str) -> List[str]:
-    client = openai_client()
-    if client is None:
-        return ["" for _ in texts]
-    instructions = (
-        "You are a professional localization translator. Return JSON only. "
-        "Preserve placeholders like {{name}}, tags, URLs, numbers, emojis, and product names unless context requires localization."
-    )
-    prompt = {
-        "target_language": target_language,
-        "domain": domain,
-        "texts": texts,
-        "output_format": [{"index": 0, "translation": "translated text"}],
-    }
-    try:
-        response = client.responses.create(
-            model=secret("OPENAI_MODEL", DEFAULT_MODEL),
-            instructions=instructions,
-            input=json.dumps(prompt, ensure_ascii=False),
-            max_output_tokens=4000,
-        )
-        raw = response.output_text.strip()
-        raw = re.sub(r"^```json\s*|\s*```$", "", raw)
-        data = json.loads(raw[raw.find("["):raw.rfind("]")+1]) if "[" in raw and "]" in raw else json.loads(raw)
-        result = [""] * len(texts)
-        for item in data:
-            idx = int(item.get("index", 0))
-            if 0 <= idx < len(result):
-                result[idx] = safe_text(item.get("translation", ""))
-        return result
-    except Exception as exc:
-        st.error(f"Translation service error: {exc}")
+    """Translate through BYO OpenAI key first, then Managed AI/vLLM, then platform OpenAI fallback.
+
+    This is the core Managed AI / Keyless AI route:
+    - user key in st.session_state['byo_openai_api_key'] wins
+    - otherwise ERRORSWEEP_MANAGED_AI_BASE_URL is used
+    - otherwise OPENAI_API_KEY is used if available
+    """
+    if not texts:
+        return []
+
+    if ai_json_items is None or select_ai_route is None:
+        st.error("Managed AI router file is missing. Add managed_ai_router.py beside app.py.")
         return ["" for _ in texts]
 
+    try:
+        route = select_ai_route(
+            user_openai_key=st.session_state.get("byo_openai_api_key", ""),
+            purpose="translate",
+        )
+    except Exception as exc:
+        st.error(f"AI route is not configured: {exc}")
+        return ["" for _ in texts]
+
+    # Compact prompt works better for self-hosted/open-source models.
+    system_prompt = f"""
+You are ErrorSweep AI, a professional localization translator.
+Return JSON only. Do not use markdown.
+
+Task:
+Translate source strings into {target_language} for a {domain} localization project.
+
+Hard rules:
+1. Preserve placeholders exactly: {{{{email}}}}, {{{{password}}}}, %s, %d, <tags>, URLs, emails.
+2. Preserve numbers, units, emoji/icons, bullets, and product names.
+3. Preserve DNT/client locked terms if they appear.
+4. Square bracket UI labels may be localized inside brackets, but keep the bracket structure.
+5. Do not leave translations blank.
+6. Return a JSON object with key "items".
+
+Output shape:
+{{
+  "items": [
+    {{"index": 0, "translation": "translated text"}}
+  ]
+}}
+"""
+
+    payload = {
+        "target_language": target_language,
+        "domain": domain,
+        "texts": [{"index": i, "source": text} for i, text in enumerate(texts)],
+    }
+
+    items, usage = ai_json_items(
+        system_prompt=system_prompt,
+        user_prompt=json.dumps(payload, ensure_ascii=False),
+        route=route,
+        temperature=0.0,
+        max_tokens=4500,
+    )
+    log_ai_usage_event(usage, "translate", len(texts))
+
+    result = [""] * len(texts)
+    for item in items:
+        try:
+            idx = int(item.get("index", 0))
+        except Exception:
+            continue
+        if 0 <= idx < len(result):
+            result[idx] = safe_text(item.get("translation", ""))
+
+    if not any(result) and usage.get("error"):
+        st.error(f"Translation service error: {usage.get('error')}")
+    return result
+
+
+def call_main_api_qa(rows: List[Dict[str, Any]], domain: str, strictness: str = "Standard") -> List[Dict[str, Any]]:
+    """Optional Managed AI QA route. Deterministic checks still run first elsewhere."""
+    if not rows:
+        return []
+    if ai_json_items is None or select_ai_route is None:
+        return []
+    try:
+        route = select_ai_route(
+            user_openai_key=st.session_state.get("byo_openai_api_key", ""),
+            purpose="qa",
+        )
+    except Exception:
+        return []
+
+    system_prompt = """
+You are ErrorSweep AI, a conservative localization QA reviewer.
+Return JSON only. Do not invent errors.
+Flag only real issues supported by source/target evidence.
+DNT/placeholder/number damage is severe. Empty target is Critical.
+
+Output shape:
+{"items":[{"id":1,"issue":"short issue","severity":"Minor|Major|Critical","suggestion":"fix","reason":"why"}]}
+"""
+    payload = {
+        "domain": domain,
+        "strictness": strictness,
+        "segments": [
+            {"id": r.get("id"), "source": r.get("source", ""), "target": r.get("target", "")}
+            for r in rows[:80]
+        ],
+    }
+    items, usage = ai_json_items(
+        system_prompt=system_prompt,
+        user_prompt=json.dumps(payload, ensure_ascii=False),
+        route=route,
+        temperature=0.0,
+        max_tokens=3000,
+    )
+    log_ai_usage_event(usage, "qa", len(rows[:80]))
+    return items
 
 def auto_detect_domain(text_sample: str) -> str:
     t = text_sample.lower()
@@ -1122,6 +1241,7 @@ def page_qa() -> None:
 
 def page_pro() -> None:
     hero("ErrorSweep Pro", "Translate + QA + Human Review", "Use main API translation first, then route uncertain segments to Human Review.")
+    st.caption(f"AI access: {current_ai_route_label()}")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
@@ -1139,7 +1259,7 @@ def page_pro() -> None:
         st.info(f"Detected domain: {domain}")
 
         source_texts = [r.get("source", "") or r.get("target", "") for r in rows]
-        with st.spinner("Translating with main API..."):
+        with st.spinner("Translating with available AI route..."):
             translations = call_main_api_translate(source_texts, target_language, domain)
 
         review_rows = []
@@ -1977,6 +2097,29 @@ def page_account() -> None:
     st.write("Email:", user.get("email"))
     st.write("Role:", user.get("role"))
     st.write("Workspace:", user.get("workspace"))
+
+    st.markdown("### AI access")
+    st.caption("Use included AI, or add your own OpenAI key for BYO-Key mode. Your key is kept only in this session for the MVP.")
+    current_mode = "BYO key active" if st.session_state.get("byo_openai_api_key") else current_ai_route_label()
+    st.info(f"Current route: {current_mode}")
+    with st.form("byo_key_form"):
+        byo_key = st.text_input("Your OpenAI API key (optional)", type="password", placeholder="sk-...", help="Leave blank to use included Managed AI if enabled.")
+        byo_model = st.text_input("OpenAI model for BYO key", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
+        col_a, col_b = st.columns(2)
+        save_key = col_a.form_submit_button("Use this key", use_container_width=True)
+        clear_key = col_b.form_submit_button("Clear BYO key", use_container_width=True)
+    if save_key:
+        if byo_key.strip():
+            st.session_state["byo_openai_api_key"] = byo_key.strip()
+            st.session_state["byo_openai_model"] = byo_model.strip() or DEFAULT_MODEL
+            st.success("BYO OpenAI key activated for this session.")
+        else:
+            st.warning("No key entered. Included AI will be used if configured.")
+    if clear_key:
+        st.session_state.pop("byo_openai_api_key", None)
+        st.session_state.pop("byo_openai_model", None)
+        st.success("BYO key cleared. Included AI will be used if configured.")
+
     st.checkbox("Email notifications", value=True)
     st.checkbox("Show review hints", value=True)
 
@@ -2023,6 +2166,13 @@ def page_owner_console() -> None:
     c1.info("Review all workspace access from User Access Matrix.")
     c2.info("Track received payments from Payments Received.")
     c3.info("Control global feature flags from Platform Settings.")
+
+    st.markdown("### Managed AI usage")
+    usage_rows = st.session_state.get("ai_usage_events", [])
+    if usage_rows:
+        st.dataframe(pd.DataFrame(usage_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No Managed AI/BYO usage logged in this session yet.")
 
 
 def page_payments_received() -> None:
