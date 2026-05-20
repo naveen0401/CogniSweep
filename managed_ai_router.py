@@ -1,12 +1,13 @@
 """
-managed_ai_router.py
+managed_ai_router.py — ErrorSweep Managed AI safe fallback router
 
-Drop-in router for ErrorSweep Managed AI / Keyless AI.
+What this file does:
+1. If the user added their own OpenAI API key, use that key.
+2. If Managed AI/vLLM is explicitly enabled and reachable, use it.
+3. If Managed AI fails or is not configured, fall back to the platform OpenAI key.
 
-What it does:
-1. If the user has their own OpenAI API key, use OpenAI.
-2. If the user has no key, use your self-hosted vLLM server.
-3. Both routes use the OpenAI Python SDK, because vLLM is OpenAI-compatible.
+This prevents the app from showing 59/59 untranslated rows when a placeholder or dead
+Managed AI endpoint is configured.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import streamlit as st
-except Exception:  # Allows using this file outside Streamlit too
+except Exception:
     st = None
 
 from openai import OpenAI
@@ -27,21 +28,20 @@ from openai import OpenAI
 
 @dataclass
 class AIRoute:
-    provider: str          # "openai_byok" or "managed_vllm"
-    model: str             # model name to send to the API
-    api_key: str           # OpenAI key or private vLLM token
-    base_url: Optional[str] # None for OpenAI, https://.../v1 for vLLM
-    managed: bool          # True when platform pays/hosts engine
+    provider: str              # openai_byok | managed_vllm | openai_platform
+    model: str
+    api_key: str
+    base_url: Optional[str]
+    managed: bool
 
 
 def _secret(name: str, default: str = "") -> str:
-    """Read value from environment first, then Streamlit secrets."""
     if os.environ.get(name):
         return os.environ[name]
     if st is not None:
         try:
             value = st.secrets.get(name)
-            if value:
+            if value is not None:
                 return str(value)
         except Exception:
             pass
@@ -57,6 +57,12 @@ def _session_value(name: str, default: str = "") -> str:
     return default
 
 
+def _as_bool(value: str, default: bool = False) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
 def _normalize_base_url(url: str) -> str:
     url = (url or "").strip().rstrip("/")
     if url and not url.endswith("/v1"):
@@ -64,50 +70,77 @@ def _normalize_base_url(url: str) -> str:
     return url
 
 
+def _is_placeholder_url(url: str) -> bool:
+    low = (url or "").lower()
+    return (
+        not low
+        or "yourdomain.com" in low
+        or "your-domain" in low
+        or "example.com" in low
+        or "paste" in low
+        or "replace" in low
+    )
+
+
+def _openai_default_model() -> str:
+    return _secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", _secret("OPENAI_MODEL", "gpt-4o-mini"))
+
+
+def _managed_model() -> str:
+    return _secret("ERRORSWEEP_MANAGED_AI_MODEL", "errorsweep-managed")
+
+
+def platform_openai_route() -> Optional[AIRoute]:
+    platform_key = _secret("OPENAI_API_KEY", "").strip()
+    if not platform_key:
+        return None
+    return AIRoute(
+        provider="openai_platform",
+        model=_openai_default_model(),
+        api_key=platform_key,
+        base_url=None,
+        managed=True,
+    )
+
+
 def select_ai_route(user_openai_key: str = "", purpose: str = "translate") -> AIRoute:
-    """
-    Main routing logic.
+    """Choose the first route to try.
 
-    Use this before QA, Pro translation, scorecard AI, or review AI.
+    Safe default:
+    - BYO user key always wins.
+    - Managed AI/vLLM is used only when ERRORSWEEP_MANAGED_AI_ENABLED=true
+      and the URL is not a placeholder.
+    - Otherwise use platform OPENAI_API_KEY.
     """
-
-    # 1) User's own key from input/session wins.
     user_key = (user_openai_key or _session_value("byo_openai_api_key", "")).strip()
     if user_key:
         return AIRoute(
             provider="openai_byok",
-            model=_session_value("byo_openai_model", _secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", "gpt-4o-mini")),
+            model=_session_value("byo_openai_model", _openai_default_model()),
             api_key=user_key,
             base_url=None,
             managed=False,
         )
 
-    # 2) Otherwise use your managed vLLM endpoint.
+    managed_enabled = _as_bool(_secret("ERRORSWEEP_MANAGED_AI_ENABLED", "false"), default=False)
     managed_base_url = _normalize_base_url(_secret("ERRORSWEEP_MANAGED_AI_BASE_URL", ""))
-    managed_api_key = _secret("ERRORSWEEP_MANAGED_AI_API_KEY", "errorsweep-managed-token")
-    managed_model = _secret("ERRORSWEEP_MANAGED_AI_MODEL", "errorsweep-managed")
 
-    if managed_base_url:
+    if managed_enabled and not _is_placeholder_url(managed_base_url):
         return AIRoute(
             provider="managed_vllm",
-            model=managed_model,
-            api_key=managed_api_key,
+            model=_managed_model(),
+            api_key=_secret("ERRORSWEEP_MANAGED_AI_API_KEY", "errorsweep-managed-token"),
             base_url=managed_base_url,
             managed=True,
         )
 
-    # 3) Final fallback: platform OpenAI key, if you still want it.
-    platform_key = _secret("OPENAI_API_KEY", "")
-    if platform_key:
-        return AIRoute(
-            provider="openai_platform",
-            model=_secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"),
-            api_key=platform_key,
-            base_url=None,
-            managed=True,
-        )
+    route = platform_openai_route()
+    if route:
+        return route
 
-    raise RuntimeError("No AI route available. Add user API key or configure Managed AI endpoint.")
+    raise RuntimeError(
+        "No AI route available. Add OPENAI_API_KEY in Streamlit Secrets, or configure a live Managed AI endpoint."
+    )
 
 
 def get_ai_client(route: AIRoute) -> OpenAI:
@@ -117,7 +150,6 @@ def get_ai_client(route: AIRoute) -> OpenAI:
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
-    """Open-source models sometimes wrap JSON in text. This safely extracts it."""
     text = (text or "").strip()
     text = re.sub(r"^```json\s*", "", text, flags=re.I)
     text = re.sub(r"^```\s*", "", text)
@@ -140,25 +172,14 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     return {"items": []}
 
 
-def ai_json_items(
+def _chat_json_items_once(
+    route: AIRoute,
     system_prompt: str,
     user_prompt: str,
-    route: Optional[AIRoute] = None,
-    user_openai_key: str = "",
-    temperature: float = 0.0,
-    max_tokens: int = 3000,
+    temperature: float,
+    max_tokens: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """
-    One function for both OpenAI and vLLM.
-
-    Expected model response format:
-    {
-      "items": [ ... ]
-    }
-    """
-    route = route or select_ai_route(user_openai_key=user_openai_key)
     client = get_ai_client(route)
-
     usage_info = {
         "provider": route.provider,
         "model": route.model,
@@ -193,15 +214,59 @@ def ai_json_items(
         return data.get("items", []), usage_info
 
     except Exception as exc:
-        usage_info["error"] = str(exc)[:500]
+        usage_info["error"] = str(exc)[:700]
         return [], usage_info
 
 
-# Simple test from terminal:
-# python managed_ai_router.py
+def ai_json_items(
+    system_prompt: str,
+    user_prompt: str,
+    route: Optional[AIRoute] = None,
+    user_openai_key: str = "",
+    temperature: float = 0.0,
+    max_tokens: int = 3000,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """One function for OpenAI BYO, Managed vLLM, and platform OpenAI fallback.
+
+    If Managed AI is selected but connection fails, this function automatically
+    tries OPENAI_API_KEY as a fallback. This keeps translations working while the
+    Managed AI server is not yet live.
+    """
+    try:
+        route = route or select_ai_route(user_openai_key=user_openai_key)
+    except Exception as exc:
+        return [], {
+            "provider": "none",
+            "model": "",
+            "managed": False,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "success": False,
+            "error": str(exc)[:700],
+        }
+
+    items, usage = _chat_json_items_once(route, system_prompt, user_prompt, temperature, max_tokens)
+
+    # Safe fallback: Managed AI/vLLM failed, but platform OpenAI key is available.
+    if not items and not usage.get("success") and route.provider == "managed_vllm":
+        fallback = platform_openai_route()
+        if fallback:
+            fallback_items, fallback_usage = _chat_json_items_once(
+                fallback, system_prompt, user_prompt, temperature, max_tokens
+            )
+            fallback_usage["error"] = (
+                "Managed AI route failed, used platform OpenAI fallback. "
+                f"Managed error: {usage.get('error', '')[:350]}"
+            )
+            return fallback_items, fallback_usage
+
+    return items, usage
+
+
 if __name__ == "__main__":
-    route = select_ai_route()
-    print("Using provider:", route.provider)
-    print("Using model:", route.model)
-    print("Using base_url:", route.base_url)
+    selected = select_ai_route()
+    print("Provider:", selected.provider)
+    print("Model:", selected.model)
+    print("Base URL:", selected.base_url)
 
