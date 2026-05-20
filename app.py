@@ -24,18 +24,18 @@ from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v25
+# ErrorSweep Platform v27
 # Website-style localization platform shell
-# Owner console + workspace workflows + Human Review + Subtitle/Transcription editor
+# Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v26 Website Platform + Compact Subtitle/Transcription Editor"
+APP_VERSION = "v27 Website Platform + Focused Subtitle/Transcription Workspace"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
 st.set_page_config(
     page_title="ErrorSweep",
-    page_icon="🌐",
+    page_icon="🧹",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -120,8 +120,13 @@ html, body, [class*="css"] {
   border-radius: 13px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--es-green), var(--es-cyan));
-  color: white;
+  background:
+    linear-gradient(135deg, rgba(0,217,133,.98), rgba(52,189,246,.92));
+  color: #05131c;
+  font-weight: 950;
+  font-size: 14px;
+  letter-spacing: -.08em;
+  position: relative;
   box-shadow: 0 10px 30px rgba(52, 189, 246, .22);
 }
 
@@ -335,13 +340,13 @@ html, body, [class*="css"] {
   margin: 6px 0 14px;
 }
 [data-testid="stVideo"] video {
-  max-height: 340px !important;
+  max-height: 220px !important;
   object-fit: contain !important;
   background: #000 !important;
   border-radius: 16px !important;
 }
 [data-testid="stVideo"] {
-  max-width: 760px !important;
+  max-width: 520px !important;
   margin-left: auto !important;
   margin-right: auto !important;
 }
@@ -518,6 +523,12 @@ def init_state() -> None:
         "audit_logs": [],
         "selected_review_index": 0,
         "selected_subtitle_index": 0,
+        "subtitle_editor_active": False,
+        "subtitle_workflow": "Transcription",
+        "subtitle_video_bytes": None,
+        "subtitle_video_name": "",
+        "subtitle_video_type": "video/mp4",
+        "show_timing_grid": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -609,7 +620,7 @@ def render_navigation() -> None:
     st.markdown(
         f"""
         <div class="es-rail">
-          <div class="es-logo"><span class="es-logo-badge">🌐</span><span>ErrorSweep</span></div>
+          <div class="es-logo"><span class="es-logo-badge">ES</span><span>ErrorSweep</span></div>
           <div class="es-small">{APP_VERSION}</div>
           <div class="es-small" style="margin-top:8px;">Signed in as<br><b>{escape(user.get("email",""))}</b></div>
           <div style="margin-top:10px;"><span class="es-chip green">{escape(current_role())}</span></div>
@@ -664,19 +675,17 @@ def hero(kicker: str, title: str, subtitle: str) -> None:
 
 
 def metrics(cards: List[Tuple[str, Any, str]]) -> None:
-    """Render metric cards using native Streamlit elements.
-
-    Previous HTML metric grids could appear as raw <div> text in some Streamlit
-    render contexts. Native metric cards avoid that issue completely.
-    """
+    """Render metric cards without raw HTML."""
     if not cards:
         return
     cols = st.columns(min(4, len(cards)))
     for idx, (label, value, note) in enumerate(cards):
         with cols[idx % len(cols)]:
-            st.metric(str(label), value)
-            if note:
-                st.caption(str(note))
+            with st.container(border=True):
+                st.caption(str(label).upper())
+                st.markdown(f"### {escape(str(value))}")
+                if note:
+                    st.caption(str(note))
 
 
 def safe_text(x: Any) -> str:
@@ -997,12 +1006,15 @@ def page_dashboard() -> None:
     ])
     st.markdown("### Recommended next steps")
     c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown('<div class="es-card"><h3>📁 Create a project</h3><p class="es-small">Set source/target languages, domain, and reusable rules.</p></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown('<div class="es-card"><h3>🚀 Run QA or Pro</h3><p class="es-small">Upload bilingual files or source files and route outputs to review.</p></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown('<div class="es-card"><h3>✍️ Open Human Review</h3><p class="es-small">Edit text, subtitles, or transcription output and save approved TM.</p></div>', unsafe_allow_html=True)
+    with c1.container(border=True):
+        st.markdown("### 📁 Create a project")
+        st.caption("Set source/target languages, domain, and reusable rules.")
+    with c2.container(border=True):
+        st.markdown("### 🚀 Run QA or Pro")
+        st.caption("Upload bilingual files or source files and route outputs to review.")
+    with c3.container(border=True):
+        st.markdown("### ✍️ Open Human Review")
+        st.caption("Edit text, subtitles, or transcription output and save approved TM.")
 
     st.markdown("### Recent jobs")
     if st.session_state.jobs:
@@ -1274,6 +1286,7 @@ def render_text_review_editor() -> None:
     st.download_button("Download reviewed CSV", rows_to_csv(st.session_state.review_segments), "human_review_output.csv", "text/csv", use_container_width=True)
 
 
+
 def default_subtitle_segments(count: int = 8, transcription: bool = False) -> List[Dict[str, Any]]:
     rows = []
     for i in range(count):
@@ -1283,54 +1296,54 @@ def default_subtitle_segments(count: int = 8, transcription: bool = False) -> Li
             "end": round(i * 4.0 + 3.5, 3),
             "source": "" if transcription else f"Source segment {i+1}",
             "target": "",
-            "status": "Untranslated",
+            "status": "Draft" if transcription else "Untranslated",
             "match": "",
         })
     return rows
 
 
-def timeline_html(rows: List[Dict[str, Any]], selected: int) -> str:
-    if not rows:
-        return ""
-    total = max(max(float(r.get("end", 0)) for r in rows), 1.0)
-    html = '<div class="es-timeline">'
-    for i, r in enumerate(rows):
-        start = float(r.get("start", 0))
-        end = max(float(r.get("end", start + 1)), start + 0.1)
-        left = max(0, min(100, (start / total) * 100))
-        width = max(1.5, min(100-left, ((end - start) / total) * 100))
-        cls = "es-timebar current" if i == selected else "es-timebar"
-        title = f"{i+1}: {format_time(start)} - {format_time(end)}"
-        html += f'<div class="{cls}" style="left:{left:.2f}%; width:{width:.2f}%;" title="{escape(title)}"></div>'
-    html += '</div>'
-    return html
+def enter_subtitle_workspace(workflow: str, rows: List[Dict[str, Any]], video_file=None) -> None:
+    """Open the dedicated subtitle/transcription workspace."""
+    st.session_state.subtitle_workflow = workflow
+    st.session_state.subtitle_segments = rows
+    st.session_state.selected_subtitle_index = 0
+    st.session_state.subtitle_editor_active = True
+    if video_file is not None:
+        st.session_state.subtitle_video_bytes = video_file.getvalue()
+        st.session_state.subtitle_video_name = getattr(video_file, "name", "uploaded_video")
+        st.session_state.subtitle_video_type = getattr(video_file, "type", "video/mp4") or "video/mp4"
+    add_audit(f"{workflow} workspace opened", f"{len(rows)} rows")
 
 
-def render_subtitle_transcription_editor() -> None:
+def render_subtitle_transcription_setup() -> None:
     st.markdown("### Subtitle / Transcription Editor")
-    workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True)
+    st.caption("Create a dedicated editor workspace. Transcription needs only a video. Subtitling can optionally use an English source script/subtitle file.")
 
-    video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm"], key="subtitle_video")
+    workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True, key="subtitle_workflow_picker")
+    video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm"], key="subtitle_video_setup")
 
-    video_col, video_help_col = st.columns([1.55, 1.0], gap="large")
-    with video_col:
-        if video:
+    if video:
+        preview_col, info_col = st.columns([0.55, 0.45], gap="large")
+        with preview_col:
             st.video(video.getvalue())
-            st.markdown('<div class="es-video-compact-note">Compact preview: use the timing controls below to sync segments while keeping the editor visible.</div>', unsafe_allow_html=True)
-        else:
-            st.info("Upload a video to start timing and review.")
-    with video_help_col:
-        st.markdown("#### Editor tips")
-        if workflow == "Subtitling":
-            st.caption("Subtitling can use an optional English source file. Edit target subtitles and sync timing below.")
-        else:
-            st.caption("Transcription does not need a source file. Watch the video and write transcript rows directly.")
-        st.caption("Use Split to divide a segment and the timing slider to adjust start/end times.")
+        with info_col:
+            st.success("Video loaded. Create the editor to open the focused workspace.")
+            st.caption("The next screen keeps the video compact at the top, script editor in the middle, and timing/text grid in a collapsible panel.")
+    else:
+        st.info("Upload a video to begin.")
 
     if workflow == "Subtitling":
-        source_file = st.file_uploader("Upload English source subtitle/script (optional for subtitling)", type=["srt", "vtt", "txt", "csv", "xlsx", "docx"], key="subtitle_source")
-        target_file = st.file_uploader("Upload existing target subtitle file (optional)", type=["srt", "vtt", "txt", "csv", "xlsx", "docx"], key="subtitle_target")
-        if st.button("Load subtitling editor", use_container_width=True):
+        source_file = st.file_uploader(
+            "Upload English source subtitle/script (optional for subtitling)",
+            type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
+            key="subtitle_source_setup",
+        )
+        target_file = st.file_uploader(
+            "Upload existing target subtitle file (optional)",
+            type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
+            key="subtitle_target_setup",
+        )
+        if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None):
             if source_file:
                 rows = extract_rows_from_upload(source_file)
                 for i, r in enumerate(rows):
@@ -1346,108 +1359,150 @@ def render_subtitle_transcription_editor() -> None:
                 for i, tr in enumerate(target_rows):
                     if i < len(rows):
                         rows[i]["target"] = tr.get("target") or tr.get("source") or ""
-                        rows[i]["status"] = "Existing" if rows[i]["target"] else rows[i]["status"]
-            st.session_state.subtitle_segments = rows
-            st.session_state.selected_subtitle_index = 0
-            add_audit("Subtitling editor loaded", f"{len(rows)} segments")
-            st.success("Subtitling editor loaded.")
+                        rows[i]["status"] = "Existing" if rows[i]["target"] else rows[i].get("status", "Untranslated")
+            enter_subtitle_workspace("Subtitling", rows, video)
+            st.rerun()
     else:
-        st.caption("Transcription mode does not require a source file. Create transcript rows while watching the video.")
-        starter_count = st.number_input("Starter transcript rows", min_value=1, max_value=200, value=10)
-        if st.button("Create transcription editor", use_container_width=True):
-            st.session_state.subtitle_segments = default_subtitle_segments(int(starter_count), transcription=True)
-            st.session_state.selected_subtitle_index = 0
-            add_audit("Transcription editor created", f"{starter_count} rows")
-            st.success("Transcription editor created.")
+        st.caption("Transcription mode does not need a source file. You write the transcript while watching the video.")
+        starter_count = st.number_input("Starter transcript rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+        if st.button("Create transcription workspace", use_container_width=True, disabled=video is None):
+            rows = default_subtitle_segments(int(starter_count), transcription=True)
+            enter_subtitle_workspace("Transcription", rows, video)
+            st.rerun()
 
+    if st.session_state.subtitle_segments:
+        if st.button("Open existing subtitle/transcription workspace", use_container_width=True):
+            st.session_state.subtitle_editor_active = True
+            st.rerun()
+
+
+def render_focused_subtitle_workspace() -> None:
+    workflow = st.session_state.get("subtitle_workflow", "Transcription")
     rows = st.session_state.subtitle_segments
     if not rows:
+        st.session_state.subtitle_editor_active = False
+        st.info("No editor rows available. Create a subtitle or transcription workspace first.")
         return
 
-    idx = min(st.session_state.selected_subtitle_index, len(rows)-1)
+    top1, top2 = st.columns([0.78, 0.22])
+    with top1:
+        st.markdown(f"### {workflow} workspace")
+        st.caption("Compact video on top, script writing in the middle, timing/text grid collapsed at the bottom.")
+    with top2:
+        if st.button("Back to setup", use_container_width=True):
+            st.session_state.subtitle_editor_active = False
+            st.rerun()
+
+    video_bytes = st.session_state.get("subtitle_video_bytes")
+    video_col, meta_col = st.columns([0.50, 0.50], gap="large")
+    with video_col:
+        if video_bytes:
+            st.video(video_bytes)
+        else:
+            st.warning("Video is not available in this session. Go back and upload it again.")
+    with meta_col:
+        st.markdown("#### Job notes")
+        st.caption("Use the selected segment below to write transcript/subtitle text. Use the collapsed grid for detailed timing edits.")
+        st.metric("Rows", len(rows))
+        st.metric("Approved", sum(1 for r in rows if r.get("status") == "Approved"))
+
+    idx = min(st.session_state.selected_subtitle_index, len(rows) - 1)
     row = rows[idx]
 
-    left, center, right = st.columns([2.2, 3.6, 1.8])
+    list_col, editor_col, assist_col = st.columns([1.25, 2.25, 1.15], gap="large")
 
-    with left:
-        st.markdown("#### Segment list")
+    with list_col:
+        st.markdown("#### Segments")
         for i, seg in enumerate(rows):
             time_label = f"{format_time(seg.get('start',0))} → {format_time(seg.get('end',0))}"
-            text_preview = seg.get("source", "") if workflow == "Subtitling" else seg.get("target", "")
-            if not text_preview:
-                text_preview = "Empty transcript row"
-            st.markdown(f'<div class="es-small"><span class="es-chip {"green" if seg.get("status")=="Approved" else "amber"}">{escape(seg.get("status",""))}</span> {escape(time_label)}</div>', unsafe_allow_html=True)
-            if st.button(f"{i+1}. {text_preview[:72]}", key=f"sub_pick_{i}", use_container_width=True):
+            preview = seg.get("source") if workflow == "Subtitling" else seg.get("target")
+            if not preview:
+                preview = "Empty transcript row" if workflow == "Transcription" else "Empty subtitle row"
+            status = seg.get("status", "Draft")
+            st.caption(f"{i+1}. {time_label} · {status}")
+            if st.button(preview[:80], key=f"focused_pick_{i}", use_container_width=True):
                 st.session_state.selected_subtitle_index = i
                 st.rerun()
 
-    with center:
+    with editor_col:
         st.markdown(f"#### {workflow} segment {idx+1} / {len(rows)}")
-        start_end = st.slider(
-            "Timing",
-            min_value=0.0,
-            max_value=max(max(float(r.get("end", 0)) for r in rows) + 10.0, 20.0),
-            value=(float(row.get("start", 0)), float(row.get("end", 3.5))),
-            step=0.1,
-            key=f"time_slider_{idx}",
-        )
-        rows[idx]["start"], rows[idx]["end"] = float(start_end[0]), float(start_end[1])
+        time_a, time_b = st.columns(2)
+        start_val = time_a.number_input("Start", min_value=0.0, value=float(row.get("start", 0.0)), step=0.1, key=f"focus_start_{idx}")
+        end_val = time_b.number_input("End", min_value=0.0, value=float(row.get("end", max(start_val + 2.0, 2.0))), step=0.1, key=f"focus_end_{idx}")
+        rows[idx]["start"] = float(start_val)
+        rows[idx]["end"] = float(max(end_val, start_val + 0.1))
 
         if workflow == "Subtitling":
-            st.text_area("English source", value=row.get("source", ""), height=130, key=f"sub_src_{idx}")
-            target = st.text_area("Target subtitle", value=row.get("target", ""), height=190, key=f"sub_tgt_{idx}")
+            source_text = st.text_area("English source", value=row.get("source", ""), height=90, key=f"focus_source_{idx}")
+            rows[idx]["source"] = source_text
+            target_label = "Target subtitle"
         else:
-            target = st.text_area("Transcript text", value=row.get("target", ""), height=260, key=f"transcript_tgt_{idx}")
+            target_label = "Transcript text"
 
-        status = st.selectbox("Status", ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"], key=f"sub_status_{idx}")
+        target_text = st.text_area(target_label, value=row.get("target", ""), height=170, key=f"focus_target_{idx}")
+        status = st.selectbox(
+            "Status",
+            ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
+            index=["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(row.get("status", "Draft")) if row.get("status", "Draft") in ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 0,
+            key=f"focus_status_{idx}",
+        )
 
-        c1, c2, c3, c4 = st.columns(4)
-        if c1.button("Save", key=f"sub_save_{idx}", use_container_width=True):
-            rows[idx]["target"] = target
+        b1, b2, b3, b4 = st.columns(4)
+        if b1.button("Save", key=f"focus_save_{idx}", use_container_width=True):
+            rows[idx]["target"] = target_text
             rows[idx]["status"] = status
             st.success("Saved.")
-        if c2.button("Approve", key=f"sub_approve_{idx}", use_container_width=True):
-            rows[idx]["target"] = target
+        if b2.button("Approve", key=f"focus_approve_{idx}", use_container_width=True):
+            rows[idx]["target"] = target_text
             rows[idx]["status"] = "Approved"
             st.success("Approved.")
-        if c3.button("Split", key=f"sub_split_{idx}", use_container_width=True):
-            end = float(rows[idx]["end"])
+        if b3.button("Split", key=f"focus_split_{idx}", use_container_width=True):
             start = float(rows[idx]["start"])
+            end = float(rows[idx]["end"])
             mid = round((start + end) / 2, 3)
             rows[idx]["end"] = mid
-            rows.insert(idx + 1, {**rows[idx], "id": len(rows)+1, "start": mid, "end": end, "target": "", "status": "Draft"})
+            rows.insert(idx + 1, {**rows[idx], "id": len(rows) + 1, "start": mid, "end": end, "source": "", "target": "", "status": "Draft"})
             st.rerun()
-        if c4.button("Next", key=f"sub_next_{idx}", use_container_width=True):
-            rows[idx]["target"] = target
+        if b4.button("Next", key=f"focus_next_{idx}", use_container_width=True):
+            rows[idx]["target"] = target_text
             rows[idx]["status"] = status
-            st.session_state.selected_subtitle_index = min(idx+1, len(rows)-1)
+            st.session_state.selected_subtitle_index = min(idx + 1, len(rows) - 1)
             st.rerun()
 
-    with right:
+    with assist_col:
         render_assist_panel(row.get("source", "") or row.get("target", ""))
 
-    st.markdown("### Duration scale")
-    st.markdown(timeline_html(rows, idx), unsafe_allow_html=True)
+    # No duration scale: compact timing/text grid only, hidden by default.
+    with st.expander("Timing and text grid", expanded=bool(st.session_state.get("show_timing_grid", False))):
+        grid_cols = ["id", "start", "end", "source", "target", "status", "match"] if workflow == "Subtitling" else ["id", "start", "end", "target", "status"]
+        edited = st.data_editor(
+            pd.DataFrame(rows)[grid_cols],
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            height=230,
+            key="focused_subtitle_grid",
+        )
+        c1, c2, c3 = st.columns(3)
+        if c1.button("Save grid", use_container_width=True):
+            st.session_state.subtitle_segments = edited.to_dict("records")
+            st.success("Grid saved.")
+        c2.download_button("Download CSV", rows_to_csv(st.session_state.subtitle_segments), "subtitle_transcription_editor.csv", "text/csv", use_container_width=True)
+        c3.download_button("Download SRT", rows_to_srt(st.session_state.subtitle_segments, use_target=True), "subtitle_transcription_output.srt", "text/plain", use_container_width=True)
 
-    st.markdown("### Timing and text grid")
-    grid_cols = ["id", "start", "end", "source", "target", "status", "match"] if workflow == "Subtitling" else ["id", "start", "end", "target", "status"]
-    edited = st.data_editor(
-        pd.DataFrame(rows)[grid_cols],
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="subtitle_grid",
-    )
-    if st.button("Save subtitle/transcription grid", use_container_width=True):
-        st.session_state.subtitle_segments = edited.to_dict("records")
-        st.success("Grid saved.")
 
-    d1, d2 = st.columns(2)
-    d1.download_button("Download CSV", rows_to_csv(st.session_state.subtitle_segments), "subtitle_transcription_editor.csv", "text/csv", use_container_width=True)
-    d2.download_button("Download SRT", rows_to_srt(st.session_state.subtitle_segments, use_target=True), "subtitle_transcription_output.srt", "text/plain", use_container_width=True)
+def render_subtitle_transcription_editor() -> None:
+    if st.session_state.get("subtitle_editor_active"):
+        render_focused_subtitle_workspace()
+    else:
+        render_subtitle_transcription_setup()
 
 
 def page_human_review() -> None:
+    # Dedicated editor mode should feel like a new page and avoid the large hero consuming space.
+    if st.session_state.get("subtitle_editor_active"):
+        render_focused_subtitle_workspace()
+        return
     hero("Human Review", "CAT, subtitling, and transcription editors", "Review translations, edit subtitles, create transcripts, sync timing, and save verified translations.")
     tab_text, tab_sub = st.tabs(["Text Review Editor", "Subtitle / Transcription Editor"])
     with tab_text:
