@@ -13,6 +13,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
+from urllib.parse import quote
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -28,7 +29,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Subtitle/Transcription editor
 # ==========================================================
 
-APP_VERSION = "v25 Website Platform + Subtitle/Transcription Editor"
+APP_VERSION = "v26 Website Platform + Compact Subtitle/Transcription Editor"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -303,6 +304,48 @@ html, body, [class*="css"] {
   box-shadow: 0 18px 38px rgba(52,189,246,.24);
 }
 
+
+.es-nav-link {
+  display: block;
+  text-decoration: none !important;
+  text-align: center;
+  color: #dce8ff !important;
+  border: 1px solid rgba(84,105,180,.26);
+  background: rgba(18,21,38,.74);
+  border-radius: 14px;
+  padding: 0.72rem 0.85rem;
+  margin: 0.45rem 0;
+  font-weight: 800;
+  box-shadow: 0 8px 22px rgba(0,0,0,.14);
+}
+.es-nav-link:hover {
+  background: rgba(52,189,246,.15);
+  border-color: rgba(52,189,246,.45);
+  color: #ffffff !important;
+}
+.es-nav-link.active {
+  background: linear-gradient(90deg, #00bf75, #2094f3);
+  color: #ffffff !important;
+  border-color: rgba(0,217,133,.45);
+  box-shadow: 0 14px 30px rgba(32,148,243,.22);
+}
+.es-video-compact-note {
+  color: #a8b0d6;
+  font-size: 12px;
+  margin: 6px 0 14px;
+}
+[data-testid="stVideo"] video {
+  max-height: 340px !important;
+  object-fit: contain !important;
+  background: #000 !important;
+  border-radius: 16px !important;
+}
+[data-testid="stVideo"] {
+  max-width: 760px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
 textarea, input, select {
   border-radius: 12px !important;
 }
@@ -542,12 +585,21 @@ def is_owner() -> bool:
     return current_role() == "Platform Owner"
 
 
+def page_link(page: str) -> str:
+    token = query_get("es_session")
+    page_param = quote(page)
+    if token:
+        return f"?es_session={token}&es_page={page_param}"
+    return f"?es_page={page_param}"
+
+
 def nav_button(page: str, key_prefix: str = "nav") -> None:
     active = st.session_state.get("page") == page
-    label = f"● {page}" if active else page
-    if st.button(label, key=f"{key_prefix}_{page}", use_container_width=True):
-        st.session_state["page"] = page
-        st.rerun()
+    cls = "es-nav-link active" if active else "es-nav-link"
+    st.markdown(
+        f'<a class="{cls}" href="{page_link(page)}" target="_self">{escape(page)}</a>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_navigation() -> None:
@@ -612,17 +664,19 @@ def hero(kicker: str, title: str, subtitle: str) -> None:
 
 
 def metrics(cards: List[Tuple[str, Any, str]]) -> None:
-    html = '<div class="es-grid-4">'
-    for label, value, note in cards:
-        html += f"""
-        <div class="es-card">
-          <div class="es-metric-label">{escape(str(label))}</div>
-          <div class="es-metric-value">{escape(str(value))}</div>
-          <div class="es-small">{escape(str(note))}</div>
-        </div>
-        """
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
+    """Render metric cards using native Streamlit elements.
+
+    Previous HTML metric grids could appear as raw <div> text in some Streamlit
+    render contexts. Native metric cards avoid that issue completely.
+    """
+    if not cards:
+        return
+    cols = st.columns(min(4, len(cards)))
+    for idx, (label, value, note) in enumerate(cards):
+        with cols[idx % len(cols)]:
+            st.metric(str(label), value)
+            if note:
+                st.caption(str(note))
 
 
 def safe_text(x: Any) -> str:
@@ -1258,10 +1312,20 @@ def render_subtitle_transcription_editor() -> None:
 
     video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm"], key="subtitle_video")
 
-    if video:
-        st.video(video.getvalue())
-    else:
-        st.info("Upload a video to start timing and review.")
+    video_col, video_help_col = st.columns([1.55, 1.0], gap="large")
+    with video_col:
+        if video:
+            st.video(video.getvalue())
+            st.markdown('<div class="es-video-compact-note">Compact preview: use the timing controls below to sync segments while keeping the editor visible.</div>', unsafe_allow_html=True)
+        else:
+            st.info("Upload a video to start timing and review.")
+    with video_help_col:
+        st.markdown("#### Editor tips")
+        if workflow == "Subtitling":
+            st.caption("Subtitling can use an optional English source file. Edit target subtitles and sync timing below.")
+        else:
+            st.caption("Transcription does not need a source file. Watch the video and write transcript rows directly.")
+        st.caption("Use Split to divide a segment and the timing slider to adjust start/end times.")
 
     if workflow == "Subtitling":
         source_file = st.file_uploader("Upload English source subtitle/script (optional for subtitling)", type=["srt", "vtt", "txt", "csv", "xlsx", "docx"], key="subtitle_source")
@@ -1643,6 +1707,11 @@ def render_app() -> None:
     if not user:
         render_login()
         return
+
+    # Restore selected page from URL query when navigation links are used.
+    requested_page = query_get("es_page")
+    if requested_page in allowed_pages():
+        st.session_state.page = requested_page
 
     # Ensure selected page is allowed.
     if st.session_state.page not in allowed_pages():
