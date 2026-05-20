@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import difflib
 import time
 import zipfile
 from dataclasses import dataclass
@@ -19,17 +20,20 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v27
+# ErrorSweep Platform v28
 # Website-style localization platform shell
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v27 Website Platform + Focused Subtitle/Transcription Workspace"
+APP_VERSION = "v28 Website Platform + Excel Scorecard"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1511,49 +1515,393 @@ def page_human_review() -> None:
         render_subtitle_transcription_editor()
 
 
+
+# ==========================================================
+# SCORECARD EXCEL OUTPUT
+# ==========================================================
+
+ERROR_CATEGORIES = ["Accuracy", "Readability", "Style and Tone", "Grammar", "Country Standards"]
+ERROR_SEVERITIES = ["Minor", "Major", "Critical"]
+SEVERITY_POINTS = {"Minor": 1, "Major": 5, "Critical": 10}
+
+CATEGORY_DESCRIPTIONS = {
+    "Accuracy": "Translation does not accurately reflect the source meaning; omission, addition, mistranslation, wrong sense, or placeholder-critical meaning issue.",
+    "Readability": "The natural flow of the sentence is compromised; structure is awkward, hard to understand, over-literal, or poorly segmented.",
+    "Style and Tone": "The tone, register, or product style is not preserved; wording does not match the client style guide or expected UI tone.",
+    "Grammar": "Grammar, spelling, punctuation, capitalization, spacing, or syntax issue in the target language.",
+    "Country Standards": "Locale/country standard issue such as date/time/number format, unit, untranslated UI term, address/currency convention, or inappropriate locale adaptation.",
+}
+
+SEVERITY_DESCRIPTIONS = {
+    "Minor": "Minor impact on meaning/readability. Overall meaning is accurate and understandable. Examples: typo, punctuation, minor grammar/style issue.",
+    "Major": "Major impact on meaning/readability. Translation may be confusing, misleading, incomplete, or noticeably wrong.",
+    "Critical": "Critical issue that can cause serious misunderstanding, offensive output, legal/compliance risk, or unusable delivery.",
+}
+
+
+def count_words(text: str) -> int:
+    return len(re.findall(r"[\w\u0900-\u097F\u0C00-\u0C7F\u0B80-\u0BFF\u0600-\u06FF]+", safe_text(text)))
+
+
+def extract_scorecard_placeholders(text: str) -> List[str]:
+    return re.findall(r"\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|<[^>]+>", safe_text(text))
+
+
+def extract_scorecard_numbers(text: str) -> List[str]:
+    return re.findall(r"\d+(?:[.,:]\d+)*", safe_text(text))
+
+
+def normalized_compare_text(text: str) -> str:
+    text = safe_text(text).lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def scorecard_category_and_severity(source: str, translator: str, reviewer: str) -> Tuple[str, str, int, str]:
+    """Heuristic categorization for translator-vs-reviewer scorecards.
+
+    The user can edit the generated categories/severities inside the Excel output.
+    This provides a practical first pass from reviewer changes.
+    """
+    src = safe_text(source)
+    tr = safe_text(translator)
+    rv = safe_text(reviewer)
+
+    if normalized_compare_text(tr) == normalized_compare_text(rv):
+        return "", "", 0, "No reviewer change."
+
+    if not tr and rv:
+        return "Accuracy", "Critical", SEVERITY_POINTS["Critical"], "Translator target is blank while reviewer/final contains translation."
+    if tr and not rv:
+        return "Accuracy", "Major", SEVERITY_POINTS["Major"], "Reviewer/final target is blank or removed compared with translator output."
+
+    tr_ph = extract_scorecard_placeholders(tr)
+    rv_ph = extract_scorecard_placeholders(rv)
+    if sorted(tr_ph) != sorted(rv_ph):
+        return "Accuracy", "Major", SEVERITY_POINTS["Major"], "Placeholder/tag mismatch between translator and reviewer/final output."
+
+    tr_nums = extract_scorecard_numbers(tr)
+    rv_nums = extract_scorecard_numbers(rv)
+    if sorted(tr_nums) != sorted(rv_nums):
+        return "Country Standards", "Major", SEVERITY_POINTS["Major"], "Number, unit, or locale-sensitive value changed between translator and reviewer/final output."
+
+    if src and normalized_compare_text(tr) == normalized_compare_text(src) and normalized_compare_text(rv) != normalized_compare_text(src):
+        return "Accuracy", "Critical", SEVERITY_POINTS["Critical"], "Translator appears to have left source text untranslated."
+
+    ratio = difflib.SequenceMatcher(None, normalized_compare_text(tr), normalized_compare_text(rv)).ratio()
+    tr_compact = re.sub(r"[\s\W_]+", "", normalized_compare_text(tr))
+    rv_compact = re.sub(r"[\s\W_]+", "", normalized_compare_text(rv))
+
+    if tr_compact == rv_compact:
+        return "Grammar", "Minor", SEVERITY_POINTS["Minor"], "Reviewer changed punctuation, spacing, casing, or minor formatting only."
+    if ratio >= 0.92:
+        return "Grammar", "Minor", SEVERITY_POINTS["Minor"], "Reviewer made a small language/formatting correction."
+    if ratio >= 0.78:
+        return "Style and Tone", "Minor", SEVERITY_POINTS["Minor"], "Reviewer made a style/tone or wording refinement."
+    if ratio >= 0.55:
+        return "Readability", "Major", SEVERITY_POINTS["Major"], "Reviewer substantially rewrote the segment for readability or clarity."
+
+    return "Accuracy", "Major", SEVERITY_POINTS["Major"], "Reviewer/final translation differs substantially from translator output."
+
+
+def build_scorecard_records(trans_rows: List[Dict[str, Any]], rev_rows: List[Dict[str, Any]], src_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    max_len = max(len(trans_rows), len(rev_rows), len(src_rows))
+    records: List[Dict[str, Any]] = []
+    category_counts = {cat: {sev: 0 for sev in ERROR_SEVERITIES} for cat in ERROR_CATEGORIES}
+    severity_counts = {sev: 0 for sev in ERROR_SEVERITIES}
+    total_penalty = 0
+    changed_count = 0
+    checked_words = 0
+
+    for i in range(max_len):
+        t = trans_rows[i] if i < len(trans_rows) else {}
+        r = rev_rows[i] if i < len(rev_rows) else {}
+        s = src_rows[i] if i < len(src_rows) else {}
+
+        source = s.get("source") or t.get("source") or r.get("source") or ""
+        translator = t.get("target") or t.get("translation") or t.get("source", "")
+        reviewer = r.get("target") or r.get("translation") or r.get("source", "")
+        source = safe_text(source)
+        translator = safe_text(translator)
+        reviewer = safe_text(reviewer)
+        checked_words += count_words(source or translator or reviewer)
+
+        changed_here = normalized_compare_text(translator) != normalized_compare_text(reviewer)
+        category, severity, penalty, comment = scorecard_category_and_severity(source, translator, reviewer)
+        if changed_here:
+            changed_count += 1
+            total_penalty += penalty
+            if category in category_counts and severity in category_counts[category]:
+                category_counts[category][severity] += 1
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+
+        records.append({
+            "Item No.": i + 1,
+            "Source Text": source,
+            "Original Translation": translator,
+            "Suggested Translation": reviewer if changed_here else "",
+            "Repeated Error": "",
+            "Error Category": category,
+            "Error Severity": severity,
+            "Reviewer's Comment": comment if changed_here else "",
+            "Agree? (Yes/No)": "",
+            "Comment": "",
+            "Reviewer's Response": "",
+            "Final Error Category": "",
+            "Final Error Severity": "",
+            "Changed": "Yes" if changed_here else "No",
+            "Penalty": penalty,
+        })
+
+    score = max(0, 100 - total_penalty)
+    result = "PASS" if score >= 90 else "REVIEW" if score >= 75 else "FAIL"
+    summary = {
+        "segments": max_len,
+        "checked_words": checked_words,
+        "changed_count": changed_count,
+        "total_penalty": total_penalty,
+        "score": score,
+        "result": result,
+        "category_counts": category_counts,
+        "severity_counts": severity_counts,
+    }
+    return records, summary
+
+
+def style_sheet_base(ws) -> None:
+    ws.sheet_view.showGridLines = False
+    thin = Side(style="thin", color="D7DEE8")
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+
+def apply_widths(ws, widths: Dict[str, float]) -> None:
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+
+def create_scorecard_excel(records: List[Dict[str, Any]], summary: Dict[str, Any]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "QA Eval Sheet"
+    score_ws = wb.create_sheet("Quality Evaluation")
+    instr_ws = wb.create_sheet("LQA Instructions")
+
+    dark = "1F2937"
+    blue = "D9EAF7"
+    green = "D9EAD3"
+    yellow = "FFF2CC"
+    red = "F4CCCC"
+    border = Side(style="thin", color="A6A6A6")
+
+    # Sheet 1: QA Eval Sheet
+    ws.merge_cells("B1:M1")
+    ws["B1"] = "ErrorSweep Linguistic Review Form"
+    ws["B1"].font = Font(bold=True, size=14, color="FFFFFF")
+    ws["B1"].alignment = Alignment(horizontal="center")
+    ws["B1"].fill = PatternFill("solid", fgColor=dark)
+
+    meta_rows = [
+        ("B2", "Client", "C2", "", "D2", "Project ID", "E2", ""),
+        ("B3", "Source language*", "C3", "", "D3", "Target language*", "E3", ""),
+        ("B4", "Translator", "C4", "", "D4", "Reviewer", "E4", ""),
+        ("B5", "Date (mm/dd/yyyy)*", "C5", "", "D5", "Number of checked words*", "E5", summary.get("checked_words", 0)),
+    ]
+    for row in meta_rows:
+        for label_cell, label, value_cell, value in [(row[0], row[1], row[2], row[3]), (row[4], row[5], row[6], row[7])]:
+            ws[label_cell] = label
+            ws[value_cell] = value
+            ws[label_cell].font = Font(bold=True)
+            ws[label_cell].fill = PatternFill("solid", fgColor=blue)
+
+    headers = [
+        "Item No.", "Source Text", "Original Translation", "Suggested Translation", "Repeated Error",
+        "Error Category", "Error Severity", "Reviewer's Comment", "Agree? (Yes/No)", "Comment",
+        "Reviewer's Response", "Error Category", "Error Severity"
+    ]
+    header_row = 7
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell.font = Font(bold=True, color="000000")
+        cell.fill = PatternFill("solid", fgColor=blue)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_idx, rec in enumerate(records, start=header_row + 1):
+        values = [
+            rec.get("Item No."), rec.get("Source Text"), rec.get("Original Translation"), rec.get("Suggested Translation"),
+            rec.get("Repeated Error"), rec.get("Error Category"), rec.get("Error Severity"), rec.get("Reviewer's Comment"),
+            rec.get("Agree? (Yes/No)"), rec.get("Comment"), rec.get("Reviewer's Response"),
+            rec.get("Final Error Category"), rec.get("Final Error Severity"),
+        ]
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            if col_idx in (6, 12) and value:
+                cell.fill = PatternFill("solid", fgColor=yellow)
+            if col_idx in (7, 13) and value:
+                if value == "Critical":
+                    cell.fill = PatternFill("solid", fgColor=red)
+                elif value == "Major":
+                    cell.fill = PatternFill("solid", fgColor="FCE4D6")
+                elif value == "Minor":
+                    cell.fill = PatternFill("solid", fgColor=yellow)
+
+    apply_widths(ws, {
+        "A": 10, "B": 42, "C": 42, "D": 42, "E": 14, "F": 18, "G": 16, "H": 36,
+        "I": 15, "J": 26, "K": 30, "L": 18, "M": 16,
+    })
+    ws.freeze_panes = "A8"
+
+    # Sheet 2: Quality Evaluation
+    score_ws.merge_cells("A1:D1")
+    score_ws["A1"] = "Quality Evaluation Score Card"
+    score_ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
+    score_ws["A1"].alignment = Alignment(horizontal="center")
+    score_ws["A1"].fill = PatternFill("solid", fgColor=dark)
+
+    score_ws["A3"] = "Number of checked words"
+    score_ws["B3"] = summary.get("checked_words", 0)
+    score_ws["A5"] = "Client"
+    score_ws["B5"] = ""
+    score_ws["A6"] = "Project ID"
+    score_ws["B6"] = ""
+    score_ws["A7"] = "Review date"
+    score_ws["B7"] = ""
+    score_ws["A8"] = "Source language"
+    score_ws["B8"] = ""
+    score_ws["A9"] = "Target language"
+    score_ws["B9"] = ""
+
+    score_ws["A12"] = "Error category"
+    score_ws["B11"] = "Error severity"
+    score_ws["B12"] = "Minor"
+    score_ws["C12"] = "Major"
+    score_ws["D12"] = "Critical"
+    for cell in score_ws["A12:D12"][0]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor=blue)
+
+    for idx, cat in enumerate(ERROR_CATEGORIES, start=13):
+        score_ws.cell(row=idx, column=1, value=cat)
+        for col_idx, sev in enumerate(ERROR_SEVERITIES, start=2):
+            score_ws.cell(row=idx, column=col_idx, value=summary["category_counts"].get(cat, {}).get(sev, 0))
+
+    total_row = 13 + len(ERROR_CATEGORIES) + 1
+    score_ws.cell(total_row, 1, "Total errors")
+    score_ws.cell(total_row, 2, summary["severity_counts"].get("Minor", 0))
+    score_ws.cell(total_row, 3, summary["severity_counts"].get("Major", 0))
+    score_ws.cell(total_row, 4, summary["severity_counts"].get("Critical", 0))
+    for cell in score_ws[total_row]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor=green)
+
+    score_ws["A22"] = "Penalty points"
+    score_ws["B22"] = summary.get("total_penalty", 0)
+    score_ws["A23"] = "LQA score"
+    score_ws["B23"] = summary.get("score", 0)
+    score_ws["A24"] = "Pass/Fail result"
+    score_ws["B24"] = summary.get("result", "")
+    score_ws["A25"] = "Changed segments"
+    score_ws["B25"] = summary.get("changed_count", 0)
+    score_ws["A26"] = "Compared segments"
+    score_ws["B26"] = summary.get("segments", 0)
+    for cell in ["A22", "A23", "A24", "A25", "A26"]:
+        score_ws[cell].font = Font(bold=True)
+        score_ws[cell].fill = PatternFill("solid", fgColor=blue)
+
+    apply_widths(score_ws, {"A": 24, "B": 16, "C": 16, "D": 16})
+
+    # Sheet 3: LQA Instructions
+    instr_ws["A1"] = "Error categories"
+    instr_ws["A1"].font = Font(bold=True, size=13)
+    instr_ws["A2"] = "Category"
+    instr_ws["B2"] = "Description"
+    instr_ws["A2"].font = Font(bold=True)
+    instr_ws["B2"].font = Font(bold=True)
+    instr_ws["A2"].fill = PatternFill("solid", fgColor=blue)
+    instr_ws["B2"].fill = PatternFill("solid", fgColor=blue)
+    for idx, cat in enumerate(ERROR_CATEGORIES, start=3):
+        instr_ws.cell(row=idx, column=1, value=cat)
+        instr_ws.cell(row=idx, column=2, value=CATEGORY_DESCRIPTIONS[cat])
+
+    sev_start = 3 + len(ERROR_CATEGORIES) + 2
+    instr_ws.cell(row=sev_start, column=1, value="Error severities")
+    instr_ws.cell(row=sev_start, column=1).font = Font(bold=True, size=13)
+    instr_ws.cell(row=sev_start + 1, column=1, value="Severity")
+    instr_ws.cell(row=sev_start + 1, column=2, value="Description")
+    instr_ws.cell(row=sev_start + 1, column=1).font = Font(bold=True)
+    instr_ws.cell(row=sev_start + 1, column=2).font = Font(bold=True)
+    instr_ws.cell(row=sev_start + 1, column=1).fill = PatternFill("solid", fgColor=blue)
+    instr_ws.cell(row=sev_start + 1, column=2).fill = PatternFill("solid", fgColor=blue)
+    for offset, sev in enumerate(ERROR_SEVERITIES, start=sev_start + 2):
+        instr_ws.cell(row=offset, column=1, value=sev)
+        instr_ws.cell(row=offset, column=2, value=SEVERITY_DESCRIPTIONS[sev])
+
+    apply_widths(instr_ws, {"A": 24, "B": 95})
+
+    for sheet in [ws, score_ws, instr_ws]:
+        style_sheet_base(sheet)
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.border = Border(left=border, right=border, top=border, bottom=border)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for idx in range(1, sheet.max_row + 1):
+            sheet.row_dimensions[idx].height = 28
+
+    # Validation for editable category / severity columns in QA Eval Sheet.
+    cat_validation = DataValidation(type="list", formula1='"Accuracy,Readability,Style and Tone,Grammar,Country Standards"', allow_blank=True)
+    sev_validation = DataValidation(type="list", formula1='"Minor,Major,Critical"', allow_blank=True)
+    yesno_validation = DataValidation(type="list", formula1='"Yes,No"', allow_blank=True)
+    ws.add_data_validation(cat_validation)
+    ws.add_data_validation(sev_validation)
+    ws.add_data_validation(yesno_validation)
+    last_row = max(header_row + 1, header_row + len(records))
+    cat_validation.add(f"F{header_row+1}:F{last_row}")
+    cat_validation.add(f"L{header_row+1}:L{last_row}")
+    sev_validation.add(f"G{header_row+1}:G{last_row}")
+    sev_validation.add(f"M{header_row+1}:M{last_row}")
+    yesno_validation.add(f"I{header_row+1}:I{last_row}")
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
 def page_scorecards() -> None:
-    hero("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output and generate vendor quality scorecards.")
+    hero("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output and generate an Excel-only LQA scorecard.")
     source = st.file_uploader("Source file (optional)", type=["xlsx", "csv", "docx", "txt"], key="score_source")
     translator = st.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="score_translator")
     reviewer = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_reviewer")
 
-    if st.button("Generate Scorecard", use_container_width=True, disabled=translator is None or reviewer is None):
+    st.info("Scorecard output is always generated as an Excel workbook with: QA Eval Sheet, Quality Evaluation, and LQA Instructions.")
+
+    if st.button("Generate Excel Scorecard", use_container_width=True, disabled=translator is None or reviewer is None):
         trans_rows = extract_rows_from_upload(translator)
         rev_rows = extract_rows_from_upload(reviewer)
         src_rows = extract_rows_from_upload(source) if source else []
-        max_len = max(len(trans_rows), len(rev_rows))
-        report = []
-        penalty = 0
-        changed = 0
-        for i in range(max_len):
-            t = trans_rows[i] if i < len(trans_rows) else {}
-            r = rev_rows[i] if i < len(rev_rows) else {}
-            s = src_rows[i] if i < len(src_rows) else {}
-            t_text = t.get("target") or t.get("source", "")
-            r_text = r.get("target") or r.get("source", "")
-            changed_here = safe_text(t_text) != safe_text(r_text)
-            if changed_here:
-                changed += 1
-                penalty += 2
-            report.append({
-                "Segment": i+1,
-                "Source": s.get("source") or t.get("source") or r.get("source", ""),
-                "Translator": t_text,
-                "Reviewer": r_text,
-                "Changed": "Yes" if changed_here else "No",
-                "Penalty": 2 if changed_here else 0,
-                "Category": "Reviewer change" if changed_here else "No change",
-            })
-        score = max(0, 100 - penalty)
-        metrics([
-            ("Quality Score", score, "out of 100"),
-            ("Segments", max_len, "compared"),
-            ("Changed", changed, "reviewer edits"),
-            ("Penalty", penalty, "score impact"),
-        ])
-        st.dataframe(pd.DataFrame(report), use_container_width=True, hide_index=True)
-        st.download_button("Download Scorecard CSV", rows_to_csv(report), "translator_scorecard.csv", "text/csv", use_container_width=True)
+        records, summary = build_scorecard_records(trans_rows, rev_rows, src_rows)
 
+        metrics([
+            ("LQA Score", summary["score"], summary["result"]),
+            ("Segments", summary["segments"], "compared"),
+            ("Changed", summary["changed_count"], "reviewer edits"),
+            ("Penalty", summary["total_penalty"], "points"),
+        ])
+
+        preview_cols = ["Item No.", "Source Text", "Original Translation", "Suggested Translation", "Error Category", "Error Severity", "Reviewer's Comment"]
+        st.dataframe(pd.DataFrame(records)[preview_cols], use_container_width=True, hide_index=True)
+
+        xlsx_bytes = create_scorecard_excel(records, summary)
+        st.download_button(
+            "Download Excel Scorecard",
+            xlsx_bytes,
+            file_name="ErrorSweep_Translator_Scorecard.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 def page_memory_rules() -> None:
     hero("Memory & Rules", "Reusable language assets", "Manage translation memory, glossary, DNT terms, and client instructions.")
