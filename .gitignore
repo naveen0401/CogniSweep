@@ -13,3 +13,4 @@ cloudflared.exe
 cloudflared*.log
 __pycache__/
 *.pyc
+.streamlit/secrets.toml
