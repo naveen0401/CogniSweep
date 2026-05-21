@@ -26,6 +26,16 @@ try:
 except Exception:
     ai_json_items = None
     select_ai_route = None
+
+# ErrorSweep v30 backend-only translation router:
+# Phase 1 current default = Azure Translator
+# Phase 2 future switch = NLLB self-hosted when NLLB_MODE=True
+try:
+    from translator_router import translate_batch as builtin_translate_batch, current_builtin_engine_label
+except Exception:
+    builtin_translate_batch = None
+    current_builtin_engine_label = None
+
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -34,12 +44,13 @@ from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v29
-# Website-style localization platform shell + Managed AI / Keyless AI routing
+# ErrorSweep Platform v30
+# Website-style localization platform shell + two-phase built-in translation engine
+# Phase 1: Azure Translator | Phase 2: NLLB self-hosted
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v29 Platform + Managed AI"
+APP_VERSION = "v30 Built-in Translation Engine"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -893,14 +904,15 @@ def openai_client() -> Optional[OpenAI]:
 
 
 def current_ai_route_label() -> str:
-    """Small safe label for UI. Do not expose base URLs or tokens to normal users."""
+    """Small safe label for UI. Do not expose provider names, URLs, or tokens."""
     if st.session_state.get("byo_openai_api_key"):
         return "BYO key active"
-    if secret("ERRORSWEEP_MANAGED_AI_BASE_URL", ""):
-        return "AI included in workspace"
-    if secret("OPENAI_API_KEY", ""):
-        return "Platform AI active"
-    return "AI not configured"
+    if current_builtin_engine_label is not None:
+        try:
+            return current_builtin_engine_label()
+        except Exception:
+            pass
+    return "Translation engine not configured"
 
 
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
@@ -922,31 +934,35 @@ def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int =
 
 
 def call_main_api_translate(texts: List[str], target_language: str, domain: str) -> List[str]:
-    """Translate through BYO OpenAI key first, then Managed AI/vLLM, then platform OpenAI fallback.
+    """Translate through the v30 two-phase backend.
 
-    This is the core Managed AI / Keyless AI route:
-    - user key in st.session_state['byo_openai_api_key'] wins
-    - otherwise ERRORSWEEP_MANAGED_AI_BASE_URL is used
-    - otherwise OPENAI_API_KEY is used if available
+    User has BYO key:
+        Keep the existing BYO OpenAI/vLLM-style prompt path unchanged.
+
+    User has no key:
+        Phase 2 if NLLB_MODE=True  -> self-hosted NLLB.
+        Otherwise                  -> Phase 1 Azure Translator.
     """
     if not texts:
         return []
 
-    if ai_json_items is None or select_ai_route is None:
-        st.error("Managed AI router file is missing. Add managed_ai_router.py beside app.py.")
-        return ["" for _ in texts]
+    user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
 
-    try:
-        route = select_ai_route(
-            user_openai_key=st.session_state.get("byo_openai_api_key", ""),
-            purpose="translate",
-        )
-    except Exception as exc:
-        st.error(f"AI route is not configured: {exc}")
-        return ["" for _ in texts]
+    # ----------------------------------------------------------
+    # BYO KEY PATH — keep existing logic unchanged.
+    # ----------------------------------------------------------
+    if user_key:
+        if ai_json_items is None or select_ai_route is None:
+            st.error("BYO-key AI router file is missing. Add managed_ai_router.py beside app.py.")
+            return ["" for _ in texts]
 
-    # Compact prompt works better for self-hosted/open-source models.
-    system_prompt = f"""
+        try:
+            route = select_ai_route(user_openai_key=user_key, purpose="translate")
+        except Exception as exc:
+            st.error(f"User AI route is not configured: {exc}")
+            return ["" for _ in texts]
+
+        system_prompt = f"""
 You are ErrorSweep AI, a professional localization translator.
 Return JSON only. Do not use markdown.
 
@@ -968,35 +984,69 @@ Output shape:
   ]
 }}
 """
+        payload = {
+            "target_language": target_language,
+            "domain": domain,
+            "texts": [{"index": i, "source": text} for i, text in enumerate(texts)],
+        }
 
-    payload = {
-        "target_language": target_language,
-        "domain": domain,
-        "texts": [{"index": i, "source": text} for i, text in enumerate(texts)],
-    }
+        items, usage = ai_json_items(
+            system_prompt=system_prompt,
+            user_prompt=json.dumps(payload, ensure_ascii=False),
+            route=route,
+            temperature=0.0,
+            max_tokens=4500,
+        )
+        log_ai_usage_event(usage, "translate", len(texts))
 
-    items, usage = ai_json_items(
-        system_prompt=system_prompt,
-        user_prompt=json.dumps(payload, ensure_ascii=False),
-        route=route,
-        temperature=0.0,
-        max_tokens=4500,
-    )
-    log_ai_usage_event(usage, "translate", len(texts))
+        result = [""] * len(texts)
+        for item in items:
+            try:
+                idx = int(item.get("index", 0))
+            except Exception:
+                continue
+            if 0 <= idx < len(result):
+                result[idx] = safe_text(item.get("translation", ""))
 
-    result = [""] * len(texts)
-    for item in items:
-        try:
-            idx = int(item.get("index", 0))
-        except Exception:
-            continue
-        if 0 <= idx < len(result):
-            result[idx] = safe_text(item.get("translation", ""))
+        if not any(result) and usage.get("error"):
+            st.error(f"Translation service error: {usage.get('error')}")
+        return result
 
-    if not any(result) and usage.get("error"):
-        st.error(f"Translation service error: {usage.get('error')}")
-    return result
+    # ----------------------------------------------------------
+    # NO USER KEY PATH — v30 built-in translation engine.
+    # Phase 1 default: Azure Translator.
+    # Phase 2 future: NLLB when NLLB_MODE=True.
+    # ----------------------------------------------------------
+    if builtin_translate_batch is None:
+        st.error("Built-in translation router is missing. Add translator_router.py, azure_translator.py, and nllb_translator.py beside app.py.")
+        return ["" for _ in texts]
 
+    try:
+        translations, usage = builtin_translate_batch(
+            source_language="English",
+            target_language=target_language,
+            texts=texts,
+            user_api_key="",
+            protected_terms=[],
+            metadata={"domain": domain},
+        )
+        # Store usage in the same owner-console log format.
+        log_ai_usage_event({
+            "provider": usage.get("provider", "built_in_translation"),
+            "model": usage.get("engine", "built_in_translation"),
+            "managed": True,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "success": usage.get("success", True),
+            "error": usage.get("error", ""),
+            "characters": usage.get("characters", 0),
+            "requests": usage.get("requests", 0),
+        }, "translate", len(texts))
+        return [safe_text(t) for t in translations]
+    except Exception as exc:
+        st.error(f"Translation service error: {str(exc)}")
+        return ["" for _ in texts]
 
 def call_main_api_qa(rows: List[Dict[str, Any]], domain: str, strictness: str = "Standard") -> List[Dict[str, Any]]:
     """Optional Managed AI QA route. Deterministic checks still run first elsewhere."""
