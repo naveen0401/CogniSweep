@@ -61,7 +61,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v37 Pro Post-Editing Only + Subtitle/Transcription"
+APP_VERSION = "v39 Excel-style Human Review Editor"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1677,59 +1677,60 @@ def render_assist_panel(source: str) -> None:
 
 
 def render_text_review_editor() -> None:
-    st.markdown("### Pro Post-Editing Editor")
-    st.caption("This editor opens only from ErrorSweep Pro after a translated draft is created. Edit target rows, approve them, save to TM, and download the final reviewed file.")
+    """Excel/CAT-style Pro post-editing workspace.
 
-    rows = st.session_state.review_segments
+    The user asked for a Phrase/Memsource-like editor: source cells on the
+    left, target cells on the right, match/status information per row, and a
+    CAT assist panel on the right. This replaces the older single-segment
+    text-area layout.
+    """
+    st.markdown(
+        """
+        <style>
+        .es-cat-toolbar {
+            border: 1px solid rgba(84,105,180,.28);
+            background: rgba(12,15,30,.78);
+            border-radius: 18px;
+            padding: 12px 14px;
+            margin: 10px 0 14px 0;
+        }
+        .es-cat-panel {
+            border: 1px solid rgba(84,105,180,.25);
+            background: rgba(13,16,31,.78);
+            border-radius: 18px;
+            padding: 14px;
+            min-height: 560px;
+        }
+        .es-cat-selected {
+            border: 1px solid rgba(0,217,133,.28);
+            background: rgba(0,217,133,.06);
+            border-radius: 14px;
+            padding: 11px;
+            margin-bottom: 12px;
+        }
+        .es-grid-caption {
+            font-family: "Space Mono", monospace;
+            font-size: 11px;
+            color: #9aa7da;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+        }
+        div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+            border-radius: 16px !important;
+            overflow: hidden !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rows = st.session_state.get("review_segments", []) or []
     if not rows:
         st.info("No Pro translated rows are loaded. Run ErrorSweep Pro first, then click Open Human Review workspace.")
         return
 
-    idx = min(st.session_state.selected_review_index, len(rows)-1)
-    row = rows[idx]
-
-    left, center, right = st.columns([2.2, 3.6, 1.8])
-
-    with left:
-        st.markdown("#### Source segments")
-        for i, seg in enumerate(rows):
-            status = seg.get("status", "Untranslated")
-            match = seg.get("match", "")
-            label = f"{i+1}. {seg.get('source','')[:70] or seg.get('target','')[:70]}"
-            st.markdown(f'<div class="es-small"><span class="es-chip {"green" if status=="Approved" else "amber" if "Review" in status else ""}">{escape(status)}</span> {escape(match)}</div>', unsafe_allow_html=True)
-            if st.button(label, key=f"review_pick_{i}", use_container_width=True):
-                st.session_state.selected_review_index = i
-                st.rerun()
-
-    with center:
-        st.markdown(f"#### Segment {idx+1} / {len(rows)}")
-        st.markdown(f'<span class="es-chip">{escape(row.get("match","") or "No match")}</span> <span class="es-chip amber">{escape(row.get("status","Untranslated"))}</span>', unsafe_allow_html=True)
-        source_text = st.text_area("Source", value=row.get("source", ""), height=150, disabled=True, key=f"source_{idx}")
-        target_text = st.text_area("Target", value=row.get("target", ""), height=220, key=f"target_{idx}")
-        status = st.selectbox("Segment status", ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"], index=0 if row.get("status") not in ["Approved","Rejected"] else ["MT","Fuzzy 75%","Fuzzy 85%","100%","101%","Needs Review","Approved","Rejected","Needs Rework","Untranslated"].index(row.get("status")), key=f"status_{idx}")
-
-        b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Save", key=f"save_{idx}", use_container_width=True):
-            rows[idx]["target"] = target_text
-            rows[idx]["status"] = status
-            st.success("Saved.")
-        if b2.button("Approve", key=f"approve_{idx}", use_container_width=True):
-            rows[idx]["target"] = target_text
-            rows[idx]["status"] = "Approved"
-            st.success("Approved.")
-        if b3.button("Save to TM", key=f"tm_{idx}", use_container_width=True):
-            rows[idx]["target"] = target_text
-            rows[idx]["status"] = "Approved"
-            st.session_state.tm.append({"source": row.get("source",""), "target": target_text, "language": "", "created": now_stamp(), "approved_by": (current_user() or {}).get("email","")})
-            st.success("Approved and saved to TM.")
-        if b4.button("Next", key=f"next_{idx}", use_container_width=True):
-            rows[idx]["target"] = target_text
-            rows[idx]["status"] = status
-            st.session_state.selected_review_index = min(idx+1, len(rows)-1)
-            st.rerun()
-
-    with right:
-        render_assist_panel(row.get("source", ""))
+    st.markdown("### Translator Human Review Editor")
+    st.caption("Excel-style post-editing workspace: source cells on the left, target cells on the right, and CAT matches on the side.")
 
     completion = compute_review_completion(rows)
     m1, m2, m3, m4 = st.columns(4)
@@ -1738,46 +1739,219 @@ def render_text_review_editor() -> None:
     m3.metric("Approved", completion["approved"])
     m4.metric("Needs Review", completion["needs_review"])
 
-    st.markdown("### Final reviewed output")
-    d1, d2, d3 = st.columns([1, 1, 1])
-    reviewed_base_name = safe_text(st.session_state.get("review_workspace_file_name", "human_review_output")) or "human_review_output"
-    reviewed_base_name = re.sub(r"\.[^.]+$", "", reviewed_base_name)
-    d1.download_button(
-        "Download 100% reviewed Excel",
-        build_reviewed_translation_workbook(rows),
-        file_name=f"{reviewed_base_name}_reviewed_translation.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-    d2.download_button(
-        "Download reviewed CSV",
-        rows_to_csv(rows),
-        file_name=f"{reviewed_base_name}_reviewed_translation.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-    d3.download_button(
-        "Download target text",
-        build_reviewed_plain_text(rows),
-        file_name=f"{reviewed_base_name}_target_text.txt",
-        mime="text/plain",
-        use_container_width=True,
-    )
+    st.markdown('<div class="es-cat-toolbar">', unsafe_allow_html=True)
+    f1, f2, f3, f4 = st.columns([1.2, 1.2, 1, .9])
+    with f1:
+        source_filter = st.text_input("Filter source", value="", placeholder="Search source…", key="cat_source_filter")
+    with f2:
+        target_filter = st.text_input("Filter target", value="", placeholder="Search target…", key="cat_target_filter")
+    with f3:
+        status_options = ["All"] + sorted({safe_text(r.get("status", "Untranslated")) or "Untranslated" for r in rows})
+        status_filter = st.selectbox("Status", status_options, key="cat_status_filter")
+    with f4:
+        only_pending = st.checkbox("Pending only", value=False, key="cat_pending_only")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("### Bulk target grid")
-    edited = st.data_editor(
-        pd.DataFrame(rows),
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="review_bulk_grid",
-    )
-    if st.button("Save bulk grid", use_container_width=True):
-        st.session_state.review_segments = edited.to_dict("records")
-        st.success("Bulk grid saved.")
+    filtered_indexes: List[int] = []
+    for i, r in enumerate(rows):
+        src = safe_text(r.get("source", ""))
+        tgt = safe_text(r.get("target", ""))
+        status = safe_text(r.get("status", "Untranslated")) or "Untranslated"
+        if source_filter and source_filter.lower() not in src.lower():
+            continue
+        if target_filter and target_filter.lower() not in tgt.lower():
+            continue
+        if status_filter != "All" and status != status_filter:
+            continue
+        if only_pending and status in {"Approved", "101%", "100%"}:
+            continue
+        filtered_indexes.append(i)
 
-    st.caption("Use the download buttons above to export the final reviewed file.")
+    if not filtered_indexes:
+        st.warning("No segments match the current filters.")
+        return
 
+    # Keep selected index valid and within the filtered list.
+    current_idx = int(st.session_state.get("selected_review_index", filtered_indexes[0]) or filtered_indexes[0])
+    if current_idx not in filtered_indexes:
+        current_idx = filtered_indexes[0]
+        st.session_state.selected_review_index = current_idx
+
+    grid_rows = []
+    for i in filtered_indexes:
+        r = rows[i]
+        grid_rows.append({
+            "#": i + 1,
+            "Location": safe_text(r.get("location", f"Segment {i+1}")),
+            "Source": safe_text(r.get("source", "")),
+            "Target": safe_text(r.get("target", "")),
+            "Status": safe_text(r.get("status", "MT" if safe_text(r.get("target", "")) else "Needs Review")),
+            "Match": safe_text(r.get("match", "MT" if safe_text(r.get("target", "")) else "Untranslated")),
+            "Notes": safe_text(r.get("notes", "")),
+        })
+
+    main_col, side_col = st.columns([4.6, 1.45])
+    with main_col:
+        st.markdown('<div class="es-grid-caption">Source / Target editing grid</div>', unsafe_allow_html=True)
+        edited_df = st.data_editor(
+            pd.DataFrame(grid_rows),
+            use_container_width=True,
+            hide_index=True,
+            height=620,
+            num_rows="fixed",
+            column_order=["#", "Source", "Target", "Status", "Match", "Location", "Notes"],
+            disabled=["#", "Source", "Match", "Location"],
+            column_config={
+                "#": st.column_config.NumberColumn("#", width="small"),
+                "Source": st.column_config.TextColumn("Source", width="large", help="Original source segment. Read only."),
+                "Target": st.column_config.TextColumn("Target", width="large", help="Editable final translation."),
+                "Status": st.column_config.SelectboxColumn(
+                    "Status",
+                    width="medium",
+                    options=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
+                ),
+                "Match": st.column_config.TextColumn("Match", width="small"),
+                "Location": st.column_config.TextColumn("Location", width="medium"),
+                "Notes": st.column_config.TextColumn("Notes", width="medium"),
+            },
+            key="cat_excel_style_editor",
+        )
+
+        a1, a2, a3, a4 = st.columns(4)
+        if a1.button("Save grid edits", type="primary", use_container_width=True):
+            for _, erow in edited_df.iterrows():
+                idx = int(erow["#"]) - 1
+                if 0 <= idx < len(rows):
+                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
+                    rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
+                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
+            st.session_state.review_segments = rows
+            st.session_state.last_pro_review_segments = rows
+            st.session_state.latest_human_review_segments = rows
+            st.success("Grid edits saved.")
+            st.rerun()
+
+        if a2.button("Approve visible", use_container_width=True):
+            for _, erow in edited_df.iterrows():
+                idx = int(erow["#"]) - 1
+                if 0 <= idx < len(rows) and safe_text(erow.get("Target", "")).strip():
+                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
+                    rows[idx]["status"] = "Approved"
+                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
+            st.session_state.review_segments = rows
+            st.success("Visible translated rows approved.")
+            st.rerun()
+
+        if a3.button("Next pending", use_container_width=True):
+            next_idx = None
+            for i, r in enumerate(rows):
+                if safe_text(r.get("status", "")) not in {"Approved", "101%", "100%"} or not safe_text(r.get("target", "")).strip():
+                    next_idx = i
+                    break
+            if next_idx is not None:
+                st.session_state.selected_review_index = next_idx
+                st.rerun()
+            else:
+                st.success("All rows look complete.")
+
+        if a4.button("Save to TM", use_container_width=True):
+            saved = 0
+            for r in rows:
+                src = safe_text(r.get("source", ""))
+                tgt = safe_text(r.get("target", ""))
+                if src and tgt and safe_text(r.get("status", "")) in {"Approved", "100%", "101%"}:
+                    st.session_state.tm.append({
+                        "source": src,
+                        "target": tgt,
+                        "language": safe_text(st.session_state.get("review_workspace_language", "")),
+                        "created": now_stamp(),
+                        "approved_by": (current_user() or {}).get("email", ""),
+                    })
+                    saved += 1
+            st.success(f"Saved {saved} approved segment(s) to TM.")
+
+        st.markdown("### Final reviewed output")
+        d1, d2, d3 = st.columns(3)
+        reviewed_base_name = safe_text(st.session_state.get("review_workspace_file_name", "human_review_output")) or "human_review_output"
+        reviewed_base_name = re.sub(r"\.[^.]+$", "", reviewed_base_name)
+        d1.download_button(
+            "Download reviewed Excel",
+            build_reviewed_translation_workbook(rows),
+            file_name=f"{reviewed_base_name}_reviewed_translation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        d2.download_button(
+            "Download reviewed CSV",
+            rows_to_csv(rows),
+            file_name=f"{reviewed_base_name}_reviewed_translation.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        d3.download_button(
+            "Download target text",
+            build_reviewed_plain_text(rows),
+            file_name=f"{reviewed_base_name}_target_text.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+    with side_col:
+        st.markdown('<div class="es-cat-panel">', unsafe_allow_html=True)
+        select_labels = [f"{i+1} · {safe_text(rows[i].get('source',''))[:38] or safe_text(rows[i].get('target',''))[:38]}" for i in filtered_indexes]
+        selected_label = st.selectbox(
+            "Focused segment",
+            select_labels,
+            index=filtered_indexes.index(current_idx) if current_idx in filtered_indexes else 0,
+            key="cat_focused_segment_label",
+        )
+        selected_pos = select_labels.index(selected_label)
+        selected_idx = filtered_indexes[selected_pos]
+        st.session_state.selected_review_index = selected_idx
+        focused = rows[selected_idx]
+
+        status = safe_text(focused.get("status", "Needs Review"))
+        match = safe_text(focused.get("match", "MT"))
+        chip_class = "green" if status in {"Approved", "100%", "101%"} else "amber" if "Review" in status or status in {"MT", "Untranslated", "Needs Rework"} else "red"
+        st.markdown(
+            f"""
+            <div class="es-cat-selected">
+              <div class="es-small">Segment {selected_idx + 1} / {len(rows)}</div>
+              <div style="margin-top:8px;"><span class="es-chip {chip_class}">{escape(status)}</span> <span class="es-chip">{escape(match)}</span></div>
+              <div class="es-small" style="margin-top:10px;">{escape(safe_text(focused.get('location','')))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("##### Source")
+        st.text_area("Source preview", value=safe_text(focused.get("source", "")), height=100, disabled=True, label_visibility="collapsed", key=f"focused_src_{selected_idx}")
+        st.markdown("##### Target")
+        focused_target = st.text_area("Target preview", value=safe_text(focused.get("target", "")), height=145, label_visibility="collapsed", key=f"focused_tgt_{selected_idx}")
+        focused_status = st.selectbox(
+            "Status",
+            ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
+            index=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(status) if status in ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 5,
+            key=f"focused_status_{selected_idx}",
+        )
+        b1, b2 = st.columns(2)
+        if b1.button("Save", key=f"focused_save_{selected_idx}", use_container_width=True):
+            rows[selected_idx]["target"] = focused_target
+            rows[selected_idx]["status"] = focused_status
+            st.session_state.review_segments = rows
+            st.success("Saved selected segment.")
+            st.rerun()
+        if b2.button("Approve", key=f"focused_approve_{selected_idx}", use_container_width=True):
+            rows[selected_idx]["target"] = focused_target
+            rows[selected_idx]["status"] = "Approved"
+            st.session_state.review_segments = rows
+            st.success("Approved selected segment.")
+            st.rerun()
+
+        st.divider()
+        st.markdown("#### CAT")
+        render_assist_panel(safe_text(focused.get("source", "")))
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def default_subtitle_segments(count: int = 8, transcription: bool = False) -> List[Dict[str, Any]]:
