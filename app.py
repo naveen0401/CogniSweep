@@ -45,14 +45,6 @@ except Exception:
     speech_engine_label = None
 
 
-# Telugu Subtitle QC Engine — API-free deterministic subtitle checks.
-try:
-    from telugu_subtitle_qc import run_telugu_subtitle_qc, build_telugu_qc_excel, findings_dataframe, events_dataframe
-except Exception:
-    run_telugu_subtitle_qc = None
-    build_telugu_qc_excel = None
-    findings_dataframe = None
-    events_dataframe = None
 
 from openpyxl import load_workbook, Workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -68,7 +60,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v35 Pro Post-Editing + Subtitle Transcription Editor"
+APP_VERSION = "v37 Pro Post-Editing Only + Subtitle/Transcription"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -598,7 +590,6 @@ WORKSPACE_PAGES = [
     "ErrorSweep QA",
     "ErrorSweep Pro",
     "Subtitle / Transcription Editor",
-    "Telugu Subtitle QC",
     "Scorecards",
     "Memory & Rules",
     "Team & Roles",
@@ -618,13 +609,13 @@ HIDDEN_EDITOR_PAGES = [
 ROLE_PAGE_ACCESS = {
     "Platform Owner": OWNER_PAGES + WORKSPACE_PAGES,
     "Workspace Owner": WORKSPACE_PAGES,
-    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
-    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
+    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
     "Translator": ["Dashboard", "Jobs", "Subtitle / Transcription Editor", "Account"],
-    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
     "Client Viewer": ["Dashboard", "Jobs", "Account"],
     "Billing Admin": ["Dashboard", "Billing", "Account"],
-    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
 }
 
 
@@ -944,12 +935,37 @@ def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "Erro
             "start": row.get("start", ""),
             "end": row.get("end", ""),
         })
+    # Store in more than one session key. Some Streamlit reruns can make a hidden
+    # route render before the editor reads review_segments; these backup keys let
+    # the workspace restore itself instead of opening as a blank page.
     st.session_state.review_segments = prepared
+    st.session_state.last_pro_review_segments = prepared
+    st.session_state.latest_human_review_segments = prepared
+    st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = 0
     st.session_state.review_workspace_title = source
     st.session_state.review_workspace_language = target_language
     st.session_state.review_workspace_file_name = file_name
     st.session_state.review_workspace_created = now_stamp() if "now_stamp" in globals() else ""
+
+
+def restore_human_review_session_from_cache() -> bool:
+    """Restore Pro review rows if the dedicated page is opened after a rerun.
+
+    This avoids the confusing blank-page experience after clicking
+    "Open Human Review workspace".
+    """
+    if st.session_state.get("review_segments"):
+        return True
+    for key in ("last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"):
+        cached = st.session_state.get(key)
+        if isinstance(cached, list) and cached:
+            st.session_state.review_segments = cached
+            st.session_state.selected_review_index = 0
+            st.session_state.pro_post_editing_ready = True
+            return True
+    return False
+
 
 
 def build_reviewed_translation_workbook(rows: List[Dict[str, Any]]) -> bytes:
@@ -1473,96 +1489,17 @@ def page_qa() -> None:
         st.download_button("Download QA CSV", rows_to_csv(findings), file_name="errorsweep_qa_findings.csv", mime="text/csv", use_container_width=True)
 
 
-def page_telugu_subtitle_qc() -> None:
-    hero("Telugu Subtitle QC", "Rule-based subtitle quality engine", "Run API-free Telugu subtitle checks for Unicode, timing, spelling, grammar hints, consistency, and stage directions.")
-    st.info("This Phase 1 engine does not use OpenAI, Azure, or NLLB. It runs deterministic Telugu subtitle QC rules and exports an Excel report.")
-
-    c1, c2 = st.columns([1.2, 1])
-    uploaded = c1.file_uploader("Upload Telugu subtitle/script file", type=["srt", "vtt", "txt"], key="telugu_qc_file")
-    fps = c2.number_input("FPS for HH:MM:SS:FF timecodes", min_value=1, max_value=120, value=25)
-    route_to_review = False
-
-    with st.expander("What this checks", expanded=False):
-        st.markdown(
-            """
-            - Timing: invalid ranges, overlaps, very short or long cues
-            - Unicode: invalid Telugu matra/halant positions and mixed digit styles
-            - Spelling: known Telugu subtitle error pairs
-            - Mixed script: unexpected Roman words inside Telugu text
-            - Grammar hints: conservative pronoun/verb agreement and aspect warnings
-            - Consistency: duplicate subtitles and known terminology variants
-            - Stage directions: English SDH/action cues that may need localization
-            """
-        )
-
-    if st.button("Run Telugu Subtitle QC", type="primary", use_container_width=True, disabled=uploaded is None):
-        if run_telugu_subtitle_qc is None or build_telugu_qc_excel is None:
-            st.error("Telugu QC engine file is missing. Add telugu_subtitle_qc.py beside app.py.")
-            st.stop()
-
-        result = run_telugu_subtitle_qc(
-            uploaded.getvalue(),
-            uploaded.name,
-            options={"fps": fps},
-        )
-        summary = result.get("summary", {})
-        findings_df = findings_dataframe(result)
-        events_df = events_dataframe(result)
-        excel_bytes = build_telugu_qc_excel(result)
-
-        metrics([
-            ("Events", int(summary.get("event_count", 0)), summary.get("format", "subtitle file")),
-            ("Critical", int(summary.get("critical_count", 0)), "must fix"),
-            ("Warnings", int(summary.get("warning_count", 0)), "should fix"),
-            ("Verdict", summary.get("verdict", "Pass"), "QC result"),
-        ])
-
-        if route_to_review:
-            review_rows = []
-            # Create editable rows from parsed subtitle events. Findings are included as issue notes.
-            issue_by_event = {}
-            for f in result.get("findings", []):
-                issue_by_event.setdefault(f.get("event_number"), []).append(f)
-            for ev in result.get("events", []):
-                notes = issue_by_event.get(ev.get("number"), [])
-                review_rows.append({
-                    "id": ev.get("number"),
-                    "source": ev.get("dialogue", ""),
-                    "target": ev.get("dialogue", ""),
-                    "status": "Needs Review" if notes else "Approved",
-                    "match": "Telugu QC" if notes else "Pass",
-                    "issues": "; ".join([f.get("rule_id", "") + ": " + f.get("description", "") for f in notes[:3]]),
-                    "start": ev.get("timecode", ""),
-                    "end": "",
-                })
-            st.session_state.review_segments = review_rows
-            st.session_state.jobs.insert(0, {"created": now_stamp(), "type": "Telugu Subtitle QC", "language": "Telugu", "status": summary.get("verdict", "Pass"), "segments": len(review_rows)})
-            add_audit("Telugu subtitle QC", f"{summary.get('findings_count', 0)} findings")
-            st.success("Telugu QC findings prepared for Human Review.")
-            if st.button("Open Human Review workspace", use_container_width=True):
-                open_page("Human Review Workspace")
-
-        st.markdown("### QC Findings")
-        if findings_df.empty:
-            st.success("No findings produced by the Telugu QC engine.")
-        else:
-            st.dataframe(findings_df, use_container_width=True, hide_index=True)
-
-        with st.expander("Parsed subtitle events", expanded=False):
-            st.dataframe(events_df, use_container_width=True, hide_index=True)
-
-        st.download_button(
-            "Download Telugu QC Excel Report",
-            excel_bytes,
-            file_name="errorsweep_telugu_subtitle_qc.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-
 def page_pro() -> None:
     hero("ErrorSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
     st.caption(f"AI access: {current_ai_route_label()}")
+
+    # If a Pro review session already exists, keep the action visible even after reruns.
+    # This prevents the user from losing access to the post-editing workspace.
+    if st.session_state.get("review_segments") or st.session_state.get("last_pro_review_segments"):
+        restore_human_review_session_from_cache()
+        st.success("A Pro Human Review session is ready.")
+        if st.button("Open Human Review workspace", type="primary", use_container_width=True, key="open_existing_pro_review"):
+            open_page("Human Review Workspace")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
@@ -2069,6 +2006,16 @@ def page_human_review() -> None:
 
 def page_human_review_workspace() -> None:
     """Dedicated text review route opened from ErrorSweep Pro outputs only."""
+    # Recovery guard: if Streamlit opened this hidden route after a rerun, restore
+    # the Pro rows from the persistent Pro result cache. This prevents blank pages.
+    if not st.session_state.get("review_segments") and st.session_state.get("pro_post_edit_rows"):
+        prepare_human_review_session(
+            st.session_state.get("pro_post_edit_rows", []),
+            source="ErrorSweep Pro",
+            target_language=st.session_state.get("pro_post_edit_language", ""),
+            file_name=st.session_state.get("pro_post_edit_file_name", ""),
+        )
+
     top1, top2 = st.columns([0.78, 0.22])
     with top1:
         title = st.session_state.get("review_workspace_title", "Human Review")
@@ -2082,9 +2029,16 @@ def page_human_review_workspace() -> None:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Back to ErrorSweep Pro", use_container_width=True):
             open_page("ErrorSweep Pro")
+
     if not st.session_state.get("review_segments"):
         st.warning("No Pro post-editing rows are loaded yet. Run ErrorSweep Pro first, then click Open Human Review workspace.")
+        # Show a safe way back instead of an empty page.
+        if st.button("Go to ErrorSweep Pro", type="primary", use_container_width=True):
+            open_page("ErrorSweep Pro")
+        return
+
     render_text_review_editor()
+
 
 
 def page_subtitle_workspace() -> None:
@@ -2610,8 +2564,9 @@ def page_admin() -> None:
             st.session_state.subtitle_segments = []
             st.success("Demo jobs and review rows cleared.")
         if st.button("Clear all demo workspace data", use_container_width=True):
-            for key in ["projects", "jobs", "tm", "review_segments", "subtitle_segments"]:
+            for key in ["projects", "jobs", "tm", "review_segments", "subtitle_segments", "last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"]:
                 st.session_state[key] = []
+            st.session_state["pro_post_editing_ready"] = False
             st.success("Demo workspace data cleared.")
 
 
@@ -2676,7 +2631,6 @@ def page_platform_settings() -> None:
         "Pro post-editing Human Review": True,
         "Scorecards": True,
         "Subtitle / Transcription Editor": True,
-        "Telugu Subtitle QC": True,
         "Public registration": False,
         "Billing collection": False,
         "Self-hosted engines": False,
@@ -2701,7 +2655,6 @@ PAGE_RENDERERS = {
     "ErrorSweep QA": page_qa,
     "ErrorSweep Pro": page_pro,
     "Subtitle / Transcription Editor": page_subtitle_transcription_editor,
-    "Telugu Subtitle QC": page_telugu_subtitle_qc,
     "Human Review Workspace": page_human_review_workspace,
     "Subtitle Workspace": page_subtitle_workspace,
     "Transcription Workspace": page_transcription_workspace,
