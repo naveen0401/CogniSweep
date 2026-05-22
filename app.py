@@ -11,6 +11,7 @@ import re
 import difflib
 import time
 import zipfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
@@ -653,6 +654,10 @@ def open_page(page: str) -> None:
     """Open an internal ErrorSweep route as a dedicated page in the same session."""
     st.session_state.page = page
     query_set("es_page", page)
+    if page == "Human Review Workspace":
+        session_id = st.session_state.get("active_review_session_id")
+        if session_id:
+            query_set("review_id", str(session_id))
     st.rerun()
 
 
@@ -908,6 +913,52 @@ def rows_to_srt(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
     return "\n".join(out).encode("utf-8")
 
 
+@st.cache_resource
+def get_review_session_store() -> Dict[str, Dict[str, Any]]:
+    """Small in-memory review-session store.
+
+    Streamlit reruns can cause a button on the Pro page to re-render before the
+    hidden editor page has read session_state. We store the Pro review rows under
+    a stable session id and pass that id through the query string, so the editor
+    can restore rows reliably instead of opening as a blank page.
+    """
+    return {}
+
+
+def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_language: str, file_name: str) -> str:
+    session_id = uuid.uuid4().hex
+    get_review_session_store()[session_id] = {
+        "rows": rows,
+        "title": title,
+        "target_language": target_language,
+        "file_name": file_name,
+        "created": now_stamp() if "now_stamp" in globals() else "",
+    }
+    st.session_state["active_review_session_id"] = session_id
+    return session_id
+
+
+def load_review_session_from_store(session_id: str) -> bool:
+    if not session_id:
+        return False
+    payload = get_review_session_store().get(session_id)
+    if not payload:
+        return False
+    rows = payload.get("rows") or []
+    if not rows:
+        return False
+    st.session_state.review_segments = rows
+    st.session_state.last_pro_review_segments = rows
+    st.session_state.latest_human_review_segments = rows
+    st.session_state.pro_post_editing_ready = True
+    st.session_state.selected_review_index = min(int(st.session_state.get("selected_review_index", 0) or 0), max(len(rows)-1, 0))
+    st.session_state.review_workspace_title = payload.get("title") or "ErrorSweep Pro"
+    st.session_state.review_workspace_language = payload.get("target_language") or ""
+    st.session_state.review_workspace_file_name = payload.get("file_name") or ""
+    st.session_state.active_review_session_id = session_id
+    return True
+
+
 def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "ErrorSweep Pro", target_language: str = "", file_name: str = "") -> None:
     """Store rows in a durable Human Review session before opening the editor.
 
@@ -941,23 +992,37 @@ def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "Erro
     st.session_state.review_segments = prepared
     st.session_state.last_pro_review_segments = prepared
     st.session_state.latest_human_review_segments = prepared
+    st.session_state.pro_review_rows = prepared
+    st.session_state.pro_post_edit_rows = prepared
+    st.session_state.pro_post_edit_language = target_language
+    st.session_state.pro_post_edit_file_name = file_name
     st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = 0
     st.session_state.review_workspace_title = source
     st.session_state.review_workspace_language = target_language
     st.session_state.review_workspace_file_name = file_name
     st.session_state.review_workspace_created = now_stamp() if "now_stamp" in globals() else ""
+    session_id = save_review_session_to_store(prepared, source, target_language, file_name)
+    query_set("review_id", session_id)
 
 
 def restore_human_review_session_from_cache() -> bool:
     """Restore Pro review rows if the dedicated page is opened after a rerun.
 
     This avoids the confusing blank-page experience after clicking
-    "Open Human Review workspace".
+    "Open Human Review workspace". The restore order is:
+    1. current review_segments
+    2. review_id query/session store
+    3. backup session_state lists
     """
     if st.session_state.get("review_segments"):
         return True
-    for key in ("last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"):
+
+    session_id = st.session_state.get("active_review_session_id") or query_get("review_id")
+    if session_id and load_review_session_from_store(str(session_id)):
+        return True
+
+    for key in ("last_pro_review_segments", "latest_human_review_segments", "pro_review_rows", "pro_post_edit_rows"):
         cached = st.session_state.get(key)
         if isinstance(cached, list) and cached:
             st.session_state.review_segments = cached
@@ -965,6 +1030,15 @@ def restore_human_review_session_from_cache() -> bool:
             st.session_state.pro_post_editing_ready = True
             return True
     return False
+
+
+def go_to_human_review_workspace() -> None:
+    """Route to the dedicated Pro post-editing workspace safely."""
+    restore_human_review_session_from_cache()
+    session_id = st.session_state.get("active_review_session_id")
+    if session_id:
+        query_set("review_id", str(session_id))
+    open_page("Human Review Workspace")
 
 
 
@@ -1499,7 +1573,7 @@ def page_pro() -> None:
         restore_human_review_session_from_cache()
         st.success("A Pro Human Review session is ready.")
         if st.button("Open Human Review workspace", type="primary", use_container_width=True, key="open_existing_pro_review"):
-            open_page("Human Review Workspace")
+            go_to_human_review_workspace()
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
@@ -1566,9 +1640,9 @@ def page_pro() -> None:
         st.markdown("### Next step")
         cta1, cta2 = st.columns([1, 1])
         with cta1:
-            if st.button("Open Human Review workspace", type="primary", use_container_width=True):
+            if st.button("Open Human Review workspace", type="primary", use_container_width=True, key="open_new_pro_review_workspace"):
                 # review_segments is already prepared above. This opens a separate professional editor page.
-                open_page("Human Review Workspace")
+                go_to_human_review_workspace()
         with cta2:
             st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
         st.info("Human Review opens as a dedicated workspace page where reviewers can edit, approve, and save verified segments to TM.")
@@ -2006,6 +2080,7 @@ def page_human_review() -> None:
 
 def page_human_review_workspace() -> None:
     """Dedicated text review route opened from ErrorSweep Pro outputs only."""
+    restore_human_review_session_from_cache()
     # Recovery guard: if Streamlit opened this hidden route after a rerun, restore
     # the Pro rows from the persistent Pro result cache. This prevents blank pages.
     if not st.session_state.get("review_segments") and st.session_state.get("pro_post_edit_rows"):
@@ -2032,7 +2107,7 @@ def page_human_review_workspace() -> None:
 
     if not st.session_state.get("review_segments"):
         st.warning("No Pro post-editing rows are loaded yet. Run ErrorSweep Pro first, then click Open Human Review workspace.")
-        # Show a safe way back instead of an empty page.
+        st.caption("Recovery check: no saved Pro review session was found for this browser session. The Pro page will keep the Open Human Review button visible after a successful run.")
         if st.button("Go to ErrorSweep Pro", type="primary", use_container_width=True):
             open_page("ErrorSweep Pro")
         return
