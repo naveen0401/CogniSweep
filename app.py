@@ -61,7 +61,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v39 Excel-style Human Review Editor"
+APP_VERSION = "v40 CAT-style Human Review Editor"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1677,47 +1677,161 @@ def render_assist_panel(source: str) -> None:
 
 
 def render_text_review_editor() -> None:
-    """Excel/CAT-style Pro post-editing workspace.
+    """Full-width CAT-style Pro post-editing workspace.
 
-    The user asked for a Phrase/Memsource-like editor: source cells on the
-    left, target cells on the right, match/status information per row, and a
-    CAT assist panel on the right. This replaces the older single-segment
-    text-area layout.
+    This version is intentionally closer to CAT tools such as Phrase/Memsource:
+    a compact job bar, filter row, spreadsheet-like source/target grid, match
+    score/status columns, and a right CAT panel. It opens as a dedicated page
+    without the normal platform navigation so the grid can use the full screen.
     """
     st.markdown(
         """
         <style>
-        .es-cat-toolbar {
-            border: 1px solid rgba(84,105,180,.28);
-            background: rgba(12,15,30,.78);
-            border-radius: 18px;
-            padding: 12px 14px;
-            margin: 10px 0 14px 0;
+        .block-container {
+            max-width: 100vw !important;
+            padding: .45rem .75rem .65rem .75rem !important;
         }
-        .es-cat-panel {
-            border: 1px solid rgba(84,105,180,.25);
-            background: rgba(13,16,31,.78);
-            border-radius: 18px;
-            padding: 14px;
-            min-height: 560px;
+        .es-cat-app-shell {
+            min-height: calc(100vh - 16px);
+            background: rgba(8, 10, 19, .98);
+            border: 1px solid rgba(84,105,180,.20);
+            border-radius: 16px;
+            overflow: hidden;
         }
-        .es-cat-selected {
-            border: 1px solid rgba(0,217,133,.28);
-            background: rgba(0,217,133,.06);
-            border-radius: 14px;
-            padding: 11px;
-            margin-bottom: 12px;
+        .es-cat-topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 10px 14px;
+            background: #24252b;
+            border-bottom: 1px solid rgba(255,255,255,.09);
         }
-        .es-grid-caption {
-            font-family: "Space Mono", monospace;
-            font-size: 11px;
-            color: #9aa7da;
+        .es-cat-brandline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            color: #fff;
+            font-weight: 800;
+            font-size: 15px;
+        }
+        .es-cat-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 12px;
+            font-weight: 900;
+            border: 1px solid rgba(255,255,255,.15);
+            background: rgba(255,255,255,.06);
+            color: #eaf2ff;
+            white-space: nowrap;
+        }
+        .es-cat-pill.green { background: rgba(0,217,133,.13); border-color: rgba(0,217,133,.32); color: #66ffc4; }
+        .es-cat-pill.amber { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); color: #ffd38a; }
+        .es-cat-toolbar2 {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 7px 14px;
+            background: #1f2026;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+            color: rgba(255,255,255,.72);
+            font-size: 14px;
+        }
+        .es-cat-tool-icon {
+            width: 28px; height: 28px; border-radius: 7px;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.06);
+        }
+        .es-cat-metrics {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            padding: 10px 14px 6px 14px;
+            background: #0b0d17;
+        }
+        .es-cat-metric {
+            background: rgba(18,21,38,.76);
+            border: 1px solid rgba(84,105,180,.20);
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
+        .es-cat-metric-label { font-family: Space Mono, monospace; color: #9aa7da; font-size: 10px; text-transform: uppercase; }
+        .es-cat-metric-value { color:#fff; font-size:20px; font-weight:900; line-height: 1.1; }
+        .es-cat-filterbar {
+            display: grid;
+            grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) 180px 120px;
+            gap: 10px;
+            padding: 8px 14px 10px 14px;
+            background: #0b0d17;
+            border-bottom: 1px solid rgba(255,255,255,.08);
+        }
+        .es-cat-grid-title {
+            display: grid;
+            grid-template-columns: 56px minmax(270px, 1fr) minmax(270px, 1fr) 74px 90px 90px;
+            gap: 0;
+            padding: 7px 12px;
+            background: #161820;
+            border: 1px solid rgba(255,255,255,.08);
+            border-bottom: none;
+            border-radius: 12px 12px 0 0;
+            font-family: Space Mono, monospace;
+            color: #aeb8dc;
             text-transform: uppercase;
-            letter-spacing: .08em;
+            font-size: 10px;
+            font-weight: 700;
+        }
+        .es-cat-grid-card {
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 0 0 12px 12px;
+            overflow: hidden;
+            background: #10121b;
+        }
+        .es-cat-side-card {
+            border: 1px solid rgba(255,255,255,.10);
+            background: #151721;
+            border-radius: 12px;
+            padding: 10px;
+            height: 735px;
+            overflow-y: auto;
+        }
+        .es-cat-seg-preview {
+            background: #0e1018;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .es-cat-assist-title {
+            font-size: 13px;
+            font-weight: 900;
+            color: #fff;
+            margin: 12px 0 5px 0;
+        }
+        .es-cat-assist-empty { color:#8d95bb; font-size:12px; }
+        .es-cat-mini-row {
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            padding: 7px 0;
+            color: #dbe6ff;
+            font-size: 12px;
         }
         div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
-            border-radius: 16px !important;
-            overflow: hidden !important;
+            border-radius: 0 !important;
+            border: none !important;
+        }
+        div[data-testid="stDataEditor"] [role="grid"] {
+            font-size: 13px !important;
+        }
+        div[data-testid="stDataEditor"] textarea,
+        div[data-testid="stDataEditor"] input {
+            font-size: 13px !important;
+        }
+        @media (max-width: 1100px) {
+            .es-cat-filterbar { grid-template-columns: 1fr; }
+            .es-cat-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         </style>
         """,
@@ -1729,28 +1843,55 @@ def render_text_review_editor() -> None:
         st.info("No Pro translated rows are loaded. Run ErrorSweep Pro first, then click Open Human Review workspace.")
         return
 
-    st.markdown("### Translator Human Review Editor")
-    st.caption("Excel-style post-editing workspace: source cells on the left, target cells on the right, and CAT matches on the side.")
-
     completion = compute_review_completion(rows)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Segments", completion["total"])
-    m2.metric("Translated", completion["translated"])
-    m3.metric("Approved", completion["approved"])
-    m4.metric("Needs Review", completion["needs_review"])
+    file_name = safe_text(st.session_state.get("review_workspace_file_name", "Current file")) or "Current file"
+    language = safe_text(st.session_state.get("review_workspace_language", "Target")) or "Target"
+    title = safe_text(st.session_state.get("review_workspace_title", "Pro Human Review")) or "Pro Human Review"
 
-    st.markdown('<div class="es-cat-toolbar">', unsafe_allow_html=True)
-    f1, f2, f3, f4 = st.columns([1.2, 1.2, 1, .9])
-    with f1:
-        source_filter = st.text_input("Filter source", value="", placeholder="Search source…", key="cat_source_filter")
-    with f2:
-        target_filter = st.text_input("Filter target", value="", placeholder="Search target…", key="cat_target_filter")
-    with f3:
-        status_options = ["All"] + sorted({safe_text(r.get("status", "Untranslated")) or "Untranslated" for r in rows})
-        status_filter = st.selectbox("Status", status_options, key="cat_status_filter")
-    with f4:
-        only_pending = st.checkbox("Pending only", value=False, key="cat_pending_only")
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Top job bar like a CAT tool.
+    st.markdown(
+        f"""
+        <div class="es-cat-app-shell">
+          <div class="es-cat-topbar">
+            <div class="es-cat-brandline">
+              <span style="font-size:18px;">▣</span>
+              <span>ErrorSweep CAT</span>
+              <span style="color:#9aa0b9; font-weight:600;">/ {escape(title)} / {escape(file_name)} / {escape(language)}</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <span class="es-cat-pill green">Accepted</span>
+              <span class="es-cat-pill">TM</span>
+              <span class="es-cat-pill">TB</span>
+              <span class="es-cat-pill amber">MT</span>
+            </div>
+          </div>
+          <div class="es-cat-toolbar2">
+            <span class="es-cat-tool-icon">B</span><span class="es-cat-tool-icon"><i>I</i></span><span class="es-cat-tool-icon">U</span>
+            <span class="es-cat-tool-icon">⌘</span><span class="es-cat-tool-icon">✓</span><span class="es-cat-tool-icon">↶</span><span class="es-cat-tool-icon">↷</span>
+            <span style="margin-left:auto; color:#8ea1dc; font-size:12px;">Post-editing workspace · source left · target right</span>
+          </div>
+          <div class="es-cat-metrics">
+            <div class="es-cat-metric"><div class="es-cat-metric-label">Confirmed</div><div class="es-cat-metric-value">{completion['approved']}</div></div>
+            <div class="es-cat-metric"><div class="es-cat-metric-label">Segments</div><div class="es-cat-metric-value">{completion['total']}</div></div>
+            <div class="es-cat-metric"><div class="es-cat-metric-label">Translated</div><div class="es-cat-metric-value">{completion['translated']}</div></div>
+            <div class="es-cat-metric"><div class="es-cat-metric-label">Needs Review</div><div class="es-cat-metric-value">{completion['needs_review']}</div></div>
+          </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Filter controls need Streamlit widgets, so they sit visually inside the shell.
+    with st.container():
+        f1, f2, f3, f4 = st.columns([1.25, 1.25, .7, .55])
+        with f1:
+            source_filter = st.text_input("Filter source", value="", placeholder="Filter source (en)", key="cat_v40_source_filter", label_visibility="collapsed")
+        with f2:
+            target_filter = st.text_input("Filter target", value="", placeholder="Filter target", key="cat_v40_target_filter", label_visibility="collapsed")
+        with f3:
+            status_options = ["All"] + sorted({safe_text(r.get("status", "Untranslated")) or "Untranslated" for r in rows})
+            status_filter = st.selectbox("Status", status_options, key="cat_v40_status_filter", label_visibility="collapsed")
+        with f4:
+            pending_only = st.checkbox("Pending", value=False, key="cat_v40_pending_only")
 
     filtered_indexes: List[int] = []
     for i, r in enumerate(rows):
@@ -1763,64 +1904,87 @@ def render_text_review_editor() -> None:
             continue
         if status_filter != "All" and status != status_filter:
             continue
-        if only_pending and status in {"Approved", "101%", "100%"}:
+        if pending_only and status in {"Approved", "101%", "100%"}:
             continue
         filtered_indexes.append(i)
 
     if not filtered_indexes:
         st.warning("No segments match the current filters.")
+        st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # Keep selected index valid and within the filtered list.
     current_idx = int(st.session_state.get("selected_review_index", filtered_indexes[0]) or filtered_indexes[0])
     if current_idx not in filtered_indexes:
         current_idx = filtered_indexes[0]
         st.session_state.selected_review_index = current_idx
 
+    # Build the editable grid. Source and target appear side-by-side like Excel/CAT.
     grid_rows = []
     for i in filtered_indexes:
         r = rows[i]
+        status = safe_text(r.get("status", "MT" if safe_text(r.get("target", "")) else "Needs Review"))
+        match = safe_text(r.get("match", "MT" if safe_text(r.get("target", "")) else "Untranslated"))
+        # Score column emulates Phrase/Memsource match percentage badges.
+        if match in {"100%", "101%"}:
+            score = match
+        elif "Fuzzy" in match:
+            score = match.replace("Fuzzy", "").strip() or "85%"
+        elif status in {"Approved", "100%", "101%"}:
+            score = "100"
+        elif match == "MT":
+            score = "MT"
+        elif match == "Untranslated":
+            score = "-"
+        else:
+            score = match or "MT"
         grid_rows.append({
-            "#": i + 1,
-            "Location": safe_text(r.get("location", f"Segment {i+1}")),
+            "No": i + 1,
             "Source": safe_text(r.get("source", "")),
             "Target": safe_text(r.get("target", "")),
-            "Status": safe_text(r.get("status", "MT" if safe_text(r.get("target", "")) else "Needs Review")),
-            "Match": safe_text(r.get("match", "MT" if safe_text(r.get("target", "")) else "Untranslated")),
+            "Score": score,
+            "Status": status,
+            "QA": "✓" if status in {"Approved", "100%", "101%"} else "◯",
             "Notes": safe_text(r.get("notes", "")),
+            "Location": safe_text(r.get("location", f"Segment {i+1}")),
         })
 
-    main_col, side_col = st.columns([4.6, 1.45])
+    main_col, side_col = st.columns([4.25, 1.15], gap="small")
     with main_col:
-        st.markdown('<div class="es-grid-caption">Source / Target editing grid</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="es-cat-grid-title"><div>No</div><div>Source</div><div>Target</div><div>Score</div><div>Status</div><div>QA</div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="es-cat-grid-card">', unsafe_allow_html=True)
         edited_df = st.data_editor(
             pd.DataFrame(grid_rows),
             use_container_width=True,
             hide_index=True,
-            height=620,
+            height=700,
             num_rows="fixed",
-            column_order=["#", "Source", "Target", "Status", "Match", "Location", "Notes"],
-            disabled=["#", "Source", "Match", "Location"],
+            column_order=["No", "Source", "Target", "Score", "Status", "QA", "Notes", "Location"],
+            disabled=["No", "Source", "Score", "QA", "Location"],
             column_config={
-                "#": st.column_config.NumberColumn("#", width="small"),
-                "Source": st.column_config.TextColumn("Source", width="large", help="Original source segment. Read only."),
-                "Target": st.column_config.TextColumn("Target", width="large", help="Editable final translation."),
+                "No": st.column_config.NumberColumn("", width="small"),
+                "Source": st.column_config.TextColumn("Source", width="large", help="Read-only source segment"),
+                "Target": st.column_config.TextColumn("Target", width="large", help="Editable reviewed translation"),
+                "Score": st.column_config.TextColumn("", width="small"),
                 "Status": st.column_config.SelectboxColumn(
                     "Status",
                     width="medium",
                     options=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
                 ),
-                "Match": st.column_config.TextColumn("Match", width="small"),
-                "Location": st.column_config.TextColumn("Location", width="medium"),
+                "QA": st.column_config.TextColumn("", width="small"),
                 "Notes": st.column_config.TextColumn("Notes", width="medium"),
+                "Location": st.column_config.TextColumn("Location", width="medium"),
             },
-            key="cat_excel_style_editor",
+            key="cat_v40_excel_grid",
         )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        a1, a2, a3, a4 = st.columns(4)
-        if a1.button("Save grid edits", type="primary", use_container_width=True):
+        b1, b2, b3, b4, b5 = st.columns([1, 1, 1, 1, 1])
+        if b1.button("Save edits", type="primary", use_container_width=True):
             for _, erow in edited_df.iterrows():
-                idx = int(erow["#"]) - 1
+                idx = int(erow["No"]) - 1
                 if 0 <= idx < len(rows):
                     rows[idx]["target"] = safe_text(erow.get("Target", ""))
                     rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
@@ -1828,21 +1992,21 @@ def render_text_review_editor() -> None:
             st.session_state.review_segments = rows
             st.session_state.last_pro_review_segments = rows
             st.session_state.latest_human_review_segments = rows
-            st.success("Grid edits saved.")
+            st.toast("Saved grid edits.")
             st.rerun()
 
-        if a2.button("Approve visible", use_container_width=True):
+        if b2.button("Approve visible", use_container_width=True):
             for _, erow in edited_df.iterrows():
-                idx = int(erow["#"]) - 1
+                idx = int(erow["No"]) - 1
                 if 0 <= idx < len(rows) and safe_text(erow.get("Target", "")).strip():
                     rows[idx]["target"] = safe_text(erow.get("Target", ""))
                     rows[idx]["status"] = "Approved"
                     rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
             st.session_state.review_segments = rows
-            st.success("Visible translated rows approved.")
+            st.toast("Visible translated rows approved.")
             st.rerun()
 
-        if a3.button("Next pending", use_container_width=True):
+        if b3.button("Next pending", use_container_width=True):
             next_idx = None
             for i, r in enumerate(rows):
                 if safe_text(r.get("status", "")) not in {"Approved", "101%", "100%"} or not safe_text(r.get("target", "")).strip():
@@ -1854,7 +2018,7 @@ def render_text_review_editor() -> None:
             else:
                 st.success("All rows look complete.")
 
-        if a4.button("Save to TM", use_container_width=True):
+        if b4.button("Save to TM", use_container_width=True):
             saved = 0
             for r in rows:
                 src = safe_text(r.get("source", ""))
@@ -1870,25 +2034,27 @@ def render_text_review_editor() -> None:
                     saved += 1
             st.success(f"Saved {saved} approved segment(s) to TM.")
 
-        st.markdown("### Final reviewed output")
-        d1, d2, d3 = st.columns(3)
+        if b5.button("Back to Pro", use_container_width=True):
+            open_page("ErrorSweep Pro")
+
         reviewed_base_name = safe_text(st.session_state.get("review_workspace_file_name", "human_review_output")) or "human_review_output"
         reviewed_base_name = re.sub(r"\.[^.]+$", "", reviewed_base_name)
-        d1.download_button(
+        dl1, dl2, dl3 = st.columns(3)
+        dl1.download_button(
             "Download reviewed Excel",
             build_reviewed_translation_workbook(rows),
             file_name=f"{reviewed_base_name}_reviewed_translation.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-        d2.download_button(
+        dl2.download_button(
             "Download reviewed CSV",
             rows_to_csv(rows),
             file_name=f"{reviewed_base_name}_reviewed_translation.csv",
             mime="text/csv",
             use_container_width=True,
         )
-        d3.download_button(
+        dl3.download_button(
             "Download target text",
             build_reviewed_plain_text(rows),
             file_name=f"{reviewed_base_name}_target_text.txt",
@@ -1897,61 +2063,82 @@ def render_text_review_editor() -> None:
         )
 
     with side_col:
-        st.markdown('<div class="es-cat-panel">', unsafe_allow_html=True)
-        select_labels = [f"{i+1} · {safe_text(rows[i].get('source',''))[:38] or safe_text(rows[i].get('target',''))[:38]}" for i in filtered_indexes]
+        st.markdown('<div class="es-cat-side-card">', unsafe_allow_html=True)
+        select_labels = [f"{i+1} · {safe_text(rows[i].get('source',''))[:42] or safe_text(rows[i].get('target',''))[:42]}" for i in filtered_indexes]
         selected_label = st.selectbox(
-            "Focused segment",
+            "CAT",
             select_labels,
             index=filtered_indexes.index(current_idx) if current_idx in filtered_indexes else 0,
-            key="cat_focused_segment_label",
+            key="cat_v40_focus_select",
+            label_visibility="collapsed",
         )
-        selected_pos = select_labels.index(selected_label)
-        selected_idx = filtered_indexes[selected_pos]
+        selected_idx = filtered_indexes[select_labels.index(selected_label)]
         st.session_state.selected_review_index = selected_idx
         focused = rows[selected_idx]
-
         status = safe_text(focused.get("status", "Needs Review"))
         match = safe_text(focused.get("match", "MT"))
         chip_class = "green" if status in {"Approved", "100%", "101%"} else "amber" if "Review" in status or status in {"MT", "Untranslated", "Needs Rework"} else "red"
         st.markdown(
             f"""
-            <div class="es-cat-selected">
-              <div class="es-small">Segment {selected_idx + 1} / {len(rows)}</div>
-              <div style="margin-top:8px;"><span class="es-chip {chip_class}">{escape(status)}</span> <span class="es-chip">{escape(match)}</span></div>
-              <div class="es-small" style="margin-top:10px;">{escape(safe_text(focused.get('location','')))}</div>
+            <div class="es-cat-seg-preview">
+              <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                <div class="es-small">Segment {selected_idx + 1} / {len(rows)}</div>
+                <div><span class="es-cat-pill {chip_class}">{escape(status)}</span></div>
+              </div>
+              <div style="margin-top:8px;"><span class="es-cat-pill">{escape(match)}</span></div>
+              <div class="es-small" style="margin-top:8px;">{escape(safe_text(focused.get('location','')))}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        st.markdown("##### Source")
-        st.text_area("Source preview", value=safe_text(focused.get("source", "")), height=100, disabled=True, label_visibility="collapsed", key=f"focused_src_{selected_idx}")
-        st.markdown("##### Target")
-        focused_target = st.text_area("Target preview", value=safe_text(focused.get("target", "")), height=145, label_visibility="collapsed", key=f"focused_tgt_{selected_idx}")
+        st.markdown('<div class="es-cat-assist-title">Source</div>', unsafe_allow_html=True)
+        st.text_area("Source preview", value=safe_text(focused.get("source", "")), height=105, disabled=True, label_visibility="collapsed", key=f"v40_src_{selected_idx}")
+        st.markdown('<div class="es-cat-assist-title">Target</div>', unsafe_allow_html=True)
+        focused_target = st.text_area("Target preview", value=safe_text(focused.get("target", "")), height=135, label_visibility="collapsed", key=f"v40_tgt_{selected_idx}")
         focused_status = st.selectbox(
             "Status",
             ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
             index=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(status) if status in ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 5,
-            key=f"focused_status_{selected_idx}",
+            key=f"v40_status_{selected_idx}",
         )
-        b1, b2 = st.columns(2)
-        if b1.button("Save", key=f"focused_save_{selected_idx}", use_container_width=True):
+        c1, c2 = st.columns(2)
+        if c1.button("Save", key=f"v40_save_{selected_idx}", use_container_width=True):
             rows[selected_idx]["target"] = focused_target
             rows[selected_idx]["status"] = focused_status
             st.session_state.review_segments = rows
-            st.success("Saved selected segment.")
+            st.toast("Saved selected segment.")
             st.rerun()
-        if b2.button("Approve", key=f"focused_approve_{selected_idx}", use_container_width=True):
+        if c2.button("Approve", key=f"v40_approve_{selected_idx}", use_container_width=True):
             rows[selected_idx]["target"] = focused_target
             rows[selected_idx]["status"] = "Approved"
             st.session_state.review_segments = rows
-            st.success("Approved selected segment.")
+            st.toast("Approved selected segment.")
             st.rerun()
 
-        st.divider()
-        st.markdown("#### CAT")
-        render_assist_panel(safe_text(focused.get("source", "")))
+        st.markdown('<div class="es-cat-assist-title">TM matches</div>', unsafe_allow_html=True)
+        matches = compute_matches(safe_text(focused.get("source", "")))
+        if matches["tm"]:
+            for m in matches["tm"][:7]:
+                st.markdown(f'<div class="es-cat-mini-row"><b>{escape(m.get("type","TM"))}</b> · {escape(m.get("source",""))}<br><span class="es-small">{escape(m.get("target",""))}</span></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="es-cat-assist-empty">No TM match.</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="es-cat-assist-title">Glossary</div>', unsafe_allow_html=True)
+        if matches["glossary"]:
+            for g in matches["glossary"][:8]:
+                st.markdown(f'<div class="es-cat-mini-row"><b>{escape(g.get("source",""))}</b> → {escape(g.get("target",""))}<br><span class="es-small">{escape(g.get("notes",""))}</span></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="es-cat-assist-empty">No glossary hits.</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="es-cat-assist-title">DNT</div>', unsafe_allow_html=True)
+        if matches["dnt"]:
+            for d in matches["dnt"][:12]:
+                st.markdown(f'<span class="es-cat-pill amber">{escape(d.get("term",""))}</span> ', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="es-cat-assist-empty">No DNT hits.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def default_subtitle_segments(count: int = 8, transcription: bool = False) -> List[Dict[str, Any]]:
@@ -2253,7 +2440,7 @@ def page_human_review() -> None:
 
 
 def page_human_review_workspace() -> None:
-    """Dedicated text review route opened from ErrorSweep Pro outputs only."""
+    """Dedicated CAT-style post-editing route opened from ErrorSweep Pro outputs only."""
     restore_human_review_session_from_cache()
     # Recovery guard: if Streamlit opened this hidden route after a rerun, restore
     # the Pro rows from the persistent Pro result cache. This prevents blank pages.
@@ -2265,23 +2452,14 @@ def page_human_review_workspace() -> None:
             file_name=st.session_state.get("pro_post_edit_file_name", ""),
         )
 
-    top1, top2 = st.columns([0.78, 0.22])
-    with top1:
-        title = st.session_state.get("review_workspace_title", "Human Review")
-        file_name = st.session_state.get("review_workspace_file_name", "")
-        language = st.session_state.get("review_workspace_language", "")
-        subtitle = "Dedicated page for editing, approving, and downloading the final reviewed translation."
-        if file_name or language:
-            subtitle += f" File: {file_name or 'current job'} · Language: {language or 'N/A'}"
-        hero("Human Review Workspace", str(title), subtitle)
-    with top2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Back to ErrorSweep Pro", use_container_width=True):
-            open_page("ErrorSweep Pro")
-
     if not st.session_state.get("review_segments"):
+        st.markdown(
+            """
+            <style>.block-container{max-width:100vw!important;padding:1rem!important;}</style>
+            """,
+            unsafe_allow_html=True,
+        )
         st.warning("No Pro post-editing rows are loaded yet. Run ErrorSweep Pro first, then click Open Human Review workspace.")
-        st.caption("Recovery check: no saved Pro review session was found for this browser session. The Pro page will keep the Open Human Review button visible after a successful run.")
         if st.button("Go to ErrorSweep Pro", type="primary", use_container_width=True):
             open_page("ErrorSweep Pro")
         return
@@ -2941,12 +3119,20 @@ def render_app() -> None:
     if st.session_state.page not in allowed_pages():
         st.session_state.page = allowed_pages()[0] if allowed_pages() else "Dashboard"
 
+    page = st.session_state.page
+    renderer = PAGE_RENDERERS.get(page, page_dashboard)
+
+    # Dedicated editor workspaces should feel like full web applications, not
+    # like a normal dashboard page squeezed beside the platform navigation.
+    # This is especially important for the CAT-style Human Review editor.
+    if page in {"Human Review Workspace", "Subtitle Workspace", "Transcription Workspace"}:
+        renderer()
+        return
+
     nav_col, main_col = st.columns([0.23, 0.77], gap="large")
     with nav_col:
         render_navigation()
     with main_col:
-        page = st.session_state.page
-        renderer = PAGE_RENDERERS.get(page, page_dashboard)
         renderer()
 
 
