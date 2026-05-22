@@ -54,7 +54,7 @@ except Exception:
     findings_dataframe = None
     events_dataframe = None
 
-from openpyxl import load_workbook, Workbook
+from openpyxl import load_workbook, Workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -68,7 +68,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v33 Telugu Subtitle QC + Human Review Workspace"
+APP_VERSION = "v35 Pro Post-Editing + Subtitle Transcription Editor"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -597,7 +597,7 @@ WORKSPACE_PAGES = [
     "Jobs",
     "ErrorSweep QA",
     "ErrorSweep Pro",
-    "Human Review",
+    "Subtitle / Transcription Editor",
     "Telugu Subtitle QC",
     "Scorecards",
     "Memory & Rules",
@@ -618,13 +618,13 @@ HIDDEN_EDITOR_PAGES = [
 ROLE_PAGE_ACCESS = {
     "Platform Owner": OWNER_PAGES + WORKSPACE_PAGES,
     "Workspace Owner": WORKSPACE_PAGES,
-    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
-    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
-    "Translator": ["Dashboard", "Jobs", "Human Review", "Account"],
-    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
+    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "Translator": ["Dashboard", "Jobs", "Subtitle / Transcription Editor", "Account"],
+    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
     "Client Viewer": ["Dashboard", "Jobs", "Account"],
     "Billing Admin": ["Dashboard", "Billing", "Account"],
-    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
+    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
 }
 
 
@@ -915,6 +915,87 @@ def rows_to_srt(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
         out.append(text)
         out.append("")
     return "\n".join(out).encode("utf-8")
+
+
+def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "ErrorSweep Pro", target_language: str = "", file_name: str = "") -> None:
+    """Store rows in a durable Human Review session before opening the editor.
+
+    This fixes the blank-page issue: the review workspace reads from
+    st.session_state.review_segments, so Pro must always seed that state
+    before routing to the dedicated Human Review Workspace page.
+    """
+    prepared = []
+    for i, row in enumerate(rows, start=1):
+        src = safe_text(row.get("source", ""))
+        tgt = safe_text(row.get("target", row.get("translation", "")))
+        status = safe_text(row.get("status", "MT" if tgt else "Needs Review"))
+        match = safe_text(row.get("match", "MT" if tgt else "Untranslated"))
+        prepared.append({
+            "id": row.get("id", i),
+            "location": row.get("location", f"Segment {i}"),
+            "source": src,
+            "target": tgt,
+            "status": status,
+            "match": match,
+            "language": target_language,
+            "file_name": file_name,
+            "source_workflow": source,
+            "notes": row.get("notes", ""),
+            "start": row.get("start", ""),
+            "end": row.get("end", ""),
+        })
+    st.session_state.review_segments = prepared
+    st.session_state.selected_review_index = 0
+    st.session_state.review_workspace_title = source
+    st.session_state.review_workspace_language = target_language
+    st.session_state.review_workspace_file_name = file_name
+    st.session_state.review_workspace_created = now_stamp() if "now_stamp" in globals() else ""
+
+
+def build_reviewed_translation_workbook(rows: List[Dict[str, Any]]) -> bytes:
+    """Excel output from Human Review. Always safe and easy for clients to review."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Reviewed Translation"
+    headers = ["Segment ID", "Location", "Source Text", "Final Translation", "Status", "Match", "Language", "Notes"]
+    ws.append(headers)
+    for row in rows:
+        ws.append([
+            row.get("id", ""),
+            row.get("location", ""),
+            row.get("source", ""),
+            row.get("target", ""),
+            row.get("status", ""),
+            row.get("match", ""),
+            row.get("language", ""),
+            row.get("notes", ""),
+        ])
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+    widths = {"A": 12, "B": 22, "C": 55, "D": 55, "E": 18, "F": 14, "G": 16, "H": 28}
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+def build_reviewed_plain_text(rows: List[Dict[str, Any]]) -> bytes:
+    return "\n".join(safe_text(r.get("target", "")) for r in rows).encode("utf-8-sig")
+
+
+def compute_review_completion(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    total = len(rows)
+    translated = sum(1 for r in rows if safe_text(r.get("target", "")).strip())
+    approved = sum(1 for r in rows if safe_text(r.get("status", "")) == "Approved")
+    needs_review = sum(1 for r in rows if "Review" in safe_text(r.get("status", "")) or not safe_text(r.get("target", "")).strip())
+    return {"total": total, "translated": translated, "approved": approved, "needs_review": needs_review}
 
 
 def compute_matches(source: str) -> Dict[str, List[Dict[str, str]]]:
@@ -1291,8 +1372,8 @@ def page_dashboard() -> None:
         st.markdown("### 🚀 Run QA or Pro")
         st.caption("Upload bilingual files or source files and route outputs to review.")
     with c3.container(border=True):
-        st.markdown("### ✍️ Open Human Review")
-        st.caption("Edit text, subtitles, or transcription output and save approved TM.")
+        st.markdown("### 🎬 Subtitle / Transcription")
+        st.caption("Create subtitles, transcripts, and timing rows in a focused editor.")
 
     st.markdown("### Recent jobs")
     if st.session_state.jobs:
@@ -1332,7 +1413,7 @@ def page_projects() -> None:
 
 
 def page_jobs() -> None:
-    hero("Jobs", "Workflow queue", "Track uploads, translation, QA, Human Review, scorecards, and delivery status.")
+    hero("Jobs", "Workflow queue", "Track uploads, translation, QA, Pro post-editing, scorecards, and delivery status.")
     if st.session_state.jobs:
         st.dataframe(pd.DataFrame(st.session_state.jobs), use_container_width=True, hide_index=True)
     else:
@@ -1340,7 +1421,7 @@ def page_jobs() -> None:
     st.markdown("### Create manual job")
     with st.form("manual_job"):
         c1, c2, c3 = st.columns(3)
-        job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Human Review", "Subtitle Review", "Transcription", "Scorecard"])
+        job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"])
         language = c2.text_input("Target language", value="French")
         assignee = c3.text_input("Assignee", value="reviewer@errorsweep.local")
         note = st.text_area("Notes", height=80)
@@ -1362,10 +1443,9 @@ def page_qa() -> None:
     hero("ErrorSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
     file = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="qa_file")
     rules = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="qa_rules")
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     strictness = c1.selectbox("Strictness", ["Lenient", "Standard", "Strict", "Very Strict"], index=2)
     domain = c2.selectbox("Domain", ["Auto-detect", "Software UI", "Marketing", "Legal", "Medical", "E-learning", "Subtitling", "General"])
-    route_review = c3.checkbox("Send findings to Human Review", value=True)
 
     if st.button("Run QA", use_container_width=True, disabled=file is None):
         rows = extract_rows_from_upload(file)
@@ -1386,10 +1466,9 @@ def page_qa() -> None:
                 status = "Needs Review"
             findings.append({**r, "status": status, "issues": "; ".join(issues), "match": r.get("match") or ("MT" if tgt else "Untranslated")})
 
-        st.session_state.review_segments = findings
-        st.session_state.jobs.insert(0, {"created": now_stamp(), "type": "QA", "language": "", "status": "Needs Review", "segments": len(findings)})
+        st.session_state.jobs.insert(0, {"created": now_stamp(), "type": "QA", "language": "", "status": "Completed", "segments": len(findings)})
         add_audit("QA run", f"{len(findings)} segments")
-        st.success("QA completed and review segments prepared.")
+        st.success("QA completed. Download the QA report below. Post-editing Human Review is available after Pro translation runs only.")
         st.dataframe(pd.DataFrame(findings), use_container_width=True, hide_index=True)
         st.download_button("Download QA CSV", rows_to_csv(findings), file_name="errorsweep_qa_findings.csv", mime="text/csv", use_container_width=True)
 
@@ -1398,10 +1477,10 @@ def page_telugu_subtitle_qc() -> None:
     hero("Telugu Subtitle QC", "Rule-based subtitle quality engine", "Run API-free Telugu subtitle checks for Unicode, timing, spelling, grammar hints, consistency, and stage directions.")
     st.info("This Phase 1 engine does not use OpenAI, Azure, or NLLB. It runs deterministic Telugu subtitle QC rules and exports an Excel report.")
 
-    c1, c2, c3 = st.columns([1.2, 1, 1])
+    c1, c2 = st.columns([1.2, 1])
     uploaded = c1.file_uploader("Upload Telugu subtitle/script file", type=["srt", "vtt", "txt"], key="telugu_qc_file")
     fps = c2.number_input("FPS for HH:MM:SS:FF timecodes", min_value=1, max_value=120, value=25)
-    route_to_review = c3.checkbox("Prepare findings for Human Review", value=True)
+    route_to_review = False
 
     with st.expander("What this checks", expanded=False):
         st.markdown(
@@ -1517,7 +1596,14 @@ def page_pro() -> None:
             review_rows.append(r)
 
         missing_rate = missing / max(len(review_rows), 1)
-        st.session_state.review_segments = review_rows
+        # IMPORTANT: seed the dedicated Human Review workspace BEFORE any button click.
+        # Without this, the Human Review page can open with no rows and look blank.
+        prepare_human_review_session(
+            review_rows,
+            source="ErrorSweep Pro",
+            target_language=target_language,
+            file_name=getattr(uploaded, "name", "uploaded_file"),
+        )
         status = "Completed" if missing == 0 else ("Needs Human Review" if missing_rate <= threshold / 100 else "Blocked")
         st.session_state.jobs.insert(0, {
             "created": now_stamp(),
@@ -1544,13 +1630,14 @@ def page_pro() -> None:
         cta1, cta2 = st.columns([1, 1])
         with cta1:
             if st.button("Open Human Review workspace", type="primary", use_container_width=True):
+                # review_segments is already prepared above. This opens a separate professional editor page.
                 open_page("Human Review Workspace")
         with cta2:
             st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
         st.info("Human Review opens as a dedicated workspace page where reviewers can edit, approve, and save verified segments to TM.")
 
 
-# Human Review Editors
+# Pro post-editing and Subtitle/Transcription editors
 # ==========================================================
 
 def render_assist_panel(source: str) -> None:
@@ -1579,24 +1666,12 @@ def render_assist_panel(source: str) -> None:
 
 
 def render_text_review_editor() -> None:
-    st.markdown("### Text Review Editor")
-    uploaded = st.file_uploader("Upload review file directly", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="text_review_file")
-    c1, c2 = st.columns([1, 1])
-    if c1.button("Load uploaded file into review editor", use_container_width=True, disabled=uploaded is None):
-        st.session_state.review_segments = extract_rows_from_upload(uploaded)
-        st.session_state.selected_review_index = 0
-        add_audit("Review file loaded", uploaded.name if uploaded else "")
-        st.success("File loaded into Human Review.")
-
-    if c2.button("Use latest QA/Pro segments", use_container_width=True):
-        if st.session_state.review_segments:
-            st.success("Latest review segments loaded.")
-        else:
-            st.warning("No latest QA/Pro segments available.")
+    st.markdown("### Pro Post-Editing Editor")
+    st.caption("This editor opens only from ErrorSweep Pro after a translated draft is created. Edit target rows, approve them, save to TM, and download the final reviewed file.")
 
     rows = st.session_state.review_segments
     if not rows:
-        st.info("Upload a file or run ErrorSweep QA/Pro first.")
+        st.info("No Pro translated rows are loaded. Run ErrorSweep Pro first, then click Open Human Review workspace.")
         return
 
     idx = min(st.session_state.selected_review_index, len(rows)-1)
@@ -1645,6 +1720,39 @@ def render_text_review_editor() -> None:
     with right:
         render_assist_panel(row.get("source", ""))
 
+    completion = compute_review_completion(rows)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Segments", completion["total"])
+    m2.metric("Translated", completion["translated"])
+    m3.metric("Approved", completion["approved"])
+    m4.metric("Needs Review", completion["needs_review"])
+
+    st.markdown("### Final reviewed output")
+    d1, d2, d3 = st.columns([1, 1, 1])
+    reviewed_base_name = safe_text(st.session_state.get("review_workspace_file_name", "human_review_output")) or "human_review_output"
+    reviewed_base_name = re.sub(r"\.[^.]+$", "", reviewed_base_name)
+    d1.download_button(
+        "Download 100% reviewed Excel",
+        build_reviewed_translation_workbook(rows),
+        file_name=f"{reviewed_base_name}_reviewed_translation.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    d2.download_button(
+        "Download reviewed CSV",
+        rows_to_csv(rows),
+        file_name=f"{reviewed_base_name}_reviewed_translation.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    d3.download_button(
+        "Download target text",
+        build_reviewed_plain_text(rows),
+        file_name=f"{reviewed_base_name}_target_text.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
     st.markdown("### Bulk target grid")
     edited = st.data_editor(
         pd.DataFrame(rows),
@@ -1657,7 +1765,7 @@ def render_text_review_editor() -> None:
         st.session_state.review_segments = edited.to_dict("records")
         st.success("Bulk grid saved.")
 
-    st.download_button("Download reviewed CSV", rows_to_csv(st.session_state.review_segments), "human_review_output.csv", "text/csv", use_container_width=True)
+    st.caption("Use the download buttons above to export the final reviewed file.")
 
 
 
@@ -1817,12 +1925,9 @@ def render_subtitle_transcription_setup() -> None:
             open_page("Transcription Workspace")
 
     if st.session_state.subtitle_segments:
-        c1, c2 = st.columns(2)
-        if c1.button("Open existing subtitle workspace", use_container_width=True):
+        if st.button("Open existing subtitle/transcription workspace", use_container_width=True):
             st.session_state.subtitle_editor_active = True
             open_page("Subtitle Workspace" if st.session_state.get("subtitle_workflow") == "Subtitling" else "Transcription Workspace")
-        if c2.button("Open existing text review workspace", use_container_width=True):
-            open_page("Human Review Workspace")
 
 
 def render_focused_subtitle_workspace() -> None:
@@ -1840,7 +1945,7 @@ def render_focused_subtitle_workspace() -> None:
     with top2:
         if st.button("Back to setup", use_container_width=True):
             st.session_state.subtitle_editor_active = False
-            open_page("Human Review")
+            open_page("Subtitle / Transcription Editor")
 
     video_bytes = st.session_state.get("subtitle_video_bytes")
     video_col, meta_col = st.columns([0.50, 0.50], gap="large")
@@ -1947,28 +2052,38 @@ def render_subtitle_transcription_editor() -> None:
         render_subtitle_transcription_setup()
 
 
-def page_human_review() -> None:
-    # Dedicated editor mode should feel like a new page and avoid the large hero consuming space.
+def page_subtitle_transcription_editor() -> None:
+    # Public/manual editor page. This page is only for subtitle and transcription work.
+    # Pro post-editing Human Review is opened only from ErrorSweep Pro via the hidden
+    # Human Review Workspace route.
     if st.session_state.get("subtitle_editor_active"):
         render_focused_subtitle_workspace()
         return
-    hero("Human Review", "CAT, subtitling, and transcription editors", "Review translations, edit subtitles, create transcripts, sync timing, and save verified translations.")
-    tab_text, tab_sub = st.tabs(["Text Review Editor", "Subtitle / Transcription Editor"])
-    with tab_text:
-        render_text_review_editor()
-    with tab_sub:
-        render_subtitle_transcription_editor()
+    hero("Subtitle / Transcription Editor", "Dedicated media localization workspace", "Create subtitles or transcripts. Pro post-editing opens separately only after a Pro translation run.")
+    render_subtitle_transcription_editor()
+
+# Backward-compatible alias for old references.
+def page_human_review() -> None:
+    page_subtitle_transcription_editor()
 
 
 def page_human_review_workspace() -> None:
-    """Dedicated text review route opened from Pro/QA outputs."""
+    """Dedicated text review route opened from ErrorSweep Pro outputs only."""
     top1, top2 = st.columns([0.78, 0.22])
     with top1:
-        hero("Human Review Workspace", "Segment editor", "Dedicated page for editing, approving, and saving verified translations.")
+        title = st.session_state.get("review_workspace_title", "Human Review")
+        file_name = st.session_state.get("review_workspace_file_name", "")
+        language = st.session_state.get("review_workspace_language", "")
+        subtitle = "Dedicated page for editing, approving, and downloading the final reviewed translation."
+        if file_name or language:
+            subtitle += f" File: {file_name or 'current job'} · Language: {language or 'N/A'}"
+        hero("Human Review Workspace", str(title), subtitle)
     with top2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Back to Human Review", use_container_width=True):
-            open_page("Human Review")
+        if st.button("Back to ErrorSweep Pro", use_container_width=True):
+            open_page("ErrorSweep Pro")
+    if not st.session_state.get("review_segments"):
+        st.warning("No Pro post-editing rows are loaded yet. Run ErrorSweep Pro first, then click Open Human Review workspace.")
     render_text_review_editor()
 
 
@@ -2558,7 +2673,7 @@ def page_platform_settings() -> None:
     hero("Platform Settings", "Global feature controls", "Owner-only controls for platform features and public availability.")
     settings = {
         "Main API translation": True,
-        "Human Review": True,
+        "Pro post-editing Human Review": True,
         "Scorecards": True,
         "Subtitle / Transcription Editor": True,
         "Telugu Subtitle QC": True,
@@ -2585,7 +2700,7 @@ PAGE_RENDERERS = {
     "Jobs": page_jobs,
     "ErrorSweep QA": page_qa,
     "ErrorSweep Pro": page_pro,
-    "Human Review": page_human_review,
+    "Subtitle / Transcription Editor": page_subtitle_transcription_editor,
     "Telugu Subtitle QC": page_telugu_subtitle_qc,
     "Human Review Workspace": page_human_review_workspace,
     "Subtitle Workspace": page_subtitle_workspace,
