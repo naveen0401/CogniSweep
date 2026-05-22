@@ -36,6 +36,14 @@ except Exception:
     builtin_translate_batch = None
     current_builtin_engine_label = None
 
+# Speech-to-text helper for subtitle/transcription editor.
+# BYO OpenAI key first, Azure Speech fallback for no-key users.
+try:
+    from speech_transcription import transcribe_media_to_rows, speech_engine_label
+except Exception:
+    transcribe_media_to_rows = None
+    speech_engine_label = None
+
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -44,13 +52,13 @@ from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v30
+# ErrorSweep Platform v31
 # Website-style localization platform shell + two-phase built-in translation engine
 # Phase 1: Azure Translator | Phase 2: NLLB self-hosted
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v30 Built-in Translation Engine"
+APP_VERSION = "v31 Human Review Workspace + Subtitle/Transcription AI"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -588,6 +596,14 @@ WORKSPACE_PAGES = [
     "Admin",
 ]
 
+# Hidden route pages. They are not shown as navigation buttons,
+# but they let editors open as dedicated professional workspaces.
+HIDDEN_EDITOR_PAGES = [
+    "Human Review Workspace",
+    "Subtitle Workspace",
+    "Transcription Workspace",
+]
+
 ROLE_PAGE_ACCESS = {
     "Platform Owner": OWNER_PAGES + WORKSPACE_PAGES,
     "Workspace Owner": WORKSPACE_PAGES,
@@ -611,7 +627,12 @@ def current_role() -> str:
 
 
 def allowed_pages() -> List[str]:
-    return ROLE_PAGE_ACCESS.get(current_role(), ROLE_PAGE_ACCESS["User"])
+    pages = list(ROLE_PAGE_ACCESS.get(current_role(), ROLE_PAGE_ACCESS["User"]))
+    # Add hidden editor pages without showing them in the left navigation.
+    for page in HIDDEN_EDITOR_PAGES:
+        if page not in pages:
+            pages.append(page)
+    return pages
 
 
 def is_owner() -> bool:
@@ -624,6 +645,13 @@ def page_link(page: str) -> str:
     if token:
         return f"?es_session={token}&es_page={page_param}"
     return f"?es_page={page_param}"
+
+
+def open_page(page: str) -> None:
+    """Open an internal ErrorSweep route as a dedicated page in the same session."""
+    st.session_state.page = page
+    query_set("es_page", page)
+    st.rerun()
 
 
 def nav_button(page: str, key_prefix: str = "nav") -> None:
@@ -1048,6 +1076,63 @@ Output shape:
         st.error(f"Translation service error: {str(exc)}")
         return ["" for _ in texts]
 
+
+
+def generate_transcription_rows_from_video(video_file, locale: str = "en-US", prompt: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Generate transcript rows from uploaded video/audio.
+
+    Routing:
+    - If user has BYO OpenAI key in Account page, use OpenAI speech-to-text.
+    - If no user key, use Azure Speech fast transcription if AZURE_SPEECH_* secrets exist.
+    - If neither works, return starter rows so the editor can still be used manually.
+    """
+    if video_file is None:
+        return default_subtitle_segments(10, transcription=True), {"success": False, "error": "No video uploaded."}
+    if transcribe_media_to_rows is None:
+        return default_subtitle_segments(10, transcription=True), {"success": False, "error": "speech_transcription.py is missing."}
+
+    user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
+    rows, usage = transcribe_media_to_rows(
+        media_bytes=video_file.getvalue(),
+        filename=getattr(video_file, "name", "video.mp4"),
+        mime_type=getattr(video_file, "type", "video/mp4") or "video/mp4",
+        user_openai_key=user_key,
+        locale=locale,
+        prompt=prompt,
+    )
+    st.session_state.setdefault("ai_usage_events", [])
+    st.session_state.ai_usage_events.insert(0, {
+        "time": now_stamp(),
+        "purpose": "transcription",
+        "provider": usage.get("provider", "speech"),
+        "model": usage.get("engine", "speech"),
+        "managed": not bool(user_key),
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "success": usage.get("success", False),
+        "error": usage.get("error", ""),
+        "segments": len(rows),
+    })
+    return rows, usage
+
+
+def translate_subtitle_sources(rows: List[Dict[str, Any]], target_language: str, domain: str = "Subtitling") -> Tuple[List[Dict[str, Any]], int]:
+    """Translate source rows into target subtitle rows using BYO key or built-in Azure/NLLB."""
+    source_texts = [safe_text(r.get("source", "")) for r in rows]
+    translations = call_main_api_translate(source_texts, target_language, domain)
+    missing = 0
+    for row, trans in zip(rows, translations):
+        row["target"] = safe_text(trans)
+        if row["target"]:
+            row["status"] = "MT"
+            row["match"] = "MT"
+        else:
+            row["status"] = "Needs Review"
+            row["match"] = "Untranslated"
+            missing += 1
+    return rows, missing
+
 def call_main_api_qa(rows: List[Dict[str, Any]], domain: str, strictness: str = "Standard") -> List[Dict[str, Any]]:
     """Optional Managed AI QA route. Deterministic checks still run first elsewhere."""
     if not rows:
@@ -1290,7 +1375,7 @@ def page_qa() -> None:
 
 
 def page_pro() -> None:
-    hero("ErrorSweep Pro", "Translate + QA + Human Review", "Use main API translation first, then route uncertain segments to Human Review.")
+    hero("ErrorSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
     st.caption(f"AI access: {current_ai_route_label()}")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
@@ -1342,14 +1427,22 @@ def page_pro() -> None:
         elif status == "Needs Human Review":
             st.warning(f"Translation mostly completed. {missing}/{len(review_rows)} rows need Human Review.")
         else:
-            st.success("Translation completed.")
+            st.success("Translation completed. Review is ready for approval.")
 
         st.dataframe(pd.DataFrame(review_rows), use_container_width=True, hide_index=True)
-        st.download_button("Download Review CSV", rows_to_csv(review_rows), file_name="errorsweep_pro_review.csv", mime="text/csv", use_container_width=True)
-        st.info("Open Human Review to edit, approve, and save verified segments to TM.")
+
+        # Dedicated Human Review action. This makes Pro feel like a workflow,
+        # not an editor embedded on the same screen.
+        st.markdown("### Next step")
+        cta1, cta2 = st.columns([1, 1])
+        with cta1:
+            if st.button("Open Human Review workspace", type="primary", use_container_width=True):
+                open_page("Human Review Workspace")
+        with cta2:
+            st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
+        st.info("Human Review opens as a dedicated workspace page where reviewers can edit, approve, and save verified segments to TM.")
 
 
-# ==========================================================
 # Human Review Editors
 # ==========================================================
 
@@ -1491,20 +1584,22 @@ def enter_subtitle_workspace(workflow: str, rows: List[Dict[str, Any]], video_fi
 
 def render_subtitle_transcription_setup() -> None:
     st.markdown("### Subtitle / Transcription Editor")
-    st.caption("Create a dedicated editor workspace. Transcription needs only a video. Subtitling can optionally use an English source script/subtitle file.")
+    st.caption("Create a dedicated editor workspace. Subtitling can use a source script or generate source from video. Transcription needs only a video.")
 
     workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True, key="subtitle_workflow_picker")
-    video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm"], key="subtitle_video_setup")
+    video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
 
     if video:
-        preview_col, info_col = st.columns([0.55, 0.45], gap="large")
+        preview_col, info_col = st.columns([0.45, 0.55], gap="large")
         with preview_col:
             st.video(video.getvalue())
         with info_col:
-            st.success("Video loaded. Create the editor to open the focused workspace.")
-            st.caption("The next screen keeps the video compact at the top, script editor in the middle, and timing/text grid in a collapsible panel.")
+            st.success("Video loaded.")
+            st.caption("The editor will open as a dedicated workspace page, separate from this setup screen.")
+            if speech_engine_label:
+                st.caption(f"Speech route: {speech_engine_label(str(st.session_state.get('byo_openai_api_key','') or ''))}")
     else:
-        st.info("Upload a video to begin.")
+        st.info("Upload a video/audio file to begin.")
 
     if workflow == "Subtitling":
         source_file = st.file_uploader(
@@ -1517,7 +1612,13 @@ def render_subtitle_transcription_setup() -> None:
             type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
             key="subtitle_target_setup",
         )
+        c1, c2, c3 = st.columns([1, 1, 1])
+        subtitle_target_language = c1.text_input("Target subtitle language", value=st.session_state.get("subtitle_target_language", "French"), key="subtitle_target_lang_setup")
+        speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only when source file is not uploaded and the system transcribes from video.")
+        auto_generate = c3.checkbox("Generate draft subtitles", value=True, help="Uses BYO API key when available; otherwise uses built-in Azure/NLLB translation. If no source file is uploaded, it first tries speech transcription.")
+
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None):
+            st.session_state.subtitle_target_language = subtitle_target_language
             if source_file:
                 rows = extract_rows_from_upload(source_file)
                 for i, r in enumerate(rows):
@@ -1527,27 +1628,66 @@ def render_subtitle_transcription_setup() -> None:
                     r.setdefault("status", "Untranslated")
                     r.setdefault("match", "")
             else:
-                rows = default_subtitle_segments(8, transcription=False)
+                with st.spinner("No source file uploaded. Creating source from video/audio..."):
+                    transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                rows = []
+                for i, tr in enumerate(transcript_rows):
+                    rows.append({
+                        "id": i + 1,
+                        "start": tr.get("start", i * 3.5),
+                        "end": tr.get("end", i * 3.5 + 3.0),
+                        "source": tr.get("target", ""),
+                        "target": "",
+                        "status": "Transcribed Source" if tr.get("target") else "Untranslated",
+                        "match": tr.get("match", "STT"),
+                    })
+                if usage.get("error") and not usage.get("success"):
+                    st.warning(f"Speech transcription was not available: {usage.get('error')}")
+
             if target_file:
                 target_rows = extract_rows_from_upload(target_file)
                 for i, tr in enumerate(target_rows):
                     if i < len(rows):
                         rows[i]["target"] = tr.get("target") or tr.get("source") or ""
                         rows[i]["status"] = "Existing" if rows[i]["target"] else rows[i].get("status", "Untranslated")
+
+            if auto_generate and rows:
+                with st.spinner("Generating target subtitle draft..."):
+                    rows, missing = translate_subtitle_sources(rows, subtitle_target_language, domain="Subtitling")
+                if missing:
+                    st.warning(f"Draft subtitles generated with {missing} untranslated row(s).")
+                else:
+                    st.success("Draft subtitles generated.")
+
             enter_subtitle_workspace("Subtitling", rows, video)
-            st.rerun()
+            open_page("Subtitle Workspace")
     else:
-        st.caption("Transcription mode does not need a source file. You write the transcript while watching the video.")
-        starter_count = st.number_input("Starter transcript rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+        st.caption("Transcription mode does not need a source file. The editor uses only the uploaded video/audio.")
+        c1, c2 = st.columns([1, 1])
+        speech_locale = c1.text_input("Speech locale", value="en-US", key="transcription_locale")
+        starter_count = c2.number_input("Fallback starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+        auto_transcribe = st.checkbox("Auto-generate transcript", value=True, help="Uses BYO OpenAI key if available; otherwise Azure Speech if configured. If no speech engine is configured, blank rows are created.")
+
         if st.button("Create transcription workspace", use_container_width=True, disabled=video is None):
-            rows = default_subtitle_segments(int(starter_count), transcription=True)
+            if auto_transcribe:
+                with st.spinner("Creating transcript from video/audio..."):
+                    rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                if usage.get("error") and not usage.get("success"):
+                    st.warning(f"Auto-transcription was not available: {usage.get('error')}. Blank rows were created for manual transcription.")
+            else:
+                rows = default_subtitle_segments(int(starter_count), transcription=True)
+            if not rows:
+                rows = default_subtitle_segments(int(starter_count), transcription=True)
             enter_subtitle_workspace("Transcription", rows, video)
-            st.rerun()
+            open_page("Transcription Workspace")
 
     if st.session_state.subtitle_segments:
-        if st.button("Open existing subtitle/transcription workspace", use_container_width=True):
+        c1, c2 = st.columns(2)
+        if c1.button("Open existing subtitle workspace", use_container_width=True):
             st.session_state.subtitle_editor_active = True
-            st.rerun()
+            open_page("Subtitle Workspace" if st.session_state.get("subtitle_workflow") == "Subtitling" else "Transcription Workspace")
+        if c2.button("Open existing text review workspace", use_container_width=True):
+            open_page("Human Review Workspace")
 
 
 def render_focused_subtitle_workspace() -> None:
@@ -1565,7 +1705,7 @@ def render_focused_subtitle_workspace() -> None:
     with top2:
         if st.button("Back to setup", use_container_width=True):
             st.session_state.subtitle_editor_active = False
-            st.rerun()
+            open_page("Human Review")
 
     video_bytes = st.session_state.get("subtitle_video_bytes")
     video_col, meta_col = st.columns([0.50, 0.50], gap="large")
@@ -1683,6 +1823,30 @@ def page_human_review() -> None:
         render_text_review_editor()
     with tab_sub:
         render_subtitle_transcription_editor()
+
+
+def page_human_review_workspace() -> None:
+    """Dedicated text review route opened from Pro/QA outputs."""
+    top1, top2 = st.columns([0.78, 0.22])
+    with top1:
+        hero("Human Review Workspace", "Segment editor", "Dedicated page for editing, approving, and saving verified translations.")
+    with top2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Back to Human Review", use_container_width=True):
+            open_page("Human Review")
+    render_text_review_editor()
+
+
+def page_subtitle_workspace() -> None:
+    st.session_state.subtitle_editor_active = True
+    st.session_state.subtitle_workflow = "Subtitling"
+    render_focused_subtitle_workspace()
+
+
+def page_transcription_workspace() -> None:
+    st.session_state.subtitle_editor_active = True
+    st.session_state.subtitle_workflow = "Transcription"
+    render_focused_subtitle_workspace()
 
 
 
@@ -2286,6 +2450,9 @@ PAGE_RENDERERS = {
     "ErrorSweep QA": page_qa,
     "ErrorSweep Pro": page_pro,
     "Human Review": page_human_review,
+    "Human Review Workspace": page_human_review_workspace,
+    "Subtitle Workspace": page_subtitle_workspace,
+    "Transcription Workspace": page_transcription_workspace,
     "Scorecards": page_scorecards,
     "Memory & Rules": page_memory_rules,
     "Team & Roles": page_team_roles,
