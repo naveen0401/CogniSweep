@@ -44,6 +44,16 @@ except Exception:
     transcribe_media_to_rows = None
     speech_engine_label = None
 
+
+# Telugu Subtitle QC Engine — API-free deterministic subtitle checks.
+try:
+    from telugu_subtitle_qc import run_telugu_subtitle_qc, build_telugu_qc_excel, findings_dataframe, events_dataframe
+except Exception:
+    run_telugu_subtitle_qc = None
+    build_telugu_qc_excel = None
+    findings_dataframe = None
+    events_dataframe = None
+
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -58,7 +68,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v32 Human Review Workspace + Subtitle/Transcription AI"
+APP_VERSION = "v33 Telugu Subtitle QC + Human Review Workspace"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -588,6 +598,7 @@ WORKSPACE_PAGES = [
     "ErrorSweep QA",
     "ErrorSweep Pro",
     "Human Review",
+    "Telugu Subtitle QC",
     "Scorecards",
     "Memory & Rules",
     "Team & Roles",
@@ -607,13 +618,13 @@ HIDDEN_EDITOR_PAGES = [
 ROLE_PAGE_ACCESS = {
     "Platform Owner": OWNER_PAGES + WORKSPACE_PAGES,
     "Workspace Owner": WORKSPACE_PAGES,
-    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
-    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Scorecards", "Memory & Rules", "Account"],
+    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
+    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
     "Translator": ["Dashboard", "Jobs", "Human Review", "Account"],
-    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Human Review", "Scorecards", "Memory & Rules", "Account"],
+    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
     "Client Viewer": ["Dashboard", "Jobs", "Account"],
     "Billing Admin": ["Dashboard", "Billing", "Account"],
-    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Scorecards", "Memory & Rules", "Account"],
+    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Human Review", "Telugu Subtitle QC", "Scorecards", "Memory & Rules", "Account"],
 }
 
 
@@ -1381,6 +1392,93 @@ def page_qa() -> None:
         st.success("QA completed and review segments prepared.")
         st.dataframe(pd.DataFrame(findings), use_container_width=True, hide_index=True)
         st.download_button("Download QA CSV", rows_to_csv(findings), file_name="errorsweep_qa_findings.csv", mime="text/csv", use_container_width=True)
+
+
+def page_telugu_subtitle_qc() -> None:
+    hero("Telugu Subtitle QC", "Rule-based subtitle quality engine", "Run API-free Telugu subtitle checks for Unicode, timing, spelling, grammar hints, consistency, and stage directions.")
+    st.info("This Phase 1 engine does not use OpenAI, Azure, or NLLB. It runs deterministic Telugu subtitle QC rules and exports an Excel report.")
+
+    c1, c2, c3 = st.columns([1.2, 1, 1])
+    uploaded = c1.file_uploader("Upload Telugu subtitle/script file", type=["srt", "vtt", "txt"], key="telugu_qc_file")
+    fps = c2.number_input("FPS for HH:MM:SS:FF timecodes", min_value=1, max_value=120, value=25)
+    route_to_review = c3.checkbox("Prepare findings for Human Review", value=True)
+
+    with st.expander("What this checks", expanded=False):
+        st.markdown(
+            """
+            - Timing: invalid ranges, overlaps, very short or long cues
+            - Unicode: invalid Telugu matra/halant positions and mixed digit styles
+            - Spelling: known Telugu subtitle error pairs
+            - Mixed script: unexpected Roman words inside Telugu text
+            - Grammar hints: conservative pronoun/verb agreement and aspect warnings
+            - Consistency: duplicate subtitles and known terminology variants
+            - Stage directions: English SDH/action cues that may need localization
+            """
+        )
+
+    if st.button("Run Telugu Subtitle QC", type="primary", use_container_width=True, disabled=uploaded is None):
+        if run_telugu_subtitle_qc is None or build_telugu_qc_excel is None:
+            st.error("Telugu QC engine file is missing. Add telugu_subtitle_qc.py beside app.py.")
+            st.stop()
+
+        result = run_telugu_subtitle_qc(
+            uploaded.getvalue(),
+            uploaded.name,
+            options={"fps": fps},
+        )
+        summary = result.get("summary", {})
+        findings_df = findings_dataframe(result)
+        events_df = events_dataframe(result)
+        excel_bytes = build_telugu_qc_excel(result)
+
+        metrics([
+            ("Events", int(summary.get("event_count", 0)), summary.get("format", "subtitle file")),
+            ("Critical", int(summary.get("critical_count", 0)), "must fix"),
+            ("Warnings", int(summary.get("warning_count", 0)), "should fix"),
+            ("Verdict", summary.get("verdict", "Pass"), "QC result"),
+        ])
+
+        if route_to_review:
+            review_rows = []
+            # Create editable rows from parsed subtitle events. Findings are included as issue notes.
+            issue_by_event = {}
+            for f in result.get("findings", []):
+                issue_by_event.setdefault(f.get("event_number"), []).append(f)
+            for ev in result.get("events", []):
+                notes = issue_by_event.get(ev.get("number"), [])
+                review_rows.append({
+                    "id": ev.get("number"),
+                    "source": ev.get("dialogue", ""),
+                    "target": ev.get("dialogue", ""),
+                    "status": "Needs Review" if notes else "Approved",
+                    "match": "Telugu QC" if notes else "Pass",
+                    "issues": "; ".join([f.get("rule_id", "") + ": " + f.get("description", "") for f in notes[:3]]),
+                    "start": ev.get("timecode", ""),
+                    "end": "",
+                })
+            st.session_state.review_segments = review_rows
+            st.session_state.jobs.insert(0, {"created": now_stamp(), "type": "Telugu Subtitle QC", "language": "Telugu", "status": summary.get("verdict", "Pass"), "segments": len(review_rows)})
+            add_audit("Telugu subtitle QC", f"{summary.get('findings_count', 0)} findings")
+            st.success("Telugu QC findings prepared for Human Review.")
+            if st.button("Open Human Review workspace", use_container_width=True):
+                open_page("Human Review Workspace")
+
+        st.markdown("### QC Findings")
+        if findings_df.empty:
+            st.success("No findings produced by the Telugu QC engine.")
+        else:
+            st.dataframe(findings_df, use_container_width=True, hide_index=True)
+
+        with st.expander("Parsed subtitle events", expanded=False):
+            st.dataframe(events_df, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "Download Telugu QC Excel Report",
+            excel_bytes,
+            file_name="errorsweep_telugu_subtitle_qc.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 def page_pro() -> None:
@@ -2463,6 +2561,7 @@ def page_platform_settings() -> None:
         "Human Review": True,
         "Scorecards": True,
         "Subtitle / Transcription Editor": True,
+        "Telugu Subtitle QC": True,
         "Public registration": False,
         "Billing collection": False,
         "Self-hosted engines": False,
@@ -2487,6 +2586,7 @@ PAGE_RENDERERS = {
     "ErrorSweep QA": page_qa,
     "ErrorSweep Pro": page_pro,
     "Human Review": page_human_review,
+    "Telugu Subtitle QC": page_telugu_subtitle_qc,
     "Human Review Workspace": page_human_review_workspace,
     "Subtitle Workspace": page_subtitle_workspace,
     "Transcription Workspace": page_transcription_workspace,
