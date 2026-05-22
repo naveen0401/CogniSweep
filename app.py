@@ -37,7 +37,7 @@ except Exception:
     current_builtin_engine_label = None
 
 # Speech-to-text helper for subtitle/transcription editor.
-# BYO OpenAI key first, Azure Speech fallback for no-key users.
+# v32 policy: auto transcription only uses the user's own API key; no-key users get blank manual rows.
 try:
     from speech_transcription import transcribe_media_to_rows, speech_engine_label
 except Exception:
@@ -52,13 +52,13 @@ from docx import Document
 
 
 # ==========================================================
-# ErrorSweep Platform v31
+# ErrorSweep Platform v32
 # Website-style localization platform shell + two-phase built-in translation engine
 # Phase 1: Azure Translator | Phase 2: NLLB self-hosted
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v31 Human Review Workspace + Subtitle/Transcription AI"
+APP_VERSION = "v32 Human Review Workspace + Subtitle/Transcription AI"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1081,17 +1081,26 @@ Output shape:
 def generate_transcription_rows_from_video(video_file, locale: str = "en-US", prompt: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Generate transcript rows from uploaded video/audio.
 
-    Routing:
-    - If user has BYO OpenAI key in Account page, use OpenAI speech-to-text.
-    - If no user key, use Azure Speech fast transcription if AZURE_SPEECH_* secrets exist.
-    - If neither works, return starter rows so the editor can still be used manually.
+    v32 policy:
+    - Auto transcription is available only when the user provides a BYO API key.
+    - Azure Translator is text-only in ErrorSweep and is NOT used for transcription.
+    - If no user API key is available, return blank starter rows for manual human editing.
     """
     if video_file is None:
         return default_subtitle_segments(10, transcription=True), {"success": False, "error": "No video uploaded."}
+
+    user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
+    if not user_key:
+        return default_subtitle_segments(10, transcription=True), {
+            "success": False,
+            "provider": "manual_transcription",
+            "engine": "manual_editor",
+            "error": "No user API key available. Blank rows were created for manual transcription.",
+        }
+
     if transcribe_media_to_rows is None:
         return default_subtitle_segments(10, transcription=True), {"success": False, "error": "speech_transcription.py is missing."}
 
-    user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
     rows, usage = transcribe_media_to_rows(
         media_bytes=video_file.getvalue(),
         filename=getattr(video_file, "name", "video.mp4"),
@@ -1104,9 +1113,9 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
     st.session_state.ai_usage_events.insert(0, {
         "time": now_stamp(),
         "purpose": "transcription",
-        "provider": usage.get("provider", "speech"),
+        "provider": usage.get("provider", "user_speech"),
         "model": usage.get("engine", "speech"),
-        "managed": not bool(user_key),
+        "managed": False,
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
@@ -1584,20 +1593,23 @@ def enter_subtitle_workspace(workflow: str, rows: List[Dict[str, Any]], video_fi
 
 def render_subtitle_transcription_setup() -> None:
     st.markdown("### Subtitle / Transcription Editor")
-    st.caption("Create a dedicated editor workspace. Subtitling can use a source script or generate source from video. Transcription needs only a video.")
+    st.caption("Create a dedicated editor workspace. Subtitling can use a source script. Transcription auto-generation is available only when the user provides an API key.")
 
     workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True, key="subtitle_workflow_picker")
-    video = st.file_uploader("Upload video", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
+    video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
+    user_key_available = bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
 
     if video:
         preview_col, info_col = st.columns([0.45, 0.55], gap="large")
         with preview_col:
             st.video(video.getvalue())
         with info_col:
-            st.success("Video loaded.")
+            st.success("Video/audio loaded.")
             st.caption("The editor will open as a dedicated workspace page, separate from this setup screen.")
-            if speech_engine_label:
-                st.caption(f"Speech route: {speech_engine_label(str(st.session_state.get('byo_openai_api_key','') or ''))}")
+            if user_key_available:
+                st.caption("Transcription route: user API key available.")
+            else:
+                st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
     else:
         st.info("Upload a video/audio file to begin.")
 
@@ -1614,8 +1626,13 @@ def render_subtitle_transcription_setup() -> None:
         )
         c1, c2, c3 = st.columns([1, 1, 1])
         subtitle_target_language = c1.text_input("Target subtitle language", value=st.session_state.get("subtitle_target_language", "French"), key="subtitle_target_lang_setup")
-        speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only when source file is not uploaded and the system transcribes from video.")
-        auto_generate = c3.checkbox("Generate draft subtitles", value=True, help="Uses BYO API key when available; otherwise uses built-in Azure/NLLB translation. If no source file is uploaded, it first tries speech transcription.")
+        speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only if no source file is uploaded and a user API key is available for transcription.")
+        starter_rows = c3.number_input("Starter rows", min_value=1, max_value=200, value=10, key="subtitle_starter_rows")
+        auto_generate = st.checkbox(
+            "Generate draft target subtitles",
+            value=True,
+            help="If source rows exist, target subtitles use BYO API key or built-in Azure/NLLB translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
+        )
 
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None):
             st.session_state.subtitle_target_language = subtitle_target_language
@@ -1628,21 +1645,30 @@ def render_subtitle_transcription_setup() -> None:
                     r.setdefault("status", "Untranslated")
                     r.setdefault("match", "")
             else:
-                with st.spinner("No source file uploaded. Creating source from video/audio..."):
-                    transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
-                rows = []
-                for i, tr in enumerate(transcript_rows):
-                    rows.append({
-                        "id": i + 1,
-                        "start": tr.get("start", i * 3.5),
-                        "end": tr.get("end", i * 3.5 + 3.0),
-                        "source": tr.get("target", ""),
-                        "target": "",
-                        "status": "Transcribed Source" if tr.get("target") else "Untranslated",
-                        "match": tr.get("match", "STT"),
-                    })
-                if usage.get("error") and not usage.get("success"):
-                    st.warning(f"Speech transcription was not available: {usage.get('error')}")
+                if user_key_available:
+                    with st.spinner("No source file uploaded. Transcribing source from video/audio using user API key..."):
+                        transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                    rows = []
+                    for i, tr in enumerate(transcript_rows):
+                        rows.append({
+                            "id": i + 1,
+                            "start": tr.get("start", i * 3.5),
+                            "end": tr.get("end", i * 3.5 + 3.0),
+                            "source": tr.get("target", ""),
+                            "target": "",
+                            "status": "Transcribed Source" if tr.get("target") else "Untranslated",
+                            "match": tr.get("match", "STT"),
+                        })
+                    if usage.get("error") and not usage.get("success"):
+                        st.warning(f"Speech transcription was not available: {usage.get('error')}. Blank rows were created for manual subtitling.")
+                else:
+                    rows = default_subtitle_segments(int(starter_rows), transcription=False)
+                    for r in rows:
+                        r["source"] = ""
+                        r["target"] = ""
+                        r["status"] = "Draft"
+                        r["match"] = "Manual"
+                    st.info("No source file and no user API key were provided. Blank subtitle rows were created for manual source/target editing.")
 
             if target_file:
                 target_rows = extract_rows_from_upload(target_file)
@@ -1651,29 +1677,40 @@ def render_subtitle_transcription_setup() -> None:
                         rows[i]["target"] = tr.get("target") or tr.get("source") or ""
                         rows[i]["status"] = "Existing" if rows[i]["target"] else rows[i].get("status", "Untranslated")
 
-            if auto_generate and rows:
+            has_source_text = any(safe_text(r.get("source", "")) for r in rows)
+            if auto_generate and rows and has_source_text:
                 with st.spinner("Generating target subtitle draft..."):
                     rows, missing = translate_subtitle_sources(rows, subtitle_target_language, domain="Subtitling")
                 if missing:
                     st.warning(f"Draft subtitles generated with {missing} untranslated row(s).")
                 else:
                     st.success("Draft subtitles generated.")
+            elif auto_generate and rows and not has_source_text:
+                st.info("Draft target subtitles were skipped because there is no source text yet. Fill source rows manually, then translate/review later.")
 
             enter_subtitle_workspace("Subtitling", rows, video)
             open_page("Subtitle Workspace")
     else:
-        st.caption("Transcription mode does not need a source file. The editor uses only the uploaded video/audio.")
+        st.caption("Transcription mode does not need a source file. Auto-transcription requires a user API key. Without a user key, blank transcript rows are created for human editing.")
         c1, c2 = st.columns([1, 1])
         speech_locale = c1.text_input("Speech locale", value="en-US", key="transcription_locale")
-        starter_count = c2.number_input("Fallback starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
-        auto_transcribe = st.checkbox("Auto-generate transcript", value=True, help="Uses BYO OpenAI key if available; otherwise Azure Speech if configured. If no speech engine is configured, blank rows are created.")
+        starter_count = c2.number_input("Starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+        auto_transcribe = st.checkbox(
+            "Auto-generate transcript using user API key",
+            value=user_key_available,
+            disabled=not user_key_available,
+            help="Speech-to-text is available only when the user has added an API key in Account. Without a key, the editor opens with blank rows for manual transcription.",
+        )
+        if not user_key_available:
+            st.info("No user API key found. The transcription workspace will open with blank rows for manual editing.")
 
         if st.button("Create transcription workspace", use_container_width=True, disabled=video is None):
-            if auto_transcribe:
-                with st.spinner("Creating transcript from video/audio..."):
+            if auto_transcribe and user_key_available:
+                with st.spinner("Creating transcript from video/audio using user API key..."):
                     rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
                 if usage.get("error") and not usage.get("success"):
                     st.warning(f"Auto-transcription was not available: {usage.get('error')}. Blank rows were created for manual transcription.")
+                    rows = default_subtitle_segments(int(starter_count), transcription=True)
             else:
                 rows = default_subtitle_segments(int(starter_count), transcription=True)
             if not rows:
