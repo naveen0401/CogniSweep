@@ -63,15 +63,36 @@ except Exception:
     update_editor_job = None
 
 
+# v42 production persistence. Supabase is used when configured; local JSON fallback keeps the MVP working.
+try:
+    from production_persistence import (
+        save_persistent_editor_job,
+        load_persistent_editor_job,
+        update_persistent_editor_job,
+        log_persistent_usage_event,
+        fetch_persistent_usage_events,
+        fetch_persistent_editor_jobs,
+        persistence_health,
+    )
+except Exception:
+    save_persistent_editor_job = None
+    load_persistent_editor_job = None
+    update_persistent_editor_job = None
+    log_persistent_usage_event = None
+    fetch_persistent_usage_events = None
+    fetch_persistent_editor_jobs = None
+    persistence_health = None
+
+
 
 # ==========================================================
-# ErrorSweep Platform v32
-# Website-style localization platform shell + two-phase built-in translation engine
+# ErrorSweep Platform v42
+# Production persistence + usage tracking + external CAT editor launcher
 # Phase 1: Azure Translator | Phase 2: NLLB self-hosted
-# Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
+# Editor jobs and usage persist to Supabase when configured, with local JSON fallback
 # ==========================================================
 
-APP_VERSION = "v41 External Editor Launcher"
+APP_VERSION = "v42 Production Persistence + Usage Tracking"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -936,48 +957,73 @@ def get_review_session_store() -> Dict[str, Dict[str, Any]]:
 
 
 def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_language: str, file_name: str) -> str:
-    """Save a Pro review job for both same-session and external-tab editors.
+    """Save a Pro review job for separate-tab editor use.
 
-    v41 change:
-    - The old in-memory store works only inside the current Streamlit session.
-    - A new browser tab can start a different Streamlit session, so we also write
-      the review rows to editor_job_store.py using a random job_id.
+    v42 release hardening:
+    - session memory for current tab
+    - local JSON fallback for development
+    - Supabase persistence when SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are configured
     """
     session_id = uuid.uuid4().hex
-    payload = {
-        "rows": rows,
+    user = current_user() or {}
+    metadata = {
         "title": title,
         "target_language": target_language,
         "file_name": file_name,
         "created": now_stamp() if "now_stamp" in globals() else "",
+        "source": "ErrorSweep Pro",
+        "workspace": user.get("workspace", "Demo Workspace"),
+        "user_email": user.get("email", ""),
+        "status": "draft",
+    }
+    payload = {
+        "job_id": session_id,
+        "rows": rows,
+        "metadata": metadata,
+        "title": title,
+        "target_language": target_language,
+        "file_name": file_name,
+        "created": metadata["created"],
         "job_type": "cat",
     }
     get_review_session_store()[session_id] = payload
+
+    # Existing v41 local job store fallback.
     if save_editor_job is not None:
         try:
-            save_editor_job("cat", rows, metadata={
-                "title": title,
-                "target_language": target_language,
-                "file_name": file_name,
-                "created": payload["created"],
-                "source": "ErrorSweep Pro",
-            }, job_id=session_id)
+            save_editor_job("cat", rows, metadata=metadata, job_id=session_id)
         except Exception:
             pass
+
+    # v42 production persistence.
+    if save_persistent_editor_job is not None:
+        try:
+            save_persistent_editor_job("cat", rows, metadata=metadata, job_id=session_id, user=user)
+        except Exception:
+            pass
+
     st.session_state["active_review_session_id"] = session_id
     return session_id
 
 
 def load_review_session_from_store(session_id: str) -> bool:
-    """Load review rows from memory first, then from external editor job storage."""
+    """Load review rows from memory, Supabase persistence, or local fallback."""
     if not session_id:
         return False
     payload = get_review_session_store().get(session_id)
+
+    if not payload and load_persistent_editor_job is not None:
+        try:
+            payload = load_persistent_editor_job(session_id)
+        except Exception:
+            payload = None
+
     if not payload and load_editor_job is not None:
         try:
             payload = load_editor_job(session_id)
         except Exception:
             payload = None
+
     if not payload:
         return False
     rows = payload.get("rows") or []
@@ -1120,6 +1166,17 @@ def render_external_editor_link(label: str, editor_type: str, job_id: str) -> No
 def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
     if not job_id:
         return None
+
+    # v42 production persistence first, so new browser tabs survive Streamlit restarts.
+    if load_persistent_editor_job is not None:
+        try:
+            payload = load_persistent_editor_job(job_id)
+            if payload:
+                return payload
+        except Exception:
+            pass
+
+    # v41 local JSON fallback.
     if load_editor_job is not None:
         try:
             payload = load_editor_job(job_id)
@@ -1148,9 +1205,17 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
         "created": metadata.get("created", ""),
         "job_type": payload.get("job_type", "cat"),
     }
+
     if update_editor_job is not None:
         try:
             update_editor_job(job_id, rows=rows, metadata=metadata)
+        except Exception:
+            pass
+
+    # v42 persistent save/update.
+    if update_persistent_editor_job is not None:
+        try:
+            update_persistent_editor_job(job_id, rows=rows, metadata=metadata, status=metadata.get("status", "draft"))
         except Exception:
             pass
 
@@ -1461,21 +1526,33 @@ def current_ai_route_label() -> str:
 
 
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
-    """Session-level MVP usage log. Later this can be saved in Supabase ai_usage_events."""
+    """Log AI/translation usage in session and, when configured, Supabase.
+
+    v42 persists Azure character usage and BYO/Managed AI events for owner reporting.
+    """
     st.session_state.setdefault("ai_usage_events", [])
-    st.session_state.ai_usage_events.insert(0, {
+    record = {
         "time": now_stamp() if "now_stamp" in globals() else datetime.now().strftime("%Y-%m-%d %H:%M"),
         "purpose": purpose,
-        "provider": usage.get("provider", "unknown"),
-        "model": usage.get("model", ""),
+        "provider": usage.get("provider", usage.get("engine", "unknown")),
+        "model": usage.get("model", usage.get("engine", "")),
         "managed": usage.get("managed", False),
         "input_tokens": usage.get("input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
+        "characters": usage.get("characters", 0),
+        "requests": usage.get("requests", 0),
         "success": usage.get("success", False),
         "error": usage.get("error", ""),
         "segments": segment_count,
-    })
+    }
+    st.session_state.ai_usage_events.insert(0, record)
+
+    if log_persistent_usage_event is not None:
+        try:
+            log_persistent_usage_event(record, purpose=purpose, segment_count=segment_count, user=current_user() or {}, metadata={"app_version": APP_VERSION})
+        except Exception:
+            pass
 
 
 def call_main_api_translate(texts: List[str], target_language: str, domain: str) -> List[str]:
@@ -3338,25 +3415,60 @@ def page_admin() -> None:
 # Owner pages
 
 def page_owner_console() -> None:
-    hero("Owner Console", "Private platform owner view", "Only your master account can see global payments, users, workspaces, and platform controls.")
+    hero("Owner Console", "Private platform owner view", "Only your master account can see global payments, users, workspaces, usage, and platform controls.")
     metrics([
         ("Workspaces", len(st.session_state.workspaces), "all customer/client spaces"),
         ("Users", len(st.session_state.users), "all access records"),
         ("Payments", len(st.session_state.payments), "received or demo records"),
         ("Audit Logs", len(st.session_state.audit_logs), "platform events"),
     ])
+
+    st.markdown("### Release persistence")
+    if persistence_health is not None:
+        health = persistence_health()
+        h1, h2, h3, h4 = st.columns(4)
+        h1.metric("Storage", health.get("storage_mode", "unknown"))
+        h2.metric("Supabase", "Ready" if health.get("supabase_configured") else "Fallback")
+        h3.metric("Jobs table", health.get("editor_jobs_table", "unknown"))
+        h4.metric("Usage table", health.get("usage_events_table", "unknown"))
+        with st.expander("Persistence diagnostics", expanded=False):
+            st.json(health)
+    else:
+        st.warning("production_persistence.py is not available. Editor jobs are using session/local fallback only.")
+
     st.markdown("### Owner actions")
     c1, c2, c3 = st.columns(3)
     c1.info("Review all workspace access from User Access Matrix.")
     c2.info("Track received payments from Payments Received.")
     c3.info("Control global feature flags from Platform Settings.")
 
-    st.markdown("### Managed AI usage")
-    usage_rows = st.session_state.get("ai_usage_events", [])
+    st.markdown("### Translation / AI usage")
+    persistent_usage = []
+    if fetch_persistent_usage_events is not None:
+        try:
+            persistent_usage = fetch_persistent_usage_events(300)
+        except Exception:
+            persistent_usage = []
+    usage_rows = persistent_usage or st.session_state.get("ai_usage_events", [])
     if usage_rows:
-        st.dataframe(pd.DataFrame(usage_rows), use_container_width=True, hide_index=True)
+        usage_df = pd.DataFrame(usage_rows)
+        st.dataframe(usage_df, use_container_width=True, hide_index=True)
+        if "characters" in usage_df.columns:
+            st.caption(f"Total characters logged: {int(pd.to_numeric(usage_df['characters'], errors='coerce').fillna(0).sum())}")
     else:
-        st.info("No Managed AI/BYO usage logged in this session yet.")
+        st.info("No usage logged yet.")
+
+    st.markdown("### Recent editor jobs")
+    editor_jobs = []
+    if fetch_persistent_editor_jobs is not None:
+        try:
+            editor_jobs = fetch_persistent_editor_jobs(100)
+        except Exception:
+            editor_jobs = []
+    if editor_jobs:
+        st.dataframe(pd.DataFrame(editor_jobs), use_container_width=True, hide_index=True)
+    else:
+        st.info("No persisted editor jobs found yet.")
 
 
 def page_payments_received() -> None:
@@ -3402,7 +3514,17 @@ def page_platform_settings() -> None:
     }
     for label, val in settings.items():
         st.checkbox(label, value=val)
-    st.info("These are MVP owner controls. Persistent settings can be connected to Supabase later.")
+
+    st.markdown("### Release readiness diagnostics")
+    if persistence_health is not None:
+        health = persistence_health()
+        st.json(health)
+        if health.get("supabase_configured") and health.get("editor_jobs_table") == "ok" and health.get("usage_events_table") == "ok":
+            st.success("Production persistence is connected. Editor jobs and usage events can survive app reboot.")
+        else:
+            st.warning("Production persistence is not fully connected. Run the v42 Supabase SQL schema and add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets.")
+    else:
+        st.warning("production_persistence.py is missing.")
 
 
 def page_platform_audit_logs() -> None:
