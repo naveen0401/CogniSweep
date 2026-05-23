@@ -53,6 +53,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from docx import Document
 
+# External editor job storage for v41.
+# Stores Pro translated rows so a separate browser tab can open the CAT editor by job_id.
+try:
+    from editor_job_store import save_editor_job, load_editor_job, update_editor_job
+except Exception:
+    save_editor_job = None
+    load_editor_job = None
+    update_editor_job = None
+
+
 
 # ==========================================================
 # ErrorSweep Platform v32
@@ -61,7 +71,7 @@ from docx import Document
 # Owner console + workspace workflows + Human Review + Focused Subtitle/Transcription workspace
 # ==========================================================
 
-APP_VERSION = "v40 CAT-style Human Review Editor"
+APP_VERSION = "v41 External Editor Launcher"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -926,35 +936,62 @@ def get_review_session_store() -> Dict[str, Dict[str, Any]]:
 
 
 def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_language: str, file_name: str) -> str:
+    """Save a Pro review job for both same-session and external-tab editors.
+
+    v41 change:
+    - The old in-memory store works only inside the current Streamlit session.
+    - A new browser tab can start a different Streamlit session, so we also write
+      the review rows to editor_job_store.py using a random job_id.
+    """
     session_id = uuid.uuid4().hex
-    get_review_session_store()[session_id] = {
+    payload = {
         "rows": rows,
         "title": title,
         "target_language": target_language,
         "file_name": file_name,
         "created": now_stamp() if "now_stamp" in globals() else "",
+        "job_type": "cat",
     }
+    get_review_session_store()[session_id] = payload
+    if save_editor_job is not None:
+        try:
+            save_editor_job("cat", rows, metadata={
+                "title": title,
+                "target_language": target_language,
+                "file_name": file_name,
+                "created": payload["created"],
+                "source": "ErrorSweep Pro",
+            }, job_id=session_id)
+        except Exception:
+            pass
     st.session_state["active_review_session_id"] = session_id
     return session_id
 
 
 def load_review_session_from_store(session_id: str) -> bool:
+    """Load review rows from memory first, then from external editor job storage."""
     if not session_id:
         return False
     payload = get_review_session_store().get(session_id)
+    if not payload and load_editor_job is not None:
+        try:
+            payload = load_editor_job(session_id)
+        except Exception:
+            payload = None
     if not payload:
         return False
     rows = payload.get("rows") or []
     if not rows:
         return False
+    metadata = payload.get("metadata") or payload
     st.session_state.review_segments = rows
     st.session_state.last_pro_review_segments = rows
     st.session_state.latest_human_review_segments = rows
     st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = min(int(st.session_state.get("selected_review_index", 0) or 0), max(len(rows)-1, 0))
-    st.session_state.review_workspace_title = payload.get("title") or "ErrorSweep Pro"
-    st.session_state.review_workspace_language = payload.get("target_language") or ""
-    st.session_state.review_workspace_file_name = payload.get("file_name") or ""
+    st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "ErrorSweep Pro"
+    st.session_state.review_workspace_language = metadata.get("target_language") or payload.get("target_language") or ""
+    st.session_state.review_workspace_file_name = metadata.get("file_name") or payload.get("file_name") or ""
     st.session_state.active_review_session_id = session_id
     return True
 
@@ -1039,6 +1076,304 @@ def go_to_human_review_workspace() -> None:
     if session_id:
         query_set("review_id", str(session_id))
     open_page("Human Review Workspace")
+
+
+def current_session_token_for_links() -> str:
+    token = query_get("es_session")
+    if token:
+        return token
+    user = current_user() or {}
+    if not user:
+        return ""
+    payload = {**user, "exp": int(time.time()) + SESSION_TTL_SECONDS}
+    try:
+        return sign_payload(payload)
+    except Exception:
+        return ""
+
+
+def external_editor_url(editor_type: str, job_id: str) -> str:
+    parts = []
+    token = current_session_token_for_links()
+    if token:
+        parts.append(f"es_session={quote(token)}")
+    parts.append(f"es_editor={quote(editor_type)}")
+    parts.append(f"job_id={quote(str(job_id))}")
+    return "?" + "&".join(parts)
+
+
+def render_external_editor_link(label: str, editor_type: str, job_id: str) -> None:
+    url = external_editor_url(editor_type, job_id)
+    st.markdown(
+        f"""
+        <a href="{url}" target="_blank" style="
+            display:flex; align-items:center; justify-content:center; width:100%;
+            padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
+            background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
+            font-weight:900; box-shadow:0 12px 30px rgba(52,189,246,.25);
+        ">{escape(label)} ↗</a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
+    if not job_id:
+        return None
+    if load_editor_job is not None:
+        try:
+            payload = load_editor_job(job_id)
+            if payload:
+                return payload
+        except Exception:
+            pass
+    return get_review_session_store().get(job_id)
+
+
+def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
+    if not job_id or not payload:
+        return
+    rows = payload.get("rows") or []
+    metadata = payload.get("metadata") or {
+        "title": payload.get("title", "ErrorSweep CAT"),
+        "target_language": payload.get("target_language", ""),
+        "file_name": payload.get("file_name", ""),
+    }
+    get_review_session_store()[job_id] = {
+        "rows": rows,
+        "metadata": metadata,
+        "title": metadata.get("title", "ErrorSweep CAT"),
+        "target_language": metadata.get("target_language", ""),
+        "file_name": metadata.get("file_name", ""),
+        "created": metadata.get("created", ""),
+        "job_type": payload.get("job_type", "cat"),
+    }
+    if update_editor_job is not None:
+        try:
+            update_editor_job(job_id, rows=rows, metadata=metadata)
+        except Exception:
+            pass
+
+
+def render_external_cat_editor(job_id: str) -> None:
+    payload = load_external_editor_payload(job_id)
+    if not payload:
+        st.error("Editor job not found or expired. Please go back to ErrorSweep Pro and open the editor again.")
+        return
+    rows = payload.get("rows") or []
+    metadata = payload.get("metadata") or payload
+    if not rows:
+        st.error("This editor job has no rows. Please rerun Pro translation and open the editor again.")
+        return
+
+    st.markdown(
+        """
+        <style>
+        .block-container { max-width: 100vw !important; padding: .15rem .25rem .25rem .25rem !important; }
+        .es-editor-shell { border: 1px solid rgba(148,163,184,.25); background:#080a12; min-height: calc(100vh - 10px); overflow:hidden; }
+        .es-editor-top { height: 50px; display:flex; align-items:center; justify-content:space-between; padding:0 14px; background:#242a2f; border-bottom:1px solid rgba(255,255,255,.08); }
+        .es-editor-brand { display:flex; align-items:center; gap:10px; font-weight:900; color:#fff; }
+        .es-editor-logo { width:32px; height:32px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#00d985,#34bdf6,#8b5cf6); color:#061018; font-weight:1000; }
+        .es-editor-pill { display:inline-flex; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:900; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); color:#e5edff; }
+        .es-editor-pill.green { background:rgba(0,217,133,.14); border-color:rgba(0,217,133,.35); color:#63ffc4; }
+        .es-editor-tabs { height:36px; display:flex; align-items:center; gap:0; background:#eef2f7; color:#0f172a; border-bottom:1px solid #cbd5e1; }
+        .es-editor-tab { height:36px; padding:0 22px; display:flex; align-items:center; font-weight:800; font-size:13px; border-right:1px solid #cbd5e1; }
+        .es-editor-tab.active { background:#fff; border-bottom:2px solid #00d985; }
+        .es-context-preview { height:96px; background:#e9eef5; border-bottom:1px solid #cbd5e1; display:flex; justify-content:center; }
+        .es-context-phone { width:430px; background:#1f2027; display:flex; align-items:center; justify-content:center; }
+        .es-context-highlight { padding:8px 54px; border-radius:999px; background:#4b5563; color:#7dd3fc; border:2px dashed #7dd3fc; font-weight:800; }
+        .es-formatbar { height:32px; display:flex; align-items:center; gap:12px; background:#313940; color:#fff; border-bottom:1px solid rgba(255,255,255,.10); padding:0 10px; font-size:13px; }
+        .es-side-card { background:#f5f6f8; color:#1f2937; border-left:1px solid #cbd5e1; height: calc(100vh - 254px); overflow-y:auto; }
+        .es-side-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #cbd5e1; font-weight:900; }
+        .es-side-section { padding:14px; border-bottom:1px solid #d8dee8; }
+        .es-side-title { font-size:13px; font-weight:900; color:#4b5563; margin-bottom:8px; }
+        .es-resource { display:grid; grid-template-columns:38px 1fr; border:1px solid #d1d5db; background:#fff; margin-bottom:8px; }
+        .es-resource-code { background:#cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; }
+        .es-resource-body { padding:8px; font-size:13px; }
+        .es-muted { color:#64748b; font-size:12px; }
+        div[data-testid="stDataEditor"] { border-radius:0 !important; border:0 !important; }
+        div[data-testid="stDataEditor"] textarea, div[data-testid="stDataEditor"] input { font-size:14px !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    title = safe_text(metadata.get("title", "ErrorSweep CAT")) or "ErrorSweep CAT"
+    file_name = safe_text(metadata.get("file_name", "translation_job")) or "translation_job"
+    language = safe_text(metadata.get("target_language", "Target")) or "Target"
+    completion = compute_review_completion(rows)
+
+    st.markdown(
+        f"""
+        <div class="es-editor-shell">
+          <div class="es-editor-top">
+            <div class="es-editor-brand"><div class="es-editor-logo">ES</div><div><div>{escape(file_name)}</div><div class="es-muted">{escape(title)} · Target: {escape(language)} · Job: {escape(job_id[:10])}</div></div></div>
+            <div style="display:flex; align-items:center; gap:8px;"><span class="es-editor-pill green">Accepted</span><span class="es-editor-pill">TM</span><span class="es-editor-pill">TB</span><span class="es-editor-pill">MT</span></div>
+          </div>
+          <div class="es-editor-tabs"><div class="es-editor-tab active">Context</div><div class="es-editor-tab">Quality Checks</div><div class="es-editor-tab">Search TM</div><div class="es-editor-tab">Glossary</div><div style="margin-left:auto; padding-right:14px; font-size:13px;">Mode: <b>Highlight strings</b></div></div>
+          <div class="es-context-preview"><div class="es-context-phone"><div class="es-context-highlight">Open account settings</div></div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    toolbar_cols = st.columns([0.45, 0.18, 0.13, 0.10, 0.14], gap="small")
+    with toolbar_cols[0]:
+        search = st.text_input("Search", placeholder="Search source and translations", label_visibility="collapsed", key=f"ext_cat_search_{job_id}")
+    with toolbar_cols[1]:
+        status_filter = st.selectbox("Status", ["All", "MT", "Needs Review", "Approved", "Untranslated", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Rejected", "Needs Rework"], label_visibility="collapsed", key=f"ext_cat_status_{job_id}")
+    with toolbar_cols[2]:
+        pending_only = st.checkbox("Pending", value=False, key=f"ext_cat_pending_{job_id}")
+    with toolbar_cols[3]:
+        st.metric("Rows", len(rows))
+    with toolbar_cols[4]:
+        st.metric("Approved", completion["approved"])
+
+    st.markdown('<div class="es-formatbar"><b>B</b><i>I</i><u>U</u><span>↶</span><span>↷</span><span>BR</span><span>NBSP</span><span>✓</span></div>', unsafe_allow_html=True)
+
+    filtered_indexes = []
+    needle = safe_text(search).lower().strip()
+    for i, r in enumerate(rows):
+        src = safe_text(r.get("source", ""))
+        tgt = safe_text(r.get("target", ""))
+        status = safe_text(r.get("status", "Needs Review")) or "Needs Review"
+        if needle and needle not in src.lower() and needle not in tgt.lower():
+            continue
+        if status_filter != "All" and status != status_filter:
+            continue
+        if pending_only and status in {"Approved", "100%", "101%"}:
+            continue
+        filtered_indexes.append(i)
+    if not filtered_indexes:
+        filtered_indexes = list(range(len(rows)))
+
+    grid_rows = []
+    for i in filtered_indexes:
+        r = rows[i]
+        status = safe_text(r.get("status", "Needs Review")) or "Needs Review"
+        grid_rows.append({
+            "No": i + 1,
+            "Source (EN)": safe_text(r.get("source", "")),
+            "Target": safe_text(r.get("target", "")),
+            "Match": safe_text(r.get("match", "MT")) or "MT",
+            "QA": "✓" if status in {"Approved", "100%", "101%"} else "⚠" if status in {"Needs Review", "Untranslated", "Needs Rework"} else "",
+            "Status": status,
+            "Notes": safe_text(r.get("notes", "")),
+            "Location": safe_text(r.get("location", f"Segment {i+1}")),
+        })
+
+    grid_col, side_col = st.columns([0.81, 0.19], gap="small")
+    with grid_col:
+        edited_df = st.data_editor(
+            pd.DataFrame(grid_rows),
+            use_container_width=True,
+            hide_index=True,
+            height=620,
+            num_rows="fixed",
+            disabled=["No", "Source (EN)", "Match", "QA", "Location"],
+            column_order=["No", "Source (EN)", "Target", "Match", "QA", "Status", "Notes", "Location"],
+            column_config={
+                "No": st.column_config.NumberColumn("#", width="small"),
+                "Source (EN)": st.column_config.TextColumn("Source (EN)", width="large"),
+                "Target": st.column_config.TextColumn("Target", width="large"),
+                "Match": st.column_config.TextColumn("Match", width="small"),
+                "QA": st.column_config.TextColumn("QA", width="small"),
+                "Status": st.column_config.SelectboxColumn("Status", options=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"], width="medium"),
+                "Notes": st.column_config.TextColumn("Notes", width="medium"),
+                "Location": st.column_config.TextColumn("Location", width="medium"),
+            },
+            key=f"external_cat_grid_{job_id}",
+        )
+
+        action_cols = st.columns([1, 1, 1, 1, 1])
+        if action_cols[0].button("Save Page", type="primary", use_container_width=True, key=f"ext_cat_save_{job_id}"):
+            for _, erow in edited_df.iterrows():
+                idx = int(erow["No"]) - 1
+                if 0 <= idx < len(rows):
+                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
+                    rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
+                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
+            payload["rows"] = rows
+            save_external_editor_payload(job_id, payload)
+            st.success("Saved editor changes.")
+        if action_cols[1].button("Approve visible", use_container_width=True, key=f"ext_cat_approve_{job_id}"):
+            for _, erow in edited_df.iterrows():
+                idx = int(erow["No"]) - 1
+                if 0 <= idx < len(rows):
+                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
+                    rows[idx]["status"] = "Approved" if safe_text(erow.get("Target", "")).strip() else "Needs Review"
+                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
+            payload["rows"] = rows
+            save_external_editor_payload(job_id, payload)
+            st.success("Visible rows approved.")
+        if action_cols[2].button("Submit", use_container_width=True, key=f"ext_cat_submit_{job_id}"):
+            for r in rows:
+                if safe_text(r.get("target", "")).strip() and safe_text(r.get("status", "")) not in {"Rejected", "Needs Rework"}:
+                    r["status"] = "Approved"
+            payload["rows"] = rows
+            payload.setdefault("metadata", metadata)["submitted_at"] = now_stamp()
+            save_external_editor_payload(job_id, payload)
+            st.success("Submitted reviewed job.")
+        if action_cols[3].button("Refresh", use_container_width=True, key=f"ext_cat_refresh_{job_id}"):
+            st.rerun()
+        if action_cols[4].button("Back to Pro", use_container_width=True, key=f"ext_cat_back_{job_id}"):
+            query_clear("es_editor")
+            query_clear("job_id")
+            open_page("ErrorSweep Pro")
+
+        dl1, dl2, dl3 = st.columns(3)
+        base = re.sub(r"\.[^.]+$", "", file_name) or "reviewed_translation"
+        dl1.download_button("Download reviewed Excel", build_reviewed_translation_workbook(rows), file_name=f"{base}_reviewed.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        dl2.download_button("Download reviewed CSV", rows_to_csv(rows), file_name=f"{base}_reviewed.csv", mime="text/csv", use_container_width=True)
+        dl3.download_button("Download target text", build_reviewed_plain_text(rows), file_name=f"{base}_target.txt", mime="text/plain", use_container_width=True)
+
+    with side_col:
+        st.markdown('<div class="es-side-card">', unsafe_allow_html=True)
+        st.markdown('<div class="es-side-head"><span>Additional Details</span><span class="es-editor-pill" style="background:#f97316;color:white;">1</span></div>', unsafe_allow_html=True)
+        selected_no = int(edited_df.iloc[0]["No"]) if not edited_df.empty else 1
+        selected_idx = max(0, min(selected_no - 1, len(rows) - 1))
+        selected = rows[selected_idx]
+        matches = compute_matches(safe_text(selected.get("source", "")))
+        st.markdown('<div class="es-side-section"><div class="es-side-title">Language Resources</div>', unsafe_allow_html=True)
+        if matches["glossary"]:
+            for g in matches["glossary"][:5]:
+                st.markdown(f'<div class="es-resource"><div class="es-resource-code">GT</div><div class="es-resource-body"><b>{escape(g.get("target", ""))}</b><br><span class="es-muted">{escape(g.get("source", ""))}</span></div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="es-resource"><div class="es-resource-code">GT</div><div class="es-resource-body"><b>Glossary</b><br><span class="es-muted">No glossary hit.</span></div></div>', unsafe_allow_html=True)
+        if matches["tm"]:
+            for m in matches["tm"][:3]:
+                st.markdown(f'<div class="es-resource"><div class="es-resource-code">TM</div><div class="es-resource-body"><b>{escape(m.get("type", "TM"))}</b><br><span class="es-muted">{escape(m.get("target", ""))}</span></div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="es-side-section"><div class="es-side-title">Quality Checks</div><div class="es-resource"><div class="es-resource-code">QA</div><div class="es-resource-body">Check placeholders, glossary, DNT, punctuation, and number consistency before submit.</div></div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="es-side-section"><div class="es-side-title">Selected Row</div><div class="es-resource"><div class="es-resource-code">#</div><div class="es-resource-body"><b>{selected_idx+1}</b><br><span class="es-muted">{escape(safe_text(selected.get("location", "")))}</span></div></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="es-side-section"><div class="es-side-title">Issues</div><button style="width:100%;border:1px solid #94a3b8;background:white;padding:8px;font-weight:800;">Open New Issue</button><div class="es-muted" style="margin-top:8px;">View related source issues (0)</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="es-side-section"><div class="es-side-title">History</div><div class="es-muted">Saved changes are stored under this job_id.</div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_external_media_editor(job_id: str) -> None:
+    payload = load_external_editor_payload(job_id)
+    if not payload:
+        st.error("Media editor job not found or expired.")
+        return
+    rows = payload.get("rows") or []
+    st.warning("Media external editor shell is ready. Full video persistence will be connected in a later backend step.")
+    st.data_editor(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=650, key=f"external_media_grid_{job_id}")
+
+
+def render_external_editor_router() -> bool:
+    editor_type = query_get("es_editor")
+    if not editor_type:
+        return False
+    job_id = query_get("job_id")
+    if editor_type == "cat":
+        render_external_cat_editor(job_id)
+        return True
+    if editor_type == "media":
+        render_external_media_editor(job_id)
+        return True
+    st.error("Unknown editor route.")
+    return True
 
 
 
@@ -1635,17 +1970,20 @@ def page_pro() -> None:
 
         st.dataframe(pd.DataFrame(review_rows), use_container_width=True, hide_index=True)
 
-        # Dedicated Human Review action. This makes Pro feel like a workflow,
-        # not an editor embedded on the same screen.
+        # v41: External editor launcher. The CAT editor opens in a new browser tab
+        # by job_id, so it feels like a professional editor window instead of a
+        # normal Streamlit dashboard page.
         st.markdown("### Next step")
         cta1, cta2 = st.columns([1, 1])
         with cta1:
-            if st.button("Open Human Review workspace", type="primary", use_container_width=True, key="open_new_pro_review_workspace"):
-                # review_segments is already prepared above. This opens a separate professional editor page.
-                go_to_human_review_workspace()
+            review_job_id = st.session_state.get("active_review_session_id") or query_get("review_id")
+            if review_job_id:
+                render_external_editor_link("Open Human Review Editor", "cat", str(review_job_id))
+            else:
+                st.error("Review job was not created. Please rerun Pro translation.")
         with cta2:
             st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
-        st.info("Human Review opens as a dedicated workspace page where reviewers can edit, approve, and save verified segments to TM.")
+        st.info("Human Review now opens in a separate full-window CAT editor. Target editing happens directly in the main grid; the right panel is only for TM, glossary, DNT, QA, issues, and history.")
 
 
 # Pro post-editing and Subtitle/Transcription editors
@@ -3108,6 +3446,11 @@ def render_app() -> None:
     user = current_user()
     if not user:
         render_login()
+        return
+
+    # v41: external editor routes open as full-window pages in a new tab.
+    # They must render before normal dashboard routing/navigation.
+    if render_external_editor_router():
         return
 
     # Restore selected page from URL query when navigation links are used.
