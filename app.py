@@ -92,7 +92,7 @@ except Exception:
 # Editor jobs and usage persist to Supabase when configured, with local JSON fallback
 # ==========================================================
 
-APP_VERSION = "v42 Production Persistence + Usage Tracking"
+APP_VERSION = "v43 Owner Console Job Details"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1003,6 +1003,28 @@ def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_
             pass
 
     st.session_state["active_review_session_id"] = session_id
+
+    # v43 owner-console handoff: keep visible current/recent job details even if
+    # Supabase/local persistence is not immediately readable in this Streamlit run.
+    owner_job_record = {
+        "id": session_id,
+        "job_type": "cat",
+        "workspace": metadata.get("workspace", ""),
+        "user_email": metadata.get("user_email", ""),
+        "file_name": file_name,
+        "target_language": target_language,
+        "status": metadata.get("status", "draft"),
+        "row_count": len(rows or []),
+        "created": metadata.get("created", ""),
+        "updated_at": metadata.get("created", ""),
+        "source": metadata.get("source", "ErrorSweep Pro"),
+    }
+    st.session_state["last_pro_task_details"] = owner_job_record
+    st.session_state.setdefault("owner_recent_editor_jobs", [])
+    st.session_state["owner_recent_editor_jobs"] = [
+        owner_job_record,
+        *[j for j in st.session_state["owner_recent_editor_jobs"] if j.get("id") != session_id],
+    ][:25]
     return session_id
 
 
@@ -3436,6 +3458,41 @@ def page_owner_console() -> None:
     else:
         st.warning("production_persistence.py is not available. Editor jobs are using session/local fallback only.")
 
+    st.markdown("### Current / recent task details")
+    active_job_id = st.session_state.get("active_review_session_id", "")
+    active_rows = st.session_state.get("review_segments") or st.session_state.get("last_pro_review_segments") or []
+    last_task = st.session_state.get("last_pro_task_details") or {}
+    session_jobs = st.session_state.get("owner_recent_editor_jobs", [])
+
+    if active_job_id or last_task or active_rows:
+        t1, t2, t3, t4 = st.columns(4)
+        t1.metric("Active job", str(active_job_id or last_task.get("id", "—"))[:10] if (active_job_id or last_task.get("id")) else "—")
+        t2.metric("File", last_task.get("file_name", st.session_state.get("review_workspace_file_name", "—")) or "—")
+        t3.metric("Rows", len(active_rows) or int(last_task.get("row_count") or 0))
+        t4.metric("Target", last_task.get("target_language", st.session_state.get("review_workspace_language", "—")) or "—")
+
+        with st.expander("Current task row preview", expanded=False):
+            preview_rows = []
+            for i, row in enumerate(active_rows[:25], start=1):
+                preview_rows.append({
+                    "No": i,
+                    "Source": safe_text(row.get("source", ""))[:180],
+                    "Target": safe_text(row.get("target", row.get("translation", "")))[:180],
+                    "Status": safe_text(row.get("status", "")),
+                    "Match": safe_text(row.get("match", "")),
+                    "Location": safe_text(row.get("location", "")),
+                })
+            if preview_rows:
+                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("The active task exists, but no row preview is available in session.")
+    else:
+        st.info("No active Pro review task is currently stored in this browser session.")
+
+    if session_jobs:
+        with st.expander("Session-created editor jobs", expanded=True):
+            st.dataframe(pd.DataFrame(session_jobs), use_container_width=True, hide_index=True)
+
     st.markdown("### Owner actions")
     c1, c2, c3 = st.columns(3)
     c1.info("Review all workspace access from User Access Matrix.")
@@ -3465,10 +3522,17 @@ def page_owner_console() -> None:
             editor_jobs = fetch_persistent_editor_jobs(100)
         except Exception:
             editor_jobs = []
+    combined_jobs = []
     if editor_jobs:
-        st.dataframe(pd.DataFrame(editor_jobs), use_container_width=True, hide_index=True)
+        combined_jobs.extend(editor_jobs)
+    for job in st.session_state.get("owner_recent_editor_jobs", []):
+        if not any(str(j.get("id")) == str(job.get("id")) for j in combined_jobs):
+            combined_jobs.append(job)
+
+    if combined_jobs:
+        st.dataframe(pd.DataFrame(combined_jobs), use_container_width=True, hide_index=True)
     else:
-        st.info("No persisted editor jobs found yet.")
+        st.info("No persisted editor jobs found yet. Run Pro, click Open Human Review Editor, then return here.")
 
 
 def page_payments_received() -> None:
