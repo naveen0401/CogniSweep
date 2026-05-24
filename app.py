@@ -28,9 +28,9 @@ except Exception:
     ai_json_items = None
     select_ai_route = None
 
-# ErrorSweep v30 backend-only translation router:
-# Phase 1 current default = Azure Translator
-# Phase 2 future switch = NLLB self-hosted when NLLB_MODE=True
+# ErrorSweep v44 backend-only translation router:
+# Built-in route = self-hosted commercial-safe MT router
+# IndicTrans2 for Indian languages + OPUS-MT for supported global pairs
 try:
     from translator_router import translate_batch as builtin_translate_batch, current_builtin_engine_label
 except Exception:
@@ -86,13 +86,13 @@ except Exception:
 
 
 # ==========================================================
-# ErrorSweep Platform v42
-# Production persistence + usage tracking + external CAT editor launcher
-# Phase 1: Azure Translator | Phase 2: NLLB self-hosted
+# ErrorSweep Platform v44
+# Production persistence + usage tracking + external CAT/media editor launcher
+# Built-in MT: self-hosted IndicTrans2 + OPUS-MT. Azure and self-hosted MT removed.
 # Editor jobs and usage persist to Supabase when configured, with local JSON fallback
 # ==========================================================
 
-APP_VERSION = "v43 Owner Console Job Details"
+APP_VERSION = "v44 Self-hosted MT + Media Editor Fix"
 DEFAULT_MODEL = "gpt-4o-mini"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 
@@ -1028,6 +1028,75 @@ def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_
     return session_id
 
 
+def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video_file=None, target_language: str = "") -> str:
+    """Save subtitle/transcription rows as an external media editor job.
+
+    This fixes the workflow where video upload created rows but did not open a
+    separate editor like the CAT review editor. Video bytes are not stored in
+    persistent JSON/Supabase in this MVP; rows and metadata are stored safely.
+    """
+    job_id = uuid.uuid4().hex
+    user = current_user() or {}
+    video_name = getattr(video_file, "name", "") if video_file is not None else ""
+    video_type = getattr(video_file, "type", "") if video_file is not None else ""
+    metadata = {
+        "title": f"ErrorSweep {workflow} Editor",
+        "target_language": target_language or st.session_state.get("subtitle_target_language", ""),
+        "file_name": video_name or f"{workflow.lower()}_job",
+        "video_name": video_name,
+        "video_type": video_type,
+        "created": now_stamp() if "now_stamp" in globals() else "",
+        "source": "Subtitle / Transcription Editor",
+        "workspace": user.get("workspace", "Demo Workspace"),
+        "user_email": user.get("email", ""),
+        "status": "draft",
+        "workflow": workflow,
+    }
+    payload = {
+        "job_id": job_id,
+        "rows": rows or [],
+        "metadata": metadata,
+        "title": metadata["title"],
+        "target_language": metadata.get("target_language", ""),
+        "file_name": metadata.get("file_name", ""),
+        "created": metadata["created"],
+        "job_type": "media",
+    }
+    get_review_session_store()[job_id] = payload
+
+    if save_editor_job is not None:
+        try:
+            save_editor_job("media", rows or [], metadata=metadata, job_id=job_id)
+        except Exception:
+            pass
+    if save_persistent_editor_job is not None:
+        try:
+            save_persistent_editor_job("media", rows or [], metadata=metadata, job_id=job_id, user=user)
+        except Exception:
+            pass
+
+    st.session_state["last_media_editor_job_id"] = job_id
+    owner_job_record = {
+        "id": job_id,
+        "job_type": "media",
+        "workspace": metadata.get("workspace", ""),
+        "user_email": metadata.get("user_email", ""),
+        "file_name": metadata.get("file_name", ""),
+        "target_language": metadata.get("target_language", ""),
+        "status": "draft",
+        "row_count": len(rows or []),
+        "created": metadata.get("created", ""),
+        "updated_at": metadata.get("created", ""),
+        "source": metadata.get("source", ""),
+    }
+    st.session_state.setdefault("owner_recent_editor_jobs", [])
+    st.session_state["owner_recent_editor_jobs"] = [
+        owner_job_record,
+        *[j for j in st.session_state["owner_recent_editor_jobs"] if j.get("id") != job_id],
+    ][:25]
+    return job_id
+
+
 def load_review_session_from_store(session_id: str) -> bool:
     """Load review rows from memory, Supabase persistence, or local fallback."""
     if not session_id:
@@ -1444,8 +1513,79 @@ def render_external_media_editor(job_id: str) -> None:
         st.error("Media editor job not found or expired.")
         return
     rows = payload.get("rows") or []
-    st.warning("Media external editor shell is ready. Full video persistence will be connected in a later backend step.")
-    st.data_editor(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=650, key=f"external_media_grid_{job_id}")
+    metadata = payload.get("metadata") or payload
+    workflow = metadata.get("workflow") or metadata.get("title", "Media Editor")
+    file_name = metadata.get("file_name", "media_job")
+    target_language = metadata.get("target_language", "")
+
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display:none !important;}
+        [data-testid="stHeader"] {display:none !important;}
+        .block-container {max-width: 100% !important; padding: 0.6rem 0.8rem 1rem !important;}
+        .es-media-top {display:flex;justify-content:space-between;align-items:center;background:#242a2f;color:white;border:1px solid #334155;border-radius:10px;padding:10px 14px;margin-bottom:10px;}
+        .es-media-title {font-weight:900;font-size:15px;}
+        .es-media-sub {font-size:12px;color:#cbd5e1;margin-top:2px;}
+        .es-media-pill {background:#0ea5e9;color:#061018;border-radius:999px;padding:5px 10px;font-weight:900;font-size:12px;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="es-media-top">
+          <div><div class="es-media-title">ErrorSweep Media Editor</div><div class="es-media-sub">{escape(str(workflow))} · {escape(str(file_name))} · {escape(str(target_language))}</div></div>
+          <div class="es-media-pill">Separate Editor</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not rows:
+        st.warning("No media rows found for this editor job.")
+        return
+
+    st.caption("Edit timing and transcript/subtitle text directly in the grid. The right panel is reserved for TM, glossary, DNT, and QA details in the next UI phase.")
+
+    df = pd.DataFrame(rows)
+    wanted = [c for c in ["id", "start", "end", "source", "target", "status", "match"] if c in df.columns]
+    if wanted:
+        df = df[wanted]
+
+    column_config = {}
+    if "target" in df.columns:
+        column_config["target"] = st.column_config.TextColumn("Target Subtitle / Transcript", width="large")
+    if "source" in df.columns:
+        column_config["source"] = st.column_config.TextColumn("Source / Speaker Note", width="large", disabled=True)
+    if "start" in df.columns:
+        column_config["start"] = st.column_config.NumberColumn("Start", format="%.3f")
+    if "end" in df.columns:
+        column_config["end"] = st.column_config.NumberColumn("End", format="%.3f")
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=620,
+        num_rows="dynamic",
+        column_config=column_config,
+        disabled=[c for c in df.columns if c not in {"target", "start", "end", "status", "match"}],
+        key=f"external_media_grid_{job_id}",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    if c1.button("Save Draft", use_container_width=True, key=f"media_save_{job_id}"):
+        new_rows = edited.to_dict(orient="records")
+        payload["rows"] = new_rows
+        save_external_editor_payload(job_id, payload)
+        st.success("Media editor draft saved.")
+    c2.download_button("Download CSV", rows_to_csv(edited.to_dict(orient="records")), file_name=f"{re.sub(r'[^A-Za-z0-9_-]+','_', str(file_name))}_media_editor.csv", mime="text/csv", use_container_width=True)
+    c3.download_button("Download SRT", rows_to_srt(edited.to_dict(orient="records"), use_target=True), file_name=f"{re.sub(r'[^A-Za-z0-9_-]+','_', str(file_name))}_output.srt", mime="text/plain", use_container_width=True)
+    if c4.button("Back", use_container_width=True, key=f"media_back_{job_id}"):
+        query_clear("es_editor")
+        query_clear("job_id")
+        open_page("Subtitle / Transcription Editor")
 
 
 def render_external_editor_router() -> bool:
@@ -1550,7 +1690,7 @@ def current_ai_route_label() -> str:
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
     """Log AI/translation usage in session and, when configured, Supabase.
 
-    v42 persists Azure character usage and BYO/Managed AI events for owner reporting.
+    v44 persists self-hosted MT usage and BYO/Managed AI events for owner reporting.
     """
     st.session_state.setdefault("ai_usage_events", [])
     record = {
@@ -1584,8 +1724,7 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str)
         Keep the existing BYO OpenAI/vLLM-style prompt path unchanged.
 
     User has no key:
-        Phase 2 if NLLB_MODE=True  -> self-hosted NLLB.
-        Otherwise                  -> Phase 1 Azure Translator.
+        Use commercial-safe self-hosted MT: IndicTrans2 for Indian languages, OPUS-MT for supported global pairs.
     """
     if not texts:
         return []
@@ -1657,12 +1796,11 @@ Output shape:
         return result
 
     # ----------------------------------------------------------
-    # NO USER KEY PATH — v30 built-in translation engine.
-    # Phase 1 default: Azure Translator.
-    # Phase 2 future: NLLB when NLLB_MODE=True.
+    # NO USER KEY PATH — v44 commercial-safe self-hosted MT.
+    # IndicTrans2 for Indian languages. OPUS-MT for supported global pairs.
     # ----------------------------------------------------------
     if builtin_translate_batch is None:
-        st.error("Built-in translation router is missing. Add translator_router.py, azure_translator.py, and nllb_translator.py beside app.py.")
+        st.error("Built-in translation router is missing. Add translator_router.py and selfhosted_mt_clients.py beside app.py.")
         return ["" for _ in texts]
 
     try:
@@ -1699,7 +1837,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
 
     v32 policy:
     - Auto transcription is available only when the user provides a BYO API key.
-    - Azure Translator is text-only in ErrorSweep and is NOT used for transcription.
+    - Built-in self-hosted MT is text-only in ErrorSweep and is NOT used for transcription.
     - If no user API key is available, return blank starter rows for manual human editing.
     """
     if video_file is None:
@@ -1743,7 +1881,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
 
 
 def translate_subtitle_sources(rows: List[Dict[str, Any]], target_language: str, domain: str = "Subtitling") -> Tuple[List[Dict[str, Any]], int]:
-    """Translate source rows into target subtitle rows using BYO key or built-in Azure/NLLB."""
+    """Translate source rows into target subtitle rows using BYO key or built-in self-hosted MT."""
     source_texts = [safe_text(r.get("source", "")) for r in rows]
     translations = call_main_api_translate(source_texts, target_language, domain)
     missing = 0
@@ -2646,7 +2784,7 @@ def render_subtitle_transcription_setup() -> None:
         auto_generate = st.checkbox(
             "Generate draft target subtitles",
             value=True,
-            help="If source rows exist, target subtitles use BYO API key or built-in Azure/NLLB translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
+            help="If source rows exist, target subtitles use BYO API key or built-in self-hosted MT translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
         )
 
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None):
@@ -2704,7 +2842,9 @@ def render_subtitle_transcription_setup() -> None:
                 st.info("Draft target subtitles were skipped because there is no source text yet. Fill source rows manually, then translate/review later.")
 
             enter_subtitle_workspace("Subtitling", rows, video)
-            open_page("Subtitle Workspace")
+            job_id = save_media_session_to_store("Subtitling", rows, video_file=video, target_language=subtitle_target_language)
+            st.success("Subtitling editor job created. Open it in the separate editor window below.")
+            render_external_editor_link("Open Subtitle Editor", "media", job_id)
     else:
         st.caption("Transcription mode does not need a source file. Auto-transcription requires a user API key. Without a user key, blank transcript rows are created for human editing.")
         c1, c2 = st.columns([1, 1])
@@ -2731,7 +2871,9 @@ def render_subtitle_transcription_setup() -> None:
             if not rows:
                 rows = default_subtitle_segments(int(starter_count), transcription=True)
             enter_subtitle_workspace("Transcription", rows, video)
-            open_page("Transcription Workspace")
+            job_id = save_media_session_to_store("Transcription", rows, video_file=video, target_language="")
+            st.success("Transcription editor job created. Open it in the separate editor window below.")
+            render_external_editor_link("Open Transcription Editor", "media", job_id)
 
     if st.session_state.subtitle_segments:
         if st.button("Open existing subtitle/transcription workspace", use_container_width=True):
