@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/models/huggingface \
+    TRANSFORMERS_CACHE=/models/huggingface \
+    OPUS_MT_FORCE_CPU=true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements_opus_mt_server.txt /app/requirements_opus_mt_server.txt
+
+# CPU-only Torch avoids downloading CUDA wheels.
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install --no-cache-dir -r /app/requirements_opus_mt_server.txt
+
+COPY opus_mt_server_v45.py /app/opus_mt_server_v45.py
+
+EXPOSE 8100
+
+CMD ["uvicorn", "opus_mt_server_v45:app", "--host", "0.0.0.0", "--port", "8100"]
