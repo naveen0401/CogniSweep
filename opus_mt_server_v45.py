@@ -253,3 +253,4 @@ def translate(req: TranslateRequest, authorization: Optional[str] = Header(defau
         "segments": len(req.texts),
         "elapsed_ms": elapsed_ms,
     }
+
