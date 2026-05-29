@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from openai import OpenAI
@@ -147,4 +148,69 @@ def transcribe_media_to_rows(
             "requests": 0,
         }
     return _openai_transcribe(media_bytes, filename, mime_type, user_openai_key, locale=locale, prompt=prompt)
+
+
+def transcribe_media_file_to_rows(
+    media_path: str,
+    filename: str,
+    mime_type: str,
+    user_openai_key: str = "",
+    locale: str = "en-US",
+    prompt: str = "",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Transcribe a media file from disk without requiring the caller to load it into RAM."""
+    if not user_openai_key:
+        return _default_rows(10), {
+            "provider": "manual_transcription",
+            "engine": "manual_editor",
+            "success": False,
+            "error": "No user API key available. Manual transcript rows were created.",
+            "characters": 0,
+            "requests": 0,
+        }
+    client = OpenAI(api_key=user_openai_key, timeout=180, max_retries=1)
+    usage = {
+        "provider": "openai_user_speech",
+        "engine": "whisper-1",
+        "success": False,
+        "error": "",
+        "characters": 0,
+        "requests": 1,
+    }
+    try:
+        path = Path(media_path)
+        with path.open("rb") as file_obj:
+            file_obj.name = filename or path.name or "audio.mp4"
+            response = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=file_obj,
+                response_format="verbose_json",
+                language=(locale.split("-")[0] if locale else None),
+                prompt=prompt or None,
+            )
+        data = response.model_dump() if hasattr(response, "model_dump") else dict(response)
+        segments = data.get("segments") or []
+        rows = []
+        if segments:
+            for i, seg in enumerate(segments):
+                text = str(seg.get("text", "")).strip()
+                if not text:
+                    continue
+                rows.append({
+                    "id": i + 1,
+                    "start": float(seg.get("start", i * 3.5) or 0),
+                    "end": float(seg.get("end", i * 3.5 + 3) or 0),
+                    "source": "",
+                    "target": text,
+                    "status": "AI Draft",
+                    "match": "STT",
+                })
+        else:
+            rows = _split_text_to_rows(str(data.get("text", "")), workflow="Transcription")
+        usage["success"] = True
+        usage["characters"] = sum(len(r.get("target", "")) for r in rows)
+        return rows or _default_rows(10), usage
+    except Exception as exc:
+        usage["error"] = str(exc)[:500]
+        return _default_rows(10), usage
 

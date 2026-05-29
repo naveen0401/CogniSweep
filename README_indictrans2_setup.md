@@ -1,165 +1,79 @@
 # ErrorSweep + IndicTrans2 setup
 
-This setup adds a **self-hosted Indian-language translation engine** for ErrorSweep Pro.
-It is mainly for Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Urdu, Odia, and other Indic languages.
+IndicTrans2 is the built-in Indian-language MT worker for ErrorSweep. Use it
+for Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, Marathi, Gujarati,
+Punjabi, Urdu, Odia, Assamese, Sanskrit, Nepali, and related Indic language
+routes.
 
-## What this gives you
+## Router role
 
-ErrorSweep Pro routing becomes:
-
-```text
-Translation Memory first
-→ Glossary / rules second
-→ OpenAI if available
-→ LOCAL_TRANSLATION_ENDPOINT if available
-→ Offline reference mode if nothing else exists
-```
-
-For Telugu without OpenAI/Gemini API keys, use this IndicTrans2 worker.
-
-## Hardware note
-
-IndicTrans2 is heavier than LibreTranslate. CPU works for testing but can be slow and may be killed on small Codespaces machines. For production use a GPU VPS/server or a larger CPU machine.
-
-Start with the distilled model:
+ErrorSweep Pro routes no-key MT like this:
 
 ```text
-ai4bharat/indictrans2-en-indic-dist-200M
+Translation Memory / rules
+-> user API key when provided
+-> IndicTrans2 for Indian languages
+-> MADLAD-400 for broad global fallback
+-> OPUS-MT lightweight fallback
 ```
 
-## Files to add to GitHub/Codespaces
+## Requirements
 
-Put these files beside `app.py`:
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements_indictrans2_worker.txt
+```
+
+On Windows, `indictranstoolkit` builds a Cython extension. If pip reports that
+Microsoft Visual C++ 14.0 or greater is required, install Microsoft C++ Build
+Tools first, then rerun the requirements install.
+
+## Download models
+
+Run this once on a machine with Hugging Face access:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\download_models.ps1 -SkipMadlad
+```
+
+This downloads:
 
 ```text
-indictrans2_worker.py
-requirements_indictrans2_worker.txt
-Dockerfile.indictrans2
-docker-compose.indictrans2.yml
-test_indictrans2_worker.py
+models\indictrans2-en-indic-dist-200M
+models\indictrans2-indic-en-dist-200M
+models\indictrans2-indic-indic-dist-320M
 ```
 
-## Option A: run with Docker
+## Run locally
 
-Build and start:
+`start_builtin_mt.ps1` automatically points the worker to local model folders
+when they exist:
 
-```bash
-docker compose -f docker-compose.indictrans2.yml up -d --build
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1 -WithIndicTrans2
 ```
 
-Watch logs:
+Or start it manually:
 
-```bash
-docker compose -f docker-compose.indictrans2.yml logs -f
+```powershell
+$env:INDICTRANS2_EN_INDIC_MODEL="C:\ErrorSweep\Error-Sweep\models\indictrans2-en-indic-dist-200M"
+$env:INDICTRANS2_INDIC_EN_MODEL="C:\ErrorSweep\Error-Sweep\models\indictrans2-indic-en-dist-200M"
+$env:INDICTRANS2_INDIC_INDIC_MODEL="C:\ErrorSweep\Error-Sweep\models\indictrans2-indic-indic-dist-320M"
+.\.venv\Scripts\python.exe -m uvicorn indictrans2_worker:app --host 127.0.0.1 --port 8000
 ```
 
-The first request may download models and take time.
-
-Test health:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Test Telugu translation:
-
-```bash
-python test_indictrans2_worker.py
-```
-
-## Option B: run directly without Docker
-
-```bash
-python -m venv .venv-indic
-source .venv-indic/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements_indictrans2_worker.txt
-python indictrans2_worker.py
-```
-
-Then test in another terminal:
-
-```bash
-python test_indictrans2_worker.py
-```
-
-## Connect ErrorSweep local app to IndicTrans2
-
-In `.streamlit/secrets.toml` for local/Codespaces testing:
+## Connect ErrorSweep
 
 ```toml
-LOCAL_TRANSLATION_ENDPOINT = "http://localhost:8000/translate"
-LOCAL_TRANSLATION_PROVIDER = "generic"
-LOCAL_TRANSLATION_API_KEY = ""
-LOCAL_TRANSLATION_SOURCE_LANGUAGE = "English"
+INDICTRANS2_ENDPOINT = "http://127.0.0.1:8000/translate"
+INDICTRANS2_API_KEY = ""
 ```
 
-Then restart ErrorSweep:
+## Test
 
-```bash
-pkill -f streamlit
-python -m streamlit run app.py --server.address=0.0.0.0 --server.port=8503
+```powershell
+curl http://127.0.0.1:8000/health
+.\.venv\Scripts\python.exe test_indictrans2_worker.py
+.\.venv\Scripts\python.exe test_builtin_mt_engines.py
 ```
 
-Open port 8503 and test:
-
-```text
-ErrorSweep Pro → Target language: Telugu → Run Translate + Review
-```
-
-## Keep LibreTranslate too?
-
-Yes. Use LibreTranslate for Spanish/French/German/etc. and IndicTrans2 for Indian languages.
-For now, switch the local secret depending on what you are testing:
-
-### LibreTranslate
-
-```toml
-LOCAL_TRANSLATION_ENDPOINT = "http://localhost:5000"
-LOCAL_TRANSLATION_PROVIDER = "libretranslate"
-LOCAL_TRANSLATION_SOURCE_LANGUAGE = "auto"
-```
-
-### IndicTrans2
-
-```toml
-LOCAL_TRANSLATION_ENDPOINT = "http://localhost:8000/translate"
-LOCAL_TRANSLATION_PROVIDER = "generic"
-LOCAL_TRANSLATION_SOURCE_LANGUAGE = "English"
-```
-
-Later we can add automatic routing in the app:
-
-```text
-Spanish/French/German → LibreTranslate
-Telugu/Hindi/Tamil/etc. → IndicTrans2
-```
-
-## Supported language names for target_language
-
-Common examples:
-
-```text
-Telugu
-Hindi
-Tamil
-Kannada
-Malayalam
-Bengali
-Marathi
-Gujarati
-Punjabi
-Urdu
-Odia
-Assamese
-Sanskrit
-Nepali
-```
-
-## Important
-
-Do not commit `.streamlit/secrets.toml`.
-
-```bash
-echo ".streamlit/secrets.toml" >> .gitignore
-```
+Then open ErrorSweep Pro and expand **Built-in MT engine diagnostics**.

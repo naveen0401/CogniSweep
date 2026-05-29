@@ -30,6 +30,7 @@ Client rules contract:
 from __future__ import annotations
 
 import re
+import logging
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Pattern, Tuple
@@ -37,10 +38,12 @@ from functools import lru_cache
 
 import requests
 
+LOGGER = logging.getLogger(__name__)
 
 try:
     import language_tool_python
-except Exception:
+except Exception as exc:
+    LOGGER.debug("language_tool_python is unavailable: %s", exc)
     language_tool_python = None
 
 # ==========================================================
@@ -71,11 +74,13 @@ KHMER_RE = re.compile(r"[\u1780-\u17FF]")
 MYANMAR_RE = re.compile(r"[\u1000-\u109F]")
 CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 GREEK_RE = re.compile(r"[\u0370-\u03FF]")
+ETHIOPIC_RE = re.compile(r"[\u1200-\u137F]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 
 URL_RE = re.compile(r"https?://[^\s]+|www\.[^\s]+")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 TAG_RE = re.compile(r"<[^>]+>")
+EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?")
 PLACEHOLDER_RE = re.compile(
     r"(\{\{[^{}]+\}\}|\{[^{}]+\}|%\$?\d*[sd]|%[sd]|\$\w+|\b\w+_id\b|<[^>]+>)"
 )
@@ -155,19 +160,27 @@ def infer_language_module(target_language: str, source: str, target: str) -> str
         return "malayalam"
     if "sinhala" in lang or lang == "si" or SINHALA_RE.search(target):
         return "sinhala"
+    if "hausa" in lang or lang.startswith("ha"):
+        return "hausa"
 
     if any(x in lang for x in ["arabic", "urdu", "persian", "farsi"]) or lang in {"ar", "ur", "fa"} or ARABIC_RE.search(target):
         return "arabic"
     if "hebrew" in lang or lang == "he" or HEBREW_RE.search(target):
         return "hebrew"
 
+    if "lao" in lang or lang == "lo":
+        return "lao"
+    if "khmer" in lang or "cambodian" in lang or lang == "km":
+        return "khmer"
+    if "myanmar" in lang or "burmese" in lang or lang == "my":
+        return "myanmar"
     if any(x in lang for x in ["thai"]) or lang == "th" or THAI_RE.search(target):
         return "thai"
-    if "lao" in lang or lang == "lo" or LAO_RE.search(target):
+    if LAO_RE.search(target):
         return "lao"
-    if "khmer" in lang or "cambodian" in lang or lang == "km" or KHMER_RE.search(target):
+    if KHMER_RE.search(target):
         return "khmer"
-    if "myanmar" in lang or "burmese" in lang or lang == "my" or MYANMAR_RE.search(target):
+    if MYANMAR_RE.search(target):
         return "myanmar"
 
     if any(x in lang for x in ["chinese", "japanese", "korean", "cjk", "mandarin", "cantonese"]) or lang in {"zh", "ja", "ko"} or has_cjk(target):
@@ -177,10 +190,15 @@ def infer_language_module(target_language: str, source: str, target: str) -> str
             return "korean"
         return "cjk"
 
+    if "mongolian" in lang or lang == "mn":
+        return "mongolian"
+
     if any(x in lang for x in ["russian", "ukrainian", "bulgarian", "serbian", "macedonian", "cyrillic"]) or lang in {"ru", "uk", "bg", "sr", "mk"} or CYRILLIC_RE.search(target):
         return "cyrillic"
     if "greek" in lang or lang == "el" or GREEK_RE.search(target):
         return "greek"
+    if "amharic" in lang or lang == "am" or ETHIOPIC_RE.search(target):
+        return "amharic"
 
     if "french" in lang or lang.startswith("fr"):
         return "french"
@@ -192,8 +210,30 @@ def infer_language_module(target_language: str, source: str, target: str) -> str
         return "italian"
     if "portuguese" in lang or lang.startswith("pt"):
         return "portuguese"
+    if "dutch" in lang or lang.startswith("nl"):
+        return "dutch"
+    if any(x in lang for x in ["swedish", "norwegian", "danish", "nordic"]) or lang.startswith(("sv", "no", "nb", "nn", "da")):
+        return "nordic"
+    if "polish" in lang or lang.startswith("pl"):
+        return "polish"
+    if "english" in lang or lang.startswith("en") or "uk english" in lang or "us english" in lang:
+        return "english"
     if "turkish" in lang or lang.startswith("tr"):
         return "turkish"
+    if "swahili" in lang or "kiswahili" in lang or lang.startswith("sw"):
+        return "swahili"
+    if "indonesian" in lang or "bahasa indonesia" in lang or lang in {"id", "id-id"}:
+        return "indonesian"
+    if "malay" in lang or "bahasa melayu" in lang or lang in {"ms", "ms-my"}:
+        return "malay"
+    if "tagalog" in lang or "filipino" in lang or lang in {"tl", "fil"}:
+        return "tagalog"
+    if "yoruba" in lang or lang.startswith("yo"):
+        return "yoruba"
+    if "zulu" in lang or "isizulu" in lang or lang.startswith("zu"):
+        return "zulu"
+    if "afrikaans" in lang or lang.startswith("af"):
+        return "afrikaans"
     if "vietnamese" in lang or lang.startswith("vi"):
         return "vietnamese"
 
@@ -219,17 +259,21 @@ def extract_tags(text: str) -> List[str]:
     return TAG_RE.findall(text or "")
 
 
+def extract_emoji(text: str) -> List[str]:
+    return EMOJI_RE.findall(text or "")
+
+
 def extract_skus(text: str) -> List[str]:
     return SKU_RE.findall(text or "")
 
 
 def protected_terms_from_rules(rules: Dict[str, Any]) -> List[str]:
     protected: List[str] = []
-    for item in (rules or {}).get("dnt", [])[:1000]:
+    for item in (rules or {}).get("dnt", []):
         term = normalize_for_qa(item.get("term", ""))
         if term:
             protected.append(term)
-    for item in (rules or {}).get("glossary", [])[:1000]:
+    for item in (rules or {}).get("glossary", []):
         src = normalize_for_qa(item.get("source_term", ""))
         tgt = normalize_for_qa(item.get("target_term", ""))
         if src:
@@ -432,6 +476,98 @@ def rule_invisible_junk(segment, rules, target_language, domain):
             priority=60,
         ))
     return findings
+
+
+@registry.register("global.unicode.zwnj_integrity", "ZWNJ")
+def rule_zwnj_integrity(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    findings: List[QAFinding] = []
+    source_count = source.count(ZWNJ)
+    target_count = target.count(ZWNJ)
+    module = infer_language_module(target_language, source, target)
+    lang = (target_language or "").lower()
+
+    if source_count and target_count < source_count:
+        findings.append(QAFinding(
+            "global.unicode.zwnj.missing_from_source",
+            "ZWNJ",
+            "Major",
+            "High",
+            f"Expected {source_count} Zero Width Non-Joiner character(s), found {target_count}.",
+            "Preserve the source ZWNJ character(s) where the same protected form appears in target.",
+            "Source contains Zero Width Non-Joiner characters that are missing or reduced in target.",
+            rule_source="Global Unicode rules",
+            priority=7,
+        ))
+
+    if target_count:
+        if re.search(rf"(^|[\s\.,;:!?]){ZWNJ}|{ZWNJ}($|[\s\.,;:!?])", target):
+            findings.append(QAFinding(
+                "global.unicode.zwnj.bad_position",
+                "ZWNJ",
+                "Major",
+                "High",
+                "Misplaced Zero Width Non-Joiner",
+                target.replace(f" {ZWNJ}", ZWNJ).replace(f"{ZWNJ} ", ZWNJ),
+                "ZWNJ is adjacent to whitespace, punctuation, or a string boundary. It should sit between characters that must not join.",
+                rule_source="Global Unicode rules",
+                autofix_possible=True,
+                priority=9,
+            ))
+        if module not in {"arabic", "devanagari", "telugu", "bengali", "gurmukhi", "gujarati", "odia", "kannada", "malayalam", "sinhala"} and not source_count:
+            findings.append(QAFinding(
+                "global.unicode.zwnj.unexpected_script",
+                "ZWNJ",
+                "Review",
+                "Medium",
+                "Zero Width Non-Joiner",
+                "Remove the ZWNJ unless the client language rules require it.",
+                "Target contains ZWNJ in a script where ErrorSweep does not normally expect it.",
+                rule_source="Global Unicode rules",
+                priority=62,
+            ))
+
+    if any(name in lang for name in ["persian", "farsi", "fa"]) or lang == "fa":
+        for prefix in ["می", "نمی"]:
+            match = re.search(rf"({re.escape(prefix)})\s+([\u0600-\u06FF]{{2,}})", target)
+            if match:
+                suggestion = target.replace(match.group(0), f"{match.group(1)}{ZWNJ}{match.group(2)}", 1)
+                findings.append(QAFinding(
+                    "persian.zwnj.verb_prefix",
+                    "ZWNJ",
+                    "Minor",
+                    "Medium",
+                    match.group(0),
+                    suggestion,
+                    "Persian verb prefixes commonly use ZWNJ instead of a visible space.",
+                    rule_source="Persian Unicode rules",
+                    autofix_possible=True,
+                    priority=32,
+                ))
+    return findings
+
+
+@registry.register("global.emoji.preserve", "Formatting")
+def rule_emoji_preserve(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    src = extract_emoji(source)
+    if not src:
+        return []
+    tgt = extract_emoji(target)
+    missing = [symbol for symbol in src if symbol not in tgt]
+    if missing:
+        return [QAFinding(
+            "global.emoji.missing_or_changed",
+            "Formatting",
+            "Major",
+            "High",
+            " ".join(missing),
+            "Keep source emoji/icon characters unchanged unless client rules say to remove them.",
+            "Emoji or icon characters from the source are missing or changed in target.",
+            rule_source="Global source-driven formatting",
+            priority=6,
+        )]
+    return []
 
 
 @registry.register("global.spacing.extra_spaces", "Spacing")
@@ -710,7 +846,7 @@ def tm_norm(text: str) -> str:
 def rule_dnt(segment, rules, target_language, domain):
     source, target = _seg_texts(segment)
     findings: List[QAFinding] = []
-    for d in (rules or {}).get("dnt", [])[:1000]:
+    for d in (rules or {}).get("dnt", []):
         term = normalize_for_qa(d.get("term", ""))
         if not term:
             continue
@@ -733,7 +869,7 @@ def rule_dnt(segment, rules, target_language, domain):
 def rule_glossary(segment, rules, target_language, domain):
     source, target = _seg_texts(segment)
     findings: List[QAFinding] = []
-    for g in (rules or {}).get("glossary", [])[:1000]:
+    for g in (rules or {}).get("glossary", []):
         src_term = normalize_for_qa(g.get("source_term", ""))
         tgt_term = normalize_for_qa(g.get("target_term", ""))
         if not src_term or not tgt_term:
@@ -966,6 +1102,759 @@ def rule_telugu_ui_imperative_hint(segment, rules, target_language, domain):
     )]
 
 
+@registry.register("indic.master_rules.punctuation_profile", "Country Standards")
+def rule_master_linguistic_punctuation_profile(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    lang = (target_language or "").lower()
+    findings: List[QAFinding] = []
+    if not target:
+        return findings
+
+    # Hindi/Bengali master profile: sentence-ending danda is expected in formal UI/prose.
+    if (
+        "hindi" in lang
+        or lang in {"hi"}
+        or "bengali" in lang
+        or "bangla" in lang
+        or lang in {"bn"}
+        or "punjabi" in lang
+        or "gurmukhi" in lang
+        or lang in {"pa"}
+        or module == "gurmukhi"
+    ) and target.rstrip().endswith("."):
+        suggestion = target.rstrip()[:-1] + "\u0964"
+        findings.append(QAFinding(
+            "indic.master_rules.danda_expected",
+            "Country Standards",
+            "Minor",
+            "Medium",
+            ".",
+            suggestion,
+            "Master linguistic rules indicate this language normally uses danda/poorna viram for sentence-ending punctuation.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=34,
+        ))
+
+    # These master profiles use the English period, not danda.
+    marathi_lang = "marathi" in lang or lang == "mr"
+    gujarati_lang = "gujarati" in lang or lang == "gu"
+    if (module in {"tamil", "telugu", "kannada", "malayalam", "gujarati"} or marathi_lang or gujarati_lang) and "\u0964" in target:
+        findings.append(QAFinding(
+            "indic.master_rules.danda_unexpected",
+            "Country Standards",
+            "Minor",
+            "High",
+            "\u0964",
+            target.replace("\u0964", "."),
+            "Master linguistic rules indicate this language profile should use the standard period instead of danda.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=31,
+        ))
+    arabic_script_lang = module == "arabic" or any(x in lang for x in ["arabic", "urdu", "persian", "farsi"]) or lang in {"ar", "ur", "fa"}
+    if arabic_script_lang and "," in target:
+        findings.append(QAFinding(
+            "master_rules.arabic_script_comma",
+            "Country Standards",
+            "Minor",
+            "Medium",
+            ",",
+            target.replace(",", "\u060c"),
+            "Master linguistic rules indicate Arabic-script locales should use the Arabic comma in localized text.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=35,
+        ))
+    if arabic_script_lang and "?" in target:
+        findings.append(QAFinding(
+            "master_rules.arabic_script_question_mark",
+            "Country Standards",
+            "Minor",
+            "Medium",
+            "?",
+            target.replace("?", "\u061f"),
+            "Master linguistic rules indicate Arabic-script locales should use the Arabic question mark.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=35,
+        ))
+    if (module == "amharic" or "amharic" in lang or lang == "am") and target.rstrip().endswith("."):
+        findings.append(QAFinding(
+            "master_rules.amharic_ethiopic_full_stop",
+            "Country Standards",
+            "Minor",
+            "Medium",
+            ".",
+            target.rstrip()[:-1] + "\u1362",
+            "Master linguistic rules indicate Amharic should use the Ethiopic full stop.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=35,
+        ))
+    return findings
+
+
+@registry.register("indic.master_rules.formality_profile", "Style")
+def rule_master_linguistic_formality_profile(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    lang = (target_language or "").lower()
+    if not target:
+        return []
+    marathi_lang = "marathi" in lang or lang == "mr"
+    checks: List[Tuple[bool, List[str], str, str]] = [
+        ("hindi" in lang or lang == "hi" or (module == "devanagari" and not marathi_lang), ["\u0924\u0942", "\u0924\u0941\u092e"], "\u0906\u092a", "Hindi UI/business text should use the formal/respectful second person."),
+        (marathi_lang, ["\u0924\u0942"], "\u0924\u0941\u092e\u094d\u0939\u0940", "Marathi professional UI/business text should use a respectful second person unless the client asks for informal tone."),
+        ("bengali" in lang or "bangla" in lang or lang == "bn" or module == "bengali", ["\u09a4\u09c1\u0987", "\u09a4\u09c1\u09ae\u09bf"], "\u0986\u09aa\u09a8\u09bf", "Bengali UI/business text should use the formal second person."),
+        (module == "tamil", ["\u0ba8\u0bc0"], "\u0ba8\u0bc0\u0b99\u0bcd\u0b95\u0bb3\u0bcd", "Tamil UI/business text should use the formal/plural second person."),
+        (module == "telugu", ["\u0c28\u0c41\u0c35\u0c4d\u0c35\u0c41"], "\u0c2e\u0c40\u0c30\u0c41", "Telugu UI/business text should use the formal/plural second person."),
+        (module == "kannada", ["\u0ca8\u0cc0\u0ca8\u0cc1"], "\u0ca8\u0cc0\u0cb5\u0cc1", "Kannada UI/business text should use the formal/plural second person."),
+        (module == "malayalam", ["\u0d28\u0d40"], "\u0d28\u0d3f\u0d19\u0d4d\u0d19\u0d7e", "Malayalam professional software text should use a respectful, slightly formal tone."),
+        (module == "gujarati", ["\u0aa4\u0ac1\u0a82"], "\u0aa4\u0aae\u0ac7", "Gujarati business/SaaS text should use the formal second person unless the client specifies informal tone."),
+        (module == "gurmukhi", ["\u0a24\u0a42\u0a70"], "\u0a24\u0a41\u0a38\u0a40\u0a02", "Punjabi UI/business text should use the respectful second person unless informal tone is requested."),
+        (module == "arabic" and ("urdu" in lang or lang == "ur"), ["\u062a\u0648", "\u062a\u0645"], "\u0622\u067e", "Urdu professional text should use the respectful second person."),
+        (module == "arabic" and ("persian" in lang or "farsi" in lang or lang == "fa"), ["\u062a\u0648"], "\u0634\u0645\u0627", "Persian SaaS/UI text should use the formal second person."),
+        (module == "greek", ["\u0395\u03c3\u03cd", "\u03b5\u03c3\u03cd"], "\u0395\u03c3\u03b5\u03af\u03c2", "Greek SaaS UI usually uses formal/plural address."),
+        (module == "amharic", ["\u12a0\u1295\u1270", "\u12a0\u1295\u127a"], "\u12a5\u122d\u1235\u12ce", "Amharic formal UI should use respectful, gender-neutral address."),
+    ]
+    findings: List[QAFinding] = []
+    for applies, informal_terms, formal_term, explanation in checks:
+        if not applies:
+            continue
+        for term in informal_terms:
+            if term and term in target:
+                findings.append(QAFinding(
+                    "indic.master_rules.formality",
+                    "Style",
+                    "Review",
+                    "Medium",
+                    term,
+                    f"Consider using {formal_term} or the client-approved formal equivalent.",
+                    explanation,
+                    rule_source="linguisticrules.md",
+                    priority=68,
+                ))
+                return findings
+    if module == "french" and re.search(r"\b(tu|toi|ton|ta|tes)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "indic.master_rules.french_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using vous/votre unless the client-approved tone is informal.",
+            "Master linguistic rules indicate SaaS French often needs a formal register.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "german" and re.search(r"\b(du|dich|dir|dein(?:e[msnr]?)?)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "indic.master_rules.german_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using Sie/Ihr unless the client-approved tone is informal.",
+            "Master linguistic rules indicate German SaaS UI often needs formal register.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "italian" and re.search(r"\b(tu|ti|tuo|tua|tuoi|tue)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.italian_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using Lei/Le/Suo unless the client-approved tone is informal.",
+            "Master linguistic rules indicate Italian B2B SaaS often uses formal address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "turkish" and re.search(r"\b(sen|seni|sana|senin)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.turkish_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using Siz/Sizin unless the client-approved tone is informal.",
+            "Master linguistic rules indicate Turkish SaaS UI defaults to formal/plural address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "cyrillic" and ("russian" in lang or lang == "ru") and re.search(r"\b(ты|тебя|тебе|твой|твоя|твои)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.russian_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using Вы/вы unless the client-approved tone is informal.",
+            "Master linguistic rules indicate Russian SaaS/UI usually uses formal address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "cyrillic" and ("ukrainian" in lang or lang == "uk") and re.search(r"\b(ти|тебе|твій|твоя|твої)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.ukrainian_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using Ви/ви unless the client-approved tone is informal.",
+            "Master linguistic rules indicate Ukrainian SaaS/UI defaults to formal address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "afrikaans" and re.search(r"\b(jy|jou|julle)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.afrikaans_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using U or impersonal phrasing for business UI unless informal tone is approved.",
+            "Master linguistic rules indicate Afrikaans business UI often uses formal or impersonal address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "yoruba" and re.search(r"\b(o|iwo)\b|\u00ccw\u1ecd", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.yoruba_honorific",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Consider using \u1eb8/\u1eb8yin or the client-approved respectful address.",
+            "Master linguistic rules indicate Yoruba professional UI should use respectful honorific address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    return findings
+
+
+@registry.register("indic.master_rules.ui_imperative_hint", "Style")
+def rule_master_linguistic_ui_imperative_hint(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if module not in {"tamil", "telugu", "kannada"} or not source or not target:
+        return []
+    command_words = ["save", "delete", "continue", "try again", "upload", "download", "select", "choose", "create", "submit", "login", "sign in"]
+    if not any(word in source.lower() for word in command_words):
+        return []
+    expected_markers = {
+        "tamil": ["\u0bb5\u0bc1\u0bae\u0bcd"],
+        "telugu": ["\u0c02\u0c21\u0c3f", "\u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f"],
+        "kannada": ["\u0cbf\u0cb0\u0cbf", "\u0cae\u0cbe\u0ca1\u0cbf"],
+    }
+    if any(marker in target for marker in expected_markers.get(module, [])):
+        return []
+    return [QAFinding(
+        "indic.master_rules.ui_imperative_hint",
+        "Style",
+        "Review",
+        "Low",
+        target,
+        target,
+        "Master linguistic rules indicate this UI command should be checked for the language's respectful imperative form.",
+        rule_source="linguisticrules.md",
+        priority=86,
+    )]
+
+
+@registry.register("indic.master_rules.text_expansion_hint", "Layout")
+def rule_master_linguistic_text_expansion_hint(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if module not in {"tamil", "telugu", "kannada", "malayalam", "german", "dutch", "nordic"} or not source or not target:
+        return []
+    if domain.lower() not in {"software ui", "subtitling", "gaming", "auto-detect", "auto detect", "general"}:
+        return []
+    expansion_limit = 1.45 if module in {"german", "dutch", "nordic"} else 1.65
+    if len(target) > max(24, int(len(source) * expansion_limit)):
+        return [QAFinding(
+            "indic.master_rules.length_expansion",
+            "Layout",
+            "Review",
+            "Medium",
+            target[:120],
+            "Check button/menu/subtitle truncation in context.",
+            "Master linguistic rules note significant text expansion or compound-word truncation risk for this language profile.",
+            rule_source="linguisticrules.md",
+            priority=72,
+        )]
+    return []
+
+
+@registry.register("master_rules.european_punctuation", "Formatting")
+def rule_master_linguistic_european_punctuation(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    lang = (target_language or "").lower()
+    if not target:
+        return []
+    findings: List[QAFinding] = []
+    if module == "french" and not any(x in lang for x in ["fr-ca", "canadian"]):
+        if re.search(r"(?<![\s\u00a0])[:;!?]", target):
+            suggestion = re.sub(r"(?<![\s\u00a0])([:;!?])", "\u00a0\\1", target)
+            findings.append(QAFinding(
+                "master_rules.french_nbsp_before_punctuation",
+                "Formatting",
+                "Minor",
+                "Medium",
+                target,
+                suggestion,
+                "Master linguistic rules indicate European French requires a non-breaking space before : ; ! and ?.",
+                rule_source="linguisticrules.md",
+                autofix_possible=True,
+                priority=36,
+            ))
+    if module == "greek" and "?" in target:
+        findings.append(QAFinding(
+            "master_rules.greek_question_mark",
+            "Punctuation",
+            "Major",
+            "High",
+            "?",
+            target.replace("?", ";"),
+            "Master linguistic rules indicate Greek questions use the semicolon-style question mark instead of the English question mark.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=20,
+        ))
+    return findings
+
+
+@registry.register("master_rules.locale_spelling", "Spelling")
+def rule_master_linguistic_locale_spelling(segment, rules, target_language, domain):
+    _, target = _seg_texts(segment)
+    lang = (target_language or "").lower().replace("_", "-")
+    if not target:
+        return []
+    uk_requested = "uk english" in lang or "english uk" in lang or "british" in lang or "en-gb" in lang or "en-uk" in lang
+    us_requested = "us english" in lang or "english us" in lang or "american" in lang or "en-us" in lang
+    if not (uk_requested or us_requested):
+        return []
+    pairs = {
+        "color": "colour",
+        "favorite": "favourite",
+        "center": "centre",
+        "customize": "customise",
+        "customized": "customised",
+        "organization": "organisation",
+        "organize": "organise",
+        "analyze": "analyse",
+        "license": "licence",
+    }
+    if us_requested:
+        pairs = {v: k for k, v in pairs.items()}
+    for wrong, preferred in pairs.items():
+        pattern = re.compile(rf"\b{re.escape(wrong)}\b", flags=re.IGNORECASE)
+        if pattern.search(target):
+            suggestion = pattern.sub(lambda m: preferred.capitalize() if m.group(0)[0].isupper() else preferred, target)
+            return [QAFinding(
+                "master_rules.english_locale_spelling",
+                "Spelling",
+                "Minor",
+                "Medium",
+                wrong,
+                suggestion,
+                "Master linguistic rules indicate English locale spelling should match the selected UK/US variant.",
+                rule_source="linguisticrules.md",
+                autofix_possible=True,
+                priority=42,
+            )]
+    return []
+
+
+@registry.register("master_rules.malayalam_chillu_encoding", "Unicode Hygiene")
+def rule_master_linguistic_malayalam_chillu_encoding(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    if infer_language_module(target_language, source, target) != "malayalam" or not target:
+        return []
+    if ZWJ in target:
+        return [QAFinding(
+            "master_rules.malayalam_legacy_chillu_zwj",
+            "Unicode Hygiene",
+            "Review",
+            "Medium",
+            "ZWJ",
+            "Verify whether this should be a modern atomic Malayalam chillu character.",
+            "Master linguistic rules note that legacy Malayalam chillu forms used ZWJ and can cause rendering issues.",
+            rule_source="linguisticrules.md",
+            priority=58,
+        )]
+    return []
+
+
+@registry.register("master_rules.russian_ukrainian_apostrophe", "Typography")
+def rule_master_linguistic_cyrillic_apostrophe(segment, rules, target_language, domain):
+    _, target = _seg_texts(segment)
+    lang = (target_language or "").lower()
+    if not target:
+        return []
+    if ("ukrainian" in lang or lang == "uk") and ("\u2019" in target or "\u2018" in target):
+        return [QAFinding(
+            "master_rules.ukrainian_apostrophe",
+            "Typography",
+            "Minor",
+            "Medium",
+            "curly apostrophe",
+            target.replace("\u2019", "\u02bc").replace("\u2018", "\u02bc"),
+            "Master linguistic rules indicate Ukrainian should use a Ukrainian apostrophe or straight apostrophe, not curly English quotes.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=45,
+        )]
+    return []
+
+
+@registry.register("master_rules.cjk_punctuation", "Punctuation")
+def rule_master_linguistic_cjk_punctuation(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if not target or module not in {"cjk", "japanese"}:
+        return []
+    if not re.search(r"[\u4E00-\u9FFF\u3040-\u30FF]", target):
+        return []
+    if not re.search(r"[.,!?;:]", target):
+        return []
+    if module == "japanese":
+        table = str.maketrans({".": "\u3002", ",": "\u3001", "!": "\uff01", "?": "\uff1f", ";": "\uff1b", ":": "\uff1a"})
+        explanation = "Master linguistic rules indicate Japanese should use ideographic/full-width punctuation in localized text."
+    else:
+        table = str.maketrans({".": "\u3002", ",": "\uff0c", "!": "\uff01", "?": "\uff1f", ";": "\uff1b", ":": "\uff1a"})
+        explanation = "Master linguistic rules indicate Chinese should use full-width punctuation in localized text."
+    return [QAFinding(
+        "master_rules.cjk_fullwidth_punctuation",
+        "Punctuation",
+        "Minor",
+        "High",
+        "ASCII punctuation",
+        target.translate(table),
+        explanation,
+        rule_source="linguisticrules.md",
+        autofix_possible=True,
+        priority=24,
+    )]
+
+
+@registry.register("master_rules.east_asian_register", "Style")
+def rule_master_linguistic_east_asian_register(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if not target:
+        return []
+    if module == "cjk" and "\u4f60" in target:
+        return [QAFinding(
+            "master_rules.chinese_formality",
+            "Style",
+            "Review",
+            "Medium",
+            "\u4f60",
+            "Consider using \u60a8 if the client requires formal/B2B address.",
+            "Master linguistic rules note Chinese B2B/legal UI may require formal/respectful address.",
+            rule_source="linguisticrules.md",
+            priority=70,
+        )]
+    if module == "korean" and "\ub2f9\uc2e0" in target:
+        return [QAFinding(
+            "master_rules.korean_direct_you",
+            "Style",
+            "Review",
+            "Medium",
+            "\ub2f9\uc2e0",
+            "Omit the direct second-person pronoun or use the client-approved polite phrasing.",
+            "Master linguistic rules note direct 'you' can sound rude in professional Korean UI.",
+            rule_source="linguisticrules.md",
+            priority=70,
+        )]
+    return []
+
+
+@registry.register("master_rules.se_asia_punctuation", "Punctuation")
+def rule_master_linguistic_se_asia_punctuation(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if not target:
+        return []
+    if module == "myanmar" and "." in target:
+        return [QAFinding(
+            "master_rules.myanmar_full_stop",
+            "Punctuation",
+            "Minor",
+            "Medium",
+            ".",
+            target.replace(".", "\u104b"),
+            "Master linguistic rules indicate Burmese/Myanmar should use the native full stop.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=32,
+        )]
+    if module == "myanmar" and "," in target:
+        return [QAFinding(
+            "master_rules.myanmar_comma",
+            "Punctuation",
+            "Minor",
+            "Medium",
+            ",",
+            target.replace(",", "\u104a"),
+            "Master linguistic rules indicate Burmese/Myanmar should use the native comma.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=33,
+        )]
+    if module == "khmer" and "." in target:
+        return [QAFinding(
+            "master_rules.khmer_khan_full_stop",
+            "Punctuation",
+            "Minor",
+            "Medium",
+            ".",
+            target.replace(".", "\u17d4"),
+            "Master linguistic rules indicate Khmer should use khan as the full stop.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=32,
+        )]
+    return []
+
+
+@registry.register("master_rules.se_asia_locale_hints", "Locale Convention")
+def rule_master_linguistic_se_asia_locale_hints(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    if not target:
+        return []
+    if module == "thai" and ("\u0e04\u0e23\u0e31\u0e1a" in target or "\u0e04\u0e48\u0e30" in target):
+        return [QAFinding(
+            "master_rules.thai_gendered_particle",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Remove gendered politeness particles in neutral software UI unless client rules require them.",
+            "Master linguistic rules indicate Thai SaaS UI usually omits gendered particles.",
+            rule_source="linguisticrules.md",
+            priority=71,
+        )]
+    if module == "lao" and THAI_RE.search(target):
+        return [QAFinding(
+            "master_rules.lao_thai_script_contamination",
+            "Mixed Script",
+            "Major",
+            "Medium",
+            "Thai script",
+            "Replace Thai-script text with native Lao orthography unless client rules explicitly allow Thai.",
+            "Master linguistic rules warn against Thai contamination in Lao localization.",
+            rule_source="linguisticrules.md",
+            priority=23,
+        )]
+    return []
+
+
+@registry.register("master_rules.indonesian_malay", "Style")
+def rule_master_linguistic_indonesian_malay(segment, rules, target_language, domain):
+    _, target = _seg_texts(segment)
+    lang = (target_language or "").lower()
+    module = infer_language_module(target_language, "", target)
+    if not target:
+        return []
+    if module == "indonesian" and re.search(r"\bkamu\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.indonesian_formality",
+            "Style",
+            "Review",
+            "Medium",
+            "kamu",
+            "Consider using Anda for B2B/SaaS UI unless informal tone is approved.",
+            "Master linguistic rules indicate Indonesian B2B/SaaS UI should use formal Anda.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "indonesian" and re.search(r"\banda\b", target):
+        return [QAFinding(
+            "master_rules.indonesian_anda_capitalization",
+            "Capitalization",
+            "Minor",
+            "High",
+            "anda",
+            re.sub(r"\banda\b", "Anda", target),
+            "Master linguistic rules indicate Anda should be capitalized.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=41,
+        )]
+    if module == "indonesian" and re.search(r"\bRp\s+\d", target):
+        return [QAFinding(
+            "master_rules.indonesian_rp_spacing",
+            "Formatting",
+            "Minor",
+            "High",
+            "Rp space",
+            re.sub(r"\bRp\s+(\d)", r"Rp\1", target),
+            "Master linguistic rules indicate Indonesian Rp currency has no space before the amount.",
+            rule_source="linguisticrules.md",
+            autofix_possible=True,
+            priority=40,
+        )]
+    if module == "malay" and re.search(r"\bawak\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.malay_formality",
+            "Style",
+            "Review",
+            "Medium",
+            "awak",
+            "Consider using Anda for SaaS UI unless informal tone is approved.",
+            "Master linguistic rules indicate Malay SaaS UI should use formal Anda.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "malay" and re.search(r"\b(unduh|unggah|kata sandi|sandi)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.malay_indonesian_contamination",
+            "Terminology",
+            "Major",
+            "Medium",
+            target,
+            "Use Malay-specific SaaS terminology such as muat turun, muat naik, and kata laluan where applicable.",
+            "Master linguistic rules warn against Indonesian terminology contamination in Malay.",
+            rule_source="linguisticrules.md",
+            priority=25,
+        )]
+    if module == "tagalog" and re.search(r"\b(pook[- ]?sapot|sulatroniko)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.tagalog_overlocalization",
+            "Terminology",
+            "Review",
+            "Medium",
+            target,
+            "Prefer modern Filipino/Taglish tech terminology unless the client requires pure Tagalog.",
+            "Master linguistic rules warn against archaic over-localized Tagalog tech terms.",
+            rule_source="linguisticrules.md",
+            priority=76,
+        )]
+    return []
+
+
+@registry.register("master_rules.remaining_language_profiles", "Style")
+def rule_master_linguistic_remaining_language_profiles(segment, rules, target_language, domain):
+    source, target = _seg_texts(segment)
+    module = infer_language_module(target_language, source, target)
+    lang = (target_language or "").lower().replace("_", "-")
+    if not target:
+        return []
+    if module == "portuguese":
+        if re.search(r"\btu\b", target, flags=re.IGNORECASE):
+            return [QAFinding(
+                "master_rules.portuguese_formality",
+                "Style",
+                "Review",
+                "Medium",
+                "tu",
+                "Verify Portuguese locale and client tone. SaaS UI often uses voce/third-person phrasing rather than informal tu.",
+                "Master linguistic rules note Portuguese formality differs by PT-PT/PT-BR locale.",
+                rule_source="linguisticrules.md",
+                priority=69,
+            )]
+        if any(x in lang for x in ["pt-pt", "portugal"]) and re.search(r"\b\w+ndo\b", target, flags=re.IGNORECASE):
+            return [QAFinding(
+                "master_rules.portuguese_ptpt_gerund",
+                "Locale Convention",
+                "Review",
+                "Medium",
+                target,
+                "Verify if PT-PT should use 'a' + infinitive instead of Brazilian-style gerund phrasing.",
+                "Master linguistic rules flag gerund usage as a PT-PT vs PT-BR localization tell.",
+                rule_source="linguisticrules.md",
+                priority=73,
+            )]
+        if any(x in lang for x in ["pt-br", "brazil", "brasil"]) and re.search(r"\b(ecr\u00e3|ficheiro)\b", target, flags=re.IGNORECASE):
+            return [QAFinding(
+                "master_rules.portuguese_brazil_vocabulary",
+                "Terminology",
+                "Review",
+                "Medium",
+                target,
+                "Verify PT-BR vocabulary. Common SaaS terms usually prefer tela/arquivo over ecrã/ficheiro.",
+                "Master linguistic rules warn against mixing Portugal and Brazil Portuguese vocabulary.",
+                rule_source="linguisticrules.md",
+                priority=74,
+            )]
+        if any(x in lang for x in ["pt-pt", "portugal"]) and re.search(r"\b(tela|arquivo)\b", target, flags=re.IGNORECASE):
+            return [QAFinding(
+                "master_rules.portuguese_portugal_vocabulary",
+                "Terminology",
+                "Review",
+                "Medium",
+                target,
+                "Verify PT-PT vocabulary. Common SaaS terms often prefer ecrã/ficheiro where applicable.",
+                "Master linguistic rules warn against mixing Portugal and Brazil Portuguese vocabulary.",
+                rule_source="linguisticrules.md",
+                priority=74,
+            )]
+    if module == "polish" and re.search(r"\b(Pan|Pani|Pa\u0144stwo)\b", target):
+        return [QAFinding(
+            "master_rules.polish_gendered_formality",
+            "Style",
+            "Review",
+            "Medium",
+            target,
+            "Verify whether an impersonal infinitive or informal UI construction is preferable.",
+            "Master linguistic rules note Polish UI often avoids gendered formal Pan/Pani constructions.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    if module == "swahili" and re.search(r"\bsaa\s+(moja|mbili|tatu|nne|tano|sita|saba|nane|tisa|kumi)\b", target, flags=re.IGNORECASE):
+        return [QAFinding(
+            "master_rules.swahili_time_expression",
+            "Locale Convention",
+            "Review",
+            "Medium",
+            target,
+            "Verify whether the client wants cultural Swahili time or standard 24-hour UI time.",
+            "Master linguistic rules note Swahili time can differ from standard software time conventions.",
+            rule_source="linguisticrules.md",
+            priority=77,
+        )]
+    if module == "hausa" and ARABIC_RE.search(target):
+        return [QAFinding(
+            "master_rules.hausa_ajami_script",
+            "Mixed Script",
+            "Review",
+            "Medium",
+            "Arabic/Ajami script",
+            "Use Latin Boko script for standard Hausa tech UI unless the client explicitly requests Ajami.",
+            "Master linguistic rules indicate standard Hausa software localization uses Latin-based Boko script.",
+            rule_source="linguisticrules.md",
+            priority=57,
+        )]
+    return []
+
+
+@registry.register("master_rules.mongolian_formality", "Style")
+def rule_master_linguistic_mongolian_formality(segment, rules, target_language, domain):
+    _, target = _seg_texts(segment)
+    if infer_language_module(target_language, "", target) != "mongolian" or not target:
+        return []
+    if "\u0427\u0438" in target or "\u0447\u0438" in target:
+        return [QAFinding(
+            "master_rules.mongolian_formality",
+            "Style",
+            "Review",
+            "Medium",
+            "\u0427\u0438",
+            "Consider using \u0422\u0430 for SaaS/UI address unless informal tone is approved.",
+            "Master linguistic rules indicate Mongolian UI uses formal/plural address.",
+            rule_source="linguisticrules.md",
+            priority=69,
+        )]
+    return []
+
+
 
 
 # ==========================================================
@@ -1170,6 +2059,43 @@ def rule_indic_danda_source_driven(segment, rules, target_language, domain):
     module = infer_language_module(target_language, source, target)
     if module not in INDIC_MODULES:
         return []
+    lang = (target_language or "").lower()
+    if (
+        source.strip().endswith(".")
+        and target
+        and not target.strip().endswith((".", "\u0964", "\u0965"))
+        and (module in {"gujarati", "telugu", "tamil", "kannada", "malayalam", "sinhala"} or "marathi" in lang or lang == "mr")
+    ):
+        return [QAFinding(
+            "indic.danda.source_driven",
+            "Punctuation",
+            "Minor",
+            "Medium",
+            "missing sentence ending",
+            target.rstrip() + ".",
+            "Source ends with a period. Target should preserve equivalent sentence-ending punctuation according to locale/client style.",
+            rule_source="Indic punctuation rules",
+            autofix_possible=True,
+            priority=34,
+        )]
+    if (
+        source.strip().endswith(".")
+        and target
+        and not target.strip().endswith((".", "\u0964", "\u0965"))
+        and (module in {"bengali", "gurmukhi"} or "hindi" in lang or lang == "hi")
+    ):
+        return [QAFinding(
+            "indic.danda.source_driven",
+            "Punctuation",
+            "Minor",
+            "Medium",
+            "missing sentence ending",
+            target.rstrip() + "\u0964",
+            "Source ends with a period. Target should preserve equivalent sentence-ending punctuation according to locale/client style.",
+            rule_source="Indic punctuation rules",
+            autofix_possible=True,
+            priority=34,
+        )]
     # Only a source-driven hint; if source has period and target is Indic script, danda may be preferred by some clients.
     if source.strip().endswith(".") and target and not target.strip().endswith((".", "।", "॥")):
         preferred = "." if module in {"telugu", "tamil", "kannada", "malayalam", "sinhala"} else "।"
@@ -1459,7 +2385,18 @@ BUILTIN_CORRECTIONS = {
 }
 
 
-def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, str]]:
+def _compile_correction_pattern(wrong: str) -> Optional[Pattern[str]]:
+    wrong = normalize_for_qa(wrong)
+    if not wrong:
+        return None
+
+    # For Latin words, use word boundaries to avoid changing inside larger words.
+    if re.fullmatch(r"[A-Za-z][A-Za-z'-]*", wrong):
+        return re.compile(rf"\b{re.escape(wrong)}\b", re.IGNORECASE)
+    return re.compile(re.escape(wrong))
+
+
+def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract client correction dictionary entries from Rules ZIP chunks.
 
     Supported high-precision formats inside txt/csv/docx/xlsx rule files:
@@ -1475,19 +2412,23 @@ def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, str]
     corrections: List[Dict[str, str]] = []
 
     # Also support explicit correction arrays if future parser adds them.
-    for item in (rules or {}).get("corrections", [])[:5000]:
+    for item in (rules or {}).get("corrections", []):
         wrong = normalize_for_qa(item.get("wrong", ""))
         correct = normalize_for_qa(item.get("correct", ""))
         if wrong and correct:
+            pattern = _compile_correction_pattern(wrong)
+            if pattern is None:
+                continue
             corrections.append({
                 "wrong": wrong,
                 "correct": correct,
                 "category": item.get("error_type", item.get("category", "Client Rule")),
                 "severity": item.get("severity", "Major"),
                 "source": item.get("source", "Client Rules"),
+                "pattern": pattern,
             })
 
-    for chunk in (rules or {}).get("chunks", [])[:200]:
+    for chunk in (rules or {}).get("chunks", []):
         source_name = chunk.get("source", "Client Rules")
         for raw_line in str(chunk.get("text", "")).splitlines():
             line = normalize_for_qa(raw_line)
@@ -1537,12 +2478,16 @@ def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, str]
             if wrong == correct:
                 continue
 
+            pattern = _compile_correction_pattern(wrong)
+            if pattern is None:
+                continue
             corrections.append({
                 "wrong": wrong,
                 "correct": correct,
                 "category": category or "Client Rule",
                 "severity": severity if severity in {"Critical", "Major", "Minor", "Review"} else "Major",
                 "source": source_name,
+                "pattern": pattern,
             })
 
     # Dedupe
@@ -1554,18 +2499,16 @@ def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, str]
             continue
         seen.add(key)
         deduped.append(item)
-    return deduped[:5000]
+    return deduped
 
 
-def _apply_correction_to_text(text: str, wrong: str, correct: str) -> Tuple[str, int]:
-    if not wrong:
+def _apply_correction_to_text(text: str, wrong: str, correct: str, pattern: Optional[Pattern[str]] = None) -> Tuple[str, int]:
+    if not wrong and pattern is None:
         return text, 0
 
-    # For Latin words, use word boundaries to avoid changing inside larger words.
-    if re.fullmatch(r"[A-Za-z][A-Za-z'-]*", wrong):
-        pattern = re.compile(rf"\b{re.escape(wrong)}\b", re.IGNORECASE)
-    else:
-        pattern = re.compile(re.escape(wrong))
+    pattern = pattern or _compile_correction_pattern(wrong)
+    if pattern is None:
+        return text, 0
 
     return pattern.subn(correct, text)
 
@@ -1583,12 +2526,12 @@ def rule_offline_correction_dictionary(segment, rules, target_language, domain):
     dictionary_entries.extend(_parse_client_correction_lines(rules))
 
     findings: List[QAFinding] = []
-    for entry in dictionary_entries[:6000]:
+    for entry in dictionary_entries:
         wrong = normalize_for_qa(entry.get("wrong", ""))
         correct = normalize_for_qa(entry.get("correct", ""))
         if not wrong or not correct:
             continue
-        new_text, count = _apply_correction_to_text(target, wrong, correct)
+        new_text, count = _apply_correction_to_text(target, wrong, correct, entry.get("pattern"))
         if count <= 0:
             continue
         category = entry.get("category", "Spelling") or "Spelling"
@@ -1679,7 +2622,7 @@ def rule_forbidden_target_terms(segment, rules, target_language, domain):
             continue
         if any(k in category for k in ["forbidden", "avoid", "terminology", "style", "client rule"]):
             # If target contains forbidden term, flag it.
-            pattern = re.compile(re.escape(wrong), re.IGNORECASE if re.fullmatch(r"[A-Za-z][A-Za-z0-9' -]*", wrong) else 0)
+            pattern = item.get("pattern") or re.compile(re.escape(wrong), re.IGNORECASE if re.fullmatch(r"[A-Za-z][A-Za-z0-9' -]*", wrong) else 0)
             if pattern.search(target):
                 findings.append(QAFinding(
                     "global.terminology.forbidden_target_terms",
@@ -1708,7 +2651,7 @@ def rule_client_grammar_patterns(segment, rules, target_language, domain):
         correct = normalize_for_qa(item.get("correct", ""))
         if not wrong or not correct:
             continue
-        new_text, count = _apply_correction_to_text(target, wrong, correct)
+        new_text, count = _apply_correction_to_text(target, wrong, correct, item.get("pattern"))
         if count > 0:
             findings.append(QAFinding(
                 "global.grammar.client_correction_patterns",
@@ -1737,7 +2680,7 @@ def rule_client_style_patterns(segment, rules, target_language, domain):
         correct = normalize_for_qa(item.get("correct", ""))
         if not wrong or not correct:
             continue
-        new_text, count = _apply_correction_to_text(target, wrong, correct)
+        new_text, count = _apply_correction_to_text(target, wrong, correct, item.get("pattern"))
         if count > 0:
             findings.append(QAFinding(
                 "global.style.client_correction_patterns",
@@ -1828,11 +2771,11 @@ def _language_tool_code(target_language: str, source: str, target: str) -> Optio
 
 
 @lru_cache(maxsize=24)
-def _get_languagetool(code: str, mode: str = "public"):
+def _get_languagetool(code: str, mode: str = "local"):
     """Create a LanguageTool checker.
 
-    mode = public: uses LanguageTool public service. No API key, but text is sent externally.
     mode = local: attempts local/private LanguageTool. Better privacy, but needs Java/server support.
+    mode = public: uses LanguageTool public service. No API key, but text is sent externally.
     """
     if language_tool_python is None:
         return None
@@ -1840,7 +2783,8 @@ def _get_languagetool(code: str, mode: str = "public"):
         if mode == "local":
             return language_tool_python.LanguageTool(code)
         return language_tool_python.LanguageToolPublicAPI(code)
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("Unable to initialize LanguageTool %s in %s mode: %s", code, mode, exc)
         return None
 
 
@@ -1879,7 +2823,8 @@ def _check_languagetool_public_http(text: str, code: str) -> List[Dict[str, Any]
             return []
         data = res.json()
         return data.get("matches", []) if isinstance(data, dict) else []
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("LanguageTool public HTTP check failed for %s: %s", code, exc)
         return []
 
 
@@ -1887,7 +2832,8 @@ def _match_dict_to_finding(m: Dict[str, Any], target: str, code: str) -> Optiona
     try:
         start = int(m.get("offset", 0) or 0)
         length = int(m.get("length", 0) or 0)
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("Invalid LanguageTool match offsets: %s", exc)
         return None
     if length <= 0:
         return None
@@ -1950,9 +2896,9 @@ def rule_languagetool_global(segment, rules, target_language, domain):
     if not code:
         return []
 
-    mode = str(rules.get("_languagetool_mode", "public")).lower()
-    if mode not in {"public", "local"}:
-        mode = "public"
+    mode = str(rules.get("_languagetool_mode", "local")).lower()
+    if mode not in {"public", "public-http", "http", "local"}:
+        mode = "local"
 
     findings: List[QAFinding] = []
 
@@ -1972,7 +2918,8 @@ def rule_languagetool_global(segment, rules, target_language, domain):
 
     try:
         matches = tool.check(target)
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("Local LanguageTool check failed for %s: %s", code, exc)
         return []
 
     for m in matches[:12]:
@@ -2303,7 +3250,7 @@ def deterministic_checks_v2(
     domain: str = "Auto-detect",
     enable_zwnj: bool = True,
     enable_language_tool: bool = False,
-    language_tool_mode: str = "public",
+    language_tool_mode: str = "local",
     language_tool_max_chars: int = 1200,
 ) -> List[Dict[str, Any]]:
     """Drop-in replacement for app.py deterministic_checks."""

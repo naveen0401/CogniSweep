@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import hmac
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
@@ -113,7 +114,7 @@ def verify_api_key(authorization: Optional[str], request_key: Optional[str]) -> 
     if authorization and authorization.lower().startswith("bearer "):
         header_key = authorization.split(" ", 1)[1].strip()
     supplied = (request_key or header_key or "").strip()
-    if supplied != SERVER_API_KEY:
+    if not hmac.compare_digest(supplied, SERVER_API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized OPUS-MT request.")
 
 
@@ -148,7 +149,12 @@ def restore_text(text: str, mapping: Dict[str, str]) -> str:
     return restored.strip()
 
 
-@lru_cache(maxsize=8)
+def clear_cuda_cache() -> None:
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+
+
+@lru_cache(maxsize=int(os.getenv("OPUS_MT_MODEL_CACHE_SIZE", "2")))
 def load_pair_model(src_code: str, tgt_code: str):
     model_name = SUPPORTED_PAIRS.get((src_code, tgt_code))
     if not model_name:
@@ -203,6 +209,7 @@ def translate_texts(texts: List[str], src_code: str, tgt_code: str) -> Tuple[Lis
         decoded = tokenizer.batch_decode(generated, skip_special_tokens=True)
         for text, mapping in zip(decoded, mappings):
             outputs.append(restore_text(text, mapping))
+        clear_cuda_cache()
 
     return outputs, model_name
 

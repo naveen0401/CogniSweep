@@ -28,8 +28,12 @@ Supabase Dashboard -> SQL Editor
 Run the contents of:
 
 ```text
-supabase_errorsweep_schema.sql
+supabase_v42_release_schema.sql
 ```
+
+This creates persistent tables for editor jobs, usage events, users,
+workspaces, projects, jobs, payments, and audit logs. If Supabase secrets are
+not configured, ErrorSweep uses the safe local JSON fallback automatically.
 
 ## 3. Streamlit Secrets
 
@@ -46,7 +50,39 @@ SUPABASE_SERVICE_ROLE_KEY = "your_supabase_service_role_key"
 
 Never put these keys in GitHub.
 
-## 4. Credit model
+## 4. No-key Machine Translation
+
+ErrorSweep can provide MT drafts without user API keys through self-hosted
+engines:
+
+```text
+MADLAD-400 -> broad global language coverage
+IndicTrans2 -> Indian languages when configured
+OPUS-MT -> lightweight fallback for tested European pairs
+```
+
+For MADLAD-400 setup, see:
+
+```text
+README_madlad400_endpoint.md
+```
+
+To start local workers on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1
+powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1 -WithMadlad -WithIndicTrans2
+```
+
+Then open ErrorSweep Pro and expand **Built-in MT engine diagnostics**.
+
+You can also run:
+
+```powershell
+.\.venv\Scripts\python.exe test_builtin_mt_engines.py
+```
+
+## 5. Credit model
 
 QA run:
 
@@ -63,7 +99,7 @@ Pro translation + review:
 +1 credit if Rules ZIP is used
 ```
 
-## 5. Upgrade user plan manually for now
+## 6. Upgrade user plan manually for now
 
 In Supabase Table Editor -> profiles, update:
 

@@ -2,9 +2,9 @@
 managed_ai_router.py — ErrorSweep Managed AI safe fallback router
 
 What this file does:
-1. If the user added their own OpenAI API key, use that key.
+1. If the user added their own API key, use that key with the selected provider/base URL.
 2. If Managed AI/vLLM is explicitly enabled and reachable, use it.
-3. If Managed AI fails or is not configured, fall back to the platform OpenAI key.
+3. If Managed AI fails or is not configured, fall back to the platform OpenAI key when available.
 
 This prevents the app from showing 59/59 untranslated rows when a placeholder or dead
 Managed AI endpoint is configured.
@@ -13,10 +13,13 @@ Managed AI endpoint is configured.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
+import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 try:
     import streamlit as st
@@ -28,7 +31,7 @@ from openai import OpenAI
 
 @dataclass
 class AIRoute:
-    provider: str              # openai_byok | managed_vllm | openai_platform
+    provider: str              # user_api | managed_vllm | openai_platform
     model: str
     api_key: str
     base_url: Optional[str]
@@ -82,6 +85,56 @@ def _is_placeholder_url(url: str) -> bool:
     )
 
 
+def _blocked_host_reason(hostname: str) -> str:
+    host = (hostname or "").strip().strip("[]").lower()
+    if not host:
+        return "missing host"
+    if host in {"localhost", "ip6-localhost", "ip6-loopback"}:
+        return "localhost is not allowed"
+    if host.endswith((".localhost", ".local", ".internal", ".lan", ".home")):
+        return "local/internal hostnames are not allowed"
+    if host in {"metadata.google.internal"}:
+        return "cloud metadata hosts are not allowed"
+
+    try:
+        ip = ipaddress.ip_address(host)
+        candidates = [ip]
+    except ValueError:
+        candidates = []
+        try:
+            for info in socket.getaddrinfo(host, None):
+                candidates.append(ipaddress.ip_address(info[4][0]))
+        except Exception:
+            candidates = []
+
+    for ip in candidates:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return f"blocked internal address {ip}"
+        if str(ip) == "169.254.169.254":
+            return "cloud metadata address is not allowed"
+    return ""
+
+
+def _validate_base_url(url: str) -> str:
+    normalized = _normalize_base_url(url)
+    if not normalized or _is_placeholder_url(normalized):
+        return ""
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"https", "http"}:
+        raise RuntimeError("BYO AI base URL must use http or https.")
+    reason = _blocked_host_reason(parsed.hostname or "")
+    if reason:
+        raise RuntimeError(f"BYO AI base URL is not allowed: {reason}.")
+    return normalized
+
+
 def _openai_default_model() -> str:
     return _secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", _secret("OPENAI_MODEL", "gpt-4o-mini"))
 
@@ -103,29 +156,37 @@ def platform_openai_route() -> Optional[AIRoute]:
     )
 
 
+def _user_provider_label() -> str:
+    return _session_value("byo_ai_provider", "Custom OpenAI-compatible").strip() or "Custom OpenAI-compatible"
+
+
 def select_ai_route(user_openai_key: str = "", purpose: str = "translate") -> AIRoute:
     """Choose the first route to try.
 
     Safe default:
-    - BYO user key always wins.
+    - BYO user key always wins. It can point to OpenAI or any OpenAI-compatible chat-completions API.
     - Managed AI/vLLM is used only when ERRORSWEEP_MANAGED_AI_ENABLED=true
       and the URL is not a placeholder.
     - Otherwise use platform OPENAI_API_KEY.
     """
     user_key = (user_openai_key or _session_value("byo_openai_api_key", "")).strip()
     if user_key:
+        base_url = _validate_base_url(_session_value("byo_ai_base_url", ""))
         return AIRoute(
-            provider="openai_byok",
+            provider=f"user_api:{_user_provider_label()}",
             model=_session_value("byo_openai_model", _openai_default_model()),
             api_key=user_key,
-            base_url=None,
+            base_url=base_url or None,
             managed=False,
         )
 
     managed_enabled = _as_bool(_secret("ERRORSWEEP_MANAGED_AI_ENABLED", "false"), default=False)
-    managed_base_url = _normalize_base_url(_secret("ERRORSWEEP_MANAGED_AI_BASE_URL", ""))
+    try:
+        managed_base_url = _validate_base_url(_secret("ERRORSWEEP_MANAGED_AI_BASE_URL", ""))
+    except RuntimeError:
+        managed_base_url = ""
 
-    if managed_enabled and not _is_placeholder_url(managed_base_url):
+    if managed_enabled and managed_base_url:
         return AIRoute(
             provider="managed_vllm",
             model=_managed_model(),
@@ -269,4 +330,3 @@ if __name__ == "__main__":
     print("Provider:", selected.provider)
     print("Model:", selected.model)
     print("Base URL:", selected.base_url)
-

@@ -1,7 +1,8 @@
 """
-ErrorSweep v44 built-in translation router.
+ErrorSweep built-in translation router.
 
 Commercial-safe self-hosted MT route:
+- MADLAD-400 endpoint for broad global language coverage
 - IndicTrans2 endpoint for Indian languages
 - OPUS-MT endpoint for selected non-Indian/global pairs
 - NLLB removed
@@ -12,17 +13,27 @@ The app calls translate_batch(...) from this module. Keep this public API stable
 from __future__ import annotations
 
 import os
+import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+import requests
+
+LOGGER = logging.getLogger(__name__)
 
 try:
     import streamlit as st
-except Exception:
+except Exception as exc:
+    LOGGER.debug("Streamlit is unavailable in translation router context: %s", exc)
     st = None
 
 from selfhosted_mt_clients import (
     TranslationRouteError,
     estimate_characters,
+    protect_text,
+    restore_text,
     translate_with_indictrans2,
+    translate_with_madlad,
     translate_with_opus_mt,
 )
 
@@ -33,6 +44,10 @@ INDIC_LANGS = {
     "san_Deva", "sat_Olck", "snd_Arab", "snd_Deva", "tam_Taml", "tel_Telu",
     "urd_Arab",
 }
+
+DEFAULT_OPUS_MT_ENDPOINT = "http://127.0.0.1:8100/translate"
+DEFAULT_MADLAD_ENDPOINT = "http://127.0.0.1:8200/translate"
+DEFAULT_INDICTRANS2_ENDPOINT = "http://127.0.0.1:8000/translate"
 
 LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
     "english": {"iso": "en", "indic": "eng_Latn"}, "en": {"iso": "en", "indic": "eng_Latn"}, "eng_latn": {"iso": "en", "indic": "eng_Latn"},
@@ -55,11 +70,42 @@ LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
     "spanish": {"iso": "es", "indic": ""}, "es": {"iso": "es", "indic": ""},
     "italian": {"iso": "it", "indic": ""}, "it": {"iso": "it", "indic": ""},
     "portuguese": {"iso": "pt", "indic": ""}, "pt": {"iso": "pt", "indic": ""},
+    "dutch": {"iso": "nl", "indic": ""}, "nl": {"iso": "nl", "indic": ""},
+    "polish": {"iso": "pl", "indic": ""}, "pl": {"iso": "pl", "indic": ""},
+    "swedish": {"iso": "sv", "indic": ""}, "sv": {"iso": "sv", "indic": ""},
+    "norwegian": {"iso": "no", "indic": ""}, "no": {"iso": "no", "indic": ""},
+    "danish": {"iso": "da", "indic": ""}, "da": {"iso": "da", "indic": ""},
+    "greek": {"iso": "el", "indic": ""}, "el": {"iso": "el", "indic": ""},
     "russian": {"iso": "ru", "indic": ""}, "ru": {"iso": "ru", "indic": ""},
+    "ukrainian": {"iso": "uk", "indic": ""}, "uk": {"iso": "uk", "indic": ""},
     "arabic": {"iso": "ar", "indic": ""}, "ar": {"iso": "ar", "indic": ""},
+    "hebrew": {"iso": "he", "indic": ""}, "he": {"iso": "he", "indic": ""},
+    "persian": {"iso": "fa", "indic": ""}, "farsi": {"iso": "fa", "indic": ""}, "fa": {"iso": "fa", "indic": ""},
+    "turkish": {"iso": "tr", "indic": ""}, "tr": {"iso": "tr", "indic": ""},
+    "swahili": {"iso": "sw", "indic": ""}, "kiswahili": {"iso": "sw", "indic": ""}, "sw": {"iso": "sw", "indic": ""},
+    "amharic": {"iso": "am", "indic": ""}, "am": {"iso": "am", "indic": ""},
+    "yoruba": {"iso": "yo", "indic": ""}, "yo": {"iso": "yo", "indic": ""},
+    "hausa": {"iso": "ha", "indic": ""}, "ha": {"iso": "ha", "indic": ""},
+    "zulu": {"iso": "zu", "indic": ""}, "isizulu": {"iso": "zu", "indic": ""}, "zu": {"iso": "zu", "indic": ""},
+    "afrikaans": {"iso": "af", "indic": ""}, "af": {"iso": "af", "indic": ""},
     "chinese": {"iso": "zh", "indic": ""}, "zh": {"iso": "zh", "indic": ""},
+    "mandarin chinese": {"iso": "zh", "indic": ""},
+    "mandarin chinese (simplified)": {"iso": "zh", "indic": ""},
+    "mandarin chinese (traditional)": {"iso": "zh", "indic": ""},
+    "simplified chinese": {"iso": "zh", "indic": ""},
+    "traditional chinese": {"iso": "zh", "indic": ""},
     "japanese": {"iso": "ja", "indic": ""}, "ja": {"iso": "ja", "indic": ""},
     "korean": {"iso": "ko", "indic": ""}, "ko": {"iso": "ko", "indic": ""},
+    "vietnamese": {"iso": "vi", "indic": ""}, "vi": {"iso": "vi", "indic": ""},
+    "thai": {"iso": "th", "indic": ""}, "th": {"iso": "th", "indic": ""},
+    "indonesian": {"iso": "id", "indic": ""}, "bahasa indonesia": {"iso": "id", "indic": ""}, "id": {"iso": "id", "indic": ""},
+    "malay": {"iso": "ms", "indic": ""}, "bahasa melayu": {"iso": "ms", "indic": ""}, "ms": {"iso": "ms", "indic": ""},
+    "tagalog": {"iso": "tl", "indic": ""}, "tagalog / filipino": {"iso": "tl", "indic": ""}, "tagalog filipino": {"iso": "tl", "indic": ""}, "filipino": {"iso": "tl", "indic": ""}, "tl": {"iso": "tl", "indic": ""}, "fil": {"iso": "tl", "indic": ""},
+    "burmese": {"iso": "my", "indic": ""}, "myanmar": {"iso": "my", "indic": ""}, "my": {"iso": "my", "indic": ""},
+    "khmer": {"iso": "km", "indic": ""}, "cambodian": {"iso": "km", "indic": ""}, "km": {"iso": "km", "indic": ""},
+    "lao": {"iso": "lo", "indic": ""}, "lo": {"iso": "lo", "indic": ""},
+    "sinhala": {"iso": "si", "indic": ""}, "si": {"iso": "si", "indic": ""},
+    "mongolian": {"iso": "mn", "indic": ""}, "mn": {"iso": "mn", "indic": ""},
 }
 
 
@@ -69,11 +115,17 @@ def _secret(name: str, default: str = "") -> str:
         return str(env)
     if st is not None:
         try:
+            value = st.session_state.get(name)
+            if value not in (None, ""):
+                return str(value)
+        except Exception as exc:
+            LOGGER.debug("Unable to read Streamlit session value %s: %s", name, exc)
+        try:
             value = st.secrets.get(name)
             if value not in (None, ""):
                 return str(value)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
     return default
 
 
@@ -82,11 +134,29 @@ def _bool_secret(name: str, default: bool = False) -> bool:
     return value in {"1", "true", "yes", "on", "enabled"}
 
 
+def _is_production() -> bool:
+    env = _secret("ERRORSWEEP_ENV", _secret("APP_ENV", "")).strip().lower()
+    return env in {"prod", "production"}
+
+
+def _indic_in_process_fallback_enabled() -> bool:
+    return _bool_secret("INDICTRANS2_IN_PROCESS_FALLBACK", not _is_production())
+
+
 def normalize_language(language: str) -> Dict[str, str]:
     raw = (language or "").strip()
     key = raw.lower().replace("-", "_")
     if key in LANGUAGE_MAP:
         return LANGUAGE_MAP[key]
+    space_key = key.replace("_", " ")
+    if space_key in LANGUAGE_MAP:
+        return LANGUAGE_MAP[space_key]
+    paren_key = re.sub(r"\s*\([^)]*\)", "", space_key).strip()
+    if paren_key in LANGUAGE_MAP:
+        return LANGUAGE_MAP[paren_key]
+    compact_key = re.sub(r"\s*/\s*", " ", space_key).strip()
+    if compact_key in LANGUAGE_MAP:
+        return LANGUAGE_MAP[compact_key]
     if "_" in raw and len(raw) >= 7:
         return {"iso": raw.split("_", 1)[0].lower(), "indic": raw}
     return {"iso": key[:2] if key else "en", "indic": ""}
@@ -97,9 +167,214 @@ def is_indic_language(language: str) -> bool:
 
 
 def current_builtin_engine_label() -> str:
-    if _secret("INDICTRANS2_ENDPOINT", "") or _secret("OPUS_MT_ENDPOINT", ""):
+    if (
+        _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
+        or _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT)
+        or _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT)
+    ):
         return "Included self-hosted MT active"
     return "Self-hosted MT not configured"
+
+
+def _endpoint_health_url(endpoint: str) -> str:
+    endpoint = (endpoint or "").strip().rstrip("/")
+    return endpoint[:-10] + "/health" if endpoint.endswith("/translate") else endpoint + "/health"
+
+
+def builtin_engine_status(timeout: int = 3) -> List[Dict[str, Any]]:
+    engines = [
+        {
+            "engine": "IndicTrans2",
+            "endpoint": _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT),
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False),
+            "priority": "Indian languages",
+        },
+        {
+            "engine": "MADLAD-400",
+            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False),
+            "priority": "Global fallback",
+        },
+        {
+            "engine": "OPUS-MT",
+            "endpoint": _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT),
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False),
+            "priority": "Lightweight fallback",
+        },
+    ]
+    rows: List[Dict[str, Any]] = []
+    for item in engines:
+        row = dict(item)
+        row["ready"] = False
+        row["detail"] = "disabled" if not item["enabled"] else "not checked"
+        if item["enabled"] and item["endpoint"]:
+            try:
+                res = requests.get(_endpoint_health_url(item["endpoint"]), timeout=timeout)
+                row["ready"] = res.status_code < 400
+                row["detail"] = res.json() if row["ready"] else f"HTTP {res.status_code}"
+            except Exception as exc:
+                row["detail"] = str(exc)[:220]
+                if item["engine"] == "IndicTrans2" and _indic_in_process_fallback_enabled():
+                    try:
+                        import indictrans2_worker
+
+                        models = {
+                            "en_indic": indictrans2_worker.model_status(indictrans2_worker.MODEL_EN_INDIC),
+                            "indic_en": indictrans2_worker.model_status(indictrans2_worker.MODEL_INDIC_EN),
+                            "indic_indic": indictrans2_worker.model_status(indictrans2_worker.MODEL_INDIC_INDIC),
+                        }
+                        local_ready = all(
+                            model["local_path"] and model["has_config"]
+                            for model in models.values()
+                        )
+                        row["ready"] = local_ready
+                        row["detail"] = {
+                            "http": row["detail"],
+                            "in_process_fallback": "ready" if local_ready else "not ready",
+                            "models": models,
+                        }
+                    except Exception as fallback_exc:
+                        row["detail"] = f"{row['detail']} | in-process fallback: {fallback_exc}"
+        rows.append(row)
+    return rows
+
+
+def smoke_test_builtin_engines(timeout: int = 120) -> List[Dict[str, Any]]:
+    tests = [
+        {
+            "engine": "IndicTrans2",
+            "endpoint": _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT),
+            "api_key": _secret("INDICTRANS2_API_KEY", ""),
+            "source_language": "eng_Latn",
+            "target_language": "tel_Telu",
+            "texts": ["Save changes"],
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False),
+        },
+        {
+            "engine": "MADLAD-400",
+            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
+            "api_key": _secret("MADLAD_API_KEY", ""),
+            "source_language": "English",
+            "target_language": "Spanish",
+            "texts": ["Save changes"],
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False),
+        },
+        {
+            "engine": "OPUS-MT",
+            "endpoint": _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT),
+            "api_key": _secret("OPUS_MT_API_KEY", ""),
+            "source_language": "English",
+            "target_language": "Spanish",
+            "texts": ["Save changes"],
+            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False),
+        },
+    ]
+    rows: List[Dict[str, Any]] = []
+    for test in tests:
+        row = {
+            "engine": test["engine"],
+            "source_language": test["source_language"],
+            "target_language": test["target_language"],
+            "success": False,
+            "translation": "",
+            "error": "disabled" if not test["enabled"] else "",
+        }
+        if not test["enabled"]:
+            rows.append(row)
+            continue
+        try:
+            if test["engine"] == "IndicTrans2":
+                data = translate_with_indictrans2(
+                    endpoint=test["endpoint"],
+                    api_key=test["api_key"],
+                    source_language=test["source_language"],
+                    target_language=test["target_language"],
+                    texts=test["texts"],
+                    timeout=timeout,
+                )
+            elif test["engine"] == "MADLAD-400":
+                data = translate_with_madlad(
+                    endpoint=test["endpoint"],
+                    api_key=test["api_key"],
+                    source_language=test["source_language"],
+                    target_language=test["target_language"],
+                    texts=test["texts"],
+                    timeout=timeout,
+                )
+            else:
+                data = translate_with_opus_mt(
+                    endpoint=test["endpoint"],
+                    api_key=test["api_key"],
+                    source_language=test["source_language"],
+                    target_language=test["target_language"],
+                    texts=test["texts"],
+                    timeout=timeout,
+                )
+            translations, usage = data
+            row["success"] = bool(translations and translations[0])
+            row["translation"] = translations[0] if translations else ""
+            row["requests"] = usage.get("requests", 0)
+        except Exception as exc:
+            if test["engine"] == "IndicTrans2" and _indic_in_process_fallback_enabled():
+                try:
+                    translations, usage = _translate_with_indictrans2_in_process(
+                        source_language=test["source_language"],
+                        target_language=test["target_language"],
+                        texts=test["texts"],
+                    )
+                    row["success"] = bool(translations and translations[0])
+                    row["translation"] = translations[0] if translations else ""
+                    row["requests"] = usage.get("requests", 0)
+                    row["engine"] = "IndicTrans2 (in-process)"
+                except Exception as fallback_exc:
+                    row["error"] = f"{exc} | in-process fallback: {fallback_exc}"[:300]
+            else:
+                row["error"] = str(exc)[:300]
+        rows.append(row)
+    return rows
+
+
+def _apply_engine_usage(usage: Dict[str, Any], provider: str, engine_usage: Dict[str, Any]) -> None:
+    usage.update(engine_usage)
+    usage["provider"] = provider
+    usage["engine"] = engine_usage.get("engine", provider)
+    usage["success"] = True
+
+
+def _translate_with_indictrans2_in_process(
+    *,
+    source_language: str,
+    target_language: str,
+    texts: List[str],
+    protected_terms: Optional[List[str]] = None,
+) -> Tuple[List[str], Dict[str, Any]]:
+    import indictrans2_worker
+
+    protected_texts: List[str] = []
+    maps = []
+    for text in texts:
+        protected, mapping = protect_text(text, protected_terms)
+        protected_texts.append(protected)
+        maps.append(mapping)
+
+    translations, model_name = indictrans2_worker.translate_texts(
+        protected_texts,
+        indictrans2_worker.normalize_language(source_language),
+        indictrans2_worker.normalize_language(target_language),
+    )
+    translations = [
+        restore_text(translation, mapping)
+        for translation, mapping in zip(translations, maps)
+    ]
+    return translations, {
+        "provider": "indictrans2",
+        "engine": "indictrans2_in_process",
+        "model": model_name,
+        "characters": estimate_characters(texts),
+        "requests": 1,
+        "segments": len(texts),
+        "managed": True,
+    }
 
 
 def translate_batch(
@@ -131,47 +406,79 @@ def translate_batch(
     source_info = normalize_language(source_language or "English")
     target_info = normalize_language(target_language)
     should_use_indic = is_indic_language(source_language) or is_indic_language(target_language) or bool(target_info.get("indic"))
+    route_errors: List[str] = []
 
     try:
         if should_use_indic and not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False):
-            endpoint = _secret("INDICTRANS2_ENDPOINT", "")
-            if not endpoint:
-                raise TranslationRouteError("Self-hosted IndicTrans2 endpoint is not configured. Add INDICTRANS2_ENDPOINT in Streamlit Secrets.")
-            translations, engine_usage = translate_with_indictrans2(
-                endpoint=endpoint,
-                api_key=_secret("INDICTRANS2_API_KEY", ""),
-                source_language=source_info.get("indic") or "eng_Latn",
-                target_language=target_info.get("indic") or target_language,
-                texts=texts,
-                protected_terms=protected_terms,
-                timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
-            )
-            usage.update(engine_usage)
-            usage["provider"] = "indictrans2"
-            usage["engine"] = engine_usage.get("engine", "indictrans2")
-            usage["success"] = True
-            return translations, usage
+            endpoint = _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT)
+            if endpoint:
+                try:
+                    translations, engine_usage = translate_with_indictrans2(
+                        endpoint=endpoint,
+                        api_key=_secret("INDICTRANS2_API_KEY", ""),
+                        source_language=source_info.get("indic") or "eng_Latn",
+                        target_language=target_info.get("indic") or target_language,
+                        texts=texts,
+                        protected_terms=protected_terms,
+                        timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
+                    )
+                    _apply_engine_usage(usage, "indictrans2", engine_usage)
+                    return translations, usage
+                except Exception as exc:
+                    route_errors.append(f"IndicTrans2 failed: {exc}")
+
+            if _indic_in_process_fallback_enabled():
+                try:
+                    translations, engine_usage = _translate_with_indictrans2_in_process(
+                        source_language=source_info.get("indic") or "eng_Latn",
+                        target_language=target_info.get("indic") or target_language,
+                        texts=texts,
+                        protected_terms=protected_terms,
+                    )
+                    _apply_engine_usage(usage, "indictrans2", engine_usage)
+                    return translations, usage
+                except Exception as exc:
+                    route_errors.append(f"IndicTrans2 in-process failed: {exc}")
+
+        if not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False):
+            endpoint = _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
+            if endpoint:
+                try:
+                    translations, engine_usage = translate_with_madlad(
+                        endpoint=endpoint,
+                        api_key=_secret("MADLAD_API_KEY", ""),
+                        source_language=source_info.get("iso", "en"),
+                        target_language=target_info.get("iso") or target_language,
+                        texts=texts,
+                        protected_terms=protected_terms,
+                        timeout=int(_secret("MADLAD_TIMEOUT", _secret("SELF_HOSTED_MT_TIMEOUT", "300"))),
+                    )
+                    _apply_engine_usage(usage, "madlad400", engine_usage)
+                    return translations, usage
+                except Exception as exc:
+                    route_errors.append(f"MADLAD-400 failed: {exc}")
 
         if not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False):
-            endpoint = _secret("OPUS_MT_ENDPOINT", "")
+            endpoint = _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT)
             if not endpoint:
-                raise TranslationRouteError("Self-hosted OPUS-MT endpoint is not configured. Add OPUS_MT_ENDPOINT in Streamlit Secrets.")
-            translations, engine_usage = translate_with_opus_mt(
-                endpoint=endpoint,
-                api_key=_secret("OPUS_MT_API_KEY", ""),
-                source_language=source_info.get("iso", "en"),
-                target_language=target_info.get("iso") or target_language,
-                texts=texts,
-                protected_terms=protected_terms,
-                timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
-            )
-            usage.update(engine_usage)
-            usage["provider"] = "opus_mt"
-            usage["engine"] = engine_usage.get("engine", "opus_mt")
-            usage["success"] = True
-            return translations, usage
+                route_errors.append("OPUS-MT endpoint is not configured.")
+            else:
+                try:
+                    translations, engine_usage = translate_with_opus_mt(
+                        endpoint=endpoint,
+                        api_key=_secret("OPUS_MT_API_KEY", ""),
+                        source_language=source_info.get("iso", "en"),
+                        target_language=target_info.get("iso") or target_language,
+                        texts=texts,
+                        protected_terms=protected_terms,
+                        timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
+                    )
+                    _apply_engine_usage(usage, "opus_mt", engine_usage)
+                    return translations, usage
+                except Exception as exc:
+                    route_errors.append(f"OPUS-MT failed: {exc}")
 
-        raise TranslationRouteError("No self-hosted MT route is enabled.")
+        raise TranslationRouteError("No self-hosted MT route succeeded. " + " | ".join(route_errors))
     except Exception as exc:
         usage["success"] = False
         usage["error"] = str(exc)

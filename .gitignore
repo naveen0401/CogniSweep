@@ -1,9 +1,11 @@
 .env
 .streamlit/secrets.toml
+.venv/
 __pycache__/
 *.pyc
 cloudflared
 *.log
+models/
 .DS_Store
 supabase/.temp/
 .env

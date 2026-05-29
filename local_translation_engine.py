@@ -10,10 +10,13 @@ Key guarantees for localization files:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+LOGGER = logging.getLogger(__name__)
 
 
 LANGUAGE_CODE_MAP = {
@@ -100,8 +103,8 @@ def _prepare_engine_source(source: str) -> Tuple[str, Dict[str, Any]]:
 
 def _restore_visual_wrapper(translation: str, meta: Dict[str, Any]) -> str:
     out = str(translation or "").strip()
-    out = re.sub(r"^\s*Â\s*", "", out).strip()
-    # LibreTranslate sometimes duplicates list bullets at the end: ∙Tableau de bord∙
+    out = re.sub(r"^\s*[ÂÃ]\s*", "", out).strip()
+    # LibreTranslate sometimes duplicates list bullets at the end.
     out = TRAILING_BULLET_RE.sub("", out).strip()
 
     if meta.get("bracketed") and out and not (out.startswith("[") and out.endswith("]")):
@@ -127,7 +130,7 @@ def _restore_safety(source: str, translation: str) -> str:
     tokens.extend([m.group(0) for m in COMMON_UNIT_RE.finditer(source)])
 
     for idx, token in enumerate(tokens):
-        marker_re = re.compile(rf"(?i)[_\s]*(?:E\s*S\s*P\s*H\s*{idx}|Z\s*X\s*P\s*H\s*{idx}\s*Z\s*X|ZXPH\s*{idx}\s*ZX)[_\s]*")
+        marker_re = re.compile(rf"(?i)[_\s]*(?:P\s*H\s*{idx:03d}\s*T\s*O\s*K\s*E\s*N|E\s*S\s*P\s*H\s*{idx}|Z\s*X\s*P\s*H\s*{idx}\s*Z\s*X|ZXPH\s*{idx}\s*ZX)[_\s]*")
         out = marker_re.sub(token, out)
         if token and token not in out:
             out = (out.rstrip() + " " + token).strip()
@@ -153,6 +156,33 @@ def translate_with_libretranslate(
     if isinstance(data, dict):
         return str(data.get("translatedText") or data.get("translation") or "")
     return ""
+
+
+def translate_batch_with_libretranslate(
+    endpoint: str,
+    texts: List[str],
+    target_language: str,
+    source_language: str = "auto",
+    api_key: str = "",
+    timeout: int = 120,
+) -> List[str]:
+    base = endpoint.rstrip("/")
+    url = base if base.endswith("/translate") else f"{base}/translate"
+    target = normalize_language_code(target_language)
+    source = normalize_language_code(source_language) if source_language and source_language.lower() != "auto" else "auto"
+    payload: Dict[str, Any] = {"q": texts, "source": source, "target": target, "format": "text"}
+    if api_key:
+        payload["api_key"] = api_key
+    data = _post_json(url, payload, timeout=timeout)
+    if isinstance(data, dict):
+        translated = data.get("translatedText") or data.get("translations")
+        if isinstance(translated, list):
+            return [str(item.get("translatedText", item) if isinstance(item, dict) else item) for item in translated]
+        if isinstance(translated, str) and len(texts) == 1:
+            return [translated]
+    if isinstance(data, list):
+        return [str(item.get("translatedText", item.get("translation", item)) if isinstance(item, dict) else item) for item in data]
+    return [""] * len(texts)
 
 
 def translate_with_generic_endpoint(
@@ -217,25 +247,41 @@ def self_hosted_translate_batch(
             timeout=timeout,
         )
     else:
-        for engine_text, original_text in zip(engine_texts, original_texts):
-            if not engine_text:
-                translations.append("")
-                continue
+        translations = [""] * len(engine_texts)
+        non_empty_indexes = [i for i, text in enumerate(engine_texts) if text]
+        try:
+            translated_non_empty = translate_batch_with_libretranslate(
+                endpoint=endpoint,
+                texts=[engine_texts[i] for i in non_empty_indexes],
+                target_language=target_language,
+                source_language=source_language,
+                api_key=api_key,
+                timeout=timeout,
+            )
+            for idx, trans in zip(non_empty_indexes, translated_non_empty):
+                translations[idx] = trans or ""
+        except Exception as exc:
+            LOGGER.warning("LibreTranslate batch request failed: %s", exc)
+            translated_non_empty = []
+
+        retry_indexes = [
+            i for i in non_empty_indexes
+            if not translations[i] and engine_texts[i] != original_texts[i]
+        ]
+        if retry_indexes:
             try:
-                trans = translate_with_libretranslate(
+                retry_translations = translate_batch_with_libretranslate(
                     endpoint=endpoint,
-                    text=engine_text,
+                    texts=[original_texts[i] for i in retry_indexes],
                     target_language=target_language,
                     source_language=source_language,
                     api_key=api_key,
                     timeout=timeout,
                 )
-                # If stripping made the engine fail, retry original once.
-                if not trans and engine_text != original_text:
-                    trans = translate_with_libretranslate(endpoint, original_text, target_language, source_language, api_key, timeout)
-                translations.append(trans or "")
-            except Exception:
-                translations.append("")
+                for idx, trans in zip(retry_indexes, retry_translations):
+                    translations[idx] = trans or ""
+            except Exception as exc:
+                LOGGER.warning("LibreTranslate retry request failed: %s", exc)
 
     if len(translations) < len(segments):
         translations.extend([""] * (len(segments) - len(translations)))

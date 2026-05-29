@@ -21,8 +21,10 @@ ERRORSWEEP_EDITOR_JOB_DIR = "/tmp/errorsweep_editor_jobs"
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -32,6 +34,8 @@ from urllib.parse import quote
 
 import requests
 
+LOGGER = logging.getLogger(__name__)
+
 try:
     import streamlit as st
 except Exception:  # pragma: no cover
@@ -39,6 +43,41 @@ except Exception:  # pragma: no cover
 
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days local fallback retention
 SUPABASE_TIMEOUT = 25
+LOCAL_USAGE_MAX_BYTES = int(os.getenv("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOCAL_USAGE_KEEP_LINES = int(os.getenv("ERRORSWEEP_USAGE_LOG_KEEP_LINES", "2000"))
+_LOCAL_WRITE_LOCK = threading.Lock()
+
+SAAS_TABLES = {
+    "users": "errorsweep_users",
+    "workspaces": "errorsweep_workspaces",
+    "projects": "errorsweep_projects",
+    "jobs": "errorsweep_jobs",
+    "payments": "errorsweep_payments",
+    "subscriptions": "errorsweep_subscriptions",
+    "checkout_sessions": "errorsweep_checkout_sessions",
+    "billing_events": "errorsweep_billing_events",
+    "auth_tokens": "errorsweep_auth_tokens",
+    "audit_logs": "errorsweep_audit_logs",
+    "files": "errorsweep_files",
+    "notifications": "errorsweep_notifications",
+    "task_queue": "errorsweep_task_queue",
+}
+
+SAAS_COLUMNS = {
+    "users": {"id", "email", "workspace", "role", "plan", "status", "password_hash", "email_verified", "verified_at", "user_email", "created_at", "updated_at"},
+    "workspaces": {"id", "workspace", "owner", "plan", "status", "users", "jobs", "user_email", "created_at", "updated_at"},
+    "projects": {"id", "workspace", "user_email", "created", "project", "client", "source", "targets", "domain", "status", "job_count", "created_at", "updated_at"},
+    "jobs": {"id", "workspace", "user_email", "created", "type", "language", "assignee", "status", "note", "segments", "project_id", "project", "attachment_count", "attachments_json", "created_at", "updated_at"},
+    "payments": {"id", "workspace", "user_email", "date", "user", "plan", "amount", "currency", "status", "created_at", "updated_at"},
+    "subscriptions": {"id", "workspace", "user_email", "plan", "status", "billing_cycle", "currency", "base_amount", "included_segments", "included_characters", "included_seats", "provider", "provider_customer_id", "provider_subscription_id", "current_period_start", "current_period_end", "cancel_at_period_end", "cancelled_at", "cancellation_reason", "metadata_json", "created_at", "updated_at"},
+    "checkout_sessions": {"id", "workspace", "user_email", "plan", "billing_cycle", "currency", "amount", "provider", "status", "checkout_url", "provider_session_id", "metadata_json", "created_at", "updated_at"},
+    "billing_events": {"id", "workspace", "user_email", "provider", "event_id", "event_type", "status", "plan", "amount", "currency", "provider_payment_id", "provider_subscription_id", "provider_order_id", "provider_customer_id", "checkout_id", "signature_status", "applied", "raw_sha256", "metadata_json", "created_at", "updated_at"},
+    "auth_tokens": {"id", "workspace", "user_email", "email", "token_hash", "token_type", "status", "expires_at", "used_at", "metadata_json", "created_at", "updated_at"},
+    "audit_logs": {"id", "workspace", "user_email", "time", "actor", "action", "details", "created_at", "updated_at"},
+    "files": {"id", "workspace", "user_email", "file_name", "purpose", "mime_type", "size_bytes", "sha256", "storage_key", "storage_provider", "storage_bucket", "public_url", "local_path", "status", "expires_at", "created_at", "updated_at"},
+    "notifications": {"id", "workspace", "user_email", "recipient", "subject", "event_type", "status", "provider", "body", "metadata_json", "sent_at", "created_at", "updated_at"},
+    "task_queue": {"id", "workspace", "user_email", "task_type", "label", "status", "progress", "total_units", "processed_units", "result_ref", "error", "metadata_json", "started_at", "finished_at", "created_at", "updated_at"},
+}
 
 
 # ==========================================================
@@ -54,8 +93,8 @@ def _secret(name: str, default: str = "") -> str:
             val = st.secrets.get(name)
             if val not in (None, ""):
                 return str(val)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
     return default
 
 
@@ -122,9 +161,32 @@ def _local_usage_path() -> Path:
     return _local_root() / "usage_events.jsonl"
 
 
+def _local_collection_path(collection: str) -> Path:
+    safe = "".join(ch for ch in str(collection) if ch.isalnum() or ch in {"-", "_"})
+    return _local_root() / f"saas_{safe or 'records'}.json"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
 def _write_local_job(payload: Dict[str, Any]) -> None:
-    _local_path(payload["job_id"]).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    cleanup_local_jobs()
+    with _LOCAL_WRITE_LOCK:
+        _atomic_write_text(_local_path(payload["job_id"]), json.dumps(payload, ensure_ascii=False, indent=2))
+        cleanup_local_jobs()
+
+
+def _rotate_local_usage_events() -> None:
+    path = _local_usage_path()
+    if not path.exists() or path.stat().st_size <= LOCAL_USAGE_MAX_BYTES:
+        return
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    retained = lines[-max(1, LOCAL_USAGE_KEEP_LINES):]
+    _atomic_write_text(path, "\n".join(retained) + ("\n" if retained else ""))
 
 
 def _read_local_job(job_id: str) -> Optional[Dict[str, Any]]:
@@ -133,8 +195,85 @@ def _read_local_job(job_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Unable to read local editor job %s: %s", path, exc)
         return None
+
+
+def _read_local_collection(collection: str) -> List[Dict[str, Any]]:
+    path = _local_collection_path(collection)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        LOGGER.warning("Unable to read local SaaS collection %s: %s", path, exc)
+        return []
+
+
+def _write_local_collection(collection: str, records: List[Dict[str, Any]]) -> None:
+    with _LOCAL_WRITE_LOCK:
+        _atomic_write_text(_local_collection_path(collection), json.dumps(records, ensure_ascii=False, indent=2))
+
+
+def _record_id(collection: str, record: Dict[str, Any]) -> str:
+    explicit = str(record.get("id") or record.get("record_id") or "").strip()
+    if explicit:
+        return _safe_job_id(explicit)
+    if collection == "users" and record.get("email"):
+        return _safe_job_id(str(record.get("email")).lower())
+    if collection == "workspaces" and record.get("workspace"):
+        return _safe_job_id(str(record.get("workspace")).lower())
+    if collection == "subscriptions" and record.get("workspace"):
+        return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('plan') or ''}-{record.get('billing_cycle') or ''}")
+    if collection == "checkout_sessions" and record.get("workspace"):
+        return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('plan') or ''}-{record.get('created_at') or _now_iso()}")
+    if collection == "billing_events" and record.get("event_id"):
+        return _safe_job_id(f"{record.get('provider') or ''}-{record.get('event_id')}")
+    if collection == "auth_tokens" and record.get("token_hash"):
+        return _safe_job_id(f"{record.get('token_type') or ''}-{record.get('email') or ''}-{record.get('token_hash')}")
+    if collection == "projects" and record.get("project"):
+        return _safe_job_id(f"{record.get('workspace') or record.get('client') or ''}-{record.get('project')}-{record.get('created') or ''}")
+    if collection == "files" and record.get("storage_key"):
+        return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('purpose') or ''}-{record.get('storage_key')}")
+    if collection == "files" and record.get("sha256"):
+        return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('purpose') or ''}-{record.get('sha256')}")
+    if collection == "notifications" and record.get("recipient") and record.get("event_type"):
+        return _safe_job_id(
+            f"{record.get('workspace') or ''}-{record.get('event_type') or ''}-{record.get('recipient') or ''}-{record.get('created_at') or _now_iso()}"
+        )
+    if collection == "task_queue" and record.get("task_type"):
+        return _safe_job_id(
+            f"{record.get('workspace') or ''}-{record.get('task_type') or ''}-{record.get('label') or ''}-{record.get('created_at') or _now_iso()}"
+        )
+    return uuid.uuid4().hex
+
+
+def _normalise_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    user = user or {}
+    item = dict(record or {})
+    item["id"] = _record_id(collection, item)
+    item.setdefault("workspace", item.get("client") or _current_workspace(user))
+    item.setdefault("user_email", item.get("email") or item.get("actor") or _current_user_email(user))
+    item.setdefault("created_at", item.get("created") or item.get("date") or item.get("time") or _now_iso())
+    item["updated_at"] = _now_iso()
+    return item
+
+
+def _upsert_local_saas_record(collection: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    records = _read_local_collection(collection)
+    rid = str(record.get("id"))
+    replaced = False
+    for idx, existing in enumerate(records):
+        if str(existing.get("id")) == rid:
+            records[idx] = {**existing, **record}
+            replaced = True
+            break
+    if not replaced:
+        records.insert(0, record)
+    _write_local_collection(collection, records[:1000])
+    return record
 
 
 def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
@@ -145,11 +284,12 @@ def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
             updated = float(payload.get("updated_at_epoch") or payload.get("created_at_epoch") or 0)
             if updated and now - updated > ttl_seconds:
                 path.unlink(missing_ok=True)
-        except Exception:
+        except Exception as exc:
+            LOGGER.warning("Unable to clean local editor job %s: %s", path, exc)
             try:
                 path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as unlink_exc:
+                LOGGER.warning("Unable to remove local editor job %s: %s", path, unlink_exc)
 
 
 # ==========================================================
@@ -201,8 +341,8 @@ def save_persistent_editor_job(
     # Always write local fallback so development/testing remains resilient.
     try:
         _write_local_job(payload)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.error("Failed to write local editor job fallback %s: %s", jid, exc)
 
     if not supabase_configured():
         return jid
@@ -229,9 +369,9 @@ def save_persistent_editor_job(
             json=db_payload,
             timeout=SUPABASE_TIMEOUT,
         ).raise_for_status()
-    except Exception:
+    except Exception as exc:
         # Never break the app if DB is unavailable.
-        pass
+        LOGGER.error("Failed to save editor job %s to Supabase: %s", jid, exc)
     return jid
 
 
@@ -258,8 +398,8 @@ def load_persistent_editor_job(job_id: str) -> Optional[Dict[str, Any]]:
                     "created": str(row.get("created_at") or ""),
                     "updated_at": str(row.get("updated_at") or ""),
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.error("Failed to load editor job %s from Supabase: %s", jid, exc)
 
     return _read_local_job(jid)
 
@@ -295,8 +435,8 @@ def update_persistent_editor_job(
 
     try:
         _write_local_job(local_payload)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.error("Failed to update local editor job fallback %s: %s", jid, exc)
 
     if not supabase_configured():
         return True
@@ -314,7 +454,8 @@ def update_persistent_editor_job(
         res = requests.patch(url, headers=_headers({"Prefer": "return=minimal"}), json=patch_payload, timeout=SUPABASE_TIMEOUT)
         res.raise_for_status()
         return True
-    except Exception:
+    except Exception as exc:
+        LOGGER.error("Failed to update editor job %s in Supabase: %s", jid, exc)
         return False
 
 
@@ -352,10 +493,13 @@ def log_persistent_usage_event(
 
     # Local audit trail fallback.
     try:
-        with _local_usage_path().open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+        with _LOCAL_WRITE_LOCK:
+            _rotate_local_usage_events()
+            with _local_usage_path().open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            _rotate_local_usage_events()
+    except Exception as exc:
+        LOGGER.error("Failed to write local usage event fallback: %s", exc)
 
     if not supabase_configured():
         return
@@ -363,8 +507,8 @@ def log_persistent_usage_event(
     try:
         url = f"{_supabase_url()}/rest/v1/errorsweep_usage_events"
         requests.post(url, headers=_headers({"Prefer": "return=minimal"}), json=record, timeout=SUPABASE_TIMEOUT).raise_for_status()
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.error("Failed to save usage event to Supabase: %s", exc)
 
 
 def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
@@ -377,8 +521,8 @@ def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
             data = res.json()
             if isinstance(data, list):
                 return data
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.error("Failed to fetch usage events from Supabase: %s", exc)
 
     events: List[Dict[str, Any]] = []
     try:
@@ -386,10 +530,10 @@ def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
         for line in reversed(lines[-int(limit):]):
             try:
                 events.append(json.loads(line))
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                LOGGER.warning("Failed to parse local usage event: %s", exc)
+    except Exception as exc:
+        LOGGER.warning("Failed to read local usage events: %s", exc)
     return events
 
 
@@ -403,8 +547,8 @@ def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
             data = res.json()
             if isinstance(data, list):
                 return data
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.error("Failed to fetch editor jobs from Supabase: %s", exc)
 
     jobs = []
     for path in sorted(_local_root().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[: int(limit)]:
@@ -419,9 +563,80 @@ def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
                 "row_count": len(payload.get("rows") or []),
                 "updated_at": payload.get("updated_at"),
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Failed to read local editor job listing %s: %s", path, exc)
     return jobs
+
+
+# ==========================================================
+# SaaS record persistence
+# ==========================================================
+
+def save_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Persist a platform record with Supabase when configured and local JSON fallback.
+
+    Supported collections include users, workspaces, projects, jobs, payments,
+    subscriptions, checkout sessions, auth tokens, files, notifications,
+    task queue records, and audit logs.
+    The app can keep using session state, while this function gives those records
+    durable storage for production SaaS operation.
+    """
+    if collection not in SAAS_TABLES:
+        raise ValueError(f"Unsupported SaaS collection: {collection}")
+
+    payload = _normalise_saas_record(collection, record, user=user)
+    try:
+        _upsert_local_saas_record(collection, payload)
+    except Exception as exc:
+        LOGGER.error("Failed to write local SaaS record %s/%s: %s", collection, payload.get("id"), exc)
+
+    if not supabase_configured():
+        return payload
+
+    try:
+        table = SAAS_TABLES[collection]
+        url = f"{_supabase_url()}/rest/v1/{table}?on_conflict=id"
+        db_payload = {k: v for k, v in payload.items() if k in SAAS_COLUMNS[collection]}
+        requests.post(
+            url,
+            headers=_headers({"Prefer": "resolution=merge-duplicates,return=representation"}),
+            json=db_payload,
+            timeout=SUPABASE_TIMEOUT,
+        ).raise_for_status()
+    except Exception as exc:
+        LOGGER.error("Failed to save SaaS record %s/%s to Supabase: %s", collection, payload.get("id"), exc)
+    return payload
+
+
+def fetch_saas_records(
+    collection: str,
+    workspace: str = "",
+    limit: int = 500,
+    include_all_workspaces: bool = False,
+) -> List[Dict[str, Any]]:
+    if collection not in SAAS_TABLES:
+        raise ValueError(f"Unsupported SaaS collection: {collection}")
+
+    lim = max(1, min(int(limit), 1000))
+    if supabase_configured():
+        try:
+            table = SAAS_TABLES[collection]
+            filters = [f"select=*", f"order=updated_at.desc", f"limit={lim}"]
+            if workspace and not include_all_workspaces:
+                filters.append(f"workspace=eq.{quote(workspace)}")
+            url = f"{_supabase_url()}/rest/v1/{table}?{'&'.join(filters)}"
+            res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
+            res.raise_for_status()
+            data = res.json()
+            if isinstance(data, list):
+                return data
+        except Exception as exc:
+            LOGGER.error("Failed to fetch SaaS records %s from Supabase: %s", collection, exc)
+
+    records = _read_local_collection(collection)
+    if workspace and not include_all_workspaces:
+        records = [r for r in records if str(r.get("workspace") or "") == workspace]
+    return records[:lim]
 
 
 # ==========================================================
@@ -435,11 +650,13 @@ def persistence_health() -> Dict[str, Any]:
         "local_job_dir": str(_local_root()),
         "editor_jobs_table": "unknown",
         "usage_events_table": "unknown",
+        "saas_tables": {},
         "error": "",
     }
     if not supabase_configured():
         health["editor_jobs_table"] = "not_checked"
         health["usage_events_table"] = "not_checked"
+        health["saas_tables"] = {table: "not_checked" for table in SAAS_TABLES.values()}
         return health
 
     try:
@@ -458,6 +675,16 @@ def persistence_health() -> Dict[str, Any]:
         health["usage_events_table"] = "error"
         if not health["error"]:
             health["error"] = str(exc)[:300]
+
+    for table in SAAS_TABLES.values():
+        try:
+            url = f"{_supabase_url()}/rest/v1/{table}?select=id&limit=1"
+            res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
+            health["saas_tables"][table] = "ok" if res.status_code < 400 else f"error_{res.status_code}"
+        except Exception as exc:
+            health["saas_tables"][table] = "error"
+            if not health["error"]:
+                health["error"] = str(exc)[:300]
 
     return health
 

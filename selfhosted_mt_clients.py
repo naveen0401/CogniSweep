@@ -1,8 +1,11 @@
-"""HTTP clients and placeholder protection for ErrorSweep v44 self-hosted MT."""
+"""HTTP clients and placeholder protection for ErrorSweep self-hosted MT."""
 from __future__ import annotations
+import logging
 import re, time
 from typing import Any, Dict, List, Optional, Tuple
 import requests
+
+LOGGER = logging.getLogger(__name__)
 
 class TranslationRouteError(RuntimeError):
     pass
@@ -42,9 +45,12 @@ def protect_text(text: str, extra_terms: Optional[List[str]] = None) -> Tuple[st
 def restore_text(text: str, mapping: Dict[str, str]) -> str:
     output = str(text or "")
     for token, original in mapping.items():
-        variants = {token, token.lower(), token.title(), f" {token} ", f" {token.lower()} ", f" {token.title()} "}
-        for v in variants:
-            output = output.replace(v, original)
+        token_pattern = r"\s*".join(re.escape(ch) for ch in token)
+        output = re.sub(token_pattern, original, output, flags=re.I)
+        compact_pattern = re.escape(token).replace("TOKEN", r"\s*TOKEN")
+        output = re.sub(compact_pattern, original, output, flags=re.I)
+        if original and original not in output:
+            output = f"{output.rstrip()} {original}".strip()
     output = re.sub(r"\s+([,.;:!?])", r"\1", output)
     return output.strip()
 
@@ -63,7 +69,8 @@ def _post(endpoint: str, api_key: str, payload: Dict[str, Any], timeout: int) ->
     if res.status_code >= 400:
         try:
             details = res.json()
-        except Exception:
+        except Exception as exc:
+            LOGGER.debug("Translation endpoint error body is not JSON: %s", exc)
             details = res.text[:500]
         raise TranslationRouteError(f"Translation endpoint returned HTTP {res.status_code}: {details}")
     try:
@@ -95,6 +102,9 @@ def _translate(provider: str, endpoint: str, api_key: str, source_language: str,
 
 def translate_with_indictrans2(*, endpoint: str, api_key: str, source_language: str, target_language: str, texts: List[str], protected_terms: Optional[List[str]]=None, timeout: int=180):
     return _translate("indictrans2", endpoint, api_key, source_language, target_language, texts, protected_terms, timeout, 20)
+
+def translate_with_madlad(*, endpoint: str, api_key: str, source_language: str, target_language: str, texts: List[str], protected_terms: Optional[List[str]]=None, timeout: int=300):
+    return _translate("madlad400", endpoint, api_key, source_language, target_language, texts, protected_terms, timeout, 8)
 
 def translate_with_opus_mt(*, endpoint: str, api_key: str, source_language: str, target_language: str, texts: List[str], protected_terms: Optional[List[str]]=None, timeout: int=180):
     return _translate("opus_mt", endpoint, api_key, source_language, target_language, texts, protected_terms, timeout, 25)

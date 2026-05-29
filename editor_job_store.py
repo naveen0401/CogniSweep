@@ -10,14 +10,18 @@ or object storage.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 2  # 48 hours
+LOGGER = logging.getLogger(__name__)
+_WRITE_LOCK = threading.Lock()
 
 
 def _job_dir() -> Path:
@@ -42,6 +46,14 @@ def _path_for(job_id: str) -> Path:
     return _job_dir() / f"{_safe_job_id(job_id)}.json"
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
 def save_editor_job(job_type: str, rows: List[Dict[str, Any]], metadata: Optional[Dict[str, Any]] = None, job_id: Optional[str] = None) -> str:
     job_id = _safe_job_id(job_id or uuid.uuid4().hex)
     payload = {
@@ -52,8 +64,9 @@ def save_editor_job(job_type: str, rows: List[Dict[str, Any]], metadata: Optiona
         "created_at": time.time(),
         "updated_at": time.time(),
     }
-    _path_for(job_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    cleanup_old_jobs()
+    with _WRITE_LOCK:
+        _atomic_write_text(_path_for(job_id), json.dumps(payload, ensure_ascii=False, indent=2))
+        cleanup_old_jobs()
     return job_id
 
 
@@ -63,7 +76,8 @@ def load_editor_job(job_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Unable to read editor job %s: %s", path, exc)
         return None
     return payload
 
@@ -79,7 +93,8 @@ def update_editor_job(job_id: str, rows: Optional[List[Dict[str, Any]]] = None, 
         merged.update(metadata)
         payload["metadata"] = merged
     payload["updated_at"] = time.time()
-    _path_for(job_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _WRITE_LOCK:
+        _atomic_write_text(_path_for(job_id), json.dumps(payload, ensure_ascii=False, indent=2))
     return True
 
 
@@ -91,9 +106,10 @@ def cleanup_old_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
             updated = float(payload.get("updated_at") or payload.get("created_at") or 0)
             if updated and now - updated > ttl_seconds:
                 path.unlink(missing_ok=True)
-        except Exception:
+        except Exception as exc:
+            LOGGER.warning("Unable to clean editor job %s: %s", path, exc)
             try:
                 path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as unlink_exc:
+                LOGGER.warning("Unable to remove editor job %s: %s", path, unlink_exc)
 
