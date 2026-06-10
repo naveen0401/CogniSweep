@@ -4339,17 +4339,20 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
             target_page = "Dashboard"
     st.session_state["user"] = user
     st.session_state["authenticated"] = True
-    st.session_state["es_page"] = target_page
     session_token = signed_session_token_for_user(user)
     st.session_state["_pending_session_cookie"] = session_token
-    st.session_state["_post_login_session_token"] = session_token
     launch_params = login_launch_params(return_to, target_page)
-    st.session_state["_post_login_tool_launch_url"] = "?" + urlencode(launch_params)
-    st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
-    st.session_state["_login_window_stay_open"] = True
-    st.session_state.page = "Login"
-    st.session_state["current_route"] = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
-    set_route_query({"es_page": "Login"})
+    launch_page = normalize_es_page(launch_params.get("es_page") or target_page or "Dashboard")
+    if launch_params.get("es_page"):
+        launch_params["es_page"] = launch_page
+    st.session_state["es_page"] = launch_page
+    st.session_state.page = launch_page if launch_page in known_protected_es_pages() else "Dashboard"
+    if launch_params.get("review_id"):
+        st.session_state["active_review_session_id"] = launch_params["review_id"]
+    for key in ("_post_login_tool_launch_url", "_post_login_tool_launch_id", "_post_login_session_token", "_login_window_stay_open"):
+        st.session_state.pop(key, None)
+    st.session_state["current_route"] = {"page": st.session_state.page, **launch_params}
+    set_route_query(launch_params)
     query_clear("public")
     query_clear("return_to")
     query_clear("es_session")
@@ -4618,6 +4621,7 @@ PUBLIC_ROUTES = {
     "billing_success",
     "billing_cancel",
 }
+AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {"landing", "login", "signup"}
 PUBLIC_ES_PAGE_ALIASES = {
     "landing": "landing",
     "login": "login",
@@ -4824,6 +4828,12 @@ def public_route_for_es_page(page: str) -> str:
         if normalized_page == page_name:
             return route
     return PUBLIC_ES_PAGE_ALIASES.get(es_page_alias_key(page), "")
+
+
+def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:
+    """Authenticated users should enter the product, not stay on auth pages."""
+    public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
+    return public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES
 
 
 def browser_route_storage_params(params: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
@@ -15435,13 +15445,9 @@ def render_login() -> None:
     st.markdown("## Login to ErrorSweep")
 
     if is_authenticated():
-        if not safe_text(st.session_state.get("_post_login_tool_launch_url", "")):
-            st.session_state["_post_login_tool_launch_url"] = app_page_link("Dashboard")
-            st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
-        if not safe_text(st.session_state.get("_post_login_session_token", "")):
-            st.session_state["_post_login_session_token"] = signed_session_token_for_user(current_user() or {})
-        render_post_login_tool_launch_bridge()
-        st.caption("You can keep this login tab open. Normal app navigation happens in the ErrorSweep Tool tab.")
+        st.info("You are signed in. Opening your dashboard.")
+        set_route_query({"es_page": "Dashboard"})
+        st.rerun()
         return
 
     tabs = st.tabs(["Platform owner", "Workspace user", "Demo access"])
@@ -19521,8 +19527,8 @@ if __name__ == "__main__":
     if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
         st.stop()
 
-    if is_authenticated() and route.get("route") in {"signup"}:
-        return_to = safe_text(st.session_state.pop("post_login_return_to", ""))
+    if is_authenticated() and authenticated_public_entry_route(route):
+        return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")
         if return_to and apply_return_to(return_to):
             route = get_current_route()
         else:

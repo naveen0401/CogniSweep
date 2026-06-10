@@ -64,17 +64,20 @@ def test_login_es_page_aliases_are_public_and_normalized() -> None:
     assert "PUBLIC_ROUTE_PAGE_NAMES.items()" in public_body
 
 
-def test_login_success_launches_tool_tab_and_keeps_login_page() -> None:
+def test_login_success_opens_target_route_in_current_tab() -> None:
     source = read_app()
     start = source.index("def login_user")
     end = source.index("def restore_session_from_query", start)
     body = source[start:end]
     assert 'st.session_state["authenticated"] = True' in body
-    assert 'st.session_state["es_page"] = target_page' in body
-    assert 'st.session_state["_post_login_tool_launch_url"] = "?" + urlencode(launch_params)' in body
-    assert 'st.session_state["_login_window_stay_open"] = True' in body
-    assert 'st.session_state.page = "Login"' in body
-    assert 'set_route_query({"es_page": "Login"})' in body
+    assert 'st.session_state["es_page"] = launch_page' in body
+    assert 'launch_params = login_launch_params(return_to, target_page)' in body
+    assert 'st.session_state.page = launch_page if launch_page in known_protected_es_pages() else "Dashboard"' in body
+    assert 'set_route_query(launch_params)' in body
+    assert 'st.session_state["_post_login_tool_launch_url"] = "?" + urlencode(launch_params)' not in body
+    assert 'st.session_state["_login_window_stay_open"] = True' not in body
+    assert 'st.session_state.page = "Login"' not in body
+    assert 'set_route_query({"es_page": "Login"})' not in body
     assert "apply_return_to(return_to)" not in body
 
 
@@ -131,17 +134,17 @@ def test_human_review_editor_uses_es_page_review_id_route() -> None:
     assert "render_editor_open_link(\"Open Human Review Editor\"" in source
 
 
-def test_public_login_and_tool_window_flow() -> None:
+def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     source = read_app()
     assert "def public_login_link_target() -> str" in source
     assert "target=\"_blank\" rel=\"noopener\"" in source
-    assert "def render_post_login_tool_launch_bridge() -> None" in source
-    assert "window.open(url.toString(), \"_blank\", \"noopener\")" in source
-    assert "st.session_state[\"_post_login_tool_launch_url\"]" in source
-    assert "st.session_state[\"_post_login_session_token\"]" in source
+    assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {\"landing\", \"login\", \"signup\"}" in source
+    assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
     assert "url.searchParams.set(\"es_page\", \"Login\")" not in source[source.index("def render_logout_bridge"):source.index("def login_launch_params")]
-    assert 'if is_authenticated() and route.get("route") in {"signup"}:' in source
+    assert 'if is_authenticated() and authenticated_public_entry_route(route):' in source
+    assert 'return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")' in source
+    assert 'set_route_query({"es_page": "Dashboard"})' in source
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
 
 
@@ -238,7 +241,7 @@ def test_refresh_restores_last_authenticated_route() -> None:
     app_body = source[app_start:app_end]
     assert "render_route_restore_bridge()" in app_body
     assert "sync_browser_session_cookie()" in app_body
-    assert 'route.get("route") in {"signup"}' in app_body
+    assert "authenticated_public_entry_route(route)" in app_body
     assert 'current_route.get("public") != "login"' not in app_body
 
 
@@ -553,8 +556,8 @@ if __name__ == "__main__":
     test_navigation_links_do_not_emit_session_tokens()
     test_auth_redirect_uses_es_page_login_without_route_param()
     test_login_es_page_aliases_are_public_and_normalized()
-    test_login_success_launches_tool_tab_and_keeps_login_page()
-    test_public_login_and_tool_window_flow()
+    test_login_success_opens_target_route_in_current_tab()
+    test_public_login_and_authenticated_entry_routes_open_dashboard()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
