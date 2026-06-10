@@ -4836,6 +4836,43 @@ def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:
     return public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES
 
 
+def authenticated_shell_route_from_session(default_page: str = "Dashboard") -> Dict[str, str]:
+    """Build a protected route from session state when query params are stale."""
+    current = st.session_state.get("current_route")
+    if isinstance(current, dict):
+        editor_type = safe_text(current.get("es_editor"))
+        page = normalize_es_page(current.get("es_page") or current.get("page") or "")
+        if editor_type:
+            params = {
+                key: safe_text(current.get(key))
+                for key in ROUTE_STORAGE_PARAM_KEYS
+                if safe_text(current.get(key))
+            }
+            params["es_editor"] = editor_type
+            return {"route": "human_review_editor" if editor_type == "human_review" else "cat_editor", **params}
+        if is_human_review_editor_page(page):
+            route = {"route": "human_review_editor", "page": "Human Review Editor", "es_page": "Human Review Editor"}
+            review_id = safe_text(current.get("review_id"))
+            if review_id:
+                route["review_id"] = review_id
+            return route
+        if page in known_protected_es_pages() and not public_route_for_es_page(page):
+            route_slug = safe_text(current.get("route")).strip().lower()
+            if route_slug in PUBLIC_ROUTES or not route_slug:
+                route_slug = PAGE_ROUTE_SLUGS.get(page) or es_page_alias_key(page) or "dashboard"
+            route = {"route": route_slug, "page": page, "es_page": page}
+            for key in ("job_id", "review_id"):
+                value = safe_text(current.get(key))
+                if value:
+                    route[key] = value
+            return route
+
+    page = normalize_es_page(st.session_state.get("page") or st.session_state.get("es_page") or default_page)
+    if public_route_for_es_page(page) or page not in known_protected_es_pages():
+        page = normalize_es_page(default_page)
+    return {"route": PAGE_ROUTE_SLUGS.get(page) or es_page_alias_key(page) or "dashboard", "page": page, "es_page": page}
+
+
 def browser_route_storage_params(params: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     params = params or {}
     stored: Dict[str, str] = {}
@@ -19538,6 +19575,8 @@ if __name__ == "__main__":
             st.session_state.page = normalize_es_page(target_page)
             set_route_query({"es_page": st.session_state.page})
             route = get_current_route()
+        if route.get("route") in PUBLIC_ROUTES:
+            route = authenticated_shell_route_from_session()
 
     if route.get("route") in PUBLIC_ROUTES:
         render_public_app()

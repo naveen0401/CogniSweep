@@ -145,6 +145,8 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert 'if is_authenticated() and authenticated_public_entry_route(route):' in source
     assert 'return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")' in source
     assert 'set_route_query({"es_page": "Dashboard"})' in source
+    assert "def authenticated_shell_route_from_session(default_page: str = \"Dashboard\") -> Dict[str, str]:" in source
+    assert 'if route.get("route") in PUBLIC_ROUTES:\n            route = authenticated_shell_route_from_session()' in source
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
 
 
