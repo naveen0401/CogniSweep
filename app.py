@@ -15081,6 +15081,58 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
     render_router_debug_panel(route, f"landing:{reason}")
     local_status = current_ai_route_label()
     st.html(
+        dedent("""
+        <div id="errorsweep-landing-page-marker"></div>
+        <style>
+        #errorsweep-landing-page-marker {
+          display: none !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"],
+        body:has(#errorsweep-landing-page-marker) [data-testid="stAppViewContainer"] .main .block-container,
+        body:has(#errorsweep-landing-page-marker) .block-container {
+          height: 100dvh !important;
+          max-height: 100dvh !important;
+          min-height: 0 !important;
+          overflow-x: hidden !important;
+          overflow-y: scroll !important;
+          overscroll-behavior: contain !important;
+          scrollbar-gutter: stable both-edges !important;
+          scroll-behavior: smooth !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"] > div[data-testid="stVerticalBlock"],
+        body:has(#errorsweep-landing-page-marker) .block-container > div[data-testid="stVerticalBlock"] {
+          height: auto !important;
+          max-height: none !important;
+          min-height: 100dvh !important;
+          overflow: visible !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp {
+          overflow: visible !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
+        body:has(#errorsweep-landing-page-marker) .block-container::-webkit-scrollbar {
+          width: 11px;
+        }
+
+        body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-track,
+        body:has(#errorsweep-landing-page-marker) .block-container::-webkit-scrollbar-track {
+          background: rgba(5, 7, 19, .82);
+        }
+
+        body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-thumb,
+        body:has(#errorsweep-landing-page-marker) .block-container::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #11f5b5, #4aa8ff);
+          border: 2px solid rgba(5, 7, 19, .82);
+          border-radius: 999px;
+        }
+        </style>
+        """).strip(),
+    )
+    st.html(
         dedent(f"""
         <div class="es-lp">
           <header class="es-lp-nav">
