@@ -1,111 +1,121 @@
-# ErrorSweep SaaS Setup
+# ErrorSweep SaaS
 
-## 1. Replace GitHub files
+ErrorSweep runs from the repository root:
 
-Rename:
+- Streamlit entrypoint: `app.py`
+- Production dependency file: `requirements.txt`
+- Production deployment pack: `deploy/`
 
-```text
-app_errorsweep_saas_supabase.py -> app.py
-requirements_errorsweep_saas_supabase.txt -> requirements.txt
+Do not rename legacy generated files into place for launch. The root `app.py` and `requirements.txt` are the canonical files used by Docker, Streamlit, release checks, and production deployment.
+
+## Local Run
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\streamlit.exe run app.py
 ```
 
-Push:
+## Production Release Guard
 
-```bash
-git add app.py requirements.txt
-git commit -m "Add Supabase auth and usage credits"
-git push
+Run the offline release check before cutting or deploying a launch branch:
+
+```powershell
+python deploy/release_check.py --strict
 ```
 
-## 2. Supabase setup
+This validates:
 
-Create a Supabase project, then open:
+- Root `app.py` and `requirements.txt` are present.
+- Docker runs `streamlit run app.py`.
+- Required production packages are listed in `requirements.txt`.
+- Deployment pack files and compose services are present.
+- Private env and secret files are ignored.
+- Production entrypoints compile.
 
-```text
-Supabase Dashboard -> SQL Editor
+## Production Environment
+
+Copy the non-secret template and fill real values outside git:
+
+```powershell
+Copy-Item deploy/.env.production.example deploy/.env.production
+python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 ```
 
-Run the contents of:
+Required launch providers include Supabase persistence, cloud object storage, async workers, billing/webhooks, transactional email, legal approval, CDN/WAF, and scheduled backups.
+Production translation also needs either `OPENAI_API_KEY` or a live managed OpenAI-compatible endpoint for platform fallback, plus self-hosted MT endpoints for no-key Pro workflows.
+
+For Streamlit Cloud-style deployments, copy `.streamlit/secrets.toml.example` into the platform Secrets UI and fill the real values there. Do not commit `.streamlit/secrets.toml`.
+
+## Production Deployment
+
+Use the deployment pack and runbook:
+
+- `deploy/README_DEPLOYMENT.md`
+- `deploy/LAUNCH_RUNBOOK.md`
+- `deploy/launch_env_check.py`
+- `production_smoke_test.py`
+
+Build and start:
+
+```powershell
+docker compose --env-file deploy/.env.production -f docker-compose.production.yml build
+docker compose --env-file deploy/.env.production -f docker-compose.production.yml up -d
+```
+
+Final verification:
+
+```powershell
+python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-app python production_smoke_test.py --markdown --strict --probe-endpoints
+docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-worker-supervisor python worker_supervisor.py --status
+```
+
+## Supabase
+
+Create the production Supabase project, then run:
 
 ```text
 supabase_v42_release_schema.sql
 ```
 
-This creates persistent tables for editor jobs, usage events, users,
-workspaces, projects, jobs, payments, and audit logs. If Supabase secrets are
-not configured, ErrorSweep uses the safe local JSON fallback automatically.
+Configure at minimum:
 
-## 3. Streamlit Secrets
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
 
-In Streamlit Cloud -> App -> Settings -> Secrets:
+Local JSON fallback is for development only. Public launch must use production Supabase persistence.
 
-```toml
-OPENAI_API_KEY = "your_openai_key"
-GEMINI_API_KEY = "your_gemini_key"
+## Built-In Machine Translation
 
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your_supabase_anon_key"
-SUPABASE_SERVICE_ROLE_KEY = "your_supabase_service_role_key"
-```
+No-key Pro translation can use self-hosted MT endpoints:
 
-Never put these keys in GitHub.
+- OPUS-MT for lightweight tested European pairs.
+- IndicTrans2 for Indian languages.
+- MADLAD-400 for broad global fallback when production GPU capacity is available.
 
-## 4. No-key Machine Translation
+Worker setup references:
 
-ErrorSweep can provide MT drafts without user API keys through self-hosted
-engines:
+- `README_v45_opus_mt_endpoint.md`
+- `README_indictrans2_setup.md`
+- `README_madlad400_endpoint.md`
 
-```text
-MADLAD-400 -> broad global language coverage
-IndicTrans2 -> Indian languages when configured
-OPUS-MT -> lightweight fallback for tested European pairs
-```
-
-For MADLAD-400 setup, see:
-
-```text
-README_madlad400_endpoint.md
-```
-
-To start local workers on Windows:
+Local worker smoke test:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1
-powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1 -WithMadlad -WithIndicTrans2
-```
-
-Then open ErrorSweep Pro and expand **Built-in MT engine diagnostics**.
-
-You can also run:
-
-```powershell
 .\.venv\Scripts\python.exe test_builtin_mt_engines.py
 ```
 
-## 5. Credit model
+## Platform AI Fallback
 
-QA run:
+User BYO keys are preferred at runtime. For production fallback, configure one of:
 
-```text
-1 credit per 100 segments
-+1 credit if Rules ZIP is used
-```
+- `OPENAI_API_KEY`
+- `ERRORSWEEP_MANAGED_AI_ENABLED=true` with `ERRORSWEEP_MANAGED_AI_BASE_URL`
 
-Pro translation + review:
+`GEMINI_API_KEY` can be added when Gemini OpenAI-compatible routing is offered as a managed option.
 
-```text
-3 credits per 75 segments
-+ extra review credit when independent review is ON
-+1 credit if Rules ZIP is used
-```
+## Secrets
 
-## 6. Upgrade user plan manually for now
-
-In Supabase Table Editor -> profiles, update:
-
-```text
-plan = pro
-monthly_credits = 600
-```
-
-Later, connect Stripe/Razorpay to update these automatically.
+Never commit API keys, Supabase keys, billing keys, webhook secrets, email credentials, or production env files. Use the deployment platform secret store or `deploy/.env.production` outside git.

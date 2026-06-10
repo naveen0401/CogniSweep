@@ -1,0 +1,117 @@
+services:
+  errorsweep-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: errorsweep/app:latest
+    restart: unless-stopped
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      ERRORSWEEP_ENV: production
+      ERRORSWEEP_PUBLIC_BASE_URL: ${ERRORSWEEP_PUBLIC_BASE_URL:-http://127.0.0.1:8501}
+      ERRORSWEEP_EDITOR_JOB_DIR: /data/errorsweep/editor_jobs
+      ERRORSWEEP_JOB_ATTACHMENT_DIR: /data/errorsweep/job_attachments
+      ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
+      ERRORSWEEP_ASYNC_WORKER_URL: ${ERRORSWEEP_ASYNC_WORKER_URL:-http://errorsweep-async-receiver:8300/tasks}
+      ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL: ${ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL:-http://errorsweep-billing-webhook:8301/webhooks/billing/razorpay}
+    ports:
+      - "8501:8501"
+    volumes:
+      - errorsweep-data:/data/errorsweep
+      - errorsweep-logs:/logs/errorsweep
+    depends_on:
+      - errorsweep-async-receiver
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  errorsweep-async-receiver:
+    image: errorsweep/app:latest
+    restart: unless-stopped
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED: "true"
+      ERRORSWEEP_ASYNC_WORKER_HOST: 0.0.0.0
+      ERRORSWEEP_ASYNC_WORKER_PORT: 8300
+      ERRORSWEEP_ASYNC_WORKER_DIR: /data/errorsweep/async_worker
+      ERRORSWEEP_EDITOR_JOB_DIR: /data/errorsweep/editor_jobs
+      ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
+    command: ["python", "async_task_worker.py", "--host", "0.0.0.0", "--port", "8300"]
+    ports:
+      - "8300:8300"
+    volumes:
+      - errorsweep-data:/data/errorsweep
+      - errorsweep-logs:/logs/errorsweep
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  errorsweep-worker-supervisor:
+    image: errorsweep/app:latest
+    restart: unless-stopped
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      ERRORSWEEP_WORKER_SUPERVISOR_ENABLED: "true"
+      ERRORSWEEP_SUPERVISOR_ENABLE_ASYNC_PROCESSOR: "true"
+      ERRORSWEEP_SUPERVISOR_ENABLE_EMAIL_WORKER: "true"
+      ERRORSWEEP_SUPERVISOR_ENABLE_BACKUP_WORKER: "true"
+      ERRORSWEEP_SUPERVISOR_ENABLE_BILLING_RECEIVER: "false"
+      ERRORSWEEP_SUPERVISOR_LOG_DIR: /logs/errorsweep/supervisor
+      ERRORSWEEP_SUPERVISOR_STATUS_FILE: /logs/errorsweep/supervisor/status.json
+      ERRORSWEEP_ASYNC_WORKER_DIR: /data/errorsweep/async_worker
+      ERRORSWEEP_ASYNC_RESULT_DIR: /data/errorsweep/async_results
+      ERRORSWEEP_EDITOR_JOB_DIR: /data/errorsweep/editor_jobs
+      ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
+      ERRORSWEEP_BACKUP_OUTPUT_DIR: /data/errorsweep/backups
+    command: ["python", "worker_supervisor.py"]
+    volumes:
+      - errorsweep-data:/data/errorsweep
+      - errorsweep-logs:/logs/errorsweep
+    depends_on:
+      - errorsweep-async-receiver
+
+  errorsweep-billing-webhook:
+    image: errorsweep/app:latest
+    restart: unless-stopped
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      ERRORSWEEP_BILLING_WEBHOOK_HOST: 0.0.0.0
+      ERRORSWEEP_BILLING_WEBHOOK_PORT: 8301
+      ERRORSWEEP_EDITOR_JOB_DIR: /data/errorsweep/editor_jobs
+    command: ["python", "billing_webhook_receiver.py"]
+    ports:
+      - "8301:8301"
+    volumes:
+      - errorsweep-data:/data/errorsweep
+      - errorsweep-logs:/logs/errorsweep
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8301/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles:
+      - redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - errorsweep-redis:/data
+
+volumes:
+  errorsweep-data:
+  errorsweep-logs:
+  errorsweep-redis:

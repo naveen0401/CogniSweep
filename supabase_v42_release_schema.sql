@@ -148,6 +148,33 @@ create table if not exists public.errorsweep_payments (
 create index if not exists idx_errorsweep_payments_workspace on public.errorsweep_payments(workspace);
 create index if not exists idx_errorsweep_payments_updated_at on public.errorsweep_payments(updated_at desc);
 
+create table if not exists public.errorsweep_invoices (
+    id text primary key,
+    workspace text,
+    user_email text,
+    invoice_number text,
+    customer_email text,
+    customer_gstin text,
+    plan text,
+    billing_period text,
+    currency text,
+    subtotal numeric,
+    tax_rate_percent numeric,
+    tax_amount numeric,
+    total numeric,
+    status text,
+    source_payment_id text,
+    notes text,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create unique index if not exists idx_errorsweep_invoices_number on public.errorsweep_invoices(invoice_number);
+create index if not exists idx_errorsweep_invoices_workspace on public.errorsweep_invoices(workspace);
+create index if not exists idx_errorsweep_invoices_status on public.errorsweep_invoices(status);
+create index if not exists idx_errorsweep_invoices_updated_at on public.errorsweep_invoices(updated_at desc);
+
 create table if not exists public.errorsweep_subscriptions (
     id text primary key,
     workspace text,
@@ -309,11 +336,14 @@ create table if not exists public.errorsweep_notifications (
     status text,
     provider text,
     body text,
+    error text,
     metadata_json jsonb,
     sent_at timestamptz,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+alter table public.errorsweep_notifications add column if not exists error text;
 
 create index if not exists idx_errorsweep_notifications_workspace on public.errorsweep_notifications(workspace);
 create index if not exists idx_errorsweep_notifications_recipient on public.errorsweep_notifications(recipient);
@@ -344,6 +374,112 @@ create index if not exists idx_errorsweep_task_queue_status on public.errorsweep
 create index if not exists idx_errorsweep_task_queue_type on public.errorsweep_task_queue(task_type);
 create index if not exists idx_errorsweep_task_queue_updated_at on public.errorsweep_task_queue(updated_at desc);
 
+create table if not exists public.errorsweep_platform_settings (
+    id text primary key,
+    workspace text not null default 'Platform',
+    user_email text,
+    setting_key text not null unique,
+    setting_value jsonb not null default '{}'::jsonb,
+    value_type text not null default 'json',
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_platform_settings_key on public.errorsweep_platform_settings(setting_key);
+create index if not exists idx_errorsweep_platform_settings_updated_at on public.errorsweep_platform_settings(updated_at desc);
+
+create table if not exists public.errorsweep_privacy_requests (
+    id text primary key,
+    workspace text,
+    user_email text,
+    request_type text,
+    requester_email text,
+    subject text,
+    status text,
+    due_at timestamptz,
+    fulfilled_at timestamptz,
+    owner_notes text,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_privacy_requests_workspace on public.errorsweep_privacy_requests(workspace);
+create index if not exists idx_errorsweep_privacy_requests_status on public.errorsweep_privacy_requests(status);
+create index if not exists idx_errorsweep_privacy_requests_due_at on public.errorsweep_privacy_requests(due_at);
+create index if not exists idx_errorsweep_privacy_requests_updated_at on public.errorsweep_privacy_requests(updated_at desc);
+
+create table if not exists public.errorsweep_support_tickets (
+    id text primary key,
+    workspace text,
+    user_email text,
+    requester_email text,
+    category text,
+    priority text,
+    subject text,
+    message text,
+    status text,
+    owner_reply text,
+    last_response_at timestamptz,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_support_tickets_workspace on public.errorsweep_support_tickets(workspace);
+create index if not exists idx_errorsweep_support_tickets_requester on public.errorsweep_support_tickets(requester_email);
+create index if not exists idx_errorsweep_support_tickets_status on public.errorsweep_support_tickets(status);
+create index if not exists idx_errorsweep_support_tickets_priority on public.errorsweep_support_tickets(priority);
+create index if not exists idx_errorsweep_support_tickets_updated_at on public.errorsweep_support_tickets(updated_at desc);
+
+create table if not exists public.errorsweep_status_incidents (
+    id text primary key,
+    workspace text,
+    user_email text,
+    scope text,
+    incident_type text,
+    severity text,
+    status text,
+    title text,
+    message text,
+    starts_at timestamptz,
+    ends_at timestamptz,
+    resolved_at timestamptz,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_status_incidents_scope on public.errorsweep_status_incidents(scope);
+create index if not exists idx_errorsweep_status_incidents_status on public.errorsweep_status_incidents(status);
+create index if not exists idx_errorsweep_status_incidents_severity on public.errorsweep_status_incidents(severity);
+create index if not exists idx_errorsweep_status_incidents_updated_at on public.errorsweep_status_incidents(updated_at desc);
+
+create table if not exists public.errorsweep_consent_records (
+    id text primary key,
+    workspace text,
+    user_email text,
+    email text,
+    account_type text,
+    role text,
+    terms_version text,
+    privacy_version text,
+    nda_version text,
+    cookie_version text,
+    dpa_version text,
+    accepted_at timestamptz,
+    ip_hint text,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_consent_records_workspace on public.errorsweep_consent_records(workspace);
+create index if not exists idx_errorsweep_consent_records_email on public.errorsweep_consent_records(email);
+create index if not exists idx_errorsweep_consent_records_versions on public.errorsweep_consent_records(terms_version, privacy_version, nda_version);
+create index if not exists idx_errorsweep_consent_records_updated_at on public.errorsweep_consent_records(updated_at desc);
+
 alter table public.errorsweep_editor_jobs enable row level security;
 alter table public.errorsweep_usage_events enable row level security;
 alter table public.errorsweep_users enable row level security;
@@ -351,6 +487,7 @@ alter table public.errorsweep_workspaces enable row level security;
 alter table public.errorsweep_projects enable row level security;
 alter table public.errorsweep_jobs enable row level security;
 alter table public.errorsweep_payments enable row level security;
+alter table public.errorsweep_invoices enable row level security;
 alter table public.errorsweep_subscriptions enable row level security;
 alter table public.errorsweep_checkout_sessions enable row level security;
 alter table public.errorsweep_billing_events enable row level security;
@@ -359,6 +496,11 @@ alter table public.errorsweep_audit_logs enable row level security;
 alter table public.errorsweep_files enable row level security;
 alter table public.errorsweep_notifications enable row level security;
 alter table public.errorsweep_task_queue enable row level security;
+alter table public.errorsweep_platform_settings enable row level security;
+alter table public.errorsweep_privacy_requests enable row level security;
+alter table public.errorsweep_support_tickets enable row level security;
+alter table public.errorsweep_status_incidents enable row level security;
+alter table public.errorsweep_consent_records enable row level security;
 
 create or replace view public.errorsweep_usage_daily as
 select

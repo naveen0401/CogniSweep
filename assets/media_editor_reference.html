@@ -1,0 +1,1663 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ErrorSweep Subtitle & Transcription Editor</title>
+  <style>
+    :root {
+      --bg: #080a12;
+      --header: #242a2f;
+      --panel: #0b1020;
+      --panel-2: #111827;
+      --panel-3: #1f2937;
+      --line: #293241;
+      --line-soft: rgba(148, 163, 184, .24);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --mint: #08d69b;
+      --cyan: #38bdf8;
+      --violet: #8b5cf6;
+      --amber: #f59e0b;
+      --right-bg: #f5f6f8;
+      --right-line: #d1d5db;
+      --right-text: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    .es-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+    .es-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 999px; }
+    .es-scroll::-webkit-scrollbar-track { background: #111827; }
+    .app-shell {
+      height: 100dvh;
+      max-height: 100dvh;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+    .app-header {
+      height: 56px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 16px;
+      background: var(--header);
+      border-bottom: 1px solid #334155;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .logo {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      font-weight: 900;
+      color: #090b12;
+      background: linear-gradient(135deg, var(--mint), var(--cyan), var(--violet));
+      flex: 0 0 auto;
+    }
+    .title-block { min-width: 0; }
+    .title {
+      font-size: 14px;
+      line-height: 1.2;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .subtitle {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .header-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+    .btn {
+      height: 32px;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--text);
+      background: #334155;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn:disabled {
+      cursor: not-allowed !important;
+      border-color: #64748b !important;
+      background: #475569 !important;
+      color: #cbd5e1 !important;
+      opacity: .62;
+      filter: grayscale(.35);
+      box-shadow: none !important;
+    }
+    .btn:disabled:hover { filter: grayscale(.35); }
+    .btn-primary { border-color: var(--cyan); background: var(--cyan); color: #07111f; }
+    .btn-mint { border-color: var(--mint); background: var(--mint); color: #07111f; }
+    .btn-ghost { background: transparent; }
+    .submit-btn:not(:disabled) {
+      box-shadow: 0 0 0 2px rgba(8, 214, 155, .18);
+    }
+    .editor-layout {
+      min-height: 0;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .left-column {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(150px, 192px) 44px minmax(0, 1fr) auto;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+    }
+    .media-strip {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+      gap: 16px;
+      padding: 16px;
+      background: #0b1020;
+      border-bottom: 1px solid var(--line);
+    }
+    .media-box {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: #000;
+      display: grid;
+      place-items: center;
+    }
+    .media-box.document-pip-active::after {
+      content: "Video is floating in Picture-in-Picture";
+      color: #94a3b8;
+      font-size: 13px;
+      font-weight: 800;
+      text-align: center;
+      padding: 18px;
+    }
+    .video-preview-layer {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      place-items: center;
+      background: #000;
+      overflow: hidden;
+    }
+    .media-box video {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      object-position: center;
+      display: block;
+      background: #000;
+    }
+    .video-caption-overlay {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      z-index: 5;
+      max-width: min(86%, 820px);
+      transform: translateX(-50%);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, .78);
+      color: #fff;
+      display: none;
+      padding: 7px 11px;
+      text-align: center;
+      font-size: 15px;
+      line-height: 1.35;
+      font-weight: 800;
+      text-shadow: 0 1px 2px rgba(0,0,0,.8);
+      white-space: pre-wrap;
+      pointer-events: none;
+    }
+    .video-caption-overlay.visible { display: block; }
+    .media-box video::cue {
+      color: #fff;
+      background: rgba(0, 0, 0, .72);
+      font-size: 15px;
+      line-height: 1.35;
+    }
+    .media-box audio {
+      width: calc(100% - 24px);
+      max-width: 100%;
+      display: block;
+    }
+    .media-placeholder {
+      color: #64748b;
+      text-align: center;
+      line-height: 1.45;
+      padding: 18px;
+      font-weight: 700;
+    }
+    .media-placeholder span { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; }
+    .segment-card {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: #111827;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .kicker {
+      color: var(--mint);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .segment-time {
+      margin-top: 8px;
+      color: #f8fafc;
+      font-size: clamp(18px, 2vw, 28px);
+      line-height: 1.08;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .segment-note {
+      margin-top: 8px;
+      color: #94a3b8;
+      font-size: 13px;
+      max-width: 760px;
+    }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .chip {
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 900;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .chip.mint { color: var(--mint); background: rgba(8,214,155,.10); border-color: rgba(8,214,155,.24); }
+    .chip.cyan { color: var(--cyan); background: rgba(56,189,248,.10); border-color: rgba(56,189,248,.24); }
+    .chip.violet { color: #ddd6fe; background: rgba(139,92,246,.12); border-color: rgba(139,92,246,.26); }
+    .toolbar {
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 12px;
+      background: #f1f5f9;
+      color: #1e293b;
+      border-bottom: 1px solid var(--line);
+      overflow: hidden;
+    }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .search {
+      width: min(320px, 28vw);
+      height: 30px;
+      min-width: 160px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 0 10px;
+      color: #0f172a;
+      background: #fff;
+    }
+    .tool-btn {
+      border: 0;
+      background: transparent;
+      color: #0284c7;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 4px;
+      white-space: nowrap;
+    }
+    .pip-btn {
+      height: 30px;
+      border: 1px solid #0284c7;
+      border-radius: 6px;
+      background: #0284c7;
+      color: #fff;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .pip-btn:hover { filter: brightness(1.08); }
+    .pip-btn:disabled {
+      cursor: not-allowed;
+      border-color: #cbd5e1;
+      background: #e2e8f0;
+      color: #64748b;
+      filter: none;
+    }
+    .caption-btn {
+      height: 30px;
+      border: 1px solid #64748b;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .caption-btn.active {
+      border-color: #08d69b;
+      background: #dcfce7;
+      color: #14532d;
+    }
+    .caption-btn:disabled {
+      cursor: not-allowed;
+      border-color: #cbd5e1;
+      background: #e2e8f0;
+      color: #64748b;
+    }
+    .mode-label {
+      height: 30px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #e0f2fe;
+      color: #075985;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .table-wrap {
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+      min-height: 0;
+      overflow: auto;
+      background: #111827;
+    }
+    table {
+      width: 100%;
+      min-width: 760px;
+      max-width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: #1f2937;
+      color: #cbd5e1;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      font-size: 11px;
+    }
+    th, td {
+      border: 1px solid #293241;
+      padding: 8px;
+      vertical-align: top;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .index-column { width: 48px; }
+    .time-column { width: 112px; }
+    .source-column { width: 31%; }
+    .target-column { width: auto; }
+    .status-column { width: 124px; max-width: 124px; }
+    .done-column { width: 56px; max-width: 56px; }
+    body.transcription-mode table { min-width: 640px; }
+    body.transcription-mode .source-column { display: none; }
+    tbody tr { background: #111827; }
+    tbody tr:hover { background: #172033; }
+    tbody tr.active-row { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(56,189,248,.12); }
+    tbody tr.hidden-row { display: none; }
+    .row-index { color: #94a3b8; font-weight: 800; text-align: center; }
+    .time-input, .cell-text, .status-select {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      color: #f8fafc;
+      background: transparent;
+      min-width: 0;
+    }
+    .time-input { color: var(--cyan); font-weight: 800; }
+    .cell-text {
+      min-height: 42px;
+      resize: vertical;
+      line-height: 1.35;
+      overflow: hidden;
+    }
+    .cell-text.source { color: #e2e8f0; }
+    .cell-text.target { color: #f8fafc; }
+    .status-select {
+      border: 1px solid rgba(148,163,184,.25);
+      border-radius: 6px;
+      background: #0f172a;
+      color: var(--mint);
+      font-size: 11px;
+      font-weight: 900;
+      padding: 4px 5px;
+    }
+    .done-cell {
+      text-align: center;
+      vertical-align: middle;
+      padding-left: 4px;
+      padding-right: 4px;
+    }
+    .done-cell input { width: 18px; height: 18px; accent-color: var(--mint); }
+    .done-header {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      width: 100%;
+      color: inherit;
+      cursor: pointer;
+    }
+    .done-header input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--mint);
+      flex: 0 0 auto;
+    }
+    .timing-drawer {
+      border-top: 1px solid var(--line);
+      background: #151b28;
+      color: #cbd5e1;
+    }
+    .timing-drawer summary {
+      cursor: pointer;
+      padding: 9px 14px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .timing-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      padding: 12px 14px 16px;
+    }
+    .timing-card {
+      border-radius: 8px;
+      background: #1f2937;
+      padding: 11px;
+      font-size: 13px;
+      min-width: 0;
+    }
+    .timing-card b { display: block; color: #f8fafc; font-size: 18px; }
+    .right-column {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--right-bg);
+      color: var(--right-text);
+    }
+    .assist-head {
+      height: 44px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--right-line);
+      padding: 0 14px;
+    }
+    .assist-head h2 { margin: 0; font-size: 15px; }
+    .assist-badge {
+      display: inline-grid;
+      place-items: center;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: #f97316;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .assist-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 14px; }
+    .assist-section { margin-bottom: 18px; }
+    .assist-section h3 {
+      margin: 0 0 8px;
+      color: #475569;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .assist-card {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      background: #fff;
+      color: #1f2937;
+      padding: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .assist-card small { display: block; margin-top: 4px; color: #64748b; }
+    .assist-card.warn {
+      border-color: #fbbf24;
+      background: #fffbeb;
+      color: #78350f;
+    }
+    .empty { color: #64748b; font-size: 13px; }
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 200;
+      display: none;
+      border-radius: 10px;
+      background: #0f172a;
+      border: 1px solid rgba(56,189,248,.32);
+      color: #e0f2fe;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 18px 42px rgba(0,0,0,.28);
+    }
+    .toast.show { display: block; }
+    @media (max-width: 1180px) {
+      .editor-layout { grid-template-columns: minmax(0, 1fr); }
+      .right-column { display: none; }
+      .media-strip { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); }
+    }
+    @media (max-width: 760px) {
+      .app-header { height: auto; min-height: 56px; flex-wrap: wrap; padding: 10px; }
+      .header-actions { width: 100%; justify-content: stretch; }
+      .header-actions .btn { flex: 1; padding: 0 8px; }
+      .media-strip { grid-template-columns: 1fr; grid-template-rows: 180px auto; }
+      .toolbar { height: auto; align-items: stretch; flex-direction: column; padding: 8px; }
+      .toolbar-left, .toolbar-right { width: 100%; flex-wrap: wrap; }
+      .search { width: 100%; }
+      .timing-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo">ES</div>
+        <div class="title-block">
+          <div class="title" id="editorTitle">ErrorSweep Media Editor</div>
+          <div class="subtitle" id="editorSubtitle">Subtitle / Transcription Workspace</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-ghost" id="backBtn">Back</button>
+        <button class="btn submit-btn" id="submitBtn" disabled>Submit</button>
+        <button class="btn" id="exportCsvBtn">Export CSV ZIP</button>
+        <button class="btn btn-primary" id="exportSrtBtn">Export SRT ZIP</button>
+      </div>
+    </header>
+
+    <main class="editor-layout">
+      <section class="left-column">
+        <div class="media-strip">
+          <div class="media-box" id="mediaBox"></div>
+          <div class="segment-card">
+            <div>
+              <div class="kicker">Current segment</div>
+              <div class="segment-time" id="activeTime">00:00:00,000 -> 00:00:00,000</div>
+              <div class="segment-note" id="activeNote">Use the table below to write subtitles or transcription while keeping the media in view.</div>
+            </div>
+            <div class="chip-row">
+              <span class="chip mint" id="workflowChip">Subtitling</span>
+              <span class="chip cyan" id="rowCountChip">0 rows</span>
+              <span class="chip violet" id="modeChip">Subtitle editing</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <input class="search" id="searchInput" placeholder="Search transcript or subtitles" />
+            <button class="tool-btn" id="splitBtn">Split</button>
+            <button class="tool-btn" id="mergeBtn">Merge</button>
+            <button class="tool-btn" id="insertBtn">Insert Row</button>
+          </div>
+          <div class="toolbar-right">
+            <button class="pip-btn" id="pipBtn" type="button" disabled>Picture-in-Picture</button>
+            <button class="caption-btn active" id="captionToggleBtn" type="button" disabled>Captions On</button>
+            <span class="mode-label" id="modeLabel">Subtitle mode</span>
+          </div>
+        </div>
+
+        <div class="table-wrap es-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th class="index-column">#</th>
+                <th class="time-column">Start</th>
+                <th class="time-column">End</th>
+                <th class="source-column" id="sourceHeader">Source / Speaker Note</th>
+                <th class="target-column" id="targetHeader">Target Subtitle</th>
+                <th class="status-column">Status</th>
+                <th class="done-column"><label class="done-header"><span>Done</span><input type="checkbox" id="confirmAllCheck" aria-label="Mark all segments done" /></label></th>
+              </tr>
+            </thead>
+            <tbody id="mediaRows"></tbody>
+          </table>
+        </div>
+
+        <details class="timing-drawer">
+          <summary>Timing and text grid</summary>
+          <div class="timing-grid">
+            <div class="timing-card">Total rows <b id="metricRows">0</b></div>
+            <div class="timing-card">Confirmed <b id="metricConfirmed">0</b></div>
+            <div class="timing-card">Active CPS <b id="metricCps">0</b></div>
+            <div class="timing-card">Overlaps <b id="metricOverlaps">0</b></div>
+          </div>
+        </details>
+      </section>
+
+      <aside class="right-column">
+        <div class="assist-head">
+          <h2>Assist Panel</h2>
+          <span class="assist-badge" id="assistCount">0</span>
+        </div>
+        <div class="assist-scroll es-scroll">
+          <div class="assist-section">
+            <h3>TM matches</h3>
+            <div id="tmMatches"></div>
+          </div>
+          <div class="assist-section">
+            <h3>Glossary</h3>
+            <div id="glossaryMatches"></div>
+          </div>
+          <div class="assist-section">
+            <h3>Quality Checks</h3>
+            <div id="qualityChecks"></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const payload = __MEDIA_EDITOR_PAYLOAD__;
+    const statusOptions = ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated", "Existing", "Transcribed Source"];
+    function safe(value) { return value == null ? "" : String(value); }
+    const workflowValue = safe((payload.metadata || {}).workflow || (payload.metadata || {}).title).toLowerCase();
+    const editorMode = workflowValue.includes("transcription") ? "transcription" : "subtitling";
+    let rows = Array.isArray(payload.rows) ? payload.rows.map((row, i) => normalizeRow(row, i)) : [];
+    let activeIndex = 0;
+    let autoSaveTimer = 0;
+    let captionsEnabled = true;
+    let captionTrack = null;
+    let captionTrackVideo = null;
+    let videoLayerElement = null;
+    let activeVideoElement = null;
+    let activeCaptionOverlay = null;
+    let documentPipWindow = null;
+    const draftKey = `errorsweep-media-editor-draft:${payload.job_id || "local"}`;
+
+    const el = (id) => document.getElementById(id);
+    const isTranscriptionMode = () => editorMode === "transcription";
+    const modeTitle = () => isTranscriptionMode() ? "Transcription" : "Subtitling";
+    const targetColumnLabel = () => isTranscriptionMode() ? "Transcript" : "Target Subtitle";
+
+    function normalizeRow(row, idx) {
+      const confirmed = Boolean(row.confirmed || row.done || row.status === "Approved");
+      return {
+        id: row.id || idx + 1,
+        start: safe(row.startText || row.start || "00:00:00,000"),
+        end: safe(row.endText || row.end || "00:00:03,500"),
+        source: safe(row.source),
+        target: safe(row.target || row.translation),
+        status: confirmed ? "Approved" : safe(row.status || "Draft"),
+        match: safe(row.match),
+        confirmed,
+        qa: Array.isArray(row.qa) ? row.qa : [],
+      };
+    }
+
+    function parseTimecode(value) {
+      const raw = safe(value).trim().replace(",", ".");
+      const parts = raw.split(":").map(Number);
+      if (parts.length === 3 && parts.every((part) => !Number.isNaN(part))) {
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      }
+      if (parts.length === 2 && parts.every((part) => !Number.isNaN(part))) {
+        return parts[0] * 60 + parts[1];
+      }
+      const asNumber = Number(raw);
+      return Number.isFinite(asNumber) ? asNumber : 0;
+    }
+
+    function formatTime(seconds) {
+      const value = Math.max(0, Number(seconds) || 0);
+      const h = Math.floor(value / 3600);
+      const m = Math.floor((value % 3600) / 60);
+      const s = Math.floor(value % 60);
+      const ms = Math.floor((value % 1) * 1000);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    }
+
+    function htmlEscape(value) {
+      return safe(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[ch]));
+    }
+
+    function showToast(message) {
+      const toast = el("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function applyEditorMode() {
+      document.body.classList.toggle("transcription-mode", isTranscriptionMode());
+      document.body.classList.toggle("subtitling-mode", !isTranscriptionMode());
+      el("modeLabel").textContent = `${modeTitle()} mode`;
+      el("workflowChip").textContent = modeTitle();
+      el("modeChip").textContent = isTranscriptionMode() ? "Transcript editing" : "Subtitle editing";
+      el("targetHeader").textContent = targetColumnLabel();
+      el("searchInput").placeholder = isTranscriptionMode() ? "Search transcript" : "Search source or subtitles";
+    }
+
+    function setupHeader() {
+      const meta = payload.metadata || {};
+      el("editorTitle").textContent = meta.title || "ErrorSweep Media Editor";
+      const parts = [meta.workflow || `${modeTitle()} Workspace`, meta.file_name || "", meta.target_language || ""].filter(Boolean);
+      el("editorSubtitle").textContent = parts.join(" · ");
+      applyEditorMode();
+      renderMediaPreview(payload.media || {});
+    }
+
+    function currentVideoElement() {
+      return activeVideoElement || el("mediaBox").querySelector("video");
+    }
+
+    function currentCaptionOverlay() {
+      return activeCaptionOverlay || el("mediaBox").querySelector(".video-caption-overlay");
+    }
+
+    function updateCaptionToggleState() {
+      const button = el("captionToggleBtn");
+      if (!button) return;
+      const video = currentVideoElement();
+      const supported = Boolean(video);
+      button.disabled = !supported;
+      button.classList.toggle("active", captionsEnabled && supported);
+      button.textContent = captionsEnabled ? "Captions On" : "Captions Off";
+      button.title = supported ? "Toggle live captions from segment rows" : "Caption preview is unavailable for this media";
+    }
+
+    function ensureCaptionTrack(video) {
+      if (!video) return null;
+      if (captionTrack && captionTrackVideo === video) return captionTrack;
+      captionTrackVideo = video;
+      captionTrack = video.addTextTrack("captions", `${modeTitle()} Preview`, "en");
+      captionTrack.mode = captionsEnabled ? "showing" : "disabled";
+      return captionTrack;
+    }
+
+    function clearCaptionTrack(track) {
+      if (!track || !track.cues) return;
+      Array.from(track.cues).forEach((cue) => {
+        try {
+          track.removeCue(cue);
+        } catch (error) {
+          // The browser can invalidate a cue while the track is updating.
+        }
+      });
+    }
+
+    function captionTextForRow(row) {
+      return safe(row.target).trim();
+    }
+
+    function activeCaptionTextAt(timeSeconds) {
+      if (!captionsEnabled) return "";
+      const time = Number(timeSeconds);
+      if (!Number.isFinite(time)) return "";
+      for (const row of rows) {
+        const text = captionTextForRow(row);
+        if (!text) continue;
+        const start = parseTimecode(row.start);
+        const end = parseTimecode(row.end);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start && time >= start && time <= end) {
+          return text;
+        }
+      }
+      return "";
+    }
+
+    function updateCaptionOverlay() {
+      const video = currentVideoElement();
+      const overlay = currentCaptionOverlay();
+      if (!overlay) return;
+      const text = video ? activeCaptionTextAt(video.currentTime || 0) : "";
+      overlay.textContent = text;
+      overlay.classList.toggle("visible", Boolean(text));
+    }
+
+    function syncCaptionPreview() {
+      const video = currentVideoElement();
+      const cueCtor = window.VTTCue || window.TextTrackCue;
+      if (!video) {
+        updateCaptionOverlay();
+        updateCaptionToggleState();
+        return;
+      }
+      if (typeof cueCtor === "function") {
+        const track = ensureCaptionTrack(video);
+        if (track) {
+          track.mode = captionsEnabled ? "showing" : "hidden";
+          clearCaptionTrack(track);
+          rows.forEach((row) => {
+            const text = captionTextForRow(row);
+            const start = parseTimecode(row.start);
+            const end = parseTimecode(row.end);
+            if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+            try {
+              track.addCue(new cueCtor(start, end, text));
+            } catch (error) {
+              // Skip malformed cue timings without blocking editing.
+            }
+          });
+          track.mode = captionsEnabled ? "showing" : "disabled";
+        }
+      }
+      updateCaptionOverlay();
+      updateCaptionToggleState();
+    }
+
+    async function toggleCaptionPreview() {
+      captionsEnabled = !captionsEnabled;
+      syncCaptionPreview();
+      const video = currentVideoElement();
+      if (captionsEnabled && video && document.pictureInPictureElement === video && documentPictureInPictureSupported()) {
+        try {
+          await document.exitPictureInPicture();
+          await openDocumentPictureInPicture(video);
+        } catch (error) {
+          updatePictureInPictureState();
+        }
+      }
+    }
+
+    function documentPictureInPictureSupported() {
+      return Boolean(window.documentPictureInPicture && typeof window.documentPictureInPicture.requestWindow === "function");
+    }
+
+    function documentPictureInPictureActive() {
+      return Boolean(documentPipWindow && !documentPipWindow.closed);
+    }
+
+    function pictureInPictureErrorText(error) {
+      if (!error) return "Picture-in-Picture failed";
+      const name = safe(error.name || "Error");
+      const message = safe(error.message || error);
+      return message && message !== name ? `${name}: ${message}` : name;
+    }
+
+    function nativePictureInPictureSupported(video) {
+      return Boolean(
+        video &&
+        document.pictureInPictureEnabled &&
+        typeof video.requestPictureInPicture === "function" &&
+        !video.disablePictureInPicture
+      );
+    }
+
+    function waitForVideoMetadata(video) {
+      if (!video) return Promise.reject(new DOMException("No video element found.", "NotFoundError"));
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          video.removeEventListener("loadedmetadata", onLoaded);
+          video.removeEventListener("error", onError);
+        };
+        const onLoaded = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          const mediaError = video.error;
+          reject(new DOMException(mediaError ? `Video metadata failed to load. MediaError code ${mediaError.code}.` : "Video metadata failed to load.", "NotSupportedError"));
+        };
+        video.addEventListener("loadedmetadata", onLoaded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        video.load();
+      });
+    }
+
+    function restoreDocumentPictureInPictureLayer() {
+      const box = el("mediaBox");
+      if (box && videoLayerElement && !box.contains(videoLayerElement)) {
+        box.appendChild(videoLayerElement);
+      }
+      if (box) {
+        box.classList.remove("document-pip-active");
+      }
+      documentPipWindow = null;
+      syncCaptionPreview();
+      updatePictureInPictureState();
+    }
+
+    async function openDocumentPictureInPicture(video) {
+      if (!video || !videoLayerElement || !documentPictureInPictureSupported()) return false;
+      const box = el("mediaBox");
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      }
+      const pipWindow = await window.documentPictureInPicture.requestWindow({
+        width: Math.min(640, Math.max(360, Math.round(window.innerWidth * 0.36))),
+        height: 360,
+      });
+      documentPipWindow = pipWindow;
+      const style = pipWindow.document.createElement("style");
+      style.textContent = `
+        html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#000; }
+        body { display:grid; place-items:center; }
+        .video-preview-layer { position:relative; width:100vw; height:100vh; display:grid; place-items:center; background:#000; overflow:hidden; }
+        video { width:100%; height:100%; max-width:100%; max-height:100%; object-fit:contain; object-position:center; background:#000; }
+        .video-caption-overlay { position:absolute; left:50%; bottom:18px; z-index:5; max-width:88%; transform:translateX(-50%); border-radius:8px; background:rgba(0,0,0,.82); color:#fff; display:none; padding:8px 12px; text-align:center; font:800 16px/1.35 Inter, system-ui, sans-serif; text-shadow:0 1px 2px rgba(0,0,0,.8); white-space:pre-wrap; pointer-events:none; }
+        .video-caption-overlay.visible { display:block; }
+      `;
+      pipWindow.document.head.appendChild(style);
+      pipWindow.document.body.appendChild(videoLayerElement);
+      box.classList.add("document-pip-active");
+      pipWindow.addEventListener("pagehide", restoreDocumentPictureInPictureLayer, { once: true });
+      syncCaptionPreview();
+      updatePictureInPictureState();
+      return true;
+    }
+
+    function updatePictureInPictureState() {
+      const button = el("pipBtn");
+      if (!button) return;
+      const video = currentVideoElement();
+      const supported = Boolean(
+        nativePictureInPictureSupported(video) ||
+        (video && documentPictureInPictureSupported())
+      );
+      button.disabled = !supported;
+      button.textContent = (document.pictureInPictureElement === video || documentPictureInPictureActive()) ? "Exit Picture-in-Picture" : "Picture-in-Picture";
+      if (!video) {
+        button.title = "Picture-in-Picture is unavailable because no video element is loaded";
+      } else if (nativePictureInPictureSupported(video)) {
+        button.title = "Open native browser Picture-in-Picture";
+      } else if (documentPictureInPictureSupported()) {
+        button.title = "Open Document Picture-in-Picture fallback";
+      } else {
+        button.title = "Picture-in-Picture is not supported by this browser or media";
+      }
+    }
+
+    async function togglePictureInPicture() {
+      const video = currentVideoElement();
+      if (!video) {
+        showToast("NotFoundError: No video element found for Picture-in-Picture");
+        updatePictureInPictureState();
+        return;
+      }
+      try {
+        if (documentPictureInPictureActive()) {
+          documentPipWindow.close();
+          restoreDocumentPictureInPictureLayer();
+          return;
+        }
+        if (document.pictureInPictureElement === video) {
+          await document.exitPictureInPicture();
+          updatePictureInPictureState();
+          return;
+        }
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        }
+        if (nativePictureInPictureSupported(video)) {
+          await waitForVideoMetadata(video);
+          await video.requestPictureInPicture();
+          updatePictureInPictureState();
+          return;
+        }
+        if (documentPictureInPictureSupported()) {
+          const opened = await openDocumentPictureInPicture(video);
+          if (opened) return;
+        }
+        showToast("NotSupportedError: Picture-in-Picture is not supported by this browser or media");
+        updatePictureInPictureState();
+      } catch (error) {
+        const nativeError = error;
+        if (!nativePictureInPictureSupported(video) && documentPictureInPictureSupported()) {
+          try {
+            const opened = await openDocumentPictureInPicture(video);
+            if (opened) return;
+          } catch (fallbackError) {
+            showToast(`${pictureInPictureErrorText(nativeError)}; fallback ${pictureInPictureErrorText(fallbackError)}`);
+            updatePictureInPictureState();
+            return;
+          }
+        }
+        showToast(pictureInPictureErrorText(nativeError));
+        updatePictureInPictureState();
+      }
+    }
+
+    function renderMediaPreview(media) {
+      const box = el("mediaBox");
+      box.textContent = "";
+      box.classList.remove("document-pip-active");
+      captionTrack = null;
+      captionTrackVideo = null;
+      videoLayerElement = null;
+      activeVideoElement = null;
+      activeCaptionOverlay = null;
+      documentPipWindow = null;
+      if (media && media.src) {
+        if (safe(media.mime).startsWith("audio/")) {
+          const audio = document.createElement("audio");
+          audio.src = media.src;
+          audio.controls = true;
+          box.appendChild(audio);
+        } else {
+          const layer = document.createElement("div");
+          layer.className = "video-preview-layer";
+          const video = document.createElement("video");
+          const overlay = document.createElement("div");
+          overlay.className = "video-caption-overlay";
+          overlay.setAttribute("aria-live", "polite");
+          video.src = media.src;
+          video.controls = true;
+          video.playsInline = true;
+          videoLayerElement = layer;
+          activeVideoElement = video;
+          activeCaptionOverlay = overlay;
+          video.addEventListener("loadedmetadata", () => {
+            updatePictureInPictureState();
+            syncCaptionPreview();
+          });
+          video.addEventListener("timeupdate", updateCaptionOverlay);
+          video.addEventListener("seeking", updateCaptionOverlay);
+          video.addEventListener("seeked", updateCaptionOverlay);
+          video.addEventListener("play", updateCaptionOverlay);
+          video.addEventListener("pause", updateCaptionOverlay);
+          video.addEventListener("enterpictureinpicture", updatePictureInPictureState);
+          video.addEventListener("leavepictureinpicture", updatePictureInPictureState);
+          layer.appendChild(video);
+          layer.appendChild(overlay);
+          box.appendChild(layer);
+          syncCaptionPreview();
+        }
+        updatePictureInPictureState();
+        updateCaptionToggleState();
+        return;
+      }
+      const div = document.createElement("div");
+      div.className = "media-placeholder";
+      div.innerHTML = `Media Preview<span>${htmlEscape(media && media.note ? media.note : "Preview unavailable for this stored media file")}</span>`;
+      box.appendChild(div);
+      updatePictureInPictureState();
+      updateCaptionToggleState();
+    }
+
+    function renderRows() {
+      const tbody = el("mediaRows");
+      const q = safe(el("searchInput").value).toLowerCase();
+      tbody.innerHTML = "";
+      rows.forEach((row, idx) => {
+        const text = `${row.source} ${row.target} ${row.status} ${row.match}`.toLowerCase();
+        const hidden = q && !text.includes(q);
+        const tr = document.createElement("tr");
+        tr.className = `${idx === activeIndex ? "active-row" : ""} ${hidden ? "hidden-row" : ""}`;
+        tr.dataset.index = idx;
+        tr.innerHTML = `
+          <td class="row-index index-column">${idx + 1}</td>
+          <td class="time-column"><input class="time-input" data-field="start" value="${htmlEscape(row.start)}" /></td>
+          <td class="time-column"><input class="time-input" data-field="end" value="${htmlEscape(row.end)}" /></td>
+          <td class="source-column"><textarea class="cell-text source" data-field="source" rows="2" aria-label="Source / Speaker Note">${htmlEscape(row.source)}</textarea></td>
+          <td class="target-column"><textarea class="cell-text target" data-field="target" rows="2" aria-label="${htmlEscape(targetColumnLabel())}">${htmlEscape(row.target)}</textarea></td>
+          <td class="status-column"><select class="status-select" data-field="status">${statusOptions.map((status) => `<option ${status === row.status ? "selected" : ""}>${htmlEscape(status)}</option>`).join("")}</select></td>
+          <td class="done-cell done-column"><input type="checkbox" data-field="confirmed" ${row.confirmed ? "checked" : ""} /></td>
+        `;
+        tr.addEventListener("click", (event) => {
+          if (event.target && event.target.dataset && event.target.dataset.field) return;
+          selectRow(idx);
+        });
+        tr.querySelectorAll("[data-field]").forEach((control) => {
+          control.addEventListener("focus", () => selectRow(idx, false));
+          control.addEventListener("input", () => updateFromControl(idx, control));
+          control.addEventListener("change", () => updateFromControl(idx, control));
+        });
+        tbody.appendChild(tr);
+      });
+      updateSummary();
+    }
+
+    function updateFromControl(idx, control) {
+      const field = control.dataset.field;
+      if (!rows[idx]) return;
+      if (field === "confirmed") {
+        rows[idx][field] = control.checked;
+        rows[idx].status = control.checked ? "Approved" : (safe(rows[idx].target).trim() ? "Needs Review" : "Draft");
+        const statusSelect = control.closest("tr") && control.closest("tr").querySelector(".status-select");
+        if (statusSelect) statusSelect.value = rows[idx].status;
+      } else if (field === "status") {
+        rows[idx][field] = control.value;
+        rows[idx].confirmed = control.value === "Approved";
+        const checkbox = control.closest("tr") && control.closest("tr").querySelector('input[data-field="confirmed"]');
+        if (checkbox) checkbox.checked = rows[idx].confirmed;
+      } else {
+        rows[idx][field] = control.value;
+      }
+      if (idx === activeIndex) updateActivePanel();
+      if (["start", "end", "target"].includes(field)) {
+        syncCaptionPreview();
+      }
+      scheduleAutoSave();
+      updateSummary();
+    }
+
+    function selectRow(idx, rerender = true) {
+      activeIndex = Math.max(0, Math.min(rows.length - 1, idx));
+      if (rerender) renderRows();
+      updateActivePanel();
+    }
+
+    function updateActivePanel() {
+      const row = rows[activeIndex] || {};
+      el("activeTime").textContent = `${row.start || "00:00:00,000"} -> ${row.end || "00:00:00,000"}`;
+      el("activeNote").textContent = row.source || row.target || `Use the selected row to write ${isTranscriptionMode() ? "transcript" : "subtitle"} text.`;
+      renderAssist(row);
+      updateSummary();
+    }
+
+    function updateSummary() {
+      const row = rows[activeIndex] || {};
+      const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
+      const textLength = safe(row.target || row.source).length;
+      const cps = Math.round(textLength / duration);
+      const overlaps = countOverlaps();
+      const confirmed = rows.filter((item) => item.confirmed || item.status === "Approved").length;
+      el("rowCountChip").textContent = `${rows.length} row${rows.length === 1 ? "" : "s"}`;
+      el("metricRows").textContent = rows.length;
+      el("metricConfirmed").textContent = confirmed;
+      el("metricCps").textContent = cps;
+      el("metricOverlaps").textContent = overlaps;
+      updateConfirmAllState();
+      updateSubmitState();
+    }
+
+    function confirmedCount() {
+      return rows.filter((item) => item.confirmed || item.status === "Approved").length;
+    }
+
+    function allRowsConfirmed() {
+      return rows.length > 0 && confirmedCount() === rows.length;
+    }
+
+    function updateSubmitState() {
+      const button = el("submitBtn");
+      const allConfirmed = allRowsConfirmed();
+      const pending = rows.length - confirmedCount();
+      if (button) {
+        button.disabled = !allConfirmed;
+        button.classList.toggle("btn-mint", allConfirmed);
+        button.title = allConfirmed ? "Submit completed media editor task" : `Tick ${pending} more segment${pending === 1 ? "" : "s"} before submitting`;
+      }
+      updateExportButtonState();
+    }
+
+    function updateExportButtonState() {
+      const allConfirmed = allRowsConfirmed();
+      const pending = rows.length - confirmedCount();
+      ["exportCsvBtn", "exportSrtBtn"].forEach((buttonId) => {
+        const button = el(buttonId);
+        if (!button) return;
+        button.disabled = !allConfirmed;
+        button.title = allConfirmed
+          ? "Download export package"
+          : `Tick ${pending} more segment${pending === 1 ? "" : "s"} Done before exporting`;
+      });
+    }
+
+    function updateConfirmAllState() {
+      const checkbox = el("confirmAllCheck");
+      if (!checkbox) return;
+      const confirmed = confirmedCount();
+      checkbox.checked = rows.length > 0 && confirmed === rows.length;
+      checkbox.indeterminate = confirmed > 0 && confirmed < rows.length;
+      checkbox.disabled = rows.length === 0;
+    }
+
+    function setAllSegmentsConfirmed(checked) {
+      rows.forEach((row) => {
+        row.confirmed = checked;
+        if (checked) {
+          row.status = "Approved";
+        } else if (row.status === "Approved") {
+          row.status = safe(row.target).trim() ? "Needs Review" : "Draft";
+        }
+      });
+      scheduleAutoSave();
+      renderRows();
+      updateSummary();
+    }
+
+    function countOverlaps() {
+      let count = 0;
+      for (let i = 1; i < rows.length; i++) {
+        if (parseTimecode(rows[i].start) < parseTimecode(rows[i - 1].end)) count++;
+      }
+      return count;
+    }
+
+    function renderAssist(row) {
+      const resources = payload.resources || {};
+      const source = safe(row.source).toLowerCase();
+      const target = safe(row.target).toLowerCase();
+      const tm = (resources.tm || []).filter((item) => {
+        const itemSource = safe(item.source).toLowerCase();
+        return itemSource && (source.includes(itemSource.slice(0, 24)) || itemSource.includes(source.slice(0, 24)));
+      }).slice(0, 3);
+      const glossary = (resources.glossary || []).filter((item) => {
+        const term = safe(item.source).toLowerCase();
+        return term && (source.includes(term) || target.includes(term));
+      }).slice(0, 6);
+      const qa = Array.isArray(row.qa) ? row.qa : [];
+      const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
+      const textLength = safe(row.target || row.source).length;
+      const cps = Math.round(textLength / duration);
+      const quality = [...qa];
+      if (cps > 20) quality.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
+      if (safe(row.target).length > 84) quality.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
+      if (parseTimecode(row.end) <= parseTimecode(row.start)) quality.push({ severity: "Blocker", message: "End time must be after start time." });
+      el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape(item.note || item.language || "TM match")}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
+      el("glossaryMatches").innerHTML = glossary.length ? glossary.map((item) => `<div class="assist-card"><b>${htmlEscape(item.source)}</b> -> ${htmlEscape(item.target)}<small>${htmlEscape(item.source_name || "Saved glossary")}</small></div>`).join("") : `<div class="empty">No glossary hits.</div>`;
+      el("qualityChecks").innerHTML = quality.length ? quality.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.severity || item.Severity || "Review")}</b><br>${htmlEscape(item.message || item.Explanation || item.issue || "Review this segment.")}</div>`).join("") : `<div class="assist-card"><b>Clear</b><br>No timing or quality warnings for the selected segment.</div>`;
+      el("assistCount").textContent = quality.length;
+    }
+
+    function splitRow() {
+      const row = rows[activeIndex];
+      if (!row) return;
+      const start = parseTimecode(row.start);
+      const end = parseTimecode(row.end);
+      const mid = formatTime((start + end) / 2);
+      const clone = { ...row, id: rows.length + 1, start: mid, confirmed: false, status: "Draft" };
+      row.end = mid;
+      rows.splice(activeIndex + 1, 0, clone);
+      syncCaptionPreview();
+      scheduleAutoSave();
+      showToast("Segment split");
+      selectRow(activeIndex + 1);
+    }
+
+    function mergeRow() {
+      if (activeIndex <= 0 || !rows[activeIndex]) {
+        showToast("Select a row after the first row to merge");
+        return;
+      }
+      const prev = rows[activeIndex - 1];
+      const row = rows[activeIndex];
+      prev.end = row.end;
+      prev.source = [prev.source, row.source].filter(Boolean).join(" ");
+      prev.target = [prev.target, row.target].filter(Boolean).join(" ");
+      prev.confirmed = prev.confirmed && row.confirmed;
+      rows.splice(activeIndex, 1);
+      syncCaptionPreview();
+      scheduleAutoSave();
+      showToast("Rows merged");
+      selectRow(activeIndex - 1);
+    }
+
+    function insertRow() {
+      const row = rows[activeIndex] || {};
+      const start = row.end || formatTime(rows.length * 4);
+      const end = formatTime(parseTimecode(start) + 3.5);
+      rows.splice(activeIndex + 1, 0, { id: rows.length + 1, start, end, source: "", target: "", status: "Draft", match: "", confirmed: false, qa: [] });
+      syncCaptionPreview();
+      scheduleAutoSave();
+      showToast("Row inserted");
+      selectRow(activeIndex + 1);
+    }
+
+    function saveCurrentDraft(state = "draft") {
+      localStorage.setItem(draftKey, JSON.stringify({ savedAt: new Date().toISOString(), state, rows }));
+    }
+
+    function scheduleAutoSave() {
+      window.clearTimeout(autoSaveTimer);
+      autoSaveTimer = window.setTimeout(() => saveCurrentDraft("draft"), 250);
+    }
+
+    function restoreAutosavedDraft() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(draftKey) || "{}");
+        if (Array.isArray(stored.rows) && stored.rows.length) {
+          rows = stored.rows.map((row, i) => normalizeRow(row, i));
+          syncCaptionPreview();
+        }
+      } catch (error) {
+        console.warn("Unable to restore media editor draft", error);
+      }
+    }
+
+    function submitEditor() {
+      if (!allRowsConfirmed()) {
+        const pending = rows.length - confirmedCount();
+        showToast(`Tick ${pending} more segment${pending === 1 ? "" : "s"} before submitting`);
+        updateSubmitState();
+        return;
+      }
+      rows.forEach((row) => {
+        row.confirmed = true;
+        row.status = "Approved";
+      });
+      saveCurrentDraft("submitted");
+      renderRows();
+      showToast("All segments submitted");
+    }
+
+    function csvEscape(value) {
+      const text = safe(value);
+      return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+
+    function crc32(bytes) {
+      let table = crc32.table;
+      if (!table) {
+        table = crc32.table = Array.from({ length: 256 }, (_, index) => {
+          let value = index;
+          for (let bit = 0; bit < 8; bit++) {
+            value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+          }
+          return value >>> 0;
+        });
+      }
+      let crc = 0xffffffff;
+      for (const byte of bytes) {
+        crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+      }
+      return (crc ^ 0xffffffff) >>> 0;
+    }
+
+    function dosDateTime(date = new Date()) {
+      const year = Math.max(1980, date.getFullYear());
+      const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+      const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+      return { dosTime, dosDate };
+    }
+
+    function uint16(value) {
+      return [value & 0xff, (value >>> 8) & 0xff];
+    }
+
+    function uint32(value) {
+      return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff];
+    }
+
+    function zipContentBytes(content, encoder) {
+      if (content instanceof Uint8Array) return content;
+      if (content instanceof ArrayBuffer) return new Uint8Array(content);
+      return encoder.encode(String(content ?? ""));
+    }
+
+    function zipConcat(chunks) {
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const output = new Uint8Array(total);
+      let cursor = 0;
+      chunks.forEach((chunk) => {
+        output.set(chunk, cursor);
+        cursor += chunk.length;
+      });
+      return output;
+    }
+
+    function createZipBytes(files) {
+      const encoder = new TextEncoder();
+      const chunks = [];
+      const central = [];
+      let offset = 0;
+      const { dosTime, dosDate } = dosDateTime();
+      files.forEach((file) => {
+        const nameBytes = encoder.encode(file.name);
+        const contentBytes = zipContentBytes(file.content, encoder);
+        const crc = crc32(contentBytes);
+        const localHeader = new Uint8Array([
+          ...uint32(0x04034b50), ...uint16(20), ...uint16(0x0800), ...uint16(0),
+          ...uint16(dosTime), ...uint16(dosDate), ...uint32(crc),
+          ...uint32(contentBytes.length), ...uint32(contentBytes.length),
+          ...uint16(nameBytes.length), ...uint16(0),
+        ]);
+        chunks.push(localHeader, nameBytes, contentBytes);
+        central.push({
+          nameBytes,
+          crc,
+          size: contentBytes.length,
+          offset,
+          dosTime,
+          dosDate,
+        });
+        offset += localHeader.length + nameBytes.length + contentBytes.length;
+      });
+      const centralStart = offset;
+      central.forEach((entry) => {
+        const header = new Uint8Array([
+          ...uint32(0x02014b50), ...uint16(20), ...uint16(20), ...uint16(0x0800), ...uint16(0),
+          ...uint16(entry.dosTime), ...uint16(entry.dosDate), ...uint32(entry.crc),
+          ...uint32(entry.size), ...uint32(entry.size), ...uint16(entry.nameBytes.length),
+          ...uint16(0), ...uint16(0), ...uint16(0), ...uint16(0), ...uint32(0), ...uint32(entry.offset),
+        ]);
+        chunks.push(header, entry.nameBytes);
+        offset += header.length + entry.nameBytes.length;
+      });
+      const centralSize = offset - centralStart;
+      chunks.push(new Uint8Array([
+        ...uint32(0x06054b50), ...uint16(0), ...uint16(0), ...uint16(central.length),
+        ...uint16(central.length), ...uint32(centralSize), ...uint32(centralStart), ...uint16(0),
+      ]));
+      return zipConcat(chunks);
+    }
+
+    function createZipBlob(files) {
+      return new Blob([createZipBytes(files)], { type: "application/zip" });
+    }
+
+    function downloadBlob(filename, blob) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function rowsCsv() {
+      const header = ["id", "start", "end", "source", "target", "status", "confirmed"];
+      const body = rows.map((row, idx) => header.map((key) => csvEscape(key === "id" ? (row.id || idx + 1) : row[key])).join(","));
+      return [header.join(","), ...body].join("\n");
+    }
+
+    function rowsToSrt(kind = "target") {
+      return rows.map((row, idx) => {
+        const text = kind === "source" ? safe(row.source) : safe(row.target || row.source);
+        return `${idx + 1}\n${row.start} --> ${row.end}\n${text}\n`;
+      }).join("\n");
+    }
+
+    function rowsToPlainScript(kind = "target") {
+      return rows.map((row, idx) => {
+        const text = kind === "source" ? safe(row.source) : safe(row.target || row.source);
+        return `[${idx + 1}] ${row.start} - ${row.end}\n${text}`;
+      }).join("\n\n");
+    }
+
+    function qualityFindingsForRow(row) {
+      const qa = Array.isArray(row.qa) ? [...row.qa] : [];
+      const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
+      const textLength = safe(row.target || row.source).length;
+      const cps = Math.round(textLength / duration);
+      if (cps > 20) qa.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
+      if (safe(row.target).length > 84) qa.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
+      if (parseTimecode(row.end) <= parseTimecode(row.start)) qa.push({ severity: "Blocker", message: "End time must be after start time." });
+      if (!safe(row.target).trim()) qa.push({ severity: "Warn", message: `${targetColumnLabel()} text is blank.` });
+      return qa;
+    }
+
+    function xmlEscape(value) {
+      return safe(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function excelColumnName(index) {
+      let name = "";
+      let value = index;
+      while (value > 0) {
+        const remainder = (value - 1) % 26;
+        name = String.fromCharCode(65 + remainder) + name;
+        value = Math.floor((value - 1) / 26);
+      }
+      return name;
+    }
+
+    function xlsxCell(value, rowIndex, columnIndex) {
+      const ref = `${excelColumnName(columnIndex)}${rowIndex}`;
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    }
+
+    function xlsxSheetXml(dataRows) {
+      const rowsXml = dataRows.map((cells, rowIndex) => {
+        const excelRow = rowIndex + 1;
+        return `<row r="${excelRow}">${cells.map((cell, colIndex) => xlsxCell(cell, excelRow, colIndex + 1)).join("")}</row>`;
+      }).join("");
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`;
+    }
+
+    function createXlsxBytes(sheetName, dataRows) {
+      const cleanSheetName = (safe(sheetName).replace(/[\\/?*[\]:]/g, " ").trim() || "QA Report").slice(0, 31);
+      const now = new Date().toISOString();
+      const files = [
+        {
+          name: "[Content_Types].xml",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+        },
+        {
+          name: "_rels/.rels",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`,
+        },
+        {
+          name: "xl/workbook.xml",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(cleanSheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        },
+        {
+          name: "xl/_rels/workbook.xml.rels",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+        },
+        { name: "xl/worksheets/sheet1.xml", content: xlsxSheetXml(dataRows) },
+        {
+          name: "docProps/core.xml",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>ErrorSweep</dc:creator><cp:lastModifiedBy>ErrorSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
+        },
+        {
+          name: "docProps/app.xml",
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ErrorSweep</Application></Properties>`,
+        },
+      ];
+      return createZipBytes(files);
+    }
+
+    function qaReportRows(packageKind) {
+      const findings = [];
+      rows.forEach((row, idx) => {
+        qualityFindingsForRow(row).forEach((item) => {
+          findings.push({
+            row: idx + 1,
+            severity: safe(item.severity || item.Severity || item.label || "Review"),
+            message: safe(item.message || item.Explanation || item.issue || item.Check || "Review this segment."),
+            start: safe(row.start),
+            end: safe(row.end),
+            text: safe(row.target || row.source),
+          });
+        });
+      });
+      const confirmed = confirmedCount();
+      const reportRows = [
+        [`ErrorSweep ${modeTitle()} QA Report`],
+        [],
+        ["Package", packageKind],
+        ["File", safe((payload.metadata || {}).file_name || payload.file_slug || "media_editor")],
+        ["Rows", rows.length],
+        ["Confirmed", `${confirmed} / ${rows.length}`],
+        ["Findings", findings.length],
+        [],
+        ["Row", "Severity", "Finding", "Start", "End", "Text"],
+      ];
+      if (findings.length) {
+        findings.forEach((item) => reportRows.push([item.row, item.severity, item.message, item.start, item.end, item.text]));
+      } else {
+        reportRows.push(["-", "Clear", "No timing or quality warnings detected at export.", "", "", ""]);
+      }
+      return reportRows;
+    }
+
+    function qaRunReportWorkbookBytes(packageKind) {
+      return createXlsxBytes("QA Report", qaReportRows(packageKind));
+    }
+
+    function mediaExportPackageFiles(packageKind) {
+      const files = [];
+      if (isTranscriptionMode()) {
+        files.push({ name: "transcription_script.srt", content: rowsToSrt("target") });
+        files.push({ name: "transcription_script.txt", content: rowsToPlainScript("target") });
+      } else {
+        files.push({ name: "source_script.srt", content: rowsToSrt("source") });
+        files.push({ name: "target_script.srt", content: rowsToSrt("target") });
+      }
+      if (packageKind === "csv") {
+        files.push({ name: "segments.csv", content: rowsCsv() });
+      }
+      files.push({ name: "qa_run_report.xlsx", content: qaRunReportWorkbookBytes(packageKind) });
+      return files;
+    }
+
+    function exportPackage(packageKind) {
+      if (!allRowsConfirmed()) {
+        const pending = rows.length - confirmedCount();
+        alert(`Tick ${pending} more segment${pending === 1 ? "" : "s"} Done before exporting.`);
+        updateExportButtonState();
+        return;
+      }
+      const slug = payload.file_slug || "errorsweep_media_editor";
+      const modeSlug = isTranscriptionMode() ? "transcription" : "subtitle";
+      const zip = createZipBlob(mediaExportPackageFiles(packageKind));
+      downloadBlob(`${slug}_${modeSlug}_${packageKind}_package.zip`, zip);
+    }
+
+    function exportCsv() {
+      exportPackage("csv");
+    }
+
+    function exportSrt() {
+      exportPackage("srt");
+    }
+
+    function bindEvents() {
+      el("searchInput").addEventListener("input", renderRows);
+      el("splitBtn").addEventListener("click", splitRow);
+      el("mergeBtn").addEventListener("click", mergeRow);
+      el("insertBtn").addEventListener("click", insertRow);
+      el("confirmAllCheck").addEventListener("change", (event) => setAllSegmentsConfirmed(event.target.checked));
+      el("pipBtn").addEventListener("click", (event) => {
+        event.preventDefault();
+        togglePictureInPicture();
+      });
+      el("captionToggleBtn").addEventListener("click", toggleCaptionPreview);
+      el("submitBtn").addEventListener("click", submitEditor);
+      el("exportCsvBtn").addEventListener("click", exportCsv);
+      el("exportSrtBtn").addEventListener("click", exportSrt);
+      el("backBtn").addEventListener("click", () => {
+        window.parent.location.href = "?es_page=Subtitle%20/%20Transcription%20Editor";
+      });
+      window.addEventListener("beforeunload", () => saveCurrentDraft("draft"));
+    }
+
+    setupHeader();
+    restoreAutosavedDraft();
+    bindEvents();
+    renderRows();
+    selectRow(0);
+  </script>
+</body>
+</html>

@@ -53,10 +53,16 @@ SAAS_TABLES = {
     "projects": "errorsweep_projects",
     "jobs": "errorsweep_jobs",
     "payments": "errorsweep_payments",
+    "invoices": "errorsweep_invoices",
     "subscriptions": "errorsweep_subscriptions",
     "checkout_sessions": "errorsweep_checkout_sessions",
     "billing_events": "errorsweep_billing_events",
     "auth_tokens": "errorsweep_auth_tokens",
+    "platform_settings": "errorsweep_platform_settings",
+    "privacy_requests": "errorsweep_privacy_requests",
+    "support_tickets": "errorsweep_support_tickets",
+    "status_incidents": "errorsweep_status_incidents",
+    "consent_records": "errorsweep_consent_records",
     "audit_logs": "errorsweep_audit_logs",
     "files": "errorsweep_files",
     "notifications": "errorsweep_notifications",
@@ -69,13 +75,19 @@ SAAS_COLUMNS = {
     "projects": {"id", "workspace", "user_email", "created", "project", "client", "source", "targets", "domain", "status", "job_count", "created_at", "updated_at"},
     "jobs": {"id", "workspace", "user_email", "created", "type", "language", "assignee", "status", "note", "segments", "project_id", "project", "attachment_count", "attachments_json", "created_at", "updated_at"},
     "payments": {"id", "workspace", "user_email", "date", "user", "plan", "amount", "currency", "status", "created_at", "updated_at"},
+    "invoices": {"id", "workspace", "user_email", "invoice_number", "customer_email", "customer_gstin", "plan", "billing_period", "currency", "subtotal", "tax_rate_percent", "tax_amount", "total", "status", "source_payment_id", "notes", "metadata_json", "created_at", "updated_at"},
     "subscriptions": {"id", "workspace", "user_email", "plan", "status", "billing_cycle", "currency", "base_amount", "included_segments", "included_characters", "included_seats", "provider", "provider_customer_id", "provider_subscription_id", "current_period_start", "current_period_end", "cancel_at_period_end", "cancelled_at", "cancellation_reason", "metadata_json", "created_at", "updated_at"},
     "checkout_sessions": {"id", "workspace", "user_email", "plan", "billing_cycle", "currency", "amount", "provider", "status", "checkout_url", "provider_session_id", "metadata_json", "created_at", "updated_at"},
     "billing_events": {"id", "workspace", "user_email", "provider", "event_id", "event_type", "status", "plan", "amount", "currency", "provider_payment_id", "provider_subscription_id", "provider_order_id", "provider_customer_id", "checkout_id", "signature_status", "applied", "raw_sha256", "metadata_json", "created_at", "updated_at"},
     "auth_tokens": {"id", "workspace", "user_email", "email", "token_hash", "token_type", "status", "expires_at", "used_at", "metadata_json", "created_at", "updated_at"},
+    "platform_settings": {"id", "workspace", "user_email", "setting_key", "setting_value", "value_type", "metadata_json", "created_at", "updated_at"},
+    "privacy_requests": {"id", "workspace", "user_email", "request_type", "requester_email", "subject", "status", "due_at", "fulfilled_at", "owner_notes", "metadata_json", "created_at", "updated_at"},
+    "support_tickets": {"id", "workspace", "user_email", "requester_email", "category", "priority", "subject", "message", "status", "owner_reply", "last_response_at", "metadata_json", "created_at", "updated_at"},
+    "status_incidents": {"id", "workspace", "user_email", "scope", "incident_type", "severity", "status", "title", "message", "starts_at", "ends_at", "resolved_at", "metadata_json", "created_at", "updated_at"},
+    "consent_records": {"id", "workspace", "user_email", "email", "account_type", "role", "terms_version", "privacy_version", "nda_version", "cookie_version", "dpa_version", "accepted_at", "ip_hint", "metadata_json", "created_at", "updated_at"},
     "audit_logs": {"id", "workspace", "user_email", "time", "actor", "action", "details", "created_at", "updated_at"},
     "files": {"id", "workspace", "user_email", "file_name", "purpose", "mime_type", "size_bytes", "sha256", "storage_key", "storage_provider", "storage_bucket", "public_url", "local_path", "status", "expires_at", "created_at", "updated_at"},
-    "notifications": {"id", "workspace", "user_email", "recipient", "subject", "event_type", "status", "provider", "body", "metadata_json", "sent_at", "created_at", "updated_at"},
+    "notifications": {"id", "workspace", "user_email", "recipient", "subject", "event_type", "status", "provider", "body", "error", "metadata_json", "sent_at", "created_at", "updated_at"},
     "task_queue": {"id", "workspace", "user_email", "task_type", "label", "status", "progress", "total_units", "processed_units", "result_ref", "error", "metadata_json", "started_at", "finished_at", "created_at", "updated_at"},
 }
 
@@ -227,12 +239,32 @@ def _record_id(collection: str, record: Dict[str, Any]) -> str:
         return _safe_job_id(str(record.get("workspace")).lower())
     if collection == "subscriptions" and record.get("workspace"):
         return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('plan') or ''}-{record.get('billing_cycle') or ''}")
+    if collection == "invoices" and record.get("invoice_number"):
+        return _safe_job_id(str(record.get("invoice_number")))
     if collection == "checkout_sessions" and record.get("workspace"):
         return _safe_job_id(f"{record.get('workspace') or ''}-{record.get('plan') or ''}-{record.get('created_at') or _now_iso()}")
     if collection == "billing_events" and record.get("event_id"):
         return _safe_job_id(f"{record.get('provider') or ''}-{record.get('event_id')}")
     if collection == "auth_tokens" and record.get("token_hash"):
         return _safe_job_id(f"{record.get('token_type') or ''}-{record.get('email') or ''}-{record.get('token_hash')}")
+    if collection == "platform_settings" and record.get("setting_key"):
+        return _safe_job_id(f"platform-{record.get('setting_key')}")
+    if collection == "privacy_requests" and record.get("requester_email"):
+        return _safe_job_id(
+            f"{record.get('workspace') or ''}-{record.get('request_type') or ''}-{record.get('requester_email') or ''}-{record.get('created_at') or _now_iso()}"
+        )
+    if collection == "support_tickets" and record.get("requester_email"):
+        return _safe_job_id(
+            f"{record.get('workspace') or ''}-{record.get('requester_email') or ''}-{record.get('subject') or ''}-{record.get('created_at') or _now_iso()}"
+        )
+    if collection == "status_incidents" and record.get("title"):
+        return _safe_job_id(
+            f"{record.get('scope') or ''}-{record.get('incident_type') or ''}-{record.get('title') or ''}-{record.get('created_at') or _now_iso()}"
+        )
+    if collection == "consent_records" and (record.get("email") or record.get("user_email")):
+        return _safe_job_id(
+            f"{record.get('workspace') or ''}-{record.get('email') or record.get('user_email') or ''}-{record.get('terms_version') or ''}-{record.get('privacy_version') or ''}-{record.get('nda_version') or ''}-{record.get('accepted_at') or record.get('created_at') or _now_iso()}"
+        )
     if collection == "projects" and record.get("project"):
         return _safe_job_id(f"{record.get('workspace') or record.get('client') or ''}-{record.get('project')}-{record.get('created') or ''}")
     if collection == "files" and record.get("storage_key"):
@@ -576,7 +608,8 @@ def save_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dic
     """Persist a platform record with Supabase when configured and local JSON fallback.
 
     Supported collections include users, workspaces, projects, jobs, payments,
-    subscriptions, checkout sessions, auth tokens, files, notifications,
+    invoices, subscriptions, checkout sessions, auth tokens, platform settings, privacy
+    requests, support tickets, status incidents, consent records, files, notifications,
     task queue records, and audit logs.
     The app can keep using session state, while this function gives those records
     durable storage for production SaaS operation.
@@ -637,6 +670,42 @@ def fetch_saas_records(
     if workspace and not include_all_workspaces:
         records = [r for r in records if str(r.get("workspace") or "") == workspace]
     return records[:lim]
+
+
+def delete_saas_record(collection: str, record_id: str) -> bool:
+    """Delete a SaaS record from local fallback and Supabase when configured."""
+    if collection not in SAAS_TABLES:
+        raise ValueError(f"Unsupported SaaS collection: {collection}")
+
+    rid = str(record_id or "").strip()
+    if not rid:
+        return False
+
+    deleted = False
+    try:
+        records = _read_local_collection(collection)
+        retained = [item for item in records if str(item.get("id") or "") != rid]
+        if len(retained) != len(records):
+            _write_local_collection(collection, retained)
+            deleted = True
+    except Exception as exc:
+        LOGGER.error("Failed to delete local SaaS record %s/%s: %s", collection, rid, exc)
+
+    if not supabase_configured():
+        return deleted
+
+    try:
+        table = SAAS_TABLES[collection]
+        url = f"{_supabase_url()}/rest/v1/{table}?id=eq.{quote(rid)}"
+        requests.delete(
+            url,
+            headers=_headers({"Prefer": "return=minimal"}),
+            timeout=SUPABASE_TIMEOUT,
+        ).raise_for_status()
+        deleted = True
+    except Exception as exc:
+        LOGGER.error("Failed to delete SaaS record %s/%s from Supabase: %s", collection, rid, exc)
+    return deleted
 
 
 # ==========================================================

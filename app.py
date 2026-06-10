@@ -19,11 +19,13 @@ import xml.etree.ElementTree as _StdET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import parseaddr
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 from textwrap import dedent
-from urllib.parse import quote
-from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, quote, urlencode
+from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -104,6 +106,7 @@ try:
         fetch_persistent_editor_jobs,
         save_saas_record,
         fetch_saas_records,
+        delete_saas_record,
         persistence_health,
     )
 except Exception as exc:
@@ -116,6 +119,7 @@ except Exception as exc:
     fetch_persistent_editor_jobs = None
     save_saas_record = None
     fetch_saas_records = None
+    delete_saas_record = None
     persistence_health = None
 
 try:
@@ -152,6 +156,13 @@ except Exception as exc:
     normalize_billing_webhook = None
     verify_billing_webhook_signature = None
 
+try:
+    from email_templates import render_transactional_email, template_catalog
+except Exception as exc:
+    LOGGER.warning("email_templates import failed: %s", exc)
+    render_transactional_email = None
+    template_catalog = None
+
 
 
 # ==========================================================
@@ -163,19 +174,118 @@ except Exception as exc:
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
 DEFAULT_MODEL = "gpt-4o-mini"
-SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
+# Persistent browser sessions should survive reloads and browser restarts until
+# the user explicitly clicks Logout. Browser cookies still need a finite
+# Max-Age, so use a long renewal window while the signed token itself has no
+# expiry check.
+SESSION_PERSISTENCE_SECONDS = int(os.getenv("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS", str(60 * 60 * 24 * 365 * 10)))
+SESSION_TTL_SECONDS = SESSION_PERSISTENCE_SECONDS
 DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
 PASSWORD_HASH_ITERATIONS = 260_000
 SESSION_HISTORY_LIMIT = 500
 RULE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_FILES", "250"))
 RULE_ZIP_MAX_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_BYTES", str(25 * 1024 * 1024)))
 MEDIA_PREVIEW_TTL_SECONDS = int(os.getenv("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
+RETENTION_POLICY_DEFAULTS = {
+    "expired_auth_token_grace_days": 0,
+    "expired_file_manifest_grace_days": 7,
+    "sent_notification_days": 180,
+    "completed_task_days": 90,
+    "closed_privacy_request_days": 730,
+    "closed_support_ticket_days": 730,
+    "local_media_preview_hours": max(1, MEDIA_PREVIEW_TTL_SECONDS // 3600),
+}
+LEGAL_VERSION_DEFAULTS = {
+    "terms_version": "2026-05-29",
+    "privacy_version": "2026-05-29",
+    "nda_version": "2026-05-29",
+    "cookie_version": "2026-05-29",
+    "dpa_version": "2026-05-29",
+}
+ABUSE_PROTECTION_DEFAULTS = {
+    "window_minutes": 15,
+    "owner_login_attempts": 5,
+    "workspace_login_attempts": 8,
+    "demo_access_attempts": 12,
+    "signup_attempts": 5,
+    "password_reset_attempts": 5,
+    "checkout_intent_attempts": 5,
+    "support_ticket_attempts": 8,
+    "privacy_request_attempts": 8,
+}
+ABUSE_ACTION_META = {
+    "owner_login": ("Owner login", "owner_login_attempts"),
+    "workspace_login": ("Workspace login", "workspace_login_attempts"),
+    "demo_access": ("Demo access", "demo_access_attempts"),
+    "signup": ("Public signup", "signup_attempts"),
+    "password_reset": ("Password reset", "password_reset_attempts"),
+    "checkout_intent": ("Checkout intent", "checkout_intent_attempts"),
+    "support_ticket": ("Support ticket", "support_ticket_attempts"),
+    "privacy_request": ("Privacy request", "privacy_request_attempts"),
+}
+SUBPROCESSOR_APPROVAL_STATUSES = ["Needs review", "Approved", "Blocked", "Customer controlled"]
+SUBPROCESSOR_DPA_STATUSES = ["Needs DPA", "DPA approved", "Not applicable", "Customer controlled"]
+SUBPROCESSOR_NOTICE_STATUSES = ["Needs customer notice", "Covered in policy", "Customer-specific approval", "Not applicable"]
+SUBPROCESSOR_DEFAULT_REGISTER = {
+    "supabase_persistence": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Covered in policy",
+        "notes": "",
+    },
+    "object_storage": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Covered in policy",
+        "notes": "",
+    },
+    "async_worker": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Covered in policy",
+        "notes": "",
+    },
+    "transactional_email": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Covered in policy",
+        "notes": "",
+    },
+    "billing_gateway": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Covered in policy",
+        "notes": "",
+    },
+    "self_hosted_mt": {
+        "approval_status": "Approved",
+        "dpa_status": "Not applicable",
+        "customer_notice": "Covered in policy",
+        "notes": "Self-hosted/local MT should stay inside ErrorSweep-controlled infrastructure.",
+    },
+    "byo_ai": {
+        "approval_status": "Customer controlled",
+        "dpa_status": "Customer controlled",
+        "customer_notice": "Customer-specific approval",
+        "notes": "Customer-provided API keys and base URLs are controlled by the customer/workspace.",
+    },
+    "languagetool": {
+        "approval_status": "Needs review",
+        "dpa_status": "Needs DPA",
+        "customer_notice": "Customer-specific approval",
+        "notes": "Public LanguageTool routing should remain disabled unless approved by customer policy.",
+    },
+}
+SSO_PROVIDER_OPTIONS = ["Microsoft Entra ID", "Okta", "Google Workspace", "Custom OIDC", "SAML 2.0"]
+SSO_PROTOCOL_OPTIONS = ["OIDC", "SAML"]
+SSO_STATUS_OPTIONS = ["Draft", "Metadata review", "Enabled", "Disabled"]
 SESSION_COLLECTION_LIMITS = {
     "ai_usage_events": 500,
     "audit_logs": 500,
     "jobs": 500,
     "owner_recent_editor_jobs": 100,
     "payments": 500,
+    "invoices": 500,
     "projects": 500,
     "files": 1000,
     "tm": 5000,
@@ -190,7 +300,18 @@ SESSION_COLLECTION_LIMITS = {
     "checkout_sessions": 500,
     "billing_events": 500,
     "auth_tokens": 500,
+    "platform_settings": 100,
+    "privacy_requests": 500,
+    "support_tickets": 1000,
+    "status_incidents": 500,
+    "consent_records": 1000,
 }
+SESSION_COOKIE_NAME = "errorsweep_session"
+SESSION_STORAGE_KEY = "errorsweep_session"
+ROUTE_STORAGE_KEY = "errorsweep_route"
+LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
+ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
+ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to")
 LANGUAGE_CATALOG = [
     "English",
     "French",
@@ -287,10 +408,24 @@ PLAN_CATALOG = [
         "label": "Custom plan",
         "description": "Custom usage, SSO, security review, dedicated deployment, and guided onboarding.",
     },
+    {
+        "name": "Unlimited",
+        "monthly": 0,
+        "annual": 0,
+        "currency": "INR",
+        "seats": 1_000_000,
+        "segments": 1_000_000_000,
+        "characters": 1_000_000_000_000,
+        "label": "Unlimited internal access",
+        "description": "Unlimited workspace access for authorized internal use.",
+    },
 ]
 EMAIL_DISPATCH_BATCH_LIMIT = int(os.getenv("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
 AUTH_TOKEN_TTL_SECONDS = int(os.getenv("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
-COMPLIANCE_ACK_LABEL = "I accept the [Terms of Service](?public=terms), [Privacy Policy](?public=privacy), and NDA/confidentiality obligations for this workspace."
+COMPLIANCE_ACK_LABEL = "I accept the Terms of Service, Privacy Policy, and NDA/confidentiality obligations for this workspace."
+UNLIMITED_ACCESS_EMAIL = "adapalanaveen401@gmail.com"
+UNLIMITED_ACCESS_WORKSPACE = "Naveen Unlimited Workspace"
+UNLIMITED_ACCESS_PASSWORD_HASH = "pbkdf2_sha256$260000$errorsweep_unlimited_adapa_2026$9xazluJn72GZoDsE2OAbeXefqvQY02foAQbjh_5gfrk"
 SENSITIVE_TEXT_RE = re.compile(
     r"("
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
@@ -339,6 +474,8 @@ st.markdown(
   --es-purple: #8b5cf6;
   --es-red: #ff4b33;
   --es-amber: #f59e0b;
+  --es-shell-frame-padding: 0 18px 0;
+  --es-shell-content-width: min(1760px, calc(100vw - 56px));
 }
 
 html, body, [class*="css"] {
@@ -361,18 +498,261 @@ html, body, [class*="css"] {
   display: none !important;
 }
 
-.block-container {
-  padding: 1.05rem 2.2rem 2rem !important;
-  max-width: min(1760px, calc(100vw - 56px)) !important;
+#human-review-editor-page-marker,
+#errorsweep-dashboard-page-marker,
+#errorsweep-root-shell-marker,
+#errorsweep-shell-top-row-marker,
+#errorsweep-shell-content-row-marker {
+  display: none !important;
+}
+
+html,
+body,
+#root,
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"] {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+body {
+  margin: 0 !important;
 }
 
 [data-testid="stAppViewContainer"] .main .block-container,
-[data-testid="stMainBlockContainer"] {
-  max-width: min(1760px, calc(100vw - 56px)) !important;
+[data-testid="stMainBlockContainer"],
+.block-container {
+  box-sizing: border-box !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+[data-testid="stAppViewContainer"] .main .block-container > div[data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] > div[data-testid="stVerticalBlock"],
+.block-container > div[data-testid="stVerticalBlock"] {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-root-shell-marker) {
+  display: none !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVerticalBlock"] {
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-content: start !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVerticalBlock"] > div:has(.st-key-errorsweep_app_shell) {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.st-key-errorsweep_app_shell {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  background:
+    radial-gradient(circle at 0% 10%, rgba(0, 217, 133, .12), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(139, 92, 246, .13), transparent 36%),
+    #060a14;
+}
+
+.st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-top-row-marker),
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-top-row-marker) {
+  grid-row: 1 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  z-index: 900 !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker),
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker),
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .st-key-errorsweep_shell_content) {
+  grid-row: 2 !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: scroll !important;
+  overscroll-behavior: contain !important;
+  scrollbar-gutter: stable both-edges !important;
+}
+
+.st-key-errorsweep_shell_top {
+  grid-row: 1 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  z-index: 900 !important;
+}
+
+.st-key-errorsweep_shell_top > div[data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+.st-key-errorsweep_shell_content {
+  grid-row: 2 !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: scroll !important;
+  overscroll-behavior: contain !important;
+  scrollbar-gutter: stable both-edges !important;
+  padding: var(--es-shell-frame-padding) !important;
+}
+
+.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: 100% !important;
+  max-width: var(--es-shell-content-width) !important;
+  margin: 0 auto !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+
+.st-key-errorsweep_shell_content[data-testid="stVerticalBlock"] {
+  height: 100% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  max-width: var(--es-shell-content-width) !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: scroll !important;
+  overscroll-behavior: contain !important;
+  scrollbar-gutter: stable both-edges !important;
+}
+
+.st-key-errorsweep_page_frame,
+.st-key-errorsweep_page_frame[data-testid="stVerticalBlock"],
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_shell_content div:has(> .st-key-errorsweep_page_frame) {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: var(--es-shell-content-width) !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  min-height: 0 !important;
+}
+
+.st-key-errorsweep_page_frame > div[data-testid="stVerticalBlock"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .st-key-errorsweep_shell_content)::-webkit-scrollbar,
+.st-key-errorsweep_shell_content::-webkit-scrollbar,
+.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"]::-webkit-scrollbar {
+  width: 11px;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar-track,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar-track,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .st-key-errorsweep_shell_content)::-webkit-scrollbar-track,
+.st-key-errorsweep_shell_content::-webkit-scrollbar-track,
+.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"]::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, .65);
+  border-radius: 999px;
+}
+
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar-thumb,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell[data-testid="stVerticalBlock"] > div:has(#errorsweep-shell-content-row-marker)::-webkit-scrollbar-thumb,
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .st-key-errorsweep_shell_content)::-webkit-scrollbar-thumb,
+.st-key-errorsweep_shell_content::-webkit-scrollbar-thumb,
+.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"]::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+  border: 2px solid rgba(15, 23, 42, .65);
+}
+
+body:has(#errorsweep-root-shell-marker) [data-testid="stAppViewContainer"] .main .block-container,
+body:has(#errorsweep-root-shell-marker) [data-testid="stMainBlockContainer"],
+body:has(#errorsweep-root-shell-marker) .block-container {
+  width: 100% !important;
+  max-width: var(--es-shell-content-width) !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
 }
 
 .es-shell {
-  min-height: calc(100vh - 80px);
+  min-height: 0;
 }
 
 .es-rail {
@@ -1647,7 +2027,8 @@ html, body, [class*="css"] {
   border: 1px solid rgba(255,255,255,.08);
 }
 
-.stButton > button, .stDownloadButton > button {
+body:has(#errorsweep-dashboard-page-marker) .stButton > button,
+body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button {
   width: 100%;
   border-radius: 10px !important;
   border: 1px solid rgba(0,217,133,.24) !important;
@@ -1658,7 +2039,8 @@ html, body, [class*="css"] {
   box-shadow: 0 12px 30px rgba(0,0,0,.20);
 }
 
-.stButton > button:hover, .stDownloadButton > button:hover {
+body:has(#errorsweep-dashboard-page-marker) .stButton > button:hover,
+body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   transform: translateY(-1px);
   box-shadow: 0 18px 38px rgba(52,189,246,.24);
 }
@@ -1704,13 +2086,13 @@ html, body, [class*="css"] {
 }
 
 .es-topnav {
-  position: sticky;
-  top: 10px;
-  z-index: 500;
+  position: relative !important;
+  top: auto !important;
+  z-index: 900;
   width: 100%;
-  margin: 0 0 22px;
+  margin: 0;
   border: 1px solid rgba(84,105,180,.34);
-  border-radius: 12px;
+  border-radius: 0;
   background:
     linear-gradient(135deg, rgba(16,22,43,.96), rgba(11,15,31,.94)),
     radial-gradient(circle at 12% 0%, rgba(0,217,133,.18), transparent 38%),
@@ -1724,26 +2106,32 @@ html, body, [class*="css"] {
 .es-topnav-row {
   position: relative;
   z-index: 4;
-  min-height: 76px;
+  min-height: 62px;
   display: flex;
   align-items: stretch;
-  gap: 12px;
-  padding: 0 18px;
+  gap: 8px;
+  padding: 0 14px;
 }
 
 .es-topnav-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 250px;
+  gap: 8px;
+  min-width: 218px;
   color: #f7fbff;
   text-decoration: none !important;
 }
 
+.es-topnav-brand-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .es-topnav-mark {
-  width: 44px;
-  height: 44px;
-  border-radius: 11px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, rgba(0,217,133,.98), rgba(52,189,246,.92));
@@ -1754,7 +2142,7 @@ html, body, [class*="css"] {
 }
 
 .es-topnav-name {
-  font-size: 25px;
+  font-size: 23px;
   line-height: 1;
   font-weight: 950;
   letter-spacing: -.04em;
@@ -1767,31 +2155,48 @@ html, body, [class*="css"] {
 }
 
 .es-topnav-sub {
-  margin-top: 3px;
+  margin-top: 2px;
   color: #a8b0d6;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+}
+
+.es-topnav-owner-tag {
+  width: fit-content;
+  border: 1px solid rgba(0,217,133,.26);
+  border-radius: 999px;
+  background: rgba(0,217,133,.10);
+  color: #75f7c4;
+  font-family: "Space Mono", monospace;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  line-height: 1;
+  padding: 3px 7px;
+  text-transform: uppercase;
 }
 
 .es-topnav-links {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  flex-wrap: wrap;
-  gap: 0;
+  flex-wrap: nowrap;
+  gap: 2px;
+  overflow: hidden;
 }
 
 .es-topnav-link {
-  min-height: 76px;
+  min-height: 62px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  padding: 0 14px;
+  padding: 0 8px;
   color: #dce8ff !important;
   text-decoration: none !important;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 950;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1809,10 +2214,10 @@ html, body, [class*="css"] {
 .es-topnav-link.active::after {
   content: "";
   position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 14px;
-  height: 4px;
+  left: 8px;
+  right: 8px;
+  bottom: 9px;
+  height: 3px;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--es-green), var(--es-cyan));
   box-shadow: 0 0 22px rgba(52,189,246,.48);
@@ -1821,17 +2226,18 @@ html, body, [class*="css"] {
 .es-topnav-tools {
   display: flex;
   align-items: stretch;
-  min-height: 76px;
+  min-height: 62px;
   border-left: 1px solid rgba(84,105,180,.26);
 }
 
 .es-topnav-tool {
-  min-width: 58px;
-  padding: 0 12px;
+  min-width: 52px;
+  padding: 0 9px;
   display: grid;
   place-items: center;
   border-right: 1px solid rgba(84,105,180,.24);
   color: #dce8ff !important;
+  font-size: 12px;
   font-weight: 900;
   text-decoration: none !important;
   position: relative;
@@ -1839,8 +2245,8 @@ html, body, [class*="css"] {
 
 .es-topnav-badge {
   position: absolute;
-  top: 11px;
-  right: 12px;
+  top: 8px;
+  right: 9px;
   min-width: 16px;
   height: 16px;
   border-radius: 999px;
@@ -1861,9 +2267,9 @@ html, body, [class*="css"] {
 .es-topnav-user {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  min-width: 220px;
+  gap: 8px;
+  padding: 0 12px;
+  min-width: 196px;
   color: #f7fbff;
   cursor: pointer;
   outline: none;
@@ -1877,8 +2283,8 @@ html, body, [class*="css"] {
 }
 
 .es-topnav-avatar {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -1945,9 +2351,9 @@ html, body, [class*="css"] {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  padding: 9px 18px 11px;
+  padding: 6px 14px 7px;
   border-top: 1px solid rgba(84,105,180,.24);
   background: rgba(7,9,20,.38);
 }
@@ -1965,8 +2371,8 @@ html, body, [class*="css"] {
   color: #c2c9e9 !important;
   text-decoration: none !important;
   font-weight: 900;
-  font-size: 12px;
-  padding: 7px 10px;
+  font-size: 11px;
+  padding: 5px 8px;
   border-radius: 8px;
 }
 
@@ -2088,6 +2494,39 @@ html, body, [class*="css"] {
 .es-fab-action:hover {
   transform: translateY(-2px) scale(1.015);
   box-shadow: 0 24px 58px rgba(52,189,246,.30);
+}
+
+.es-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.es-task-action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(52,189,246,.24);
+  border-radius: 8px;
+  background: rgba(52,189,246,.08);
+  color: #dff7ff !important;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none !important;
+}
+
+.es-task-action-link.primary {
+  border-color: rgba(0,217,133,.34);
+  background: linear-gradient(90deg, rgba(0,191,117,.94), rgba(32,148,243,.94));
+  color: #06121f !important;
+}
+
+.es-task-action-link:hover {
+  border-color: rgba(52,189,246,.52);
+  transform: translateY(-1px);
 }
 
 .es-area-chart {
@@ -2541,7 +2980,9 @@ html, body, [class*="css"] {
   margin-right: auto !important;
 }
 
-textarea, input, select {
+textarea,
+input,
+select {
   border-radius: 12px !important;
 }
 
@@ -2562,25 +3003,33 @@ div[data-testid="stDataEditor"] canvas {
   user-select: none !important;
 }
 
-div[data-testid="stDataFrame"] textarea:not(:focus),
-div[data-testid="stDataFrame"] input:not(:focus),
-div[data-testid="stDataEditor"] textarea:not(:focus),
-div[data-testid="stDataEditor"] input:not(:focus),
-textarea.gdg-input:not(:focus),
-input.gdg-input:not(:focus),
-textarea[class*="gdg"]:not(:focus),
-input[class*="gdg"]:not(:focus),
-textarea[class*="dvn"]:not(:focus),
-input[class*="dvn"]:not(:focus) {
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-
 body:has(div[data-testid="stDataFrame"]:hover) textarea[class*="gdg"]:focus,
 body:has(div[data-testid="stDataEditor"]:hover) textarea[class*="gdg"]:focus,
 body:has(div[data-testid="stDataEditor"]:hover) input[class*="gdg"]:focus {
   opacity: 1 !important;
   pointer-events: auto !important;
+}
+
+body.es-grid-scroll-active div[data-testid="stDataFrame"] textarea,
+body.es-grid-scroll-active div[data-testid="stDataFrame"] input,
+body.es-grid-scroll-active div[data-testid="stDataEditor"] textarea,
+body.es-grid-scroll-active div[data-testid="stDataEditor"] input,
+body.es-grid-scroll-active textarea.gdg-input,
+body.es-grid-scroll-active input.gdg-input,
+body.es-grid-scroll-active textarea[class*="gdg"],
+body.es-grid-scroll-active input[class*="gdg"],
+body.es-grid-scroll-active textarea[class*="dvn"],
+body.es-grid-scroll-active input[class*="dvn"] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(-9999px) !important;
+}
+
+textarea.es-grid-overlay-escaped,
+input.es-grid-overlay-escaped {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(-9999px) !important;
 }
 
 [data-testid="stFileUploader"] {
@@ -2634,13 +3083,123 @@ components.html(
         return cls.includes("gdg") || cls.includes("dvn") || aria.includes("cell") ||
           !!el.closest('[data-testid="stDataFrame"],[data-testid="stDataEditor"]');
       };
-      parentDoc.addEventListener("scroll", () => {
+      const overlaySelector = [
+        'textarea.gdg-input', 'input.gdg-input',
+        'textarea[class*="gdg"]', 'input[class*="gdg"]',
+        'textarea[class*="dvn"]', 'input[class*="dvn"]',
+        '[data-testid="stDataFrame"] textarea', '[data-testid="stDataFrame"] input',
+        '[data-testid="stDataEditor"] textarea', '[data-testid="stDataEditor"] input'
+      ].join(',');
+      const rectsOverlap = (a, b) => {
+        return a.right > b.left + 2 && a.left < b.right - 2 && a.bottom > b.top + 2 && a.top < b.bottom - 2;
+      };
+      const overlayInsideGrid = (el) => {
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.width < 2 || rect.height < 2) return true;
+        const grids = Array.from(parentDoc.querySelectorAll('[data-testid="stDataFrame"],[data-testid="stDataEditor"]'));
+        return grids.some((grid) => rectsOverlap(rect, grid.getBoundingClientRect()));
+      };
+      const cleanupEscapedGridOverlays = () => {
+        parentDoc.querySelectorAll(overlaySelector).forEach((el) => {
+          if (!isGridOverlay(el)) return;
+          if (!overlayInsideGrid(el)) {
+            el.classList.add("es-grid-overlay-escaped");
+            if (parentDoc.activeElement === el) el.blur();
+          } else if (!parentDoc.body.classList.contains("es-grid-scroll-active")) {
+            el.classList.remove("es-grid-overlay-escaped");
+          }
+        });
+      };
+      const focusGridOverlayAtPoint = (x, y) => {
+        const overlays = Array.from(parentDoc.querySelectorAll(overlaySelector))
+          .filter((el) => isGridOverlay(el) && overlayInsideGrid(el));
+        const containing = overlays.find((el) => {
+          const rect = el.getBoundingClientRect();
+          return x >= rect.left - 2 && x <= rect.right + 2 && y >= rect.top - 2 && y <= rect.bottom + 2;
+        });
+        const target = containing || overlays.find((el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 8 && rect.height > 8;
+        });
+        if (!target) return;
+        target.classList.remove("es-grid-overlay-escaped");
+        target.style.opacity = "1";
+        target.style.pointerEvents = "auto";
+        target.focus({ preventScroll: true });
+        if (typeof target.setSelectionRange === "function") {
+          const end = String(target.value || "").length;
+          target.setSelectionRange(end, end);
+        }
+      };
+      let scrollTimer = null;
+      const hideGridOverlayDuringScroll = () => {
+        parentDoc.body.classList.add("es-grid-scroll-active");
         const el = parentDoc.activeElement;
         if (isGridOverlay(el)) el.blur();
-      }, true);
-      parentDoc.addEventListener("wheel", () => {
-        const el = parentDoc.activeElement;
-        if (isGridOverlay(el)) el.blur();
+        cleanupEscapedGridOverlays();
+        window.clearTimeout(scrollTimer);
+        scrollTimer = window.setTimeout(() => {
+          parentDoc.body.classList.remove("es-grid-scroll-active");
+          cleanupEscapedGridOverlays();
+        }, 220);
+      };
+      parentDoc.addEventListener("scroll", hideGridOverlayDuringScroll, true);
+      parentDoc.addEventListener("wheel", hideGridOverlayDuringScroll, true);
+      parentDoc.addEventListener("touchmove", hideGridOverlayDuringScroll, true);
+      window.setInterval(cleanupEscapedGridOverlays, 350);
+      parentDoc.addEventListener("click", (event) => {
+        if (parentDoc.__errorsweepSyntheticGridEdit) return;
+        const target = event.target;
+        if (!target || !target.closest || !target.closest('[data-testid="stDataEditor"]')) return;
+        if (target.closest('input, textarea, button, select, [role="button"]')) return;
+        const now = Date.now();
+        if (parentDoc.__errorsweepLastGridClick && now - parentDoc.__errorsweepLastGridClick < 180) return;
+        parentDoc.__errorsweepLastGridClick = now;
+        window.setTimeout(() => {
+          if (parentDoc.body.classList.contains("es-grid-scroll-active")) return;
+          const editTarget = parentDoc.elementFromPoint(event.clientX, event.clientY) || target;
+          parentDoc.__errorsweepSyntheticGridEdit = true;
+          const fire = (type, detail) => {
+            editTarget.dispatchEvent(new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              view: parentDoc.defaultView || window,
+              clientX: event.clientX,
+              clientY: event.clientY,
+              screenX: event.screenX,
+              screenY: event.screenY,
+              button: event.button,
+              buttons: event.buttons,
+              ctrlKey: event.ctrlKey,
+              shiftKey: event.shiftKey,
+              altKey: event.altKey,
+              metaKey: event.metaKey,
+              detail: detail
+            }));
+          };
+          fire("mousedown", 2);
+          fire("mouseup", 2);
+          fire("click", 2);
+          const dbl = new MouseEvent("dblclick", {
+            bubbles: true,
+            cancelable: true,
+            view: parentDoc.defaultView || window,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            screenX: event.screenX,
+            screenY: event.screenY,
+            button: event.button,
+            buttons: event.buttons,
+            ctrlKey: event.ctrlKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            metaKey: event.metaKey,
+            detail: 2
+          });
+          editTarget.dispatchEvent(dbl);
+          window.setTimeout(() => focusGridOverlayAtPoint(event.clientX, event.clientY), 35);
+          window.setTimeout(() => { parentDoc.__errorsweepSyntheticGridEdit = false; }, 100);
+        }, 45);
       }, true);
     }
     </script>
@@ -2669,6 +3228,81 @@ def secret(name: str, default: str = "") -> str:
 def is_production_mode() -> bool:
     mode = secret("ERRORSWEEP_ENV", secret("ENVIRONMENT", secret("APP_ENV", ""))).strip().lower()
     return mode in {"prod", "production"}
+
+
+FEATURE_FLAG_META = {
+    "main_api_translation": ("Main API translation", "Allow Pro/QA workflows to call BYO AI or built-in MT translation routes."),
+    "pro_human_review": ("Pro post-editing Human Review", "Allow Pro translation to open the Human Review workspace."),
+    "scorecards": ("Scorecards", "Allow translator/reviewer scorecard generation workflows."),
+    "subtitle_editor": ("Subtitle / Transcription Editor", "Allow subtitle and transcription workspace tools."),
+    "public_registration": ("Public registration", "Allow unauthenticated users to create a trial workspace."),
+    "demo_access": ("Demo access", "Allow unauthenticated demo workspace sign-in on local builds."),
+    "billing_collection": ("Billing collection", "Allow checkout/mandate intents from the Billing page."),
+    "self_hosted_engines": ("Self-hosted engines", "Allow no-key translation through configured IndicTrans2/MADLAD/OPUS workers."),
+}
+
+
+def feature_flag_defaults() -> Dict[str, bool]:
+    local_mode = not is_production_mode()
+    return {
+        "main_api_translation": True,
+        "pro_human_review": True,
+        "scorecards": True,
+        "subtitle_editor": True,
+        "public_registration": local_mode,
+        "demo_access": local_mode,
+        "billing_collection": local_mode,
+        "self_hosted_engines": True,
+    }
+
+
+def parse_bool_flag(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return safe_text(value).lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def feature_flag(key: str, default: Optional[bool] = None) -> bool:
+    defaults = feature_flag_defaults()
+    fallback = defaults.get(key, bool(default))
+    env_key = f"ERRORSWEEP_FEATURE_{key.upper()}"
+    configured = secret(env_key, "")
+    if configured != "":
+        return parse_bool_flag(configured, fallback)
+    flags = st.session_state.setdefault("feature_flags", defaults.copy())
+    if key not in flags:
+        flags[key] = fallback
+    return parse_bool_flag(flags.get(key), fallback)
+
+
+def set_feature_flags(updates: Dict[str, bool]) -> List[str]:
+    flags = st.session_state.setdefault("feature_flags", feature_flag_defaults().copy())
+    changed: List[str] = []
+    for key, value in updates.items():
+        normalized = bool(value)
+        if bool(flags.get(key, feature_flag_defaults().get(key, False))) != normalized:
+            flags[key] = normalized
+            changed.append(key)
+    if changed:
+        try:
+            upsert_platform_setting(
+                "feature_flags",
+                {key: bool(flags.get(key, feature_flag_defaults().get(key, False))) for key in FEATURE_FLAG_META},
+                metadata={"changed": changed, "source": "Platform Settings"},
+            )
+        except Exception as exc:
+            LOGGER.warning("Unable to persist feature flags: %s", exc)
+        add_audit(
+            "Feature flags updated",
+            ", ".join(f"{FEATURE_FLAG_META.get(key, (key, ''))[0]}={flags.get(key)}" for key in changed),
+        )
+    return changed
+
+
+def retention_policy_defaults() -> Dict[str, int]:
+    return dict(RETENTION_POLICY_DEFAULTS)
 
 
 def session_secret() -> str:
@@ -2749,6 +3383,313 @@ def load_saas_records(collection: str, workspace: str = "", include_all_workspac
     except Exception as exc:
         LOGGER.warning("Unable to load SaaS records %s: %s", collection, exc)
         return []
+
+
+def remove_saas_record(collection: str, record_id: str) -> bool:
+    removed = False
+    if delete_saas_record is not None:
+        try:
+            removed = bool(delete_saas_record(collection, record_id))
+        except Exception as exc:
+            LOGGER.warning("Unable to delete SaaS record %s/%s: %s", collection, record_id, exc)
+    rows = st.session_state.get(collection)
+    if isinstance(rows, list):
+        before = len(rows)
+        st.session_state[collection] = [
+            item for item in rows
+            if not (isinstance(item, dict) and safe_text(item.get("id")) == safe_text(record_id))
+        ]
+        removed = removed or len(st.session_state[collection]) != before
+    return removed
+
+
+def _setting_json_value(record: Dict[str, Any]) -> Any:
+    value = record.get("setting_value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
+def upsert_platform_setting(setting_key: str, setting_value: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    record = persist_saas_record("platform_settings", {
+        "id": f"platform-{safe_text(setting_key)}",
+        "workspace": "Platform",
+        "setting_key": safe_text(setting_key),
+        "setting_value": setting_value,
+        "value_type": "json" if isinstance(setting_value, (dict, list, bool, int, float)) else "text",
+        "metadata_json": metadata or {},
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    })
+    upsert_session_record("platform_settings", record)
+    return record
+
+
+def legal_version_defaults() -> Dict[str, str]:
+    return dict(LEGAL_VERSION_DEFAULTS)
+
+
+def legal_versions() -> Dict[str, str]:
+    versions = legal_version_defaults()
+    persisted = st.session_state.setdefault("legal_versions", legal_version_defaults())
+    if isinstance(persisted, dict):
+        for key in versions:
+            value = safe_text(persisted.get(key))
+            if value:
+                versions[key] = value[:80]
+    st.session_state["legal_versions"] = versions
+    return versions
+
+
+def set_legal_versions(updates: Dict[str, str]) -> List[str]:
+    current = legal_versions()
+    cleaned = {}
+    changed = []
+    for key, fallback in legal_version_defaults().items():
+        value = safe_text(updates.get(key) or fallback).strip()[:80]
+        cleaned[key] = value or fallback
+        if cleaned[key] != current.get(key):
+            changed.append(key)
+    st.session_state["legal_versions"] = cleaned
+    if changed:
+        try:
+            upsert_platform_setting(
+                "legal_versions",
+                cleaned,
+                metadata={"changed": changed, "source": "Platform Settings"},
+            )
+        except Exception as exc:
+            LOGGER.warning("Unable to persist legal versions: %s", exc)
+        add_audit("Legal versions updated", ", ".join(f"{key}={cleaned[key]}" for key in changed))
+    return changed
+
+
+def compliance_ack_label() -> str:
+    versions = legal_versions()
+    return (
+        f"I accept the [Terms of Service](?public=terms) (v{versions['terms_version']}), "
+        f"[Privacy Policy](?public=privacy) (v{versions['privacy_version']}), "
+        f"[Cookie Notice](?public=cookies) (v{versions['cookie_version']}), "
+        f"[DPA](?public=dpa) (v{versions['dpa_version']}), and "
+        f"NDA/confidentiality obligations (v{versions['nda_version']}) for this workspace."
+    )
+
+
+def consent_versions_are_current(record: Dict[str, Any], versions: Optional[Dict[str, str]] = None) -> bool:
+    versions = versions or legal_versions()
+    return all(safe_text(record.get(key)) == safe_text(versions.get(key)) for key in ("terms_version", "privacy_version", "nda_version", "cookie_version", "dpa_version"))
+
+
+def record_consent_acceptance(email: str, role: str, account_type: str, workspace: str, source: str = "login") -> Dict[str, Any]:
+    versions = legal_versions()
+    accepted_at = now_stamp()
+    record = persist_saas_record("consent_records", {
+        "id": f"consent-{uuid.uuid4().hex}",
+        "workspace": safe_text(workspace or "Demo Workspace"),
+        "user_email": safe_text(email).strip(),
+        "email": safe_text(email).strip(),
+        "account_type": safe_text(account_type),
+        "role": safe_text(role),
+        **versions,
+        "accepted_at": accepted_at,
+        "ip_hint": "",
+        "metadata_json": {"source": safe_text(source), "app_version": APP_VERSION},
+        "created_at": accepted_at,
+        "updated_at": accepted_at,
+    })
+    upsert_session_record("consent_records", record)
+    add_audit(
+        "Legal terms accepted",
+        f"{safe_text(email)} accepted terms={versions['terms_version']} privacy={versions['privacy_version']} nda={versions['nda_version']}",
+    )
+    return record
+
+
+def abuse_protection_defaults() -> Dict[str, int]:
+    return dict(ABUSE_PROTECTION_DEFAULTS)
+
+
+def abuse_protection_settings() -> Dict[str, int]:
+    settings = abuse_protection_defaults()
+    persisted = st.session_state.setdefault("abuse_protection", abuse_protection_defaults())
+    if isinstance(persisted, dict):
+        for key, fallback in settings.items():
+            try:
+                value = int(persisted.get(key, fallback))
+            except Exception:
+                value = fallback
+            settings[key] = max(0, value)
+    settings["window_minutes"] = max(1, settings.get("window_minutes", ABUSE_PROTECTION_DEFAULTS["window_minutes"]))
+    st.session_state["abuse_protection"] = settings
+    return settings
+
+
+def set_abuse_protection_settings(updates: Dict[str, int]) -> List[str]:
+    current = abuse_protection_settings()
+    cleaned: Dict[str, int] = {}
+    changed: List[str] = []
+    for key, fallback in abuse_protection_defaults().items():
+        try:
+            value = int(updates.get(key, fallback))
+        except Exception:
+            value = fallback
+        if key == "window_minutes":
+            value = max(1, min(1440, value))
+        else:
+            value = max(0, min(1000, value))
+        cleaned[key] = value
+        if cleaned[key] != current.get(key):
+            changed.append(key)
+    st.session_state["abuse_protection"] = cleaned
+    if changed:
+        try:
+            upsert_platform_setting(
+                "abuse_protection",
+                cleaned,
+                metadata={"changed": changed, "source": "Platform Settings"},
+            )
+        except Exception as exc:
+            LOGGER.warning("Unable to persist abuse protection settings: %s", exc)
+        add_audit("Abuse protection updated", ", ".join(f"{key}={cleaned[key]}" for key in changed))
+    return changed
+
+
+def abuse_identifier(action: str, identifier: str = "") -> str:
+    user = current_user() or {}
+    raw = safe_text(identifier or user.get("email") or user.get("workspace") or "anonymous").strip().lower()
+    if not raw:
+        raw = "anonymous"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"{safe_text(action)}:{digest}"
+
+
+def abuse_attempt_label(action: str, identifier: str = "") -> str:
+    visible = safe_text(identifier or (current_user() or {}).get("email") or "anonymous").strip()
+    if "@" in visible:
+        name, _, domain = visible.partition("@")
+        visible = f"{name[:2]}***@{domain}"
+    elif len(visible) > 18:
+        visible = f"{visible[:8]}...{visible[-4:]}"
+    return visible or "anonymous"
+
+
+def consume_abuse_attempt(action: str, identifier: str = "") -> Tuple[bool, str]:
+    meta = ABUSE_ACTION_META.get(action)
+    if not meta:
+        return True, ""
+    label, limit_key = meta
+    settings = abuse_protection_settings()
+    limit = int(settings.get(limit_key, 0))
+    if limit <= 0:
+        return True, ""
+    window_seconds = max(60, int(settings.get("window_minutes", 15)) * 60)
+    now_epoch = time.time()
+    key = abuse_identifier(action, identifier)
+    events = st.session_state.setdefault("abuse_throttle_events", {})
+    attempts = [float(item) for item in events.get(key, []) if now_epoch - float(item) <= window_seconds]
+    if len(attempts) >= limit:
+        oldest = min(attempts) if attempts else now_epoch
+        wait_seconds = max(1, int(window_seconds - (now_epoch - oldest)))
+        wait_minutes = max(1, math.ceil(wait_seconds / 60))
+        blocks = st.session_state.setdefault("abuse_throttle_blocks", [])
+        block = {
+            "time": now_stamp(),
+            "action": action,
+            "surface": label,
+            "identifier": abuse_attempt_label(action, identifier),
+            "attempts": len(attempts),
+            "limit": limit,
+            "window_minutes": settings.get("window_minutes", 15),
+            "wait_minutes": wait_minutes,
+        }
+        blocks.insert(0, block)
+        del blocks[100:]
+        add_audit("Abuse throttle blocked", f"{label}: {block['identifier']} hit {len(attempts)}/{limit} in {settings.get('window_minutes')}m")
+        return False, f"Too many {label.lower()} attempts. Please wait about {wait_minutes} minute(s) and try again."
+    attempts.append(now_epoch)
+    events[key] = attempts
+    return True, ""
+
+
+def clear_abuse_attempts(action: str, identifier: str = "") -> None:
+    key = abuse_identifier(action, identifier)
+    events = st.session_state.setdefault("abuse_throttle_events", {})
+    events.pop(key, None)
+
+
+def hydrate_platform_settings(force: bool = False) -> None:
+    if st.session_state.get("_platform_settings_hydrated") and not force:
+        return
+    records = load_saas_records(
+        "platform_settings",
+        workspace="Platform",
+        include_all_workspaces=True,
+        limit=SESSION_COLLECTION_LIMITS.get("platform_settings", 100),
+    )
+    if records:
+        st.session_state["platform_settings"] = records
+        feature_record = next((row for row in records if safe_text(row.get("setting_key")) == "feature_flags"), None)
+        if feature_record:
+            persisted_flags = _setting_json_value(feature_record)
+            if isinstance(persisted_flags, dict):
+                merged = feature_flag_defaults()
+                merged.update({key: bool(value) for key, value in persisted_flags.items() if key in FEATURE_FLAG_META})
+                st.session_state["feature_flags"] = merged
+        retention_record = next((row for row in records if safe_text(row.get("setting_key")) == "retention_policy"), None)
+        if retention_record:
+            persisted_policy = _setting_json_value(retention_record)
+            if isinstance(persisted_policy, dict):
+                merged_policy = retention_policy_defaults()
+                for key, value in persisted_policy.items():
+                    if key in merged_policy:
+                        try:
+                            merged_policy[key] = max(0, int(value))
+                        except Exception:
+                            LOGGER.warning("Invalid persisted retention value for %s: %s", key, value)
+                st.session_state["retention_policy"] = merged_policy
+        legal_record = next((row for row in records if safe_text(row.get("setting_key")) == "legal_versions"), None)
+        if legal_record:
+            persisted_versions = _setting_json_value(legal_record)
+            if isinstance(persisted_versions, dict):
+                merged_versions = legal_version_defaults()
+                for key, value in persisted_versions.items():
+                    if key in merged_versions and safe_text(value):
+                        merged_versions[key] = safe_text(value)[:80]
+                st.session_state["legal_versions"] = merged_versions
+        abuse_record = next((row for row in records if safe_text(row.get("setting_key")) == "abuse_protection"), None)
+        if abuse_record:
+            persisted_abuse = _setting_json_value(abuse_record)
+            if isinstance(persisted_abuse, dict):
+                merged_abuse = abuse_protection_defaults()
+                for key, value in persisted_abuse.items():
+                    if key in merged_abuse:
+                        try:
+                            merged_abuse[key] = max(0, int(value))
+                        except Exception:
+                            LOGGER.warning("Invalid persisted abuse protection value for %s: %s", key, value)
+                merged_abuse["window_minutes"] = max(1, merged_abuse.get("window_minutes", ABUSE_PROTECTION_DEFAULTS["window_minutes"]))
+                st.session_state["abuse_protection"] = merged_abuse
+        subprocessor_record = next((row for row in records if safe_text(row.get("setting_key")) == "subprocessor_register"), None)
+        if subprocessor_record:
+            persisted_register = _setting_json_value(subprocessor_record)
+            if isinstance(persisted_register, dict):
+                merged_register = dict(SUBPROCESSOR_DEFAULT_REGISTER)
+                for key, value in persisted_register.items():
+                    if isinstance(value, dict):
+                        merged_register[safe_text(key)] = {
+                            **merged_register.get(safe_text(key), {}),
+                            **{safe_text(child_key): safe_text(child_value) for child_key, child_value in value.items()},
+                        }
+                st.session_state["subprocessor_register"] = merged_register
+        sso_record = next((row for row in records if safe_text(row.get("setting_key")) == "sso_connections"), None)
+        if sso_record:
+            persisted_sso = _setting_json_value(sso_record)
+            if isinstance(persisted_sso, dict):
+                st.session_state["sso_connections"] = persisted_sso
+    st.session_state["_platform_settings_hydrated"] = True
 
 
 def public_auth_link(route: str, token: str) -> str:
@@ -2908,6 +3849,7 @@ def hydrate_saas_state_for_user() -> None:
         "projects",
         "jobs",
         "payments",
+        "invoices",
         "audit_logs",
         "notifications",
         "task_queue",
@@ -2916,10 +3858,17 @@ def hydrate_saas_state_for_user() -> None:
         "checkout_sessions",
         "billing_events",
         "auth_tokens",
+        "platform_settings",
+        "privacy_requests",
+        "support_tickets",
+        "status_incidents",
+        "consent_records",
     ]:
-        records = load_saas_records(key, workspace=workspace, include_all_workspaces=include_all, limit=SESSION_COLLECTION_LIMITS.get(key, 500))
+        collection_include_all = include_all or key in {"status_incidents"}
+        records = load_saas_records(key, workspace=workspace, include_all_workspaces=collection_include_all, limit=SESSION_COLLECTION_LIMITS.get(key, 500))
         if records:
             st.session_state[key] = records
+    hydrate_platform_settings(force=True)
     if fetch_persistent_usage_events is not None:
         try:
             usage_records = fetch_persistent_usage_events(SESSION_COLLECTION_LIMITS.get("ai_usage_events", 500))
@@ -2949,8 +3898,6 @@ def verify_payload(token: str) -> Optional[Dict[str, Any]]:
         if not hmac.compare_digest(expected, sig):
             return None
         data = json.loads(b64url_decode(body))
-        if int(data.get("exp", 0)) < int(time.time()):
-            return None
         return data
     except RuntimeError:
         raise
@@ -2985,6 +3932,396 @@ def query_clear(name: str) -> None:
         LOGGER.debug("Unable to clear query param %s: %s", name, exc)
 
 
+def route_query_has_explicit_target() -> bool:
+    return any(query_get(key) for key in ROUTE_RESTORE_BLOCKING_QUERY_KEYS)
+
+
+def signed_session_token_for_user(user: Dict[str, Any]) -> str:
+    payload = {**user, "iat": int(time.time()), "persistent": True}
+    return sign_payload(payload)
+
+
+def browser_session_cookie() -> str:
+    try:
+        return safe_text(st.context.cookies.get(SESSION_COOKIE_NAME, ""))
+    except Exception as exc:
+        LOGGER.debug("Unable to read browser session cookie: %s", exc)
+        return ""
+
+
+def restore_user_from_signed_session(token: str) -> bool:
+    if not safe_text(token):
+        return False
+    data = verify_payload(token)
+    if not data:
+        return False
+    st.session_state["user"] = {
+        "email": data.get("email", ""),
+        "role": data.get("role", "User"),
+        "account_type": data.get("account_type", "user"),
+        "workspace": data.get("workspace", "Demo Workspace"),
+        "login_at": data.get("login_at", ""),
+    }
+    st.session_state["authenticated"] = True
+    return True
+
+
+def session_restore_probe_pending(route: Optional[Dict[str, str]] = None, explicit_route_target: bool = False) -> bool:
+    if is_authenticated():
+        return False
+    if query_get("es_restore") or query_get("es_session") or query_get("es_restore_miss") == "1":
+        return False
+    if browser_session_cookie():
+        return False
+    if isinstance(route, dict) and route.get("route") in PUBLIC_ROUTES:
+        return False
+    return bool(explicit_route_target or protected_route_requested())
+
+
+def sync_browser_session_cookie() -> None:
+    """Mirror the signed session into a browser cookie so reloads survive.
+
+    Streamlit app code cannot set HttpOnly cookies directly. This keeps the
+    token out of URLs and browser history; a deployment proxy should upgrade
+    this to a Secure HttpOnly Set-Cookie header when available.
+    """
+    token = safe_text(st.session_state.pop("_pending_session_cookie", ""))
+    clear_cookie = bool(st.session_state.pop("_clear_session_cookie", False))
+    if not token and not clear_cookie and st.session_state.get("authenticated") and st.session_state.get("user"):
+        token = signed_session_token_for_user(st.session_state.get("user") or {})
+    if not token and not clear_cookie:
+        return
+    token_json = json.dumps(token)
+    name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    max_age = SESSION_PERSISTENCE_SECONDS if token else 0
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          const name = {name_json};
+          const storageKey = {storage_key_json};
+          const routeStorageKey = {route_storage_key_json};
+          const value = {token_json};
+          const secure = window.location.protocol === "https:" ? "; Secure" : "";
+          try {{
+            const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+            targetDoc.cookie = name + "=" + encodeURIComponent(value) +
+              "; Max-Age={max_age}; Path=/; SameSite=Lax" + secure;
+          }} catch (err) {{}}
+          try {{
+            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+            if (value) storage.setItem(storageKey, value);
+            else {{
+              storage.removeItem(storageKey);
+              storage.removeItem(routeStorageKey);
+            }}
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
+    logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
+    return f"""
+            const url = new URL(loc.href);
+            ["es_session", "es_restore", "es_restore_miss", "es_editor", "job_id", "review_id", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            url.searchParams.set("es_page", "Landing");
+            {logout_marker_js}
+    """
+
+
+def render_global_logout_listener() -> None:
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          if (window.__errorsweepGlobalLogoutListener) return;
+          window.__errorsweepGlobalLogoutListener = true;
+          const cookieName = {cookie_name_json};
+          const storageKey = {storage_key_json};
+          const routeStorageKey = {route_storage_key_json};
+          const logoutKey = {logout_key_json};
+          const clearAuthAndGoLanding = () => {{
+            try {{
+              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+            }} catch (err) {{}}
+            try {{
+              const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+              storage.removeItem(storageKey);
+              storage.removeItem(routeStorageKey);
+            }} catch (err) {{}}
+            try {{
+              const loc = window.parent ? window.parent.location : window.location;
+              {landing_redirect_url_js(include_logout_marker=True)}
+              if (loc.href !== url.toString()) loc.replace(url.toString());
+            }} catch (err) {{}}
+          }};
+          window.addEventListener("storage", (event) => {{
+            if (event.key === logoutKey && event.newValue) clearAuthAndGoLanding();
+          }});
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_session_restore_bridge() -> None:
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    route_blocking_keys_json = json.dumps(list(ROUTE_RESTORE_BLOCKING_QUERY_KEYS))
+    route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    public_routes_json = json.dumps(list(PUBLIC_ROUTES))
+    public_es_page_aliases_json = json.dumps(PUBLIC_ES_PAGE_ALIASES)
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            const cookieName = {cookie_name_json};
+            const storageKey = {storage_key_json};
+            const routeStorageKey = {route_storage_key_json};
+            const routeBlockingKeys = {route_blocking_keys_json};
+            const routeParamKeys = {route_param_keys_json};
+            const publicRoutes = {public_routes_json};
+            const publicEsPageAliases = {public_es_page_aliases_json};
+            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+            const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+            const cookieToken = (targetDoc.cookie || "").split(";").map((item) => item.trim()).reduce((found, item) => {{
+              if (found) return found;
+              const prefix = cookieName + "=";
+              return item.startsWith(prefix) ? decodeURIComponent(item.slice(prefix.length)) : "";
+            }}, "");
+            const token = storage.getItem(storageKey) || cookieToken;
+            const loc = window.parent ? window.parent.location : window.location;
+            const url = new URL(loc.href);
+            if (url.searchParams.has("es_restore")) return;
+            if (!token) {{
+              const route = String(url.searchParams.get("route") || url.searchParams.get("public") || "").toLowerCase();
+              const esPage = String(url.searchParams.get("es_page") || "").toLowerCase().replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim();
+              const publicEsRoute = publicEsPageAliases[esPage] || "";
+              const isPublic = (route && publicRoutes.includes(route)) || (publicEsRoute && publicRoutes.includes(publicEsRoute));
+              const hasRouteTarget = Boolean(route) || routeParamKeys.some((key) => url.searchParams.has(key));
+              if (hasRouteTarget && !isPublic && !url.searchParams.has("es_restore_miss")) {{
+                url.searchParams.set("es_restore_miss", "1");
+                loc.replace(url.toString());
+              }}
+              return;
+            }}
+            url.searchParams.delete("es_restore_miss");
+            url.searchParams.delete("public");
+            if (!routeBlockingKeys.some((key) => url.searchParams.has(key))) {{
+              const savedRoute = storage.getItem(routeStorageKey);
+              if (savedRoute) {{
+                try {{
+                  const params = JSON.parse(savedRoute);
+                  if (params && (params.es_page || params.es_editor)) {{
+                    Object.entries(params).forEach(([key, value]) => {{
+                      if (routeParamKeys.includes(key) && value) {{
+                        url.searchParams.set(key, String(value));
+                      }}
+                    }});
+                  }}
+                }} catch (err) {{}}
+              }}
+            }}
+            url.searchParams.set("es_restore", token);
+            loc.replace(url.toString());
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_auth_restore_bridge(return_to: str = "") -> None:
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    return_to_json = json.dumps(safe_text(return_to))
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          function readCookie(name) {{
+            try {{
+              let cookieText = document.cookie || "";
+              try {{
+                if (window.parent && window.parent.document && window.parent.document.cookie) {{
+                  cookieText = window.parent.document.cookie;
+                }}
+              }} catch (err) {{}}
+              const parts = cookieText.split(";").map((part) => part.trim());
+              const prefix = name + "=";
+              for (const part of parts) {{
+                if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length));
+              }}
+            }} catch (err) {{}}
+            return "";
+          }}
+          try {{
+            const storageKey = {storage_key_json};
+            const cookieName = {cookie_name_json};
+            const returnTo = {return_to_json};
+            const loc = window.parent ? window.parent.location : window.location;
+            const url = new URL(loc.href);
+            const alreadyTriedRestore = url.searchParams.has("es_restore") || url.searchParams.has("es_session");
+            let token = "";
+            if (!alreadyTriedRestore) {{
+              try {{
+                const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+                token = storage.getItem(storageKey) || "";
+              }} catch (err) {{}}
+              if (!token) token = readCookie(cookieName);
+            }}
+            if (token) {{
+              url.searchParams.delete("public");
+              url.searchParams.delete("es_session");
+              url.searchParams.delete("es_restore_miss");
+              url.searchParams.delete("return_to");
+              url.searchParams.set("es_restore", token);
+            }} else {{
+              ["route", "public", "es_session", "es_restore", "es_restore_miss", "es_logout"].forEach((key) => url.searchParams.delete(key));
+              url.searchParams.set("es_page", "Login");
+              if (returnTo) url.searchParams.set("return_to", returnTo);
+            }}
+            loc.replace(url.toString());
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_logout_bridge() -> None:
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            const cookieName = {cookie_name_json};
+            const storageKey = {storage_key_json};
+            const routeStorageKey = {route_storage_key_json};
+            const logoutKey = {logout_key_json};
+            const secure = window.location.protocol === "https:" ? "; Secure" : "";
+            try {{
+              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+            }} catch (err) {{}}
+            try {{
+              const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+              storage.removeItem(storageKey);
+              storage.removeItem(routeStorageKey);
+              storage.setItem(logoutKey, String(Date.now()));
+            }} catch (err) {{}}
+            const loc = window.parent ? window.parent.location : window.location;
+            {landing_redirect_url_js()}
+            loc.replace(url.toString());
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dict[str, str]:
+    """Build the route opened in the separate authenticated tool tab."""
+    fallback_page = normalize_es_page(fallback_page or "Dashboard")
+    if public_route_for_es_page(fallback_page):
+        fallback_page = "Dashboard"
+    fallback = route_query_for_page(fallback_page)
+    if not safe_text(return_to):
+        return fallback
+
+    parsed = parse_qs(return_to.lstrip("?"), keep_blank_values=False)
+    flat = {key: safe_text(values[0]) for key, values in parsed.items() if values}
+    route = flat.get("route", "").strip().lower()
+    page = normalize_es_page(flat.get("es_page"))
+
+    if route in {"login", "landing", "signup"} or public_route_for_es_page(page) in {"login", "landing", "signup"}:
+        return fallback
+    if route == "human_review_editor" or is_human_review_editor_page(page):
+        review_id = safe_text(flat.get("review_id"))
+        return route_query_for_page("Human Review Editor", {"review_id": review_id}) if review_id else fallback
+    if flat.get("es_editor"):
+        editor_params = {key: value for key, value in flat.items() if key in ROUTE_STORAGE_PARAM_KEYS and safe_text(value)}
+        return editor_params or fallback
+    if route in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route]:
+        page = normalize_es_page(ROUTE_PAGE_ALIASES[route])
+        return route_query_for_page(page, {key: value for key, value in flat.items() if key != "route"})
+    if flat.get("es_page") and page in known_protected_es_pages():
+        return route_query_for_page(page, {key: value for key, value in flat.items() if key not in {"route", "es_page"}})
+    return fallback
+
+
+def render_post_login_tool_launch_bridge() -> None:
+    launch_url = safe_text(st.session_state.get("_post_login_tool_launch_url", ""))
+    if not launch_url:
+        return
+    launch_id = safe_text(st.session_state.get("_post_login_tool_launch_id", "")) or uuid.uuid4().hex
+    st.session_state["_post_login_tool_launch_id"] = launch_id
+    session_token = safe_text(st.session_state.get("_post_login_session_token", ""))
+    launch_url_json = json.dumps(launch_url)
+    launch_id_json = json.dumps(launch_id)
+    session_token_json = json.dumps(session_token)
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    st.success("Signed in. ErrorSweep is opening the tool in a new tab.")
+    st.markdown(
+        f'<a class="es-lp-btn primary" href="{escape(launch_url)}" target="_blank" rel="noopener">Open ErrorSweep Tool</a>',
+        unsafe_allow_html=True,
+    )
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            const launchUrl = {launch_url_json};
+            const launchId = {launch_id_json};
+            const sessionToken = {session_token_json};
+            const cookieName = {cookie_name_json};
+            const storageKey = {storage_key_json};
+            const key = "errorsweep_tool_launch_" + launchId;
+            const storage = (window.parent && window.parent.sessionStorage) ? window.parent.sessionStorage : window.sessionStorage;
+            if (storage.getItem(key)) return;
+            storage.setItem(key, "1");
+            if (sessionToken) {{
+              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken) +
+                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+              const persistentStorage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+              persistentStorage.setItem(storageKey, sessionToken);
+            }}
+            const loc = window.parent ? window.parent.location : window.location;
+            const url = new URL(launchUrl, loc.href);
+            window.open(url.toString(), "_blank", "noopener");
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def login_user(email: str, role: str, account_type: str, workspace: str = "Demo Workspace") -> None:
     user = {
         "email": email,
@@ -2993,39 +4330,71 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
         "workspace": workspace,
         "login_at": datetime.now(timezone.utc).isoformat(),
     }
+    return_to = query_get("return_to") or safe_text(st.session_state.get("auth_return_to", ""))
+    target_page = "Dashboard"
+    if return_to:
+        parsed_return_to = parse_qs(return_to.lstrip("?"), keep_blank_values=False)
+        target_page = normalize_es_page((parsed_return_to.get("es_page") or ["Dashboard"])[0])
+        if public_route_for_es_page(target_page) == "login":
+            target_page = "Dashboard"
     st.session_state["user"] = user
-    payload = {**user, "exp": int(time.time()) + SESSION_TTL_SECONDS}
+    st.session_state["authenticated"] = True
+    st.session_state["es_page"] = target_page
+    session_token = signed_session_token_for_user(user)
+    st.session_state["_pending_session_cookie"] = session_token
+    st.session_state["_post_login_session_token"] = session_token
+    launch_params = login_launch_params(return_to, target_page)
+    st.session_state["_post_login_tool_launch_url"] = "?" + urlencode(launch_params)
+    st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
+    st.session_state["_login_window_stay_open"] = True
+    st.session_state.page = "Login"
+    st.session_state["current_route"] = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+    set_route_query({"es_page": "Login"})
     query_clear("public")
-    query_set("es_session", sign_payload(payload))
+    query_clear("return_to")
+    query_clear("es_session")
+    query_clear("es_restore")
+    query_clear("es_restore_miss")
 
 
 def restore_session_from_query() -> None:
     if st.session_state.get("user"):
+        query_clear("es_session")
+        query_clear("es_restore")
+        query_clear("es_restore_miss")
         return
-    token = query_get("es_session")
+    restore_token = query_get("es_restore")
+    token = restore_token or query_get("es_session")
     if not token:
+        cookie_token = browser_session_cookie()
+        if cookie_token and restore_user_from_signed_session(cookie_token):
+            st.session_state["_pending_session_cookie"] = cookie_token
+            query_clear("es_restore_miss")
         return
-    data = verify_payload(token)
-    if data:
-        st.session_state["user"] = {
-            "email": data.get("email", ""),
-            "role": data.get("role", "User"),
-            "account_type": data.get("account_type", "user"),
-            "workspace": data.get("workspace", "Demo Workspace"),
-            "login_at": data.get("login_at", ""),
-        }
+    if restore_user_from_signed_session(token):
+        st.session_state["_pending_session_cookie"] = token
+        query_clear("es_restore_miss")
+    else:
+        st.session_state["_clear_session_cookie"] = True
+    query_clear("es_session")
+    query_clear("es_restore")
 
 
 def logout() -> None:
     st.session_state.pop("user", None)
+    st.session_state.pop("authenticated", None)
     st.session_state.pop("_saas_state_hydrated", None)
-    query_clear("es_session")
-    query_clear("es_page")
-    query_clear("es_logout")
-    st.rerun()
-
-
-restore_session_from_query()
+    st.session_state.pop("_post_login_tool_launch_url", None)
+    st.session_state.pop("_post_login_tool_launch_id", None)
+    st.session_state.pop("_post_login_session_token", None)
+    st.session_state.pop("_login_window_stay_open", None)
+    st.session_state["_clear_session_cookie"] = True
+    for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "route", "public", "return_to", "es_logout"):
+        query_clear(key)
+    query_set("es_page", "Landing")
+    render_logout_bridge()
+    render_landing_page("logout")
+    st.stop()
 
 
 # ==========================================================
@@ -3051,23 +4420,53 @@ def init_state() -> None:
         "payments": [
             {"date": "2026-05-01", "workspace": "Demo Workspace", "user": "demo@errorsweep.local", "plan": "Trial", "amount": 0, "currency": "INR", "status": "Demo"}
         ],
+        "invoices": [],
         "workspaces": [
             {"workspace": "Demo Workspace", "owner": "demo@errorsweep.local", "plan": "Trial", "status": "Active", "users": 3, "jobs": 0}
+            ,
+            {"workspace": UNLIMITED_ACCESS_WORKSPACE, "owner": UNLIMITED_ACCESS_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
         ],
         "users": [
             {"email": "owner@errorsweep.local", "workspace": "Platform", "role": "Platform Owner", "plan": "Owner", "status": "Active"},
             {"email": "demo@errorsweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "plan": "Trial", "status": "Active"},
             {"email": "reviewer@errorsweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "plan": "Trial", "status": "Active"},
+            {"email": UNLIMITED_ACCESS_EMAIL, "workspace": "Platform", "role": "Platform Owner", "plan": "Unlimited", "status": "Active", "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH, "email_verified": True},
         ],
         "audit_logs": [],
         "ai_usage_events": [],
         "files": [],
         "notifications": [],
         "task_queue": [],
-        "subscriptions": [],
+        "subscriptions": [
+            {
+                "workspace": UNLIMITED_ACCESS_WORKSPACE,
+                "plan": "Unlimited",
+                "status": "Active",
+                "billing_cycle": "internal",
+                "currency": "INR",
+                "base_amount": 0,
+                "included_segments": 1_000_000_000,
+                "included_characters": 1_000_000_000_000,
+                "included_seats": 1_000_000,
+                "provider": "internal",
+            }
+        ],
         "checkout_sessions": [],
         "billing_events": [],
         "auth_tokens": [],
+        "platform_settings": [],
+        "privacy_requests": [],
+        "support_tickets": [],
+        "status_incidents": [],
+        "consent_records": [],
+        "feature_flags": feature_flag_defaults(),
+        "retention_policy": retention_policy_defaults(),
+        "legal_versions": legal_version_defaults(),
+        "abuse_protection": abuse_protection_defaults(),
+        "subprocessor_register": dict(SUBPROCESSOR_DEFAULT_REGISTER),
+        "sso_connections": {},
+        "abuse_throttle_events": {},
+        "abuse_throttle_blocks": [],
         "selected_review_index": 0,
         "selected_subtitle_index": 0,
         "subtitle_editor_active": False,
@@ -3083,7 +4482,54 @@ def init_state() -> None:
             st.session_state[key] = val
 
 
+def ensure_unlimited_access_account() -> None:
+    user_record = {
+        "email": UNLIMITED_ACCESS_EMAIL,
+        "workspace": "Platform",
+        "role": "Platform Owner",
+        "plan": "Unlimited",
+        "status": "Active",
+        "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH,
+        "email_verified": True,
+    }
+    workspace_record = {
+        "workspace": UNLIMITED_ACCESS_WORKSPACE,
+        "owner": UNLIMITED_ACCESS_EMAIL,
+        "plan": "Unlimited",
+        "status": "Active",
+        "users": 1,
+        "jobs": 0,
+    }
+    subscription_record = {
+        "workspace": UNLIMITED_ACCESS_WORKSPACE,
+        "plan": "Unlimited",
+        "status": "Active",
+        "billing_cycle": "internal",
+        "currency": "INR",
+        "base_amount": 0,
+        "included_segments": 1_000_000_000,
+        "included_characters": 1_000_000_000_000,
+        "included_seats": 1_000_000,
+        "provider": "internal",
+    }
+
+    def upsert_by(items_key: str, record: Dict[str, Any], match_key: str) -> None:
+        rows = st.session_state.setdefault(items_key, [])
+        wanted = str(record.get(match_key) or "").strip().lower()
+        for idx, item in enumerate(rows):
+            if str(item.get(match_key) or "").strip().lower() == wanted:
+                rows[idx] = {**item, **record}
+                break
+        else:
+            rows.insert(0, record)
+
+    upsert_by("users", user_record, "email")
+    upsert_by("workspaces", workspace_record, "workspace")
+    upsert_by("subscriptions", subscription_record, "workspace")
+
+
 init_state()
+ensure_unlimited_access_account()
 trim_session_collections()
 
 
@@ -3118,6 +4564,7 @@ WORKSPACE_PAGES = [
 # Hidden route pages. They are not shown as navigation buttons,
 # but they let editors open as dedicated professional workspaces.
 HIDDEN_EDITOR_PAGES = [
+    "Human Review Editor",
     "Human Review Workspace",
     "Subtitle Workspace",
     "Transcription Workspace",
@@ -3135,13 +4582,180 @@ ROLE_PAGE_ACCESS = {
     "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
 }
 
+ROUTE_PAGE_ALIASES = {
+    "landing": "",
+    "login": "",
+    "dashboard": "Dashboard",
+    "errorsweep_pro": "ErrorSweep Pro",
+    "projects": "Projects",
+    "jobs": "Jobs",
+    "pro": "ErrorSweep Pro",
+    "quality": "ErrorSweep QA",
+    "quality-checks": "ErrorSweep QA",
+    "qa": "ErrorSweep QA",
+    "glossary": "Memory & Rules",
+    "translation-memory": "Memory & Rules",
+    "tm": "Memory & Rules",
+    "memory": "Memory & Rules",
+    "rules": "Memory & Rules",
+    "billing": "Billing",
+    "account": "Account",
+}
+PAGE_ROUTE_SLUGS = {page: slug for slug, page in ROUTE_PAGE_ALIASES.items() if page}
+PUBLIC_ROUTES = {
+    "",
+    "landing",
+    "login",
+    "signup",
+    "verify",
+    "reset",
+    "terms",
+    "privacy",
+    "security",
+    "cookies",
+    "dpa",
+    "sso_handoff",
+    "billing_success",
+    "billing_cancel",
+}
+PUBLIC_ES_PAGE_ALIASES = {
+    "landing": "landing",
+    "login": "login",
+    "signup": "signup",
+    "sign up": "signup",
+    "verify": "verify",
+    "verify email": "verify",
+    "reset": "reset",
+    "reset password": "reset",
+    "terms": "terms",
+    "terms of service": "terms",
+    "privacy": "privacy",
+    "privacy policy": "privacy",
+    "security": "security",
+    "cookies": "cookies",
+    "cookie notice": "cookies",
+    "dpa": "dpa",
+    "sso_handoff": "sso_handoff",
+    "sso handoff": "sso_handoff",
+    "billing_success": "billing_success",
+    "billing success": "billing_success",
+    "billing_cancel": "billing_cancel",
+    "billing cancel": "billing_cancel",
+}
+PUBLIC_ROUTE_PAGE_NAMES = {
+    "landing": "Landing",
+    "login": "Login",
+    "signup": "Signup",
+    "verify": "Verify",
+    "reset": "Reset Password",
+    "terms": "Terms",
+    "privacy": "Privacy",
+    "security": "Security",
+    "cookies": "Cookies",
+    "dpa": "DPA",
+    "sso_handoff": "SSO Handoff",
+    "billing_success": "Billing Success",
+    "billing_cancel": "Billing Cancel",
+}
+HUMAN_REVIEW_EDITOR_PAGES = {"Human Review Editor", "HumanReviewEditor", "human_review_editor"}
+
+
+def es_page_alias_key(raw_page: Any) -> str:
+    value = safe_text(raw_page).strip()
+    key = value.lower().replace("+", " ").replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", key).strip()
+
+
+def normalize_es_page(raw_page: Any) -> str:
+    if not safe_text(raw_page):
+        return "Landing"
+
+    value = safe_text(raw_page).strip()
+    key = es_page_alias_key(value)
+    compact_key = key.replace(" ", "")
+    aliases = {
+        "login": "Login",
+        "sign in": "Login",
+        "signin": "Login",
+        "landing": "Landing",
+        "home": "Landing",
+        "signup": "Signup",
+        "sign up": "Signup",
+        "verify": "Verify",
+        "verify email": "Verify",
+        "reset": "Reset Password",
+        "reset password": "Reset Password",
+        "terms": "Terms",
+        "terms of service": "Terms",
+        "privacy": "Privacy",
+        "privacy policy": "Privacy",
+        "security": "Security",
+        "cookies": "Cookies",
+        "cookie notice": "Cookies",
+        "dpa": "DPA",
+        "sso handoff": "SSO Handoff",
+        "billing success": "Billing Success",
+        "billing cancel": "Billing Cancel",
+        "dashboard": "Dashboard",
+        "errorsweep pro": "ErrorSweep Pro",
+        "error sweep pro": "ErrorSweep Pro",
+        "errorsweeppro": "ErrorSweep Pro",
+        "human review editor": "Human Review Editor",
+        "humanrevieweditor": "Human Review Editor",
+        "pro": "ErrorSweep Pro",
+        "projects": "Projects",
+        "jobs": "Jobs",
+        "qa tasks": "ErrorSweep QA",
+        "qa": "ErrorSweep QA",
+        "quality": "ErrorSweep QA",
+        "quality checks": "ErrorSweep QA",
+        "errorsweep qa": "ErrorSweep QA",
+        "rules": "Memory & Rules",
+        "memory": "Memory & Rules",
+        "memory rules": "Memory & Rules",
+        "memory and rules": "Memory & Rules",
+        "team": "Team & Roles",
+        "team roles": "Team & Roles",
+        "billing": "Billing",
+        "account": "Account",
+        "admin": "Admin",
+        "scorecards": "Scorecards",
+        "subtitle transcription editor": "Subtitle / Transcription Editor",
+        "subtitle editor": "Subtitle / Transcription Editor",
+        "transcription editor": "Subtitle / Transcription Editor",
+    }
+    return aliases.get(key) or aliases.get(compact_key) or value
+
+
+def known_protected_es_pages() -> Set[str]:
+    pages = set(HIDDEN_EDITOR_PAGES)
+    pages.update(PAGE_ROUTE_SLUGS.keys())
+    for role_pages in ROLE_PAGE_ACCESS.values():
+        pages.update(role_pages)
+    return pages
+
 
 def current_user() -> Optional[Dict[str, Any]]:
     return st.session_state.get("user")
 
 
+def platform_owner_emails() -> set:
+    owner_user = safe_text(secret("ERRORSWEEP_OWNER_USERNAME", "owner@errorsweep.local")).strip().lower()
+    return {email for email in {owner_user, UNLIMITED_ACCESS_EMAIL.lower()} if email}
+
+
+def is_platform_owner_identity(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if user is not None else (current_user() or {})
+    email = safe_text(candidate.get("email")).strip().lower()
+    role = safe_text(candidate.get("role"))
+    account_type = safe_text(candidate.get("account_type")).strip().lower()
+    return role == "Platform Owner" or account_type == "owner" or email in platform_owner_emails()
+
+
 def current_role() -> str:
     user = current_user() or {}
+    if is_platform_owner_identity(user):
+        return "Platform Owner"
     return user.get("role", "User")
 
 
@@ -3155,30 +4769,376 @@ def allowed_pages() -> List[str]:
 
 
 def is_owner() -> bool:
-    return current_role() == "Platform Owner"
+    return is_platform_owner_identity()
 
 
 def page_link(page: str) -> str:
-    token = query_get("es_session")
-    page_param = quote(page)
-    if token:
-        return f"?es_session={token}&es_page={page_param}"
-    return f"?es_page={page_param}"
+    return "?" + urlencode({"es_page": normalize_es_page(page)})
 
 
 def public_page_link(page: str) -> str:
-    return f"?public={quote(page)}"
+    route = public_route_for_es_page(page) or es_page_alias_key(page)
+    page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route, safe_text(page).strip().title() or "Landing")
+    return "?" + urlencode({"es_page": page_name})
+
+
+def public_login_link_target() -> str:
+    return 'target="_blank" rel="noopener"'
+
+
+def route_query_for_page(page: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    params = {"es_page": normalize_es_page(page)}
+    for key, value in (extra or {}).items():
+        if key != "route" and safe_text(value):
+            params[key] = safe_text(value)
+    return params
+
+
+def app_page_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:
+    return "?" + urlencode(route_query_for_page(page, extra))
+
+
+def human_review_editor_link(review_id: str) -> str:
+    return app_page_link("Human Review Editor", {"review_id": review_id})
+
+
+def task_monitor_link(task_id: str) -> str:
+    return app_page_link("Jobs", {"task_id": task_id})
+
+
+def set_route_query(params: Dict[str, str]) -> None:
+    params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id"):
+        if stale not in params:
+            query_clear(stale)
+    for key, value in params.items():
+        query_set(key, value)
+    sync_browser_route_state(params)
+
+
+def public_route_for_es_page(page: str) -> str:
+    if not safe_text(page):
+        return ""
+    normalized_page = normalize_es_page(page)
+    for route, page_name in PUBLIC_ROUTE_PAGE_NAMES.items():
+        if normalized_page == page_name:
+            return route
+    return PUBLIC_ES_PAGE_ALIASES.get(es_page_alias_key(page), "")
+
+
+def browser_route_storage_params(params: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    params = params or {}
+    stored: Dict[str, str] = {}
+    raw_page = safe_text(params.get("es_page") or params.get("page"))
+    page = normalize_es_page(raw_page) if raw_page else ""
+    if page and not public_route_for_es_page(page) and page in known_protected_es_pages():
+        stored["es_page"] = page
+    for key in ("es_editor", "job_id", "review_id"):
+        value = safe_text(params.get(key) or query_get(key))
+        if value:
+            stored[key] = value
+    if stored.get("es_page") or (stored.get("es_editor") and stored.get("job_id")):
+        return stored
+    return {}
+
+
+def sync_browser_route_state(params: Optional[Dict[str, Any]] = None, clear: bool = False) -> None:
+    stored = {} if clear else browser_route_storage_params(params)
+    if not stored and not clear:
+        return
+    storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    value_json = json.dumps(stored)
+    should_clear_json = json.dumps(bool(clear))
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            const routeStorageKey = {storage_key_json};
+            const value = {value_json};
+            const shouldClear = {should_clear_json};
+            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+            if (shouldClear) storage.removeItem(routeStorageKey);
+            else storage.setItem(routeStorageKey, JSON.stringify(value));
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_route_restore_bridge() -> None:
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    route_blocking_keys_json = json.dumps(list(ROUTE_RESTORE_BLOCKING_QUERY_KEYS))
+    route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          try {{
+            const routeStorageKey = {route_storage_key_json};
+            const routeBlockingKeys = {route_blocking_keys_json};
+            const routeParamKeys = {route_param_keys_json};
+            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+            const savedRoute = storage.getItem(routeStorageKey);
+            if (!savedRoute) return;
+            const loc = window.parent ? window.parent.location : window.location;
+            const url = new URL(loc.href);
+            if (routeBlockingKeys.some((key) => url.searchParams.has(key))) return;
+            const params = JSON.parse(savedRoute);
+            if (!params || (!params.es_page && !params.es_editor)) return;
+            Object.entries(params).forEach(([key, value]) => {{
+              if (routeParamKeys.includes(key) && value) {{
+                url.searchParams.set(key, String(value));
+              }}
+            }});
+            loc.replace(url.toString());
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def is_human_review_editor_page(page: str) -> bool:
+    normalized_page = normalize_es_page(page)
+    return normalized_page == "Human Review Editor" or safe_text(page).strip() in HUMAN_REVIEW_EDITOR_PAGES
+
+
+def navigate_es_page(page_name: str, **params: str) -> None:
+    """Navigate with the existing es_page query model and remove route conflicts."""
+    page_name = normalize_es_page(page_name or "Dashboard")
+    clean_params = {key: safe_text(value) for key, value in params.items() if safe_text(value)}
+    st.session_state["es_page"] = page_name
+    if page_name in allowed_pages():
+        st.session_state.page = page_name
+    for key, value in clean_params.items():
+        st.session_state[key] = value
+    if clean_params.get("review_id"):
+        st.session_state["active_review_session_id"] = clean_params["review_id"]
+    st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
+
+    existing_es_session = query_get("es_session")
+    st.query_params["es_page"] = page_name
+    if existing_es_session:
+        st.query_params["es_session"] = existing_es_session
+        st.session_state["es_session"] = existing_es_session
+    if "route" in st.query_params:
+        del st.query_params["route"]
+        
+    for key, value in clean_params.items():
+        st.query_params[key] = str(value)
+        
+    st.rerun()
+
+
+def navigate(route: str, params: Optional[Dict[str, str]] = None, **kwargs: str) -> None:
+    """Central app navigation that preserves the current Streamlit session."""
+    route_value = safe_text(route) or "dashboard"
+    route_key = route_value.strip().lower().replace(" ", "_")
+    merged_params = {**(params or {}), **{key: value for key, value in kwargs.items() if safe_text(value)}}
+    if route_key == "human_review_editor":
+        review_id = safe_text(merged_params.get("review_id"))
+        if not review_id:
+            st.error("Cannot open Human Review Editor: missing review_id.")
+            st.stop()
+        navigate_es_page("Human Review Editor", review_id=review_id)
+    if route_key in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route_key]:
+        page = ROUTE_PAGE_ALIASES[route_key]
+        navigate_es_page(page, **merged_params)
+    page = route_value
+    navigate_es_page(page, **merged_params)
+
+
+def navigate_to_human_review_editor(review_id: str = "") -> None:
+    review_id = (
+        safe_text(review_id)
+        or query_get("review_id")
+        or safe_text(st.session_state.get("review_id", ""))
+        or safe_text(st.session_state.get("active_review_session_id", ""))
+    )
+    if not review_id:
+        st.error("Cannot open Human Review Editor: missing review_id.")
+        st.stop()
+    navigate_es_page("Human Review Editor", review_id=review_id)
+
+
+def requested_route_params() -> Dict[str, str]:
+    params: Dict[str, str] = {}
+    for key in ("es_page", "es_editor", "job_id", "review_id"):
+        value = query_get(key)
+        if value:
+            params[key] = normalize_es_page(value) if key == "es_page" else value
+    route = safe_text(query_get("route")).strip().lower()
+    if params:
+        if route:
+            query_clear("route")
+        return params
+    if route:
+        if route in {"editor", "cat_editor"}:
+            params["es_editor"] = safe_text(query_get("es_editor") or "cat")
+            if query_get("job_id"):
+                params["job_id"] = query_get("job_id")
+        elif route == "human_review_editor":
+            params["es_page"] = "Human Review Editor"
+            if query_get("review_id"):
+                params["review_id"] = query_get("review_id")
+        elif route in ROUTE_PAGE_ALIASES:
+            page = ROUTE_PAGE_ALIASES[route]
+            if page:
+                params["es_page"] = normalize_es_page(page)
+            else:
+                params["es_page"] = PUBLIC_ROUTE_PAGE_NAMES.get(route, normalize_es_page(route))
+    return params
+
+
+def protected_route_requested() -> bool:
+    route = safe_text(query_get("route")).strip().lower()
+    es_page = normalize_es_page(query_get("es_page"))
+    public_es_route = public_route_for_es_page(es_page)
+    if public_es_route and public_es_route in PUBLIC_ROUTES:
+        return False
+    public_routes = PUBLIC_ROUTES
+    if route in public_routes and not (query_get("es_page") or query_get("es_editor") or query_get("job_id") or query_get("review_id")):
+        return False
+    if is_human_review_editor_page(es_page) or safe_text(query_get("es_editor")):
+        return True
+    if es_page in known_protected_es_pages():
+        return True
+    if route == "human_review_editor":
+        return True
+    if route in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route]:
+        return normalize_es_page(ROUTE_PAGE_ALIASES[route]) in known_protected_es_pages()
+    return False
+
+
+def get_current_route() -> Dict[str, str]:
+    params = requested_route_params()
+    if params:
+        if params.get("es_page"):
+            params["es_page"] = normalize_es_page(params.get("es_page"))
+        public_route = public_route_for_es_page(safe_text(params.get("es_page")))
+        if public_route:
+            return {"route": public_route, "public": public_route, "page": PUBLIC_ROUTE_PAGE_NAMES.get(public_route, params.get("es_page", "Landing")), **params}
+        legacy_public_route = safe_text(params.get("route")).strip().lower()
+        if legacy_public_route and legacy_public_route in PUBLIC_ROUTES:
+            return {"route": legacy_public_route, "public": legacy_public_route, **params}
+        if is_human_review_editor_page(safe_text(params.get("es_page"))):
+            return {"route": "human_review_editor", **params}
+        if params.get("es_editor"):
+            editor_route = "human_review_editor" if safe_text(params.get("es_editor")) == "human_review" else "cat_editor"
+            return {"route": editor_route, **params}
+        page_value = params.get("es_page", st.session_state.get("page", "Dashboard"))
+        if page_value not in known_protected_es_pages():
+            return {"route": "unknown", "unknown": page_value, **params}
+        route_slug = params.get("route") or PAGE_ROUTE_SLUGS.get(page_value) or es_page_alias_key(page_value) or "dashboard"
+        return {"route": route_slug, "page": page_value, **params}
+    public_route = safe_text(query_get("public") or query_get("route")).strip().lower()
+    if public_route in {"landing", "login", "signup", "verify", "reset", "terms", "privacy", "security", "cookies", "dpa", "sso_handoff", "billing_success", "billing_cancel"}:
+        return {"route": safe_text(public_route), "public": safe_text(public_route), "page": PUBLIC_ROUTE_PAGE_NAMES.get(public_route, "Landing")}
+    if public_route:
+        return {"route": public_route, "unknown": public_route}
+    return {"route": "page", "page": safe_text(st.session_state.get("page", "Dashboard")) or "Dashboard"}
+
+
+def is_authenticated() -> bool:
+    if not (st.session_state.get("authenticated") and st.session_state.get("user")):
+        restore_session_from_query()
+    return bool(st.session_state.get("authenticated") and st.session_state.get("user"))
+
+
+def redirect_to_login_with_return_to(reason: str = "unknown") -> None:
+    if query_get("debug_auth") == "1":
+        st.warning(f"Redirecting to Login. Reason: {reason}")
+    return_url = encode_return_to()
+    st.session_state["post_login_return_to"] = return_url
+    st.session_state["_router_redirect_reason"] = reason
+    render_auth_restore_bridge(return_url)
+    st.stop()
+
+
+def require_auth(route: Optional[Any] = None) -> bool:
+    if is_authenticated():
+        return True
+        
+    if isinstance(route, dict):
+        if route.get("route") == "public":
+            return True
+        if route.get("route") in {"page", "editor"} and not protected_route_requested():
+            return True
+            
+    redirect_to_login_with_return_to(reason="protected_page_without_valid_session")
+    st.stop()
+    return False
+
+
+def encode_return_to(params: Optional[Dict[str, str]] = None) -> str:
+    route_params = params or requested_route_params()
+    return urlencode({key: value for key, value in route_params.items() if safe_text(value)})
+
+
+def apply_return_to(return_to: str) -> bool:
+    if not safe_text(return_to):
+        return False
+    parsed = parse_qs(return_to.lstrip("?"), keep_blank_values=False)
+    flat = {key: safe_text(values[0]) for key, values in parsed.items() if values}
+    route = flat.get("route", "").strip().lower()
+    page = normalize_es_page(flat.get("es_page"))
+    if route == "login" or public_route_for_es_page(page) == "login":
+        st.session_state.page = "Dashboard"
+        st.session_state["current_route"] = {"page": "Dashboard", "es_page": "Dashboard"}
+        set_route_query({"es_page": "Dashboard"})
+        return True
+    if route == "human_review_editor" or is_human_review_editor_page(page):
+        review_id = safe_text(flat.get("review_id"))
+        if not review_id:
+            st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor"}
+            set_route_query({"es_page": "Human Review Editor"})
+            return True
+        st.session_state["active_review_session_id"] = review_id
+        st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor", "review_id": review_id}
+        set_route_query({"es_page": "Human Review Editor", "review_id": review_id})
+        return True
+    if route in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route]:
+        page = normalize_es_page(ROUTE_PAGE_ALIASES[route])
+        extra = {key: value for key, value in flat.items() if key != "route"}
+        st.session_state.page = page
+        st.session_state["current_route"] = {"page": page, "es_page": page, **extra}
+        set_route_query({"es_page": page, **extra})
+        return True
+    if flat.get("es_editor") == "human_review" and flat.get("review_id"):
+        review_id = safe_text(flat.get("review_id"))
+        st.session_state["active_review_session_id"] = review_id
+        st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor", "review_id": review_id}
+        set_route_query({"es_page": "Human Review Editor", "review_id": review_id})
+        return True
+    if flat.get("es_editor") and flat.get("job_id"):
+        for key, value in flat.items():
+            if key != "route":
+                query_set(key, value)
+        query_clear("route")
+        st.session_state["current_route"] = dict(flat)
+        return True
+    page_value = flat.get("es_page")
+    if page_value:
+        page = normalize_es_page(page_value)
+        st.session_state.page = page
+        st.session_state["current_route"] = {"page": page, "es_page": page}
+        set_route_query(route_query_for_page(page, {k: v for k, v in flat.items() if k not in {"es_page", "route"}}))
+        return True
+    return False
 
 
 def open_page(page: str) -> None:
     """Open an internal ErrorSweep route as a dedicated page in the same session."""
-    st.session_state.page = page
-    query_set("es_page", page)
+    params: Dict[str, str] = {}
     if page == "Human Review Workspace":
         session_id = st.session_state.get("active_review_session_id")
         if session_id:
-            query_set("review_id", str(session_id))
-    st.rerun()
+            params["review_id"] = str(session_id)
+    navigate(page, params)
 
 
 def nav_button(page: str, key_prefix: str = "nav") -> None:
@@ -3210,21 +5170,8 @@ def render_navigation() -> None:
         "Account": "Account",
         "Admin": "Admin",
     }
-    workspace_links = []
-    for page in WORKSPACE_PAGES:
-        if page not in pages:
-            continue
-        active = " active" if st.session_state.get("page") == page else ""
-        workspace_links.append(
-            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
-        )
-    owner_links = []
-    if is_owner():
-        for page in OWNER_PAGES:
-            active = " active" if st.session_state.get("page") == page else ""
-            owner_links.append(
-                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
-            )
+    workspace_pages = [page for page in WORKSPACE_PAGES if page in pages]
+    owner_pages = OWNER_PAGES if is_owner() else []
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
@@ -3235,27 +5182,36 @@ def render_navigation() -> None:
     user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
     role = current_role()
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
-    billing_item = (
-        f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
-        if "Billing" in pages
-        else ""
+    active_page = safe_text(st.session_state.get("page", "Dashboard"))
+    owner_badge = '<div class="es-topnav-owner-tag">Owner only</div>' if is_owner() else ""
+    nav_links = "".join(
+        f'<a class="es-topnav-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+        for page in workspace_pages
     )
+    owner_strip = ""
+    if owner_pages:
+        owner_links = "".join(
+            f'<a class="es-owner-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
+            for page in owner_pages
+        )
+        owner_strip = f'<div class="es-owner-strip" aria-label="Owner only pages">{owner_links}</div>'
     topnav = f"""
     <nav class="es-topnav">
       <div class="es-topnav-row">
-        <a class="es-topnav-brand" href="{page_link('Dashboard')}" target="_self">
+        <div class="es-topnav-brand">
           <div class="es-topnav-mark">ES</div>
-          <div>
+          <div class="es-topnav-brand-copy">
             <div class="es-topnav-name">error<span>sweep</span></div>
             <div class="es-topnav-sub">by Nawin Corp</div>
+            {owner_badge}
           </div>
-        </a>
+        </div>
         <div class="es-topnav-links">
-          {''.join(workspace_links)}
+          {nav_links}
         </div>
         <div class="es-topnav-tools">
-          <a class="es-topnav-tool" href="{page_link('Jobs')}" target="_self" title="Jobs">JOBS<span class="es-topnav-badge">{open_count}</span></a>
-          <a class="es-topnav-tool" href="{page_link('Account')}" target="_self" title="Notifications">NOTES<span class="es-topnav-badge">{notification_count}</span></a>
+          <div class="es-topnav-tool" title="Jobs">JOBS<span class="es-topnav-badge">{open_count}</span></div>
+          <div class="es-topnav-tool" title="Notifications">NOTES<span class="es-topnav-badge">{notification_count}</span></div>
           <div class="es-topnav-tool" title="Language">EN</div>
           <div class="es-topnav-user-wrap">
             <div class="es-topnav-user" tabindex="0" title="Account menu">
@@ -3267,19 +5223,34 @@ def render_navigation() -> None:
               <span class="es-account-caret">v</span>
             </div>
             <div class="es-account-menu">
-              <a href="{page_link('Account')}" target="_self">Profile <span>Account</span></a>
-              <a href="{page_link(settings_page)}" target="_self">Settings <span>{escape(settings_page)}</span></a>
-              {billing_item}
               <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
+              <a href="{page_link('Account')}" target="_self">Account <span>Profile</span></a>
+              <a href="{page_link(settings_page)}" target="_self">{escape(settings_page)} <span>Settings</span></a>
               <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
             </div>
           </div>
         </div>
       </div>
-      {f'<div class="es-owner-strip"><span>Owner only</span>{"".join(owner_links)}</div>' if owner_links else ''}
+      {owner_strip}
     </nav>
     """
     st.markdown(topnav, unsafe_allow_html=True)
+    return
+    if workspace_pages:
+        nav_cols = st.columns(len(workspace_pages), gap="small")
+        for col, page in zip(nav_cols, workspace_pages):
+            active = st.session_state.get("page") == page
+            label = ("● " if active else "") + label_map.get(page, page)
+            if col.button(label, key=f"topnav_{page}", use_container_width=True):
+                navigate(page)
+    if owner_pages:
+        st.caption("Owner only")
+        owner_cols = st.columns(len(owner_pages), gap="small")
+        for col, page in zip(owner_cols, owner_pages):
+            active = st.session_state.get("page") == page
+            label = ("● " if active else "") + page
+            if col.button(label, key=f"owner_nav_{page}", use_container_width=True):
+                navigate(page)
 
 
 # ==========================================================
@@ -3359,6 +5330,2517 @@ def add_audit(action: str, details: str = "") -> None:
     trim_session_list("audit_logs")
 
 
+AUDIT_CHAIN_VERSION = "errorsweep-audit-chain-v1"
+
+
+def audit_sort_key(record: Dict[str, Any]) -> str:
+    parsed = parse_record_datetime(record.get("created_at") or record.get("time") or record.get("updated_at"))
+    if parsed:
+        return parsed.isoformat()
+    return safe_text(record.get("time") or record.get("created_at") or record.get("updated_at") or record.get("id"))
+
+
+def canonical_audit_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    excluded = {"sequence", "record_hash", "previous_chain_hash", "chain_hash", "chain_valid"}
+    canonical = {}
+    for key, value in sorted((record or {}).items(), key=lambda item: safe_text(item[0])):
+        if key in excluded:
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            canonical[safe_text(key)] = json.loads(json.dumps(value, ensure_ascii=False, default=safe_text))
+        else:
+            canonical[safe_text(key)] = safe_text(value) if value is not None else ""
+    return canonical
+
+
+def audit_record_digest(record: Dict[str, Any]) -> str:
+    payload = json.dumps(canonical_audit_record(record), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def audit_chain_rows(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sorted_records = sorted([dict(item) for item in records or []], key=audit_sort_key)
+    previous_hash = "0" * 64
+    rows = []
+    for index, record in enumerate(sorted_records, start=1):
+        record_hash = audit_record_digest(record)
+        chain_payload = json.dumps(
+            {
+                "version": AUDIT_CHAIN_VERSION,
+                "sequence": index,
+                "previous_chain_hash": previous_hash,
+                "record_hash": record_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        chain_hash = hashlib.sha256(chain_payload.encode("utf-8")).hexdigest()
+        rows.append({
+            "sequence": index,
+            "record_hash": record_hash,
+            "previous_chain_hash": previous_hash,
+            "chain_hash": chain_hash,
+            "chain_valid": True,
+            **record,
+        })
+        previous_hash = chain_hash
+    return rows
+
+
+def audit_snapshot_report(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    chain_rows = audit_chain_rows(records)
+    return {
+        "export_type": "errorsweep_tamper_evident_audit_snapshot",
+        "version": AUDIT_CHAIN_VERSION,
+        "generated_at": now_stamp(),
+        "requested_by": safe_text((current_user() or {}).get("email")),
+        "record_count": len(chain_rows),
+        "first_event": chain_rows[0].get("time") if chain_rows else "",
+        "last_event": chain_rows[-1].get("time") if chain_rows else "",
+        "hash_algorithm": "sha256",
+        "genesis_hash": "0" * 64,
+        "final_chain_hash": chain_rows[-1].get("chain_hash") if chain_rows else "",
+        "records": chain_rows,
+    }
+
+
+def audit_snapshot_json(records: List[Dict[str, Any]]) -> str:
+    return json.dumps(audit_snapshot_report(records), ensure_ascii=False, indent=2, default=safe_text)
+
+
+EXPORT_REDACTED_VALUE = "[redacted]"
+EXPORT_BINARY_VALUE = "[binary omitted]"
+EXPORT_EXCLUDED_COLLECTIONS = {"auth_tokens"}
+EXPORT_COLLECTIONS = [
+    "workspaces",
+    "users",
+    "projects",
+    "jobs",
+    "tm",
+    "glossary",
+    "dnt",
+    "rule_instructions",
+    "payments",
+    "invoices",
+    "subscriptions",
+    "checkout_sessions",
+    "billing_events",
+    "notifications",
+    "task_queue",
+    "files",
+    "review_segments",
+    "subtitle_segments",
+    "owner_recent_editor_jobs",
+    "platform_settings",
+    "privacy_requests",
+    "support_tickets",
+    "status_incidents",
+    "consent_records",
+    "audit_logs",
+    "ai_usage_events",
+]
+BACKUP_SCHEMA_VERSION = 1
+BACKUP_COLLECTIONS = [
+    collection for collection in EXPORT_COLLECTIONS
+    if collection not in EXPORT_EXCLUDED_COLLECTIONS
+]
+BACKUP_RESTORE_COLLECTIONS = [
+    collection for collection in BACKUP_COLLECTIONS
+    if collection not in {"audit_logs", "ai_usage_events", "review_segments", "subtitle_segments", "owner_recent_editor_jobs"}
+]
+BACKUP_DEFAULT_COLLECTIONS = [
+    "workspaces",
+    "users",
+    "projects",
+    "jobs",
+    "tm",
+    "glossary",
+    "dnt",
+    "rule_instructions",
+    "files",
+    "platform_settings",
+    "privacy_requests",
+    "support_tickets",
+    "status_incidents",
+    "consent_records",
+]
+BACKUP_PERSISTABLE_COLLECTIONS = {
+    "users",
+    "workspaces",
+    "projects",
+    "jobs",
+    "payments",
+    "invoices",
+    "subscriptions",
+    "checkout_sessions",
+    "billing_events",
+    "notifications",
+    "task_queue",
+    "files",
+    "platform_settings",
+    "privacy_requests",
+    "support_tickets",
+    "status_incidents",
+    "consent_records",
+}
+TENANT_SCOPED_COLLECTIONS = {
+    "users",
+    "projects",
+    "jobs",
+    "payments",
+    "invoices",
+    "subscriptions",
+    "checkout_sessions",
+    "billing_events",
+    "notifications",
+    "task_queue",
+    "files",
+    "privacy_requests",
+    "support_tickets",
+    "status_incidents",
+    "consent_records",
+    "audit_logs",
+    "ai_usage_events",
+}
+EXPORT_SENSITIVE_EXACT_KEYS = {
+    "api_key",
+    "authorization",
+    "checkout_url",
+    "client_secret",
+    "key_secret",
+    "password",
+    "password_hash",
+    "provider_customer_id",
+    "provider_order_id",
+    "provider_payment_id",
+    "provider_session_id",
+    "provider_subscription_id",
+    "raw_body",
+    "refresh_token",
+    "secret",
+    "secret_key",
+    "service_role_key",
+    "session",
+    "session_id",
+    "signature",
+    "token",
+    "token_hash",
+    "webhook_signature",
+}
+
+
+def export_key_is_sensitive(key: Any) -> bool:
+    lowered = safe_text(key).lower()
+    if lowered in EXPORT_SENSITIVE_EXACT_KEYS:
+        return True
+    if lowered.endswith(("_api_key", "_secret", "_token", "_token_hash")):
+        return True
+    return any(marker in lowered for marker in ("password", "private_key", "service_role", "bearer"))
+
+
+def redact_export_value(key: Any, value: Any) -> Any:
+    if export_key_is_sensitive(key):
+        return EXPORT_REDACTED_VALUE
+    if isinstance(value, dict):
+        return {safe_text(child_key): redact_export_value(child_key, child_value) for child_key, child_value in value.items()}
+    if isinstance(value, list):
+        return [redact_export_value("", item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_export_value("", item) for item in value]
+    if isinstance(value, (bytes, bytearray)):
+        return EXPORT_BINARY_VALUE
+    return value
+
+
+def export_record_belongs_to_workspace(collection: str, record: Any, workspace: str) -> bool:
+    workspace = safe_text(workspace)
+    if collection == "dnt":
+        return workspace == safe_text((current_user() or {}).get("workspace", workspace))
+    if not isinstance(record, dict):
+        return False
+    if collection == "platform_settings":
+        return workspace.lower() in {"platform", "all platform settings"}
+    candidate_keys = ("workspace", "client", "client_workspace", "workspace_name")
+    values = [safe_text(record.get(key)) for key in candidate_keys if safe_text(record.get(key))]
+    if values:
+        return workspace in values
+    if collection in {"tm", "glossary", "rule_instructions", "review_segments", "subtitle_segments"}:
+        return workspace == safe_text((current_user() or {}).get("workspace", workspace))
+    return False
+
+
+def workspace_privacy_export_payload(
+    workspace: str,
+    include_audit: bool = True,
+    include_usage: bool = True,
+    include_file_manifest: bool = True,
+) -> Dict[str, Any]:
+    user = current_user() or {}
+    workspace = safe_text(workspace or user.get("workspace") or "Demo Workspace")
+    records_by_collection: Dict[str, List[Any]] = {}
+    redacted_fields = set()
+
+    for collection in EXPORT_COLLECTIONS:
+        if collection in EXPORT_EXCLUDED_COLLECTIONS:
+            continue
+        if collection == "audit_logs" and not include_audit:
+            continue
+        if collection == "ai_usage_events" and not include_usage:
+            continue
+        if collection == "files" and not include_file_manifest:
+            continue
+        filtered_records = []
+        for raw_record in st.session_state.get(collection, []):
+            if not export_record_belongs_to_workspace(collection, raw_record, workspace):
+                continue
+            if isinstance(raw_record, dict):
+                for key in raw_record.keys():
+                    if export_key_is_sensitive(key):
+                        redacted_fields.add(safe_text(key))
+                filtered_records.append(redact_export_value("", raw_record))
+            else:
+                filtered_records.append(redact_export_value("", raw_record))
+        records_by_collection[collection] = filtered_records
+
+    excluded_counts = {
+        collection: len(st.session_state.get(collection, []))
+        for collection in EXPORT_EXCLUDED_COLLECTIONS
+        if st.session_state.get(collection)
+    }
+    return {
+        "export_type": "errorsweep_workspace_privacy_export",
+        "schema_version": 1,
+        "generated_at": now_stamp(),
+        "workspace": workspace,
+        "requested_by": safe_text(user.get("email")),
+        "requested_role": safe_text(user.get("role")),
+        "redaction_policy": {
+            "sensitive_fields": sorted(redacted_fields),
+            "redacted_value": EXPORT_REDACTED_VALUE,
+            "excluded_collections": sorted(EXPORT_EXCLUDED_COLLECTIONS),
+            "binary_value": EXPORT_BINARY_VALUE,
+        },
+        "record_counts": {collection: len(rows) for collection, rows in records_by_collection.items()},
+        "excluded_counts": excluded_counts,
+        "records": records_by_collection,
+    }
+
+
+def workspace_privacy_export_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=safe_text)
+
+
+def known_workspace_names() -> set:
+    names = {"Platform"}
+    for item in st.session_state.get("workspaces", []):
+        if isinstance(item, dict) and safe_text(item.get("workspace")):
+            names.add(safe_text(item.get("workspace")))
+    user_workspace = safe_text((current_user() or {}).get("workspace"))
+    if user_workspace:
+        names.add(user_workspace)
+    return names
+
+
+def record_workspace_value(collection: str, record: Dict[str, Any]) -> str:
+    if collection == "workspaces":
+        return safe_text(record.get("workspace"))
+    if collection == "platform_settings":
+        return safe_text(record.get("workspace") or "Platform")
+    for key in ("workspace", "client_workspace", "workspace_name", "client"):
+        value = safe_text(record.get(key))
+        if value:
+            return value
+    return ""
+
+
+def tenant_record_label(record: Dict[str, Any]) -> str:
+    for key in ("id", "email", "project", "job_id", "invoice_number", "file_name", "subject", "setting_key", "action"):
+        value = safe_text(record.get(key))
+        if value:
+            return value[:80]
+    return "(no id)"
+
+
+def tenant_finding(severity: str, collection: str, record: Dict[str, Any], workspace: str, issue: str, recommendation: str) -> Dict[str, str]:
+    return {
+        "severity": severity,
+        "collection": collection,
+        "record": tenant_record_label(record),
+        "workspace": workspace or "(missing)",
+        "issue": issue,
+        "recommendation": recommendation,
+    }
+
+
+def tenant_isolation_findings(scope: str = "All workspaces") -> List[Dict[str, str]]:
+    scope = safe_text(scope or "All workspaces")
+    known_workspaces = known_workspace_names()
+    findings: List[Dict[str, str]] = []
+
+    workspace_counts: Dict[str, int] = {}
+    for record in st.session_state.get("workspaces", []):
+        if not isinstance(record, dict):
+            continue
+        workspace = safe_text(record.get("workspace"))
+        if not workspace:
+            findings.append(tenant_finding("High", "workspaces", record, "", "Workspace record has no workspace name.", "Set a unique workspace name before public tenant onboarding."))
+            continue
+        workspace_counts[workspace.lower()] = workspace_counts.get(workspace.lower(), 0) + 1
+    for workspace_name, count in workspace_counts.items():
+        if count > 1:
+            findings.append({
+                "severity": "High",
+                "collection": "workspaces",
+                "record": workspace_name,
+                "workspace": workspace_name,
+                "issue": f"Duplicate workspace name appears {count} times.",
+                "recommendation": "Merge or rename duplicate workspace records; workspace names are used as tenant boundaries in the MVP.",
+            })
+
+    active_email_workspaces: Dict[str, set] = {}
+    project_by_id: Dict[str, Dict[str, Any]] = {}
+    project_by_name: Dict[str, Dict[str, Any]] = {}
+    for project in st.session_state.get("projects", []):
+        if not isinstance(project, dict):
+            continue
+        project_id = safe_text(project.get("id"))
+        project_name = safe_text(project.get("project"))
+        if project_id:
+            project_by_id[project_id] = project
+        if project_name:
+            project_by_name[project_name.lower()] = project
+
+    for collection in sorted(TENANT_SCOPED_COLLECTIONS | {"platform_settings"}):
+        rows = st.session_state.get(collection, [])
+        if not isinstance(rows, list):
+            continue
+        for record in rows:
+            if not isinstance(record, dict):
+                continue
+            workspace = record_workspace_value(collection, record)
+            if scope != "All workspaces" and workspace != scope:
+                continue
+            if collection == "platform_settings":
+                if workspace != "Platform":
+                    findings.append(tenant_finding("Medium", collection, record, workspace, "Platform setting is not scoped to Platform.", "Move this setting to the Platform workspace scope."))
+                continue
+            if not workspace:
+                findings.append(tenant_finding("High", collection, record, workspace, "Tenant-scoped record is missing workspace ownership.", "Add a workspace value before this record is used in production."))
+            elif workspace not in known_workspaces and workspace.lower() not in {"all", "global"}:
+                findings.append(tenant_finding("Medium", collection, record, workspace, "Record points to a workspace that is not in the workspace registry.", "Create the workspace record or correct the record's workspace value."))
+
+            if collection == "users":
+                email = safe_text(record.get("email")).lower()
+                status = safe_text(record.get("status", "Active")).lower()
+                role = safe_text(record.get("role"))
+                if workspace == "Platform" and role != "Platform Owner":
+                    findings.append(tenant_finding("High", collection, record, workspace, "Non-owner user is scoped to Platform workspace.", "Move this account to a customer workspace or change the role deliberately."))
+                if email and status in {"active", "invited"} and workspace:
+                    active_email_workspaces.setdefault(email, set()).add(workspace)
+
+            if collection == "jobs":
+                project_id = safe_text(record.get("project_id"))
+                project_name = safe_text(record.get("project")).lower()
+                linked_project = project_by_id.get(project_id) if project_id else project_by_name.get(project_name)
+                if project_id and not linked_project:
+                    findings.append(tenant_finding("Medium", collection, record, workspace, "Job references a project_id that does not exist.", "Relink the job to an existing project or recreate the project record."))
+                if linked_project:
+                    project_workspace = record_workspace_value("projects", linked_project)
+                    if workspace and project_workspace and workspace != project_workspace:
+                        findings.append(tenant_finding("High", collection, record, workspace, "Job workspace differs from linked project workspace.", "Move the job or project so both records share the same tenant boundary."))
+
+            if collection == "files":
+                file_workspace = safe_text(record.get("workspace"))
+                storage_key = safe_text(record.get("storage_key"))
+                if file_workspace and storage_key and file_workspace.replace(" ", "_").lower() not in storage_key.lower():
+                    findings.append(tenant_finding("Low", collection, record, file_workspace, "Storage key does not visibly include the workspace name.", "Confirm the object-storage adapter is using workspace-scoped prefixes."))
+
+    for email, workspaces_for_email in active_email_workspaces.items():
+        if len(workspaces_for_email) > 1:
+            findings.append({
+                "severity": "High",
+                "collection": "users",
+                "record": email,
+                "workspace": ", ".join(sorted(workspaces_for_email)),
+                "issue": "Same active/invited email appears in multiple workspaces.",
+                "recommendation": "Use unique login identifiers or add workspace selection before public multi-tenant launch.",
+            })
+
+    return findings
+
+
+def render_tenant_isolation_panel(workspace_options: Optional[List[str]] = None) -> None:
+    st.markdown("### Tenant isolation diagnostics")
+    st.caption("Read-only checks for workspace ownership, duplicate tenants, orphan project links, and records that could blur tenant boundaries.")
+    scope_options = ["All workspaces"] + [safe_text(item) for item in (workspace_options or []) if safe_text(item) and safe_text(item) != "All workspaces"]
+    scope_options = list(dict.fromkeys(scope_options))
+    c1, c2 = st.columns(2)
+    selected_scope = c1.selectbox("Diagnostic scope", scope_options, key="tenant_diagnostic_scope")
+    severity_filter = c2.multiselect("Severity", ["High", "Medium", "Low"], default=["High", "Medium", "Low"], key="tenant_diagnostic_severity")
+    findings = [
+        row for row in tenant_isolation_findings(selected_scope)
+        if row.get("severity") in severity_filter
+    ]
+    high = sum(1 for row in findings if row.get("severity") == "High")
+    medium = sum(1 for row in findings if row.get("severity") == "Medium")
+    low = sum(1 for row in findings if row.get("severity") == "Low")
+    metrics([
+        ("Findings", len(findings), selected_scope),
+        ("High", high, "fix before public launch"),
+        ("Medium", medium, "review"),
+        ("Low", low, "confirm"),
+    ])
+    if high:
+        st.error("High tenant-isolation findings remain. Resolve these before putting multiple paying workspaces on one deployment.")
+    elif medium:
+        st.warning("No high-risk tenant findings, but medium findings should be reviewed before launch.")
+    else:
+        st.success("No high or medium tenant-isolation findings in the selected scope.")
+    if findings:
+        st.dataframe(pd.DataFrame(findings), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download tenant isolation findings CSV",
+            pd.DataFrame(findings).to_csv(index=False).encode("utf-8"),
+            file_name="errorsweep_tenant_isolation_findings.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_tenant_isolation_findings",
+        )
+    else:
+        st.info("No tenant isolation findings for this scope.")
+
+
+def subprocessor_register_state() -> Dict[str, Dict[str, str]]:
+    register = dict(SUBPROCESSOR_DEFAULT_REGISTER)
+    persisted = st.session_state.setdefault("subprocessor_register", dict(SUBPROCESSOR_DEFAULT_REGISTER))
+    if isinstance(persisted, dict):
+        for key, value in persisted.items():
+            if isinstance(value, dict):
+                register[safe_text(key)] = {
+                    **register.get(safe_text(key), {}),
+                    **{safe_text(child_key): safe_text(child_value) for child_key, child_value in value.items()},
+                }
+    st.session_state["subprocessor_register"] = register
+    return register
+
+
+def set_subprocessor_register_entry(processor_id: str, updates: Dict[str, str]) -> Dict[str, Dict[str, str]]:
+    register = subprocessor_register_state()
+    processor_id = safe_text(processor_id)
+    current = dict(register.get(processor_id, {}))
+    current.update({
+        "approval_status": safe_text(updates.get("approval_status") or current.get("approval_status") or "Needs review"),
+        "dpa_status": safe_text(updates.get("dpa_status") or current.get("dpa_status") or "Needs DPA"),
+        "customer_notice": safe_text(updates.get("customer_notice") or current.get("customer_notice") or "Needs customer notice"),
+        "notes": safe_text(updates.get("notes") or current.get("notes")),
+    })
+    register[processor_id] = current
+    st.session_state["subprocessor_register"] = register
+    try:
+        upsert_platform_setting(
+            "subprocessor_register",
+            register,
+            metadata={"processor_id": processor_id, "source": "Platform Settings"},
+        )
+    except Exception as exc:
+        LOGGER.warning("Unable to persist subprocessor register: %s", exc)
+    add_audit("Subprocessor register updated", f"{processor_id}: {current.get('approval_status')} / {current.get('dpa_status')}")
+    return register
+
+
+def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
+    register = subprocessor_register_state()
+    storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "configured": False, "mode": "local_fallback", "bucket": "local"}
+    async_health = async_backend_status() if async_backend_status is not None else {"provider": "local", "ready": False, "mode": "local_inline"}
+    email_provider = email_provider_label()
+    billing_provider = billing_provider_label()
+    supabase_active = secret_is_configured("SUPABASE_URL") and secret_is_configured("SUPABASE_SERVICE_ROLE_KEY")
+    storage_provider = safe_text(storage_health.get("provider") or "local")
+    storage_active = bool(storage_health.get("configured")) and storage_provider != "local"
+    async_active = async_health.get("mode") == "external" and bool(async_health.get("ready") or secret_is_configured("ERRORSWEEP_ASYNC_WORKER_URL") or secret_is_configured("REDIS_URL") or secret_is_configured("CELERY_BROKER_URL"))
+    email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local"
+    billing_active = billing_provider in {"stripe", "razorpay"} and billing_provider_ready(billing_provider)
+    self_hosted_active = feature_flag("self_hosted_engines") and (
+        any_secret_configured(["INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT", "OPUS_MT_ENDPOINT"])
+        or not is_production_mode()
+    )
+    language_tool_active = safe_text(secret("ERRORSWEEP_LANGUAGETOOL_PUBLIC", "")).lower() in {"1", "true", "yes", "on"}
+
+    base_rows = [
+        {
+            "id": "supabase_persistence",
+            "service": "Supabase persistence",
+            "provider": "Supabase",
+            "purpose": "Database persistence for users, workspaces, jobs, billing, audit, and SaaS records",
+            "data_categories": "Account, workspace, job, billing, audit, usage metadata",
+            "route_type": "external",
+            "active": supabase_active,
+            "runtime_status": "Configured" if supabase_active else "Local JSON fallback",
+        },
+        {
+            "id": "object_storage",
+            "service": "Object storage",
+            "provider": storage_provider.upper() if storage_provider in {"s3", "gcs"} else storage_provider.title(),
+            "purpose": "Workspace uploads, media previews, generated downloads, and attachment manifests",
+            "data_categories": "Files, media, generated exports, file metadata",
+            "route_type": "external" if storage_active else "local",
+            "active": storage_active,
+            "runtime_status": f"{storage_health.get('mode', 'local_fallback')} / {storage_health.get('bucket', 'local')}",
+        },
+        {
+            "id": "async_worker",
+            "service": "Async worker",
+            "provider": safe_text(async_health.get("provider") or "local"),
+            "purpose": "External processing for heavy QA and Pro translation tasks",
+            "data_categories": "Uploaded files, source/target text, rules, task metadata",
+            "route_type": "external" if async_active else "local",
+            "active": async_active,
+            "runtime_status": safe_text(async_health.get("mode") or "local_inline"),
+        },
+        {
+            "id": "transactional_email",
+            "service": "Transactional email",
+            "provider": email_provider,
+            "purpose": "Verification, password reset, invites, billing, support, and status notifications",
+            "data_categories": "Email address, workspace name, notification metadata",
+            "route_type": "external",
+            "active": email_active,
+            "runtime_status": "Configured" if email_active else "Outbox/local fallback",
+        },
+        {
+            "id": "billing_gateway",
+            "service": "Billing gateway",
+            "provider": billing_provider,
+            "purpose": "Card/UPI mandates, payment webhook reconciliation, subscription billing",
+            "data_categories": "Customer email, workspace, plan, amount, payment metadata",
+            "route_type": "external",
+            "active": billing_active,
+            "runtime_status": "Configured" if billing_active else "Manual/local billing records",
+        },
+        {
+            "id": "self_hosted_mt",
+            "service": "Self-hosted MT",
+            "provider": current_builtin_engine_label() if current_builtin_engine_label is not None else "IndicTrans2/MADLAD/OPUS",
+            "purpose": "No-key machine translation fallback inside approved infrastructure",
+            "data_categories": "Source text, target-language metadata, protected placeholders",
+            "route_type": "internal",
+            "active": self_hosted_active,
+            "runtime_status": "Enabled" if self_hosted_active else "Disabled",
+        },
+        {
+            "id": "byo_ai",
+            "service": "Customer BYO AI",
+            "provider": "OpenAI-compatible user/workspace key",
+            "purpose": "Customer-selected AI translation/review route when an API key/base URL is supplied",
+            "data_categories": "Source text, rules, QA context, user-selected model metadata",
+            "route_type": "customer-controlled",
+            "active": True,
+            "runtime_status": "Available when user supplies a key",
+        },
+        {
+            "id": "languagetool",
+            "service": "LanguageTool",
+            "provider": "LanguageTool",
+            "purpose": "Optional grammar/spelling QA route",
+            "data_categories": "Source/target text snippets for language checking",
+            "route_type": "external",
+            "active": language_tool_active,
+            "runtime_status": "Public routing enabled" if language_tool_active else "Local-only/disabled",
+        },
+    ]
+
+    rows: List[Dict[str, Any]] = []
+    for row in base_rows:
+        state = register.get(row["id"], {})
+        approval_status = safe_text(state.get("approval_status") or "Needs review")
+        dpa_status = safe_text(state.get("dpa_status") or "Needs DPA")
+        customer_notice = safe_text(state.get("customer_notice") or "Needs customer notice")
+        external_unapproved = (
+            bool(row.get("active"))
+            and row.get("route_type") == "external"
+            and approval_status != "Approved"
+        )
+        dpa_unapproved = (
+            bool(row.get("active"))
+            and row.get("route_type") == "external"
+            and dpa_status != "DPA approved"
+        )
+        rows.append({
+            **row,
+            "approval_status": approval_status,
+            "dpa_status": dpa_status,
+            "customer_notice": customer_notice,
+            "notes": safe_text(state.get("notes")),
+            "launch_risk": "Blocker" if external_unapproved or dpa_unapproved else ("Review" if row.get("route_type") == "customer-controlled" else "OK"),
+        })
+    return rows
+
+
+def subprocessor_launch_summary() -> Dict[str, int]:
+    rows = subprocessor_runtime_rows()
+    active_external = [row for row in rows if row.get("active") and row.get("route_type") == "external"]
+    blockers = [row for row in active_external if row.get("launch_risk") == "Blocker"]
+    approved = [row for row in active_external if row.get("approval_status") == "Approved" and row.get("dpa_status") == "DPA approved"]
+    return {
+        "total": len(rows),
+        "active_external": len(active_external),
+        "approved_external": len(approved),
+        "blockers": len(blockers),
+    }
+
+
+def render_subprocessor_register_panel() -> None:
+    st.markdown("### Subprocessor and data-routing register")
+    st.caption("Track active external providers, customer-controlled routes, data categories, approval status, and DPA/customer notice readiness before public launch.")
+    rows = subprocessor_runtime_rows()
+    active_external = [row for row in rows if row.get("active") and row.get("route_type") == "external"]
+    blockers = [row for row in active_external if row.get("launch_risk") == "Blocker"]
+    customer_routes = [row for row in rows if row.get("route_type") == "customer-controlled"]
+    metrics([
+        ("Processors", len(rows), "tracked"),
+        ("Active external", len(active_external), "platform routes"),
+        ("Approval blockers", len(blockers), "fix before launch"),
+        ("Customer routes", len(customer_routes), "BYO/customer controlled"),
+    ])
+    if blockers:
+        st.error("Active external processors still need approval/DPA status before public customer traffic.")
+    else:
+        st.success("No active external subprocessor approval blockers detected.")
+
+    display_rows = []
+    for row in rows:
+        display_rows.append({
+            "service": row.get("service"),
+            "provider": row.get("provider"),
+            "active": "Yes" if row.get("active") else "No",
+            "route_type": row.get("route_type"),
+            "approval": row.get("approval_status"),
+            "dpa": row.get("dpa_status"),
+            "customer_notice": row.get("customer_notice"),
+            "launch_risk": row.get("launch_risk"),
+            "data_categories": row.get("data_categories"),
+            "runtime_status": row.get("runtime_status"),
+        })
+    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download subprocessor register CSV",
+        pd.DataFrame(display_rows).to_csv(index=False).encode("utf-8"),
+        file_name="errorsweep_subprocessor_register.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="download_subprocessor_register",
+    )
+
+    labels = [f"{row['service']} ({row['provider']})" for row in rows]
+    selected_label = st.selectbox("Update processor approval", labels, key="subprocessor_update_select")
+    selected_index = labels.index(selected_label) if selected_label in labels else 0
+    selected = rows[selected_index]
+    with st.form("subprocessor_register_update", enter_to_submit=False):
+        c1, c2, c3 = st.columns(3)
+        approval_status = c1.selectbox(
+            "Approval status",
+            SUBPROCESSOR_APPROVAL_STATUSES,
+            index=SUBPROCESSOR_APPROVAL_STATUSES.index(selected.get("approval_status")) if selected.get("approval_status") in SUBPROCESSOR_APPROVAL_STATUSES else 0,
+        )
+        dpa_status = c2.selectbox(
+            "DPA status",
+            SUBPROCESSOR_DPA_STATUSES,
+            index=SUBPROCESSOR_DPA_STATUSES.index(selected.get("dpa_status")) if selected.get("dpa_status") in SUBPROCESSOR_DPA_STATUSES else 0,
+        )
+        customer_notice = c3.selectbox(
+            "Customer notice",
+            SUBPROCESSOR_NOTICE_STATUSES,
+            index=SUBPROCESSOR_NOTICE_STATUSES.index(selected.get("customer_notice")) if selected.get("customer_notice") in SUBPROCESSOR_NOTICE_STATUSES else 0,
+        )
+        notes = st.text_area("Internal notes", value=safe_text(selected.get("notes")), height=90)
+        saved = st.form_submit_button("Save processor status", use_container_width=True)
+    if saved:
+        set_subprocessor_register_entry(
+            selected["id"],
+            {
+                "approval_status": approval_status,
+                "dpa_status": dpa_status,
+                "customer_notice": customer_notice,
+                "notes": notes,
+            },
+        )
+        st.success("Subprocessor register updated.")
+        st.rerun()
+
+
+def sso_connection_id(workspace: str, provider: str, domains: str) -> str:
+    raw = f"{safe_text(workspace) or 'workspace'}-{safe_text(provider) or 'provider'}-{safe_text(domains) or uuid.uuid4().hex[:8]}"
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw.strip().lower()).strip("-")
+    return (normalized or f"sso-{uuid.uuid4().hex[:8]}")[:96]
+
+
+def sso_connection_state() -> Dict[str, Dict[str, str]]:
+    persisted = st.session_state.setdefault("sso_connections", {})
+    connections: Dict[str, Dict[str, str]] = {}
+    if isinstance(persisted, list):
+        for item in persisted:
+            if isinstance(item, dict):
+                conn_id = safe_text(item.get("id")) or sso_connection_id(item.get("workspace"), item.get("provider"), item.get("domains"))
+                connections[conn_id] = {safe_text(key): safe_text(value) for key, value in item.items()}
+    elif isinstance(persisted, dict):
+        for key, value in persisted.items():
+            if isinstance(value, dict):
+                connections[safe_text(key)] = {safe_text(child_key): safe_text(child_value) for child_key, child_value in value.items()}
+
+    env_enabled = safe_text(secret("ERRORSWEEP_ENTERPRISE_SSO_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    env_provider = safe_text(secret("ERRORSWEEP_SSO_PROVIDER", ""))
+    env_has_metadata = any_secret_configured(["ERRORSWEEP_SSO_ISSUER_URL", "ERRORSWEEP_SSO_METADATA_URL", "ERRORSWEEP_SSO_CLIENT_ID", "ERRORSWEEP_SSO_ENTITY_ID"])
+    if env_enabled or env_provider or env_has_metadata:
+        env_existing = dict(connections.get("env-default", {}))
+        env_existing.update({
+            "id": "env-default",
+            "workspace": safe_text(secret("ERRORSWEEP_SSO_WORKSPACE", env_existing.get("workspace") or "Enterprise")),
+            "provider": env_provider or env_existing.get("provider") or "Custom OIDC",
+            "protocol": safe_text(secret("ERRORSWEEP_SSO_PROTOCOL", env_existing.get("protocol") or "OIDC")).upper(),
+            "domains": safe_text(secret("ERRORSWEEP_SSO_DOMAINS", env_existing.get("domains") or "")),
+            "issuer_url": safe_text(secret("ERRORSWEEP_SSO_ISSUER_URL", env_existing.get("issuer_url") or "")),
+            "metadata_url": safe_text(secret("ERRORSWEEP_SSO_METADATA_URL", env_existing.get("metadata_url") or "")),
+            "client_id": safe_text(secret("ERRORSWEEP_SSO_CLIENT_ID", env_existing.get("client_id") or "")),
+            "entity_id": safe_text(secret("ERRORSWEEP_SSO_ENTITY_ID", env_existing.get("entity_id") or "")),
+            "redirect_uri": safe_text(secret("ERRORSWEEP_SSO_REDIRECT_URI", env_existing.get("redirect_uri") or "")),
+            "login_url": safe_text(secret("ERRORSWEEP_SSO_LOGIN_URL", env_existing.get("login_url") or "")),
+            "status": "Enabled" if env_enabled else env_existing.get("status") or "Draft",
+            "jit_provisioning": safe_text(secret("ERRORSWEEP_SSO_JIT_PROVISIONING", env_existing.get("jit_provisioning") or "No")),
+            "role_mapping": safe_text(secret("ERRORSWEEP_SSO_ROLE_MAPPING", env_existing.get("role_mapping") or "Workspace Owner -> Workspace Owner; Reviewer -> Reviewer")),
+            "notes": env_existing.get("notes") or "Environment-backed SSO connection. Keep client secrets in deployment secrets, not in this register.",
+            "source": "environment",
+        })
+        connections["env-default"] = env_existing
+
+    st.session_state["sso_connections"] = connections
+    return connections
+
+
+def sso_connection_ready(connection: Dict[str, str]) -> bool:
+    status_ready = safe_text(connection.get("status")) == "Enabled"
+    protocol = safe_text(connection.get("protocol") or "OIDC").upper()
+    has_domain = bool(safe_text(connection.get("domains")).strip())
+    has_endpoint = bool(safe_text(connection.get("issuer_url")) or safe_text(connection.get("metadata_url")))
+    if protocol == "SAML":
+        has_identifier = bool(safe_text(connection.get("entity_id")) or safe_text(connection.get("metadata_url")))
+    else:
+        has_identifier = bool(safe_text(connection.get("client_id")) and safe_text(connection.get("redirect_uri")))
+    return status_ready and has_domain and has_endpoint and has_identifier
+
+
+def set_sso_connection_entry(connection_id: str, updates: Dict[str, str]) -> Dict[str, Dict[str, str]]:
+    connections = sso_connection_state()
+    connection_id = safe_text(connection_id) or sso_connection_id(updates.get("workspace"), updates.get("provider"), updates.get("domains"))
+    current = dict(connections.get(connection_id, {}))
+    current.update({
+        "id": connection_id,
+        "workspace": safe_text(updates.get("workspace") or current.get("workspace") or "Demo Workspace"),
+        "provider": safe_text(updates.get("provider") or current.get("provider") or "Custom OIDC"),
+        "protocol": safe_text(updates.get("protocol") or current.get("protocol") or "OIDC").upper(),
+        "domains": safe_text(updates.get("domains") or current.get("domains")),
+        "issuer_url": safe_text(updates.get("issuer_url") or current.get("issuer_url")),
+        "metadata_url": safe_text(updates.get("metadata_url") or current.get("metadata_url")),
+        "client_id": safe_text(updates.get("client_id") or current.get("client_id")),
+        "entity_id": safe_text(updates.get("entity_id") or current.get("entity_id")),
+        "redirect_uri": safe_text(updates.get("redirect_uri") or current.get("redirect_uri")),
+        "login_url": safe_text(updates.get("login_url") or current.get("login_url")),
+        "status": safe_text(updates.get("status") or current.get("status") or "Draft"),
+        "jit_provisioning": safe_text(updates.get("jit_provisioning") or current.get("jit_provisioning") or "No"),
+        "role_mapping": safe_text(updates.get("role_mapping") or current.get("role_mapping")),
+        "notes": safe_text(updates.get("notes") or current.get("notes")),
+        "source": safe_text(current.get("source") or "platform_setting"),
+        "updated_at": now_stamp(),
+    })
+    connections[connection_id] = current
+    st.session_state["sso_connections"] = connections
+    try:
+        persisted_connections = {
+            key: value
+            for key, value in connections.items()
+            if safe_text(value.get("source")) != "environment"
+        }
+        upsert_platform_setting(
+            "sso_connections",
+            persisted_connections,
+            metadata={"connection_id": connection_id, "source": "Platform Settings"},
+        )
+    except Exception as exc:
+        LOGGER.warning("Unable to persist SSO connection register: %s", exc)
+    add_audit("SSO connection updated", f"{connection_id}: {current.get('provider')} / {current.get('status')}")
+    return connections
+
+
+def enterprise_sso_runtime_rows() -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for connection_id, connection in sso_connection_state().items():
+        protocol = safe_text(connection.get("protocol") or "OIDC").upper()
+        ready = sso_connection_ready(connection)
+        missing: List[str] = []
+        if safe_text(connection.get("status")) != "Enabled":
+            missing.append("enable connection")
+        if not safe_text(connection.get("domains")):
+            missing.append("verified domain")
+        if not (safe_text(connection.get("issuer_url")) or safe_text(connection.get("metadata_url"))):
+            missing.append("issuer or metadata URL")
+        if protocol == "SAML" and not (safe_text(connection.get("entity_id")) or safe_text(connection.get("metadata_url"))):
+            missing.append("entity ID or metadata")
+        if protocol != "SAML" and not (safe_text(connection.get("client_id")) and safe_text(connection.get("redirect_uri"))):
+            missing.append("client ID and redirect URI")
+        rows.append({
+            "id": connection_id,
+            "workspace": safe_text(connection.get("workspace")),
+            "provider": safe_text(connection.get("provider")),
+            "protocol": protocol,
+            "domains": safe_text(connection.get("domains")),
+            "status": safe_text(connection.get("status") or "Draft"),
+            "source": safe_text(connection.get("source") or "platform_setting"),
+            "issuer_url": safe_text(connection.get("issuer_url")),
+            "metadata_url": safe_text(connection.get("metadata_url")),
+            "client_id": "Configured" if safe_text(connection.get("client_id")) else "Missing",
+            "entity_id": "Configured" if safe_text(connection.get("entity_id")) else "Missing",
+            "redirect_uri": safe_text(connection.get("redirect_uri")),
+            "login_url": safe_text(connection.get("login_url")),
+            "jit_provisioning": safe_text(connection.get("jit_provisioning") or "No"),
+            "role_mapping": safe_text(connection.get("role_mapping")),
+            "readiness": "Ready" if ready else "Needs setup",
+            "next_action": "Test IdP redirect/callback in staging" if ready else ", ".join(missing),
+            "notes": safe_text(connection.get("notes")),
+        })
+    return rows
+
+
+def enterprise_sso_summary() -> Dict[str, int]:
+    rows = enterprise_sso_runtime_rows()
+    enabled = [row for row in rows if row.get("status") == "Enabled"]
+    ready = [row for row in rows if row.get("readiness") == "Ready"]
+    metadata = [
+        row for row in rows
+        if row.get("issuer_url") or row.get("metadata_url") or row.get("client_id") == "Configured" or row.get("entity_id") == "Configured"
+    ]
+    login_urls = [row for row in rows if sso_external_url_allowed(row.get("login_url"))]
+    return {
+        "total": len(rows),
+        "enabled": len(enabled),
+        "ready": len(ready),
+        "metadata": len(metadata),
+        "login_urls": len(login_urls),
+    }
+
+
+def split_sso_domains(raw: Any) -> List[str]:
+    parts = re.split(r"[,;\s]+", safe_text(raw).lower())
+    return [part.strip().lstrip("@") for part in parts if part.strip().lstrip("@")]
+
+
+def sso_email_domain_allowed(email: str, domains: Any) -> bool:
+    email_domain = safe_text(email).lower().rsplit("@", 1)[-1]
+    if not email_domain or email_domain == safe_text(email).lower():
+        return False
+    for domain in split_sso_domains(domains):
+        if domain.startswith("*.") and email_domain.endswith(domain[1:]):
+            return True
+        if email_domain == domain:
+            return True
+    return False
+
+
+def sso_external_url_allowed(url: Any) -> bool:
+    raw = safe_text(url).strip()
+    if raw.startswith("https://"):
+        return True
+    if not is_production_mode() and raw.startswith("http://"):
+        return True
+    return False
+
+
+def sso_handoff_secret() -> str:
+    configured = secret("ERRORSWEEP_SSO_HANDOFF_SECRET", "")
+    if configured:
+        return configured
+    if is_production_mode():
+        return ""
+    return session_secret()
+
+
+def sign_sso_handoff_payload(payload: Dict[str, Any]) -> str:
+    body = b64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = hmac.new(sso_handoff_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def verify_sso_handoff_token(token: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    token = safe_text(token).strip()
+    if not token:
+        return None, "SSO handoff token is missing."
+    if len(token) > 12000:
+        return None, "SSO handoff token is too large."
+    secret_value = sso_handoff_secret()
+    if not secret_value:
+        return None, "SSO handoff secret is not configured. Set ERRORSWEEP_SSO_HANDOFF_SECRET before enabling live SSO."
+    try:
+        body, signature = token.split(".", 1)
+        expected = hmac.new(secret_value.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return None, "SSO handoff signature is invalid."
+        payload = json.loads(b64url_decode(body))
+        exp = int(payload.get("exp") or 0)
+        if exp < int(time.time()):
+            return None, "SSO handoff token is expired."
+        email = safe_text(payload.get("email")).strip().lower()
+        if "@" not in email:
+            return None, "SSO handoff token does not include a valid email address."
+        payload["email"] = email
+        return payload, ""
+    except Exception as exc:
+        LOGGER.warning("Unable to verify SSO handoff token: %s", exc)
+        return None, "SSO handoff token could not be read."
+
+
+def sso_handoff_token_used(token: str) -> bool:
+    token_hash = auth_token_hash(token)
+    records = list(st.session_state.get("auth_tokens", []))
+    for record in load_saas_records("auth_tokens", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("auth_tokens", 500)):
+        if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in records):
+            records.append(record)
+    return any(
+        safe_text(record.get("token_type")) == "sso_handoff"
+        and safe_text(record.get("token_hash")) == token_hash
+        and safe_text(record.get("status")).lower() == "used"
+        for record in records
+    )
+
+
+def consume_sso_handoff_token(token: str, payload: Dict[str, Any], connection_id: str, workspace: str) -> Dict[str, Any]:
+    expires_at = datetime.fromtimestamp(int(payload.get("exp") or time.time()), timezone.utc).isoformat()
+    record = persist_saas_record("auth_tokens", {
+        "id": f"sso-handoff-{hashlib.sha256(safe_text(token).encode('utf-8')).hexdigest()[:24]}",
+        "workspace": workspace or "Demo Workspace",
+        "user_email": safe_text(payload.get("email")),
+        "email": safe_text(payload.get("email")),
+        "token_hash": auth_token_hash(token),
+        "token_type": "sso_handoff",
+        "status": "used",
+        "expires_at": expires_at,
+        "used_at": now_stamp(),
+        "metadata_json": {
+            "connection_id": connection_id,
+            "provider": safe_text(payload.get("provider")),
+            "jti": safe_text(payload.get("jti")),
+            "source": "enterprise_sso_handoff",
+        },
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    })
+    upsert_session_record("auth_tokens", record)
+    return record
+
+
+def find_sso_connection_for_payload(payload: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, str]], str]:
+    email = safe_text(payload.get("email")).lower()
+    payload_workspace = safe_text(payload.get("workspace"))
+    requested_id = safe_text(payload.get("connection_id"))
+    connections = sso_connection_state()
+    candidates = [(requested_id, connections.get(requested_id))] if requested_id else list(connections.items())
+    for connection_id, connection in candidates:
+        if not connection:
+            continue
+        if safe_text(connection.get("status")) != "Enabled":
+            continue
+        if payload_workspace and safe_text(connection.get("workspace")) != payload_workspace:
+            continue
+        if not sso_email_domain_allowed(email, connection.get("domains")):
+            continue
+        return safe_text(connection_id), connection, ""
+    return "", None, "No enabled SSO connection matches this email domain and workspace."
+
+
+def safe_sso_role(payload: Dict[str, Any], connection: Dict[str, str]) -> str:
+    requested = safe_text(payload.get("role") or "User")
+    if requested == "Platform Owner":
+        allow_owner = safe_text(secret("ERRORSWEEP_SSO_ALLOW_PLATFORM_OWNER", "")).lower() in {"1", "true", "yes", "on"}
+        if allow_owner and safe_text(connection.get("workspace")) == "Platform":
+            return "Platform Owner"
+        return "User"
+    return requested if requested in ROLE_PAGE_ACCESS else "User"
+
+
+def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    email_key = safe_text(email).lower()
+    users = list(st.session_state.get("users", []))
+    for record in load_saas_records("users", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("users", 1000)):
+        if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in users):
+            users.append(record)
+    for item in users:
+        if safe_text(item.get("email")).lower() == email_key:
+            return dict(item)
+    return None
+
+
+def ensure_sso_user(payload: Dict[str, Any], connection: Dict[str, str]) -> Tuple[Optional[Dict[str, Any]], str]:
+    email = safe_text(payload.get("email")).lower()
+    workspace = safe_text(connection.get("workspace") or payload.get("workspace") or "Demo Workspace")
+    existing = find_user_by_email(email)
+    if existing:
+        if safe_text(existing.get("workspace")) != workspace:
+            return None, "This SSO identity belongs to a different ErrorSweep workspace."
+        if safe_text(existing.get("role")) == "Platform Owner" and safe_sso_role(payload, connection) != "Platform Owner":
+            return None, "Platform owner access is not enabled for this SSO connection."
+        if safe_text(existing.get("status", "Active")).lower() not in {"active", "invited"}:
+            return None, "This SSO account is not active in ErrorSweep."
+        if not bool(existing.get("email_verified")):
+            existing = update_stored_user(email, {"email_verified": True, "verified_at": now_stamp(), "status": "Active"}) or existing
+        return existing, ""
+
+    if safe_text(connection.get("jit_provisioning")) != "Yes":
+        return None, "This SSO connection does not allow just-in-time user provisioning. Ask the workspace owner to invite this user first."
+
+    role = safe_sso_role(payload, connection)
+    workspace_record = next((item for item in st.session_state.get("workspaces", []) if safe_text(item.get("workspace")) == workspace), None)
+    if not workspace_record:
+        workspace_record = persist_saas_record("workspaces", {
+            "workspace": workspace,
+            "owner": email,
+            "plan": "Enterprise",
+            "status": "Active",
+            "users": 1,
+            "jobs": 0,
+        })
+        upsert_session_record("workspaces", workspace_record)
+
+    user_record = persist_saas_record("users", {
+        "email": email,
+        "workspace": workspace,
+        "role": role,
+        "plan": safe_text(workspace_record.get("plan") or "Enterprise"),
+        "status": "Active",
+        "password_hash": "",
+        "email_verified": True,
+        "verified_at": now_stamp(),
+    })
+    upsert_session_record("users", user_record)
+    return user_record, ""
+
+
+def sso_handoff_payload_template() -> str:
+    expires = int(time.time()) + 300
+    payload = {
+        "email": "user@customer.com",
+        "workspace": "Enterprise Workspace",
+        "role": "Reviewer",
+        "connection_id": "optional-platform-settings-connection-id",
+        "provider": "Okta",
+        "jti": "unique-id-from-idp",
+        "exp": expires,
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_enterprise_sso_panel(workspace_options: Optional[List[str]] = None) -> None:
+    st.markdown("### Enterprise SSO readiness")
+    st.caption("Track workspace SSO metadata, verified domains, protocol, and readiness without storing client secrets in the app.")
+    rows = enterprise_sso_runtime_rows()
+    summary = enterprise_sso_summary()
+    metrics([
+        ("Connections", summary["total"], "tracked"),
+        ("Enabled", summary["enabled"], "configured for use"),
+        ("Ready", summary["ready"], "metadata complete"),
+        ("Handoff secret", "Yes" if secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET") or not is_production_mode() else "No", "signed token bridge"),
+    ])
+    st.caption("Callback route for an IdP/broker: `?public=sso_handoff&token=<signed_payload>`. Use ERRORSWEEP_SSO_HANDOFF_SECRET to sign short-lived payloads.")
+    if summary["ready"]:
+        st.success("At least one enterprise SSO connection has complete public metadata. Test the provider callback in staging before production rollout.")
+    elif summary["total"]:
+        st.warning("SSO connections exist, but none are fully ready. Complete metadata, domains, and redirect details before enterprise onboarding.")
+    else:
+        st.info("No enterprise SSO connections are registered yet.")
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download SSO readiness CSV",
+            pd.DataFrame(rows).to_csv(index=False).encode("utf-8"),
+            file_name="errorsweep_sso_readiness.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_sso_readiness",
+        )
+    st.download_button(
+        "Download SSO handoff payload template",
+        sso_handoff_payload_template(),
+        file_name="errorsweep_sso_handoff_payload_template.json",
+        mime="application/json",
+        use_container_width=True,
+        key="download_sso_handoff_payload_template",
+    )
+
+    labels = ["Create new connection"] + [f"{row['workspace']} - {row['provider']} ({row['status']})" for row in rows]
+    selected_label = st.selectbox("SSO connection", labels, key="sso_connection_select")
+    selected: Dict[str, Any] = {}
+    selected_id = ""
+    if selected_label != "Create new connection":
+        selected_index = labels.index(selected_label) - 1
+        selected = rows[selected_index] if 0 <= selected_index < len(rows) else {}
+        selected_id = safe_text(selected.get("id"))
+        if selected_id:
+            selected = {**selected, **sso_connection_state().get(selected_id, {})}
+
+    workspace_choices = [safe_text(item) for item in (workspace_options or []) if safe_text(item)]
+    workspace_choices = [item for item in dict.fromkeys(workspace_choices) if item != "All workspaces"]
+    if "Demo Workspace" not in workspace_choices:
+        workspace_choices.append("Demo Workspace")
+    selected_workspace = safe_text(selected.get("workspace") or "Demo Workspace")
+    workspace_index = workspace_choices.index(selected_workspace) if selected_workspace in workspace_choices else 0
+
+    with st.form("enterprise_sso_connection_form", enter_to_submit=False):
+        c1, c2, c3 = st.columns(3)
+        workspace = c1.selectbox("Workspace", workspace_choices, index=workspace_index)
+        provider_value = safe_text(selected.get("provider") or "Custom OIDC")
+        provider = c2.selectbox(
+            "Provider",
+            SSO_PROVIDER_OPTIONS,
+            index=SSO_PROVIDER_OPTIONS.index(provider_value) if provider_value in SSO_PROVIDER_OPTIONS else SSO_PROVIDER_OPTIONS.index("Custom OIDC"),
+        )
+        protocol_value = safe_text(selected.get("protocol") or "OIDC").upper()
+        protocol = c3.selectbox(
+            "Protocol",
+            SSO_PROTOCOL_OPTIONS,
+            index=SSO_PROTOCOL_OPTIONS.index(protocol_value) if protocol_value in SSO_PROTOCOL_OPTIONS else 0,
+        )
+        domains = st.text_input("Verified email domains", value=safe_text(selected.get("domains")), placeholder="client.com, client.co.in")
+        c4, c5 = st.columns(2)
+        issuer_url = c4.text_input("OIDC issuer URL", value=safe_text(selected.get("issuer_url")), placeholder="https://idp.example.com/oauth2/default")
+        metadata_url = c5.text_input("SAML/OIDC metadata URL", value=safe_text(selected.get("metadata_url")), placeholder="https://idp.example.com/metadata")
+        c6, c7, c8 = st.columns(3)
+        client_id = c6.text_input("OIDC client ID", value="" if selected.get("client_id") in {"Configured", "Missing"} else safe_text(selected.get("client_id")))
+        entity_id = c7.text_input("SAML entity ID", value="" if selected.get("entity_id") in {"Configured", "Missing"} else safe_text(selected.get("entity_id")))
+        redirect_uri = c8.text_input("Redirect / ACS URL", value=safe_text(selected.get("redirect_uri")), placeholder="https://app.your-domain.com/?public=sso_handoff")
+        login_url = st.text_input("IdP / broker login URL", value=safe_text(selected.get("login_url")), placeholder="https://idp.example.com/login?client_id=...")
+        c9, c10 = st.columns(2)
+        status_value = safe_text(selected.get("status") or "Draft")
+        status = c9.selectbox(
+            "Status",
+            SSO_STATUS_OPTIONS,
+            index=SSO_STATUS_OPTIONS.index(status_value) if status_value in SSO_STATUS_OPTIONS else 0,
+        )
+        jit = c10.selectbox("JIT provisioning", ["No", "Yes"], index=1 if safe_text(selected.get("jit_provisioning")) == "Yes" else 0)
+        role_mapping = st.text_input(
+            "Role mapping notes",
+            value=safe_text(selected.get("role_mapping")),
+            placeholder="IdP group translators -> Reviewer; owners -> Workspace Owner",
+        )
+        notes = st.text_area("Internal notes", value=safe_text(selected.get("notes")), height=80)
+        saved = st.form_submit_button("Save SSO connection", use_container_width=True)
+    if saved:
+        connection_id = selected_id or sso_connection_id(workspace, provider, domains)
+        set_sso_connection_entry(
+            connection_id,
+            {
+                "workspace": workspace,
+                "provider": provider,
+                "protocol": protocol,
+                "domains": domains,
+                "issuer_url": issuer_url,
+                "metadata_url": metadata_url,
+                "client_id": client_id,
+                "entity_id": entity_id,
+                "redirect_uri": redirect_uri,
+                "login_url": login_url,
+                "status": status,
+                "jit_provisioning": jit,
+                "role_mapping": role_mapping,
+                "notes": notes,
+            },
+        )
+        st.success("SSO connection saved.")
+        st.rerun()
+
+
+def render_sso_login_controls(surface: str) -> None:
+    rows = [row for row in enterprise_sso_runtime_rows() if row.get("status") == "Enabled"]
+    if rows:
+        st.caption("Enterprise SSO connections are registered. Live redirect/callback wiring should be tested in staging before enabling sign-in.")
+        cols = st.columns(min(2, len(rows)))
+        for idx, row in enumerate(rows[:2]):
+            label = f"Continue with {row.get('provider')}"
+            login_url = safe_text(row.get("login_url"))
+            if sso_external_url_allowed(login_url):
+                cols[idx % len(cols)].link_button(label, login_url, use_container_width=True)
+            else:
+                cols[idx % len(cols)].button(label, disabled=True, use_container_width=True, key=f"{surface}_sso_{idx}")
+    else:
+        sso1, sso2 = st.columns(2)
+        sso1.button("Continue with Enterprise SSO", disabled=True, use_container_width=True, key=f"{surface}_enterprise_sso")
+        sso2.button("Continue with Okta", disabled=True, use_container_width=True, key=f"{surface}_okta_sso")
+
+
+def backup_scope_matches_record(collection: str, record: Any, scope: str) -> bool:
+    scope = safe_text(scope or "All workspaces")
+    if scope == "All workspaces":
+        return True
+    if collection == "platform_settings":
+        return scope == "Platform"
+    if isinstance(record, dict):
+        return export_record_belongs_to_workspace(collection, record, scope)
+    return scope == safe_text((current_user() or {}).get("workspace", scope))
+
+
+def backup_collection_hash(records: List[Any]) -> str:
+    payload = json.dumps(records, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=safe_text)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def operational_backup_payload(scope: str, collections: List[str], include_audit: bool = False, include_usage: bool = False) -> Dict[str, Any]:
+    user = current_user() or {}
+    selected = [item for item in collections if item in BACKUP_COLLECTIONS]
+    if include_audit and "audit_logs" not in selected:
+        selected.append("audit_logs")
+    if include_usage and "ai_usage_events" not in selected:
+        selected.append("ai_usage_events")
+    records_by_collection: Dict[str, List[Any]] = {}
+    redacted_fields = set()
+    collection_hashes: Dict[str, str] = {}
+
+    for collection in selected:
+        filtered_records: List[Any] = []
+        for raw_record in st.session_state.get(collection, []):
+            if not backup_scope_matches_record(collection, raw_record, scope):
+                continue
+            if isinstance(raw_record, dict):
+                for key in raw_record.keys():
+                    if export_key_is_sensitive(key):
+                        redacted_fields.add(safe_text(key))
+            filtered_records.append(redact_export_value("", raw_record))
+        records_by_collection[collection] = filtered_records
+        collection_hashes[collection] = backup_collection_hash(filtered_records)
+
+    counts = {collection: len(rows) for collection, rows in records_by_collection.items()}
+    snapshot_body_hash = backup_collection_hash(records_by_collection)
+    return {
+        "export_type": "errorsweep_operational_backup",
+        "schema_version": BACKUP_SCHEMA_VERSION,
+        "generated_at": now_stamp(),
+        "scope": safe_text(scope or "All workspaces"),
+        "requested_by": safe_text(user.get("email")),
+        "requested_role": safe_text(user.get("role")),
+        "app_version": APP_VERSION,
+        "redaction_policy": {
+            "auth_tokens": "excluded",
+            "sensitive_fields": sorted(redacted_fields),
+            "redacted_value": EXPORT_REDACTED_VALUE,
+            "binary_value": EXPORT_BINARY_VALUE,
+        },
+        "record_counts": counts,
+        "collection_hashes": collection_hashes,
+        "snapshot_sha256": snapshot_body_hash,
+        "records": records_by_collection,
+    }
+
+
+def operational_backup_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=safe_text)
+
+
+def parse_operational_backup(data: bytes) -> Dict[str, Any]:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        payload = json.loads(data.decode("utf-8-sig"))
+    if not isinstance(payload, dict) or payload.get("export_type") != "errorsweep_operational_backup":
+        raise ValueError("This is not an ErrorSweep operational backup JSON file.")
+    if int(payload.get("schema_version") or 0) > BACKUP_SCHEMA_VERSION:
+        raise ValueError("This backup was generated by a newer ErrorSweep backup schema.")
+    records = payload.get("records")
+    if not isinstance(records, dict):
+        raise ValueError("Backup file does not contain a valid records object.")
+    return payload
+
+
+def sanitize_restore_record(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child_value in value.items():
+            if export_key_is_sensitive(key):
+                continue
+            cleaned_child = sanitize_restore_record(child_value)
+            if cleaned_child in (EXPORT_REDACTED_VALUE, EXPORT_BINARY_VALUE):
+                continue
+            cleaned[safe_text(key)] = cleaned_child
+        return cleaned
+    if isinstance(value, list):
+        cleaned_list = []
+        for item in value:
+            cleaned_item = sanitize_restore_record(item)
+            if cleaned_item not in (EXPORT_REDACTED_VALUE, EXPORT_BINARY_VALUE):
+                cleaned_list.append(cleaned_item)
+        return cleaned_list
+    if value in {EXPORT_REDACTED_VALUE, EXPORT_BINARY_VALUE}:
+        return ""
+    return value
+
+
+def merge_session_restore_record(collection: str, record: Any) -> None:
+    rows = st.session_state.setdefault(collection, [])
+    if isinstance(record, dict):
+        record_id = safe_text(record.get("id"))
+        natural_keys = ("email", "workspace", "invoice_number", "setting_key", "storage_key")
+        for idx, item in enumerate(rows):
+            if not isinstance(item, dict):
+                continue
+            if record_id and safe_text(item.get("id")) == record_id:
+                rows[idx] = {**item, **record}
+                break
+            matched_key = next((key for key in natural_keys if safe_text(record.get(key)) and safe_text(item.get(key)) == safe_text(record.get(key))), "")
+            if matched_key:
+                rows[idx] = {**item, **record}
+                break
+        else:
+            rows.insert(0, record)
+    else:
+        if record not in rows:
+            rows.append(record)
+    trim_session_list(collection, SESSION_COLLECTION_LIMITS.get(collection, SESSION_HISTORY_LIMIT))
+
+
+def restore_operational_backup(payload: Dict[str, Any], collections: List[str]) -> Dict[str, Any]:
+    records = payload.get("records") if isinstance(payload.get("records"), dict) else {}
+    selected = [item for item in collections if item in BACKUP_RESTORE_COLLECTIONS]
+    restored_counts: Dict[str, int] = {}
+    skipped_counts: Dict[str, int] = {}
+    for collection in selected:
+        restored_counts[collection] = 0
+        skipped_counts[collection] = 0
+        raw_rows = records.get(collection, [])
+        if not isinstance(raw_rows, list):
+            skipped_counts[collection] += 1
+            continue
+        for raw_record in raw_rows:
+            clean_record = sanitize_restore_record(raw_record)
+            if clean_record in ("", None, [], {}):
+                skipped_counts[collection] += 1
+                continue
+            if collection == "dnt" and not isinstance(clean_record, str):
+                skipped_counts[collection] += 1
+                continue
+            if collection != "dnt" and not isinstance(clean_record, dict):
+                skipped_counts[collection] += 1
+                continue
+            if isinstance(clean_record, dict):
+                clean_record["restored_at"] = now_stamp()
+                clean_record["restore_source_sha256"] = safe_text(payload.get("snapshot_sha256"))
+            if collection in BACKUP_PERSISTABLE_COLLECTIONS and isinstance(clean_record, dict):
+                clean_record = persist_saas_record(collection, clean_record)
+            merge_session_restore_record(collection, clean_record)
+            restored_counts[collection] += 1
+    add_audit(
+        "Operational backup restored",
+        f"snapshot={safe_text(payload.get('snapshot_sha256'))[:16]}; collections={', '.join(selected)}; records={sum(restored_counts.values())}",
+    )
+    return {"restored_counts": restored_counts, "skipped_counts": skipped_counts}
+
+
+def render_operational_backup_panel(workspace_options: Optional[List[str]] = None) -> None:
+    st.markdown("### Operational backup and restore")
+    st.caption("Create owner-controlled JSON snapshots for SaaS records. Auth tokens are excluded, sensitive fields are redacted, and restore actions require explicit confirmation with an audit trail.")
+    backup_worker_enabled = safe_text(secret("ERRORSWEEP_BACKUP_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    backup_provider = safe_text(secret("ERRORSWEEP_BACKUP_PROVIDER", "")) or "manual"
+    backup_interval = safe_text(secret("ERRORSWEEP_BACKUP_INTERVAL_HOURS", "24"))
+    backup_retention = safe_text(secret("ERRORSWEEP_BACKUP_RETENTION_DAYS", "30"))
+    metrics([
+        ("Scheduled worker", "Enabled" if backup_worker_enabled else "Not enabled", "operational_backup_worker.py"),
+        ("Backup provider", backup_provider, "configured route"),
+        ("Interval", f"{backup_interval}h", "schedule"),
+        ("Retention", f"{backup_retention}d", "local cleanup"),
+    ])
+    if backup_worker_enabled:
+        st.success("Scheduled backup worker is marked enabled. Run operational_backup_worker.py in production to create file manifests and audit records automatically.")
+    else:
+        st.info("Manual backups are available here. For launch, set ERRORSWEEP_BACKUP_WORKER_ENABLED=true and schedule operational_backup_worker.py.")
+    workspace_values = [safe_text(item) for item in (workspace_options or []) if safe_text(item)]
+    scope_options = ["All workspaces"] + workspace_values
+    scope_options = list(dict.fromkeys(scope_options))
+    c1, c2, c3 = st.columns([2, 1, 1])
+    selected_scope = c1.selectbox("Backup scope", scope_options, key="backup_scope")
+    include_audit = c2.checkbox("Include audit logs", value=True, key="backup_include_audit")
+    include_usage = c3.checkbox("Include usage events", value=True, key="backup_include_usage")
+    selected_collections = st.multiselect(
+        "Collections",
+        BACKUP_COLLECTIONS,
+        default=[item for item in BACKUP_DEFAULT_COLLECTIONS if item in BACKUP_COLLECTIONS],
+        key="backup_collections",
+    )
+    backup_key = "operational_backup_payload"
+    if st.button("Prepare operational backup", use_container_width=True, key="prepare_operational_backup"):
+        payload = operational_backup_payload(selected_scope, selected_collections, include_audit=include_audit, include_usage=include_usage)
+        st.session_state[backup_key] = payload
+        add_audit("Operational backup prepared", f"scope={selected_scope}; records={sum(payload.get('record_counts', {}).values())}; sha={payload.get('snapshot_sha256', '')[:16]}")
+        st.success("Operational backup prepared.")
+
+    payload = st.session_state.get(backup_key)
+    if isinstance(payload, dict):
+        counts = payload.get("record_counts", {})
+        metrics([
+            ("Backup scope", payload.get("scope", selected_scope), "selected"),
+            ("Collections", sum(1 for value in counts.values() if value), "with records"),
+            ("Records", sum(int(value or 0) for value in counts.values()), "included"),
+            ("SHA-256", safe_text(payload.get("snapshot_sha256"))[:12], "snapshot"),
+        ])
+        manifest_rows = [
+            {
+                "collection": collection,
+                "records": counts.get(collection, 0),
+                "sha256": (payload.get("collection_hashes") or {}).get(collection, ""),
+            }
+            for collection in sorted(counts)
+        ]
+        st.dataframe(pd.DataFrame(manifest_rows), use_container_width=True, hide_index=True)
+        file_scope = safe_text(payload.get("scope", "all")).replace(" ", "_").lower()
+        st.download_button(
+            "Download operational backup JSON",
+            operational_backup_json(payload),
+            file_name=f"errorsweep_operational_backup_{file_scope}_{datetime.now(local_timezone()).strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="download_operational_backup",
+        )
+
+    uploaded = st.file_uploader("Restore from operational backup JSON", type=["json"], key="restore_operational_backup_upload")
+    if uploaded is not None:
+        try:
+            restore_payload = parse_operational_backup(uploaded.getvalue())
+            restore_records = restore_payload.get("records") or {}
+            importable = [collection for collection in restore_records.keys() if collection in BACKUP_RESTORE_COLLECTIONS]
+            st.info(f"Backup scope: {restore_payload.get('scope', 'unknown')} | Snapshot: {safe_text(restore_payload.get('snapshot_sha256'))[:16]}")
+            preview_rows = [
+                {"collection": collection, "records": len(rows) if isinstance(rows, list) else 0}
+                for collection, rows in restore_records.items()
+                if collection in BACKUP_COLLECTIONS
+            ]
+            if preview_rows:
+                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+            selected_restore = st.multiselect(
+                "Collections to restore",
+                importable,
+                default=[item for item in importable if item in BACKUP_DEFAULT_COLLECTIONS],
+                key="restore_backup_collections",
+            )
+            confirm_restore = st.checkbox("I understand this will upsert selected records into the current ErrorSweep workspace/session.", key="confirm_operational_restore")
+            if st.button("Restore selected records", use_container_width=True, disabled=not confirm_restore or not selected_restore):
+                result = restore_operational_backup(restore_payload, selected_restore)
+                total = sum(result.get("restored_counts", {}).values())
+                st.success(f"Restored {total} record(s) from backup.")
+                st.dataframe(pd.DataFrame([
+                    {
+                        "collection": collection,
+                        "restored": result["restored_counts"].get(collection, 0),
+                        "skipped": result["skipped_counts"].get(collection, 0),
+                    }
+                    for collection in selected_restore
+                ]), use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.error(f"Backup restore preview failed: {safe_text(exc)}")
+
+
+LEGAL_VERSION_FIELDS = [
+    ("terms_version", "Terms version"),
+    ("privacy_version", "Privacy version"),
+    ("nda_version", "NDA/confidentiality version"),
+    ("cookie_version", "Cookie notice version"),
+    ("dpa_version", "DPA version"),
+]
+
+
+def render_legal_version_panel(workspace_options: Optional[List[str]] = None) -> None:
+    st.markdown("### Legal document versions")
+    st.caption("Track which Terms, Privacy, Cookie, NDA, and DPA versions users accepted. Updating a version makes older acceptances visible as stale until users accept the new version on their next login.")
+    current_versions = legal_versions()
+    with st.form("legal_document_versions", enter_to_submit=False):
+        cols = st.columns(3)
+        updates: Dict[str, str] = {}
+        for index, (key, label) in enumerate(LEGAL_VERSION_FIELDS):
+            with cols[index % len(cols)]:
+                updates[key] = st.text_input(label, value=current_versions.get(key, legal_version_defaults().get(key, "")), key=f"legal_version_{key}")
+        save_versions = st.form_submit_button("Save legal versions", use_container_width=True)
+    if save_versions:
+        changed = set_legal_versions(updates)
+        if changed:
+            st.success(f"Updated {len(changed)} legal document version(s).")
+            st.rerun()
+        else:
+            st.info("No legal version changes detected.")
+
+    rows = [item for item in st.session_state.get("consent_records", []) if isinstance(item, dict)]
+    options = ["All workspaces"] + [safe_text(item) for item in (workspace_options or []) if safe_text(item) and safe_text(item) != "All workspaces"]
+    options = list(dict.fromkeys(options))
+    selected_workspace = st.selectbox("Consent workspace filter", options, key="legal_consent_workspace_filter") if len(options) > 1 else "All workspaces"
+    if selected_workspace != "All workspaces":
+        rows = [item for item in rows if safe_text(item.get("workspace")) == selected_workspace]
+    latest_versions = legal_versions()
+    stale_rows = [item for item in rows if not consent_versions_are_current(item, latest_versions)]
+    unique_users = {safe_text(item.get("email") or item.get("user_email")).lower() for item in rows if safe_text(item.get("email") or item.get("user_email"))}
+    metrics([
+        ("Consent records", len(rows), "tracked"),
+        ("Unique users", len(unique_users), "accepted"),
+        ("Stale acceptances", len(stale_rows), "need re-acceptance"),
+        ("Current Terms", latest_versions.get("terms_version", ""), "active"),
+    ])
+    version_rows = [
+        {"Document": label.replace(" version", ""), "Current version": latest_versions.get(key, "")}
+        for key, label in LEGAL_VERSION_FIELDS
+    ]
+    st.dataframe(pd.DataFrame(version_rows), use_container_width=True, hide_index=True)
+    if rows:
+        display_rows = []
+        for item in sorted(rows, key=lambda row: safe_text(row.get("accepted_at") or row.get("created_at")), reverse=True)[:200]:
+            display_rows.append({
+                "accepted_at": item.get("accepted_at") or item.get("created_at"),
+                "workspace": item.get("workspace", ""),
+                "email": item.get("email") or item.get("user_email", ""),
+                "role": item.get("role", ""),
+                "terms": item.get("terms_version", ""),
+                "privacy": item.get("privacy_version", ""),
+                "cookie": item.get("cookie_version", ""),
+                "dpa": item.get("dpa_version", ""),
+                "nda": item.get("nda_version", ""),
+                "status": "Current" if consent_versions_are_current(item, latest_versions) else "Needs re-acceptance",
+                "source": (item.get("metadata_json") or {}).get("source", "") if isinstance(item.get("metadata_json"), dict) else "",
+            })
+        display_dataframe(display_rows)
+        st.download_button(
+            "Download consent records CSV",
+            pd.DataFrame(display_rows).to_csv(index=False).encode("utf-8"),
+            file_name="errorsweep_consent_records.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.info("No legal acceptance records have been captured yet.")
+
+
+def render_abuse_protection_panel() -> None:
+    st.markdown("### Abuse protection")
+    st.caption("Configure app-level throttles for sensitive actions. Production deployments still need CDN/WAF rate limits, but these controls protect local and Supabase-backed workflows from accidental or repeated abuse.")
+    settings = abuse_protection_settings()
+    with st.form("abuse_protection_form", enter_to_submit=False):
+        c1, c2, c3 = st.columns(3)
+        updates: Dict[str, int] = {}
+        updates["window_minutes"] = c1.number_input("Throttle window minutes", min_value=1, max_value=1440, value=int(settings["window_minutes"]))
+        updates["owner_login_attempts"] = c2.number_input("Owner login attempts", min_value=0, max_value=1000, value=int(settings["owner_login_attempts"]))
+        updates["workspace_login_attempts"] = c3.number_input("Workspace login attempts", min_value=0, max_value=1000, value=int(settings["workspace_login_attempts"]))
+        c4, c5, c6 = st.columns(3)
+        updates["demo_access_attempts"] = c4.number_input("Demo access attempts", min_value=0, max_value=1000, value=int(settings["demo_access_attempts"]))
+        updates["signup_attempts"] = c5.number_input("Signup attempts", min_value=0, max_value=1000, value=int(settings["signup_attempts"]))
+        updates["password_reset_attempts"] = c6.number_input("Password reset attempts", min_value=0, max_value=1000, value=int(settings["password_reset_attempts"]))
+        c7, c8, c9 = st.columns(3)
+        updates["checkout_intent_attempts"] = c7.number_input("Checkout attempts", min_value=0, max_value=1000, value=int(settings["checkout_intent_attempts"]))
+        updates["support_ticket_attempts"] = c8.number_input("Support ticket attempts", min_value=0, max_value=1000, value=int(settings["support_ticket_attempts"]))
+        updates["privacy_request_attempts"] = c9.number_input("Privacy request attempts", min_value=0, max_value=1000, value=int(settings["privacy_request_attempts"]))
+        save_abuse = st.form_submit_button("Save abuse protection", use_container_width=True)
+    if save_abuse:
+        changed = set_abuse_protection_settings(updates)
+        if changed:
+            st.success(f"Updated {len(changed)} abuse protection setting(s).")
+            st.rerun()
+        else:
+            st.info("No abuse protection changes detected.")
+
+    events = st.session_state.get("abuse_throttle_events", {})
+    active_keys = 0
+    active_attempts = 0
+    if isinstance(events, dict):
+        now_epoch = time.time()
+        window_seconds = max(60, int(settings.get("window_minutes", 15)) * 60)
+        for key, values in list(events.items()):
+            recent = [float(item) for item in values if now_epoch - float(item) <= window_seconds]
+            if recent:
+                active_keys += 1
+                active_attempts += len(recent)
+                events[key] = recent
+            else:
+                events.pop(key, None)
+    blocks = st.session_state.get("abuse_throttle_blocks", [])
+    metrics([
+        ("Active throttle keys", active_keys, "within window"),
+        ("Recent attempts", active_attempts, "tracked locally"),
+        ("Blocks", len(blocks), "this session"),
+        ("Edge WAF", safe_text(secret("ERRORSWEEP_WAF_PROVIDER", "")) or "Not configured", "external layer"),
+    ])
+    if blocks:
+        st.dataframe(pd.DataFrame(display_records(blocks[:50])), use_container_width=True, hide_index=True)
+    else:
+        st.info("No throttle blocks have occurred in this session.")
+
+
+def render_workspace_privacy_export(workspace_options: Optional[List[str]] = None, key_prefix: str = "workspace") -> None:
+    user = current_user() or {}
+    current_workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    options = [safe_text(item) for item in (workspace_options or [current_workspace]) if safe_text(item)]
+    if not options:
+        options = [current_workspace]
+    selected_workspace = current_workspace if current_workspace in options else options[0]
+
+    st.markdown("### Privacy data export")
+    st.caption("Prepare a redacted JSON export for customer data requests, audits, or workspace handover. Authentication tokens are excluded, and sensitive account/payment fields are masked.")
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        if len(options) > 1:
+            selected_workspace = st.selectbox("Workspace", options, index=options.index(selected_workspace), key=f"{key_prefix}_privacy_workspace")
+        else:
+            st.text_input("Workspace", value=selected_workspace, disabled=True, key=f"{key_prefix}_privacy_workspace_readonly")
+    with c2:
+        include_audit = st.checkbox("Audit logs", value=True, key=f"{key_prefix}_privacy_audit")
+    with c3:
+        include_usage = st.checkbox("Usage events", value=True, key=f"{key_prefix}_privacy_usage")
+    with c4:
+        include_files = st.checkbox("File manifests", value=True, key=f"{key_prefix}_privacy_files")
+
+    payload_key = f"{key_prefix}_privacy_export_payload"
+    if st.button("Prepare redacted export", use_container_width=True, key=f"{key_prefix}_prepare_privacy_export"):
+        payload = workspace_privacy_export_payload(
+            selected_workspace,
+            include_audit=include_audit,
+            include_usage=include_usage,
+            include_file_manifest=include_files,
+        )
+        st.session_state[payload_key] = payload
+        total_records = sum(payload.get("record_counts", {}).values())
+        add_audit("Privacy export prepared", f"workspace={selected_workspace}; records={total_records}")
+        st.success(f"Prepared export for {selected_workspace} with {total_records} record(s).")
+
+    payload = st.session_state.get(payload_key)
+    if isinstance(payload, dict):
+        counts = payload.get("record_counts", {})
+        total_records = sum(int(value or 0) for value in counts.values())
+        metrics([
+            ("Export workspace", payload.get("workspace", selected_workspace), "selected"),
+            ("Collections", sum(1 for value in counts.values() if value), "with records"),
+            ("Records", total_records, "included"),
+            ("Auth tokens", "Excluded", "security"),
+        ])
+        st.download_button(
+            "Download redacted privacy export",
+            workspace_privacy_export_json(payload),
+            file_name=f"errorsweep_privacy_export_{safe_text(payload.get('workspace', selected_workspace)).replace(' ', '_')}.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"{key_prefix}_download_privacy_export",
+        )
+
+
+PRIVACY_REQUEST_TYPES = [
+    "Access / export",
+    "Correction",
+    "Deletion",
+    "Restriction",
+    "Consent withdrawal",
+    "Other",
+]
+PRIVACY_REQUEST_STATUSES = [
+    "Open",
+    "In Review",
+    "Waiting on Customer",
+    "Fulfilled",
+    "Rejected",
+    "Cancelled",
+]
+
+
+def privacy_request_due_at(days: int = 30) -> str:
+    due = datetime.now(local_timezone()) + timedelta(days=days)
+    due = due.replace(hour=23, minute=59, second=0, microsecond=0)
+    return due.astimezone(timezone.utc).isoformat()
+
+
+def create_privacy_request(
+    workspace: str,
+    request_type: str,
+    requester_email: str,
+    subject: str,
+    notes: str,
+    due_at: str = "",
+) -> Dict[str, Any]:
+    user = current_user() or {}
+    record = {
+        "id": uuid.uuid4().hex,
+        "workspace": safe_text(workspace or user.get("workspace") or "Demo Workspace"),
+        "user_email": safe_text(user.get("email")),
+        "request_type": safe_text(request_type or "Access / export"),
+        "requester_email": safe_text(requester_email),
+        "subject": safe_text(subject),
+        "status": "Open",
+        "due_at": due_at or privacy_request_due_at(),
+        "fulfilled_at": "",
+        "owner_notes": safe_text(notes),
+        "metadata_json": {"source": "manual", "created_by_role": safe_text(user.get("role"))},
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    }
+    record = persist_saas_record("privacy_requests", record)
+    upsert_session_record("privacy_requests", record)
+    add_audit("Privacy request created", f"{record['request_type']} for {record['workspace']} / {record['requester_email']}")
+    queue_email_notification(
+        recipient=safe_text(user.get("email")) or safe_text(requester_email),
+        subject=f"Privacy request opened: {record['request_type']}",
+        body=f"A privacy request was opened for {record['workspace']} and is due by {format_local_time(record['due_at'])}.",
+        event_type="privacy_request_opened",
+        metadata={"privacy_request_id": record["id"], "workspace": record["workspace"], "request_type": record["request_type"]},
+        workspace=record["workspace"],
+    )
+    return record
+
+
+def update_privacy_request_status(record_id: str, status: str, owner_notes: str = "") -> Optional[Dict[str, Any]]:
+    rows = st.session_state.setdefault("privacy_requests", [])
+    for idx, item in enumerate(rows):
+        if safe_text(item.get("id")) != safe_text(record_id):
+            continue
+        updated = dict(item)
+        updated["status"] = safe_text(status or item.get("status") or "Open")
+        if owner_notes:
+            updated["owner_notes"] = safe_text(owner_notes)
+        if updated["status"] == "Fulfilled" and not safe_text(updated.get("fulfilled_at")):
+            updated["fulfilled_at"] = now_stamp()
+        updated["updated_at"] = now_stamp()
+        updated = persist_saas_record("privacy_requests", updated)
+        rows[idx] = updated
+        add_audit("Privacy request updated", f"{updated.get('id')} -> {updated.get('status')}")
+        return updated
+    return None
+
+
+def render_privacy_request_tracker(workspace_options: Optional[List[str]] = None, key_prefix: str = "workspace") -> None:
+    user = current_user() or {}
+    current_workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    options = [safe_text(item) for item in (workspace_options or [current_workspace]) if safe_text(item)]
+    if not options:
+        options = [current_workspace]
+    selected_workspace = current_workspace if current_workspace in options else options[0]
+
+    st.markdown("### Privacy request tracker")
+    st.caption("Track customer export, correction, deletion, restriction, and consent-withdrawal requests with a simple owner-reviewed workflow.")
+    with st.form(f"{key_prefix}_privacy_request_form", enter_to_submit=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            if len(options) > 1:
+                selected_workspace = st.selectbox("Request workspace", options, index=options.index(selected_workspace), key=f"{key_prefix}_privacy_request_workspace")
+            else:
+                st.text_input("Request workspace", value=selected_workspace, disabled=True, key=f"{key_prefix}_privacy_request_workspace_readonly")
+            request_type = st.selectbox("Request type", PRIVACY_REQUEST_TYPES, key=f"{key_prefix}_privacy_request_type")
+            requester_email = st.text_input("Requester email", key=f"{key_prefix}_privacy_requester_email")
+        with c2:
+            subject = st.text_input("Subject", placeholder="Export workspace data for user@example.com", key=f"{key_prefix}_privacy_request_subject")
+            due_date = st.date_input("Due date", value=datetime.now(local_timezone()).date() + timedelta(days=30), key=f"{key_prefix}_privacy_request_due_date")
+            notes = st.text_area("Owner notes", height=90, key=f"{key_prefix}_privacy_request_notes")
+        submitted = st.form_submit_button("Create privacy request", use_container_width=True)
+    if submitted:
+        if not safe_text(requester_email):
+            st.error("Requester email is required.")
+        elif not safe_text(subject):
+            st.error("Subject is required.")
+        else:
+            allowed_attempt, throttle_message = consume_abuse_attempt("privacy_request", f"{selected_workspace}:{requester_email}")
+            if not allowed_attempt:
+                st.error(throttle_message)
+                return
+            due_at = datetime(due_date.year, due_date.month, due_date.day, 23, 59, tzinfo=local_timezone()).astimezone(timezone.utc).isoformat()
+            created = create_privacy_request(selected_workspace, request_type, requester_email, subject, notes, due_at=due_at)
+            st.success(f"Privacy request created: {created['id'][:10]}")
+
+    show_all_requests = current_role() == "Platform Owner" and selected_workspace == "Platform"
+    rows = [
+        item for item in st.session_state.get("privacy_requests", [])
+        if show_all_requests or safe_text(item.get("workspace")) == selected_workspace
+    ]
+    open_rows = [item for item in rows if safe_text(item.get("status")) not in {"Fulfilled", "Rejected", "Cancelled"}]
+    overdue_rows = []
+    now_utc = datetime.now(timezone.utc)
+    for item in open_rows:
+        try:
+            due = datetime.fromisoformat(safe_text(item.get("due_at")).replace("Z", "+00:00"))
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            if due < now_utc:
+                overdue_rows.append(item)
+        except Exception:
+            continue
+    metrics([
+        ("Open requests", len(open_rows), "active"),
+        ("Overdue", len(overdue_rows), "needs attention"),
+        ("Completed", sum(1 for item in rows if safe_text(item.get("status")) == "Fulfilled"), "fulfilled"),
+        ("Total", len(rows), "tracked"),
+    ])
+    if rows:
+        display_rows = []
+        for item in rows[:100]:
+            display_rows.append({
+                "id": safe_text(item.get("id"))[:12],
+                "workspace": item.get("workspace", ""),
+                "type": item.get("request_type", ""),
+                "requester": item.get("requester_email", ""),
+                "subject": item.get("subject", ""),
+                "status": item.get("status", ""),
+                "due_at": item.get("due_at", ""),
+                "fulfilled_at": item.get("fulfilled_at", ""),
+                "updated_at": item.get("updated_at", ""),
+            })
+        st.dataframe(pd.DataFrame(display_records(display_rows)), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download privacy request tracker CSV",
+            rows_to_csv(display_records(rows)),
+            file_name=f"errorsweep_privacy_requests_{selected_workspace.replace(' ', '_')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"{key_prefix}_download_privacy_requests",
+        )
+        active_options = [f"{safe_text(item.get('id'))[:12]} | {safe_text(item.get('request_type'))} | {safe_text(item.get('requester_email'))}" for item in rows]
+        selected_label = st.selectbox("Update request", active_options, key=f"{key_prefix}_privacy_request_update") if active_options else ""
+        selected_id = selected_label.split("|", 1)[0].strip() if selected_label else ""
+        selected_record = next((item for item in rows if safe_text(item.get("id")).startswith(selected_id)), None)
+        if selected_record:
+            u1, u2 = st.columns([1, 2])
+            with u1:
+                new_status = st.selectbox(
+                    "Status",
+                    PRIVACY_REQUEST_STATUSES,
+                    index=PRIVACY_REQUEST_STATUSES.index(safe_text(selected_record.get("status"))) if safe_text(selected_record.get("status")) in PRIVACY_REQUEST_STATUSES else 0,
+                    key=f"{key_prefix}_privacy_request_status",
+                )
+            with u2:
+                owner_notes = st.text_input("Update notes", value=safe_text(selected_record.get("owner_notes")), key=f"{key_prefix}_privacy_request_update_notes")
+            if st.button("Save privacy request update", use_container_width=True, key=f"{key_prefix}_save_privacy_request_update"):
+                updated = update_privacy_request_status(selected_record["id"], new_status, owner_notes)
+                if updated:
+                    st.success("Privacy request updated.")
+                    st.rerun()
+                else:
+                    st.error("Could not find that privacy request.")
+    else:
+        st.info("No privacy requests are tracked for this workspace yet.")
+
+
+SUPPORT_TICKET_CATEGORIES = [
+    "Product issue",
+    "Billing",
+    "Translation / QA quality",
+    "Account / access",
+    "Feature request",
+    "Other",
+]
+SUPPORT_TICKET_PRIORITIES = ["Normal", "High", "Urgent"]
+SUPPORT_TICKET_STATUSES = ["Open", "In Review", "Waiting on Customer", "Resolved", "Closed"]
+
+
+def support_ticket_is_open(record: Dict[str, Any]) -> bool:
+    return safe_text(record.get("status") or "Open") not in {"Resolved", "Closed"}
+
+
+def create_support_ticket(category: str, priority: str, subject: str, message: str) -> Dict[str, Any]:
+    user = current_user() or {}
+    workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    requester = safe_text(user.get("email"))
+    record = {
+        "id": uuid.uuid4().hex,
+        "workspace": workspace,
+        "user_email": requester,
+        "requester_email": requester,
+        "category": safe_text(category or "Product issue"),
+        "priority": safe_text(priority or "Normal"),
+        "subject": safe_text(subject),
+        "message": safe_text(message),
+        "status": "Open",
+        "owner_reply": "",
+        "last_response_at": "",
+        "metadata_json": {"created_by_role": safe_text(user.get("role")), "source": "Account"},
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    }
+    record = persist_saas_record("support_tickets", record)
+    upsert_session_record("support_tickets", record)
+    add_audit("Support ticket created", f"{workspace}: {record['category']} / {record['subject']}")
+    queue_email_notification(
+        requester,
+        f"Support ticket opened: {record['subject']}",
+        f"Your ErrorSweep support ticket was opened with priority {record['priority']}. Status: Open.",
+        "support.ticket_opened",
+        metadata={"ticket_id": record["id"], "category": record["category"], "priority": record["priority"]},
+        workspace=workspace,
+    )
+    support_recipient = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or safe_text(secret("ERRORSWEEP_EMAIL_FROM", ""))
+    if support_recipient and support_recipient.lower() != requester.lower():
+        queue_email_notification(
+            support_recipient,
+            f"New ErrorSweep support ticket: {record['subject']}",
+            f"{requester} opened a {record['priority']} priority {record['category']} ticket for {workspace}.",
+            "support.ticket_notify_owner",
+            metadata={"ticket_id": record["id"], "workspace": workspace},
+            workspace=workspace,
+        )
+    return record
+
+
+def update_support_ticket(ticket_id: str, status: str, priority: str, owner_reply: str) -> Optional[Dict[str, Any]]:
+    rows = st.session_state.setdefault("support_tickets", [])
+    for idx, item in enumerate(rows):
+        if safe_text(item.get("id")) != safe_text(ticket_id):
+            continue
+        previous_status = safe_text(item.get("status") or "Open")
+        updated = dict(item)
+        updated["status"] = safe_text(status or previous_status)
+        updated["priority"] = safe_text(priority or item.get("priority") or "Normal")
+        if owner_reply:
+            updated["owner_reply"] = safe_text(owner_reply)
+            updated["last_response_at"] = now_stamp()
+        updated["updated_at"] = now_stamp()
+        updated = persist_saas_record("support_tickets", updated)
+        rows[idx] = updated
+        add_audit("Support ticket updated", f"{updated.get('id')} -> {updated.get('status')}")
+        if updated["status"] != previous_status or owner_reply:
+            queue_email_notification(
+                safe_text(updated.get("requester_email") or updated.get("user_email")),
+                f"Support ticket updated: {updated.get('subject', '')}",
+                f"Status: {updated['status']}\n\n{safe_text(updated.get('owner_reply'))}",
+                "support.ticket_updated",
+                metadata={"ticket_id": updated["id"], "status": updated["status"]},
+                workspace=safe_text(updated.get("workspace")),
+            )
+        return updated
+    return None
+
+
+def render_account_support_panel() -> None:
+    user = current_user() or {}
+    my_email = safe_text(user.get("email")).lower()
+    st.markdown("### Support tickets")
+    st.caption("Send product, billing, account, or translation-quality questions to the ErrorSweep support queue.")
+    with st.form("account_support_ticket_form", enter_to_submit=False):
+        c1, c2 = st.columns(2)
+        category = c1.selectbox("Category", SUPPORT_TICKET_CATEGORIES)
+        priority = c2.selectbox("Priority", SUPPORT_TICKET_PRIORITIES)
+        subject = st.text_input("Subject", placeholder="Example: QA report column order looks wrong")
+        message = st.text_area("Message", height=120, placeholder="Describe what happened, expected result, and any job/file name involved.")
+        submit_ticket = st.form_submit_button("Create support ticket", use_container_width=True)
+    if submit_ticket:
+        if not safe_text(subject):
+            st.error("Subject is required.")
+        elif not safe_text(message):
+            st.error("Message is required.")
+        else:
+            allowed_attempt, throttle_message = consume_abuse_attempt("support_ticket", my_email or safe_text(subject))
+            if not allowed_attempt:
+                st.error(throttle_message)
+                return
+            ticket = create_support_ticket(category, priority, subject, message)
+            st.success(f"Support ticket created: {ticket['id'][:10]}")
+
+    my_tickets = [
+        item for item in st.session_state.get("support_tickets", [])
+        if safe_text(item.get("requester_email") or item.get("user_email")).lower() == my_email
+    ]
+    if my_tickets:
+        rows = []
+        for item in my_tickets[:25]:
+            rows.append({
+                "created_at": item.get("created_at", ""),
+                "id": safe_text(item.get("id"))[:12],
+                "category": item.get("category", ""),
+                "priority": item.get("priority", ""),
+                "subject": item.get("subject", ""),
+                "status": item.get("status", ""),
+                "last_response_at": item.get("last_response_at", ""),
+            })
+        st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+    else:
+        st.info("No support tickets for this account yet.")
+
+
+def render_support_queue_panel(workspace_options: Optional[List[str]] = None, key_prefix: str = "support") -> None:
+    user = current_user() or {}
+    current_workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    options = [safe_text(item) for item in (workspace_options or [current_workspace]) if safe_text(item)]
+    if not options:
+        options = [current_workspace]
+    selected_workspace = current_workspace if current_workspace in options else options[0]
+    if len(options) > 1:
+        selected_workspace = st.selectbox("Support queue workspace", options, index=options.index(selected_workspace), key=f"{key_prefix}_queue_workspace")
+    show_all = current_role() == "Platform Owner" and selected_workspace == "Platform"
+    tickets = [
+        item for item in st.session_state.get("support_tickets", [])
+        if show_all or safe_text(item.get("workspace")) == selected_workspace
+    ]
+    open_tickets = [item for item in tickets if support_ticket_is_open(item)]
+    urgent_tickets = [item for item in open_tickets if safe_text(item.get("priority")) == "Urgent"]
+    metrics([
+        ("Open tickets", len(open_tickets), "active"),
+        ("Urgent", len(urgent_tickets), "priority"),
+        ("Resolved", sum(1 for item in tickets if safe_text(item.get("status")) == "Resolved"), "done"),
+        ("Total", len(tickets), "tracked"),
+    ])
+    if not tickets:
+        st.info("No support tickets are tracked for this workspace yet.")
+        return
+    display_rows = []
+    for item in tickets[:100]:
+        display_rows.append({
+            "id": safe_text(item.get("id"))[:12],
+            "workspace": item.get("workspace", ""),
+            "requester": item.get("requester_email", ""),
+            "category": item.get("category", ""),
+            "priority": item.get("priority", ""),
+            "subject": item.get("subject", ""),
+            "status": item.get("status", ""),
+            "updated_at": item.get("updated_at", ""),
+        })
+    st.dataframe(pd.DataFrame(display_records(display_rows)), use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download support queue CSV",
+        rows_to_csv(display_records(tickets)),
+        file_name=f"errorsweep_support_tickets_{selected_workspace.replace(' ', '_')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key=f"{key_prefix}_download_support_tickets",
+    )
+    ticket_options = [
+        f"{safe_text(item.get('id'))[:12]} | {safe_text(item.get('priority'))} | {safe_text(item.get('subject'))[:80]}"
+        for item in tickets
+    ]
+    selected_label = st.selectbox("Update support ticket", ticket_options, key=f"{key_prefix}_ticket_update")
+    selected_id = selected_label.split("|", 1)[0].strip()
+    selected_ticket = next((item for item in tickets if safe_text(item.get("id")).startswith(selected_id)), None)
+    if selected_ticket:
+        st.caption(safe_text(selected_ticket.get("message"))[:600])
+        c1, c2 = st.columns(2)
+        status = c1.selectbox(
+            "Status",
+            SUPPORT_TICKET_STATUSES,
+            index=SUPPORT_TICKET_STATUSES.index(safe_text(selected_ticket.get("status"))) if safe_text(selected_ticket.get("status")) in SUPPORT_TICKET_STATUSES else 0,
+            key=f"{key_prefix}_ticket_status",
+        )
+        priority = c2.selectbox(
+            "Priority",
+            SUPPORT_TICKET_PRIORITIES,
+            index=SUPPORT_TICKET_PRIORITIES.index(safe_text(selected_ticket.get("priority"))) if safe_text(selected_ticket.get("priority")) in SUPPORT_TICKET_PRIORITIES else 0,
+            key=f"{key_prefix}_ticket_priority",
+        )
+        reply = st.text_area("Owner reply", value=safe_text(selected_ticket.get("owner_reply")), height=110, key=f"{key_prefix}_ticket_reply")
+        if st.button("Save support ticket update", use_container_width=True, key=f"{key_prefix}_save_ticket_update"):
+            updated = update_support_ticket(selected_ticket["id"], status, priority, reply)
+            if updated:
+                st.success("Support ticket updated.")
+                st.rerun()
+            else:
+                st.error("Could not find that support ticket.")
+
+
+STATUS_INCIDENT_TYPES = ["Incident", "Maintenance", "Degraded service", "Announcement"]
+STATUS_INCIDENT_SEVERITIES = ["Notice", "Minor", "Major", "Critical"]
+STATUS_INCIDENT_STATUSES = ["Scheduled", "Investigating", "Identified", "Monitoring", "Resolved"]
+STATUS_ACTIVE_STATUSES = {"Scheduled", "Investigating", "Identified", "Monitoring"}
+
+
+def create_status_incident(
+    scope: str,
+    incident_type: str,
+    severity: str,
+    status: str,
+    title: str,
+    message: str,
+    starts_at: str = "",
+    ends_at: str = "",
+) -> Dict[str, Any]:
+    user = current_user() or {}
+    record = {
+        "id": uuid.uuid4().hex,
+        "workspace": "Platform",
+        "user_email": safe_text(user.get("email")),
+        "scope": safe_text(scope or "All Workspaces"),
+        "incident_type": safe_text(incident_type or "Incident"),
+        "severity": safe_text(severity or "Notice"),
+        "status": safe_text(status or "Investigating"),
+        "title": safe_text(title),
+        "message": safe_text(message),
+        "starts_at": starts_at or now_stamp(),
+        "ends_at": ends_at,
+        "resolved_at": now_stamp() if safe_text(status) == "Resolved" else "",
+        "metadata_json": {"created_by_role": safe_text(user.get("role")), "source": "Platform Settings"},
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    }
+    record = persist_saas_record("status_incidents", record)
+    upsert_session_record("status_incidents", record)
+    add_audit("Status incident created", f"{record['scope']}: {record['severity']} / {record['title']}")
+    if record["scope"] == "All Workspaces":
+        queue_email_notification(
+            safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or safe_text(user.get("email")),
+            f"ErrorSweep status notice: {record['title']}",
+            f"{record['severity']} {record['incident_type']} is now {record['status']}.\n\n{record['message']}",
+            "status.incident_created",
+            metadata={"incident_id": record["id"], "scope": record["scope"], "severity": record["severity"]},
+            workspace="Platform",
+        )
+    return record
+
+
+def update_status_incident(incident_id: str, status: str, severity: str, message: str, ends_at: str = "") -> Optional[Dict[str, Any]]:
+    rows = st.session_state.setdefault("status_incidents", [])
+    for idx, item in enumerate(rows):
+        if safe_text(item.get("id")) != safe_text(incident_id):
+            continue
+        previous_status = safe_text(item.get("status"))
+        updated = dict(item)
+        updated["status"] = safe_text(status or item.get("status") or "Monitoring")
+        updated["severity"] = safe_text(severity or item.get("severity") or "Notice")
+        if message:
+            updated["message"] = safe_text(message)
+        if ends_at:
+            updated["ends_at"] = ends_at
+        if updated["status"] == "Resolved" and previous_status != "Resolved":
+            updated["resolved_at"] = now_stamp()
+        updated["updated_at"] = now_stamp()
+        updated = persist_saas_record("status_incidents", updated)
+        rows[idx] = updated
+        add_audit("Status incident updated", f"{updated.get('id')} -> {updated.get('status')}")
+        return updated
+    return None
+
+
+def status_incident_visible(record: Dict[str, Any], workspace: str) -> bool:
+    status = safe_text(record.get("status"))
+    if status not in STATUS_ACTIVE_STATUSES:
+        return False
+    scope = safe_text(record.get("scope") or "All Workspaces")
+    if scope == "All Workspaces":
+        return True
+    if scope == "Platform":
+        return current_role() == "Platform Owner"
+    return scope == safe_text(workspace)
+
+
+def visible_status_incidents(workspace: str = "") -> List[Dict[str, Any]]:
+    workspace = safe_text(workspace or (current_user() or {}).get("workspace") or "Demo Workspace")
+    severity_rank = {"Critical": 0, "Major": 1, "Minor": 2, "Notice": 3}
+    rows = [
+        item for item in st.session_state.get("status_incidents", [])
+        if isinstance(item, dict) and status_incident_visible(item, workspace)
+    ]
+    return sorted(rows, key=lambda item: (severity_rank.get(safe_text(item.get("severity")), 9), safe_text(item.get("updated_at"))), reverse=False)
+
+
+def render_status_incident_banner() -> None:
+    incidents = visible_status_incidents()
+    if not incidents:
+        return
+    top = incidents[0]
+    summary = (
+        f"{safe_text(top.get('severity'))} {safe_text(top.get('incident_type'))}: "
+        f"{safe_text(top.get('title'))} - {safe_text(top.get('status'))}. "
+        f"{safe_text(top.get('message'))}"
+    )
+    severity = safe_text(top.get("severity"))
+    if severity == "Critical":
+        st.error(summary)
+    elif severity == "Major":
+        st.warning(summary)
+    elif severity == "Minor":
+        st.info(summary)
+    else:
+        st.caption(summary)
+    if len(incidents) > 1:
+        with st.expander(f"{len(incidents)} active status notices", expanded=False):
+            st.dataframe(pd.DataFrame(display_records(incidents)), use_container_width=True, hide_index=True)
+
+
+def render_status_incident_panel(workspace_options: Optional[List[str]] = None) -> None:
+    st.markdown("### Service status & maintenance notices")
+    st.caption("Publish signed-in app notices for incidents, degraded services, announcements, or planned maintenance.")
+    options = ["All Workspaces", "Platform"]
+    for item in workspace_options or []:
+        name = safe_text(item)
+        if name and name not in options:
+            options.append(name)
+    with st.form("status_incident_create_form", enter_to_submit=False):
+        c1, c2, c3, c4 = st.columns(4)
+        scope = c1.selectbox("Scope", options)
+        incident_type = c2.selectbox("Type", STATUS_INCIDENT_TYPES)
+        severity = c3.selectbox("Severity", STATUS_INCIDENT_SEVERITIES, index=1)
+        status = c4.selectbox("Status", STATUS_INCIDENT_STATUSES, index=1)
+        title = st.text_input("Title", placeholder="Example: Scheduled MT maintenance")
+        message = st.text_area("Message", height=90, placeholder="Short customer-facing status message.")
+        d1, d2 = st.columns(2)
+        starts_date = d1.date_input("Starts date", value=datetime.now(local_timezone()).date())
+        ends_date = d2.date_input("Expected end date", value=datetime.now(local_timezone()).date())
+        create_notice = st.form_submit_button("Publish status notice", use_container_width=True)
+    if create_notice:
+        if not safe_text(title):
+            st.error("Title is required.")
+        elif not safe_text(message):
+            st.error("Message is required.")
+        else:
+            starts_at = datetime(starts_date.year, starts_date.month, starts_date.day, 0, 0, tzinfo=local_timezone()).astimezone(timezone.utc).isoformat()
+            ends_at = datetime(ends_date.year, ends_date.month, ends_date.day, 23, 59, tzinfo=local_timezone()).astimezone(timezone.utc).isoformat()
+            incident = create_status_incident(scope, incident_type, severity, status, title, message, starts_at=starts_at, ends_at=ends_at)
+            st.success(f"Status notice published: {incident['id'][:10]}")
+
+    incidents = st.session_state.get("status_incidents", [])
+    active = [item for item in incidents if safe_text(item.get("status")) in STATUS_ACTIVE_STATUSES]
+    critical = [item for item in active if safe_text(item.get("severity")) == "Critical"]
+    metrics([
+        ("Active notices", len(active), "visible"),
+        ("Critical", len(critical), "highest severity"),
+        ("Resolved", sum(1 for item in incidents if safe_text(item.get("status")) == "Resolved"), "closed"),
+        ("Total", len(incidents), "tracked"),
+    ])
+    if incidents:
+        rows = []
+        for item in incidents[:100]:
+            rows.append({
+                "id": safe_text(item.get("id"))[:12],
+                "scope": item.get("scope", ""),
+                "type": item.get("incident_type", ""),
+                "severity": item.get("severity", ""),
+                "status": item.get("status", ""),
+                "title": item.get("title", ""),
+                "starts_at": item.get("starts_at", ""),
+                "ends_at": item.get("ends_at", ""),
+                "updated_at": item.get("updated_at", ""),
+            })
+        st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download status notices CSV",
+            rows_to_csv(display_records(incidents)),
+            file_name="errorsweep_status_notices.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        labels = [f"{safe_text(item.get('id'))[:12]} | {safe_text(item.get('severity'))} | {safe_text(item.get('title'))[:80]}" for item in incidents]
+        selected_label = st.selectbox("Update status notice", labels)
+        selected_id = selected_label.split("|", 1)[0].strip()
+        selected = next((item for item in incidents if safe_text(item.get("id")).startswith(selected_id)), None)
+        if selected:
+            c1, c2 = st.columns(2)
+            new_status = c1.selectbox(
+                "Update status",
+                STATUS_INCIDENT_STATUSES,
+                index=STATUS_INCIDENT_STATUSES.index(safe_text(selected.get("status"))) if safe_text(selected.get("status")) in STATUS_INCIDENT_STATUSES else 0,
+                key="status_incident_update_status",
+            )
+            new_severity = c2.selectbox(
+                "Update severity",
+                STATUS_INCIDENT_SEVERITIES,
+                index=STATUS_INCIDENT_SEVERITIES.index(safe_text(selected.get("severity"))) if safe_text(selected.get("severity")) in STATUS_INCIDENT_SEVERITIES else 0,
+                key="status_incident_update_severity",
+            )
+            new_message = st.text_area("Update message", value=safe_text(selected.get("message")), height=100, key="status_incident_update_message")
+            if st.button("Save status notice update", use_container_width=True):
+                updated = update_status_incident(selected["id"], new_status, new_severity, new_message)
+                if updated:
+                    st.success("Status notice updated.")
+                    st.rerun()
+                else:
+                    st.error("Could not find that status notice.")
+    else:
+        st.info("No service status notices have been created yet.")
+
+
+RETENTION_COLLECTION_LABELS = {
+    "auth_tokens": "Expired auth tokens",
+    "files": "Expired file manifests",
+    "notifications": "Old sent notifications",
+    "task_queue": "Old completed tasks",
+    "privacy_requests": "Closed privacy requests",
+    "support_tickets": "Closed support tickets",
+}
+
+
+def parse_record_datetime(value: Any) -> Optional[datetime]:
+    raw = safe_text(value)
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def retention_cutoff(days: Any) -> datetime:
+    try:
+        normalized_days = max(0, int(days or 0))
+    except Exception:
+        normalized_days = 0
+    return datetime.now(timezone.utc) - timedelta(days=normalized_days)
+
+
+def retention_policy() -> Dict[str, int]:
+    policy = retention_policy_defaults()
+    stored = st.session_state.setdefault("retention_policy", policy.copy())
+    for key, default in policy.items():
+        try:
+            policy[key] = max(0, int(stored.get(key, default)))
+        except Exception:
+            policy[key] = default
+    return policy
+
+
+def media_preview_cleanup_candidates(ttl_hours: int) -> int:
+    ttl_seconds = max(1, int(ttl_hours or 1)) * 3600
+    root = media_preview_root()
+    now = time.time()
+    count = 0
+    try:
+        for path in root.iterdir():
+            if path.is_file() and now - path.stat().st_mtime > ttl_seconds:
+                count += 1
+    except Exception as exc:
+        LOGGER.warning("Unable to scan media preview cleanup candidates: %s", exc)
+    return count
+
+
+def retention_cleanup_candidates(policy: Optional[Dict[str, int]] = None) -> Dict[str, List[Dict[str, Any]]]:
+    policy = policy or retention_policy()
+    candidates: Dict[str, List[Dict[str, Any]]] = {key: [] for key in RETENTION_COLLECTION_LABELS}
+    now_utc = datetime.now(timezone.utc)
+
+    auth_cutoff = retention_cutoff(policy.get("expired_auth_token_grace_days", 0))
+    for record in st.session_state.get("auth_tokens", []):
+        expires = parse_record_datetime(record.get("expires_at"))
+        if expires and expires < now_utc and expires <= auth_cutoff:
+            candidates["auth_tokens"].append(record)
+
+    file_cutoff = retention_cutoff(policy.get("expired_file_manifest_grace_days", 7))
+    for record in st.session_state.get("files", []):
+        expires = parse_record_datetime(record.get("expires_at"))
+        if expires and expires <= file_cutoff:
+            candidates["files"].append(record)
+
+    notification_cutoff = retention_cutoff(policy.get("sent_notification_days", 180))
+    for record in st.session_state.get("notifications", []):
+        status = safe_text(record.get("status")).lower()
+        sent_at = parse_record_datetime(record.get("sent_at") or record.get("updated_at") or record.get("created_at"))
+        if status == "sent" and sent_at and sent_at <= notification_cutoff:
+            candidates["notifications"].append(record)
+
+    task_cutoff = retention_cutoff(policy.get("completed_task_days", 90))
+    for record in st.session_state.get("task_queue", []):
+        status = safe_text(record.get("status")).lower()
+        finished_at = parse_record_datetime(record.get("finished_at") or record.get("updated_at") or record.get("created_at"))
+        if status in {"completed", "cancelled", "canceled"} and finished_at and finished_at <= task_cutoff:
+            candidates["task_queue"].append(record)
+
+    privacy_cutoff = retention_cutoff(policy.get("closed_privacy_request_days", 730))
+    for record in st.session_state.get("privacy_requests", []):
+        status = safe_text(record.get("status"))
+        closed_at = parse_record_datetime(record.get("fulfilled_at") or record.get("updated_at") or record.get("created_at"))
+        if status in {"Fulfilled", "Rejected", "Cancelled"} and closed_at and closed_at <= privacy_cutoff:
+            candidates["privacy_requests"].append(record)
+
+    support_cutoff = retention_cutoff(policy.get("closed_support_ticket_days", 730))
+    for record in st.session_state.get("support_tickets", []):
+        status = safe_text(record.get("status"))
+        closed_at = parse_record_datetime(record.get("last_response_at") or record.get("updated_at") or record.get("created_at"))
+        if status in {"Resolved", "Closed"} and closed_at and closed_at <= support_cutoff:
+            candidates["support_tickets"].append(record)
+
+    return candidates
+
+
+def run_retention_cleanup(policy: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    policy = policy or retention_policy()
+    candidates = retention_cleanup_candidates(policy)
+    removed_counts: Dict[str, int] = {key: 0 for key in RETENTION_COLLECTION_LABELS}
+    for collection, records in candidates.items():
+        for record in records:
+            record_id = safe_text(record.get("id")) if isinstance(record, dict) else ""
+            if record_id and remove_saas_record(collection, record_id):
+                removed_counts[collection] += 1
+    removed_counts["media_preview_files"] = cleanup_media_preview_files(
+        ttl_seconds=max(1, int(policy.get("local_media_preview_hours", 48))) * 3600
+    )
+    add_audit(
+        "Retention cleanup run",
+        ", ".join(f"{collection}={count}" for collection, count in removed_counts.items()),
+    )
+    return removed_counts
+
+
+def render_retention_policy_panel() -> None:
+    st.markdown("### Data retention & cleanup")
+    st.caption("Owner-controlled cleanup for temporary and operational records. Audit logs and billing records are intentionally retained outside this cleanup action.")
+    current_policy = retention_policy()
+    with st.form("retention_policy_form", enter_to_submit=False):
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            auth_days = st.number_input("Expired auth-token grace days", min_value=0, max_value=365, value=current_policy["expired_auth_token_grace_days"])
+            file_days = st.number_input("Expired file-manifest grace days", min_value=0, max_value=365, value=current_policy["expired_file_manifest_grace_days"])
+        with c2:
+            notification_days = st.number_input("Sent notification retention days", min_value=1, max_value=3650, value=max(1, current_policy["sent_notification_days"]))
+            task_days = st.number_input("Completed task retention days", min_value=1, max_value=3650, value=max(1, current_policy["completed_task_days"]))
+        with c3:
+            privacy_days = st.number_input("Closed privacy-request retention days", min_value=30, max_value=3650, value=max(30, current_policy["closed_privacy_request_days"]))
+            support_days = st.number_input("Closed support-ticket retention days", min_value=30, max_value=3650, value=max(30, current_policy["closed_support_ticket_days"]))
+        with c4:
+            media_hours = st.number_input("Local media-preview retention hours", min_value=1, max_value=24 * 30, value=max(1, current_policy["local_media_preview_hours"]))
+        save_policy = st.form_submit_button("Save retention policy", use_container_width=True)
+    if save_policy:
+        updated_policy = {
+            "expired_auth_token_grace_days": int(auth_days),
+            "expired_file_manifest_grace_days": int(file_days),
+            "sent_notification_days": int(notification_days),
+            "completed_task_days": int(task_days),
+            "closed_privacy_request_days": int(privacy_days),
+            "closed_support_ticket_days": int(support_days),
+            "local_media_preview_hours": int(media_hours),
+        }
+        st.session_state["retention_policy"] = updated_policy
+        upsert_platform_setting("retention_policy", updated_policy, metadata={"source": "Platform Settings"})
+        add_audit("Retention policy updated", json.dumps(updated_policy, sort_keys=True))
+        st.success("Retention policy saved.")
+        current_policy = updated_policy
+
+    candidates = retention_cleanup_candidates(current_policy)
+    media_candidates = media_preview_cleanup_candidates(current_policy.get("local_media_preview_hours", 48))
+    metrics([
+        ("Expired tokens", len(candidates["auth_tokens"]), "cleanup candidates"),
+        ("File manifests", len(candidates["files"]), "expired metadata"),
+        ("Notifications", len(candidates["notifications"]), "old sent"),
+        ("Media previews", media_candidates, "local files"),
+    ])
+    metrics([
+        ("Completed tasks", len(candidates["task_queue"]), "old records"),
+        ("Privacy requests", len(candidates["privacy_requests"]), "closed old records"),
+        ("Support tickets", len(candidates["support_tickets"]), "closed old records"),
+        ("Audit/Billing", "Retained", "excluded"),
+    ])
+    preview_rows = []
+    for collection, records in candidates.items():
+        for record in records[:25]:
+            preview_rows.append({
+                "collection": RETENTION_COLLECTION_LABELS.get(collection, collection),
+                "id": safe_text(record.get("id"))[:16],
+                "workspace": record.get("workspace", ""),
+                "status": record.get("status", ""),
+                "created_at": record.get("created_at", ""),
+                "updated_at": record.get("updated_at", ""),
+                "expires_at": record.get("expires_at", ""),
+                "due_at": record.get("due_at", ""),
+            })
+    if preview_rows:
+        st.dataframe(pd.DataFrame(display_records(preview_rows)), use_container_width=True, hide_index=True)
+    else:
+        st.info("No SaaS records currently match the retention cleanup policy.")
+    confirm_cleanup = st.checkbox("I understand this removes matching temporary/operational records from session storage and the configured persistence backend.", key="confirm_retention_cleanup")
+    if st.button("Run retention cleanup", use_container_width=True, disabled=not confirm_cleanup):
+        removed = run_retention_cleanup(current_policy)
+        total_removed = sum(removed.values())
+        if total_removed:
+            st.success(f"Retention cleanup removed {total_removed} item(s).")
+            st.rerun()
+        else:
+            st.info("No matching records were removed.")
+
+
 def email_provider_label() -> str:
     return secret("ERRORSWEEP_EMAIL_PROVIDER", "").strip().lower() or "not_configured"
 
@@ -3370,6 +7852,48 @@ def email_from_address() -> str:
         or secret("RESEND_FROM_EMAIL", "")
         or "no-reply@errorsweep.local"
     ).strip()
+
+
+def email_sender_parts() -> Tuple[str, str, str]:
+    raw = email_from_address()
+    name, email = parseaddr(raw)
+    return raw, safe_text(email or raw), safe_text(name)
+
+
+def email_templates_enabled() -> bool:
+    return parse_bool_flag(secret("ERRORSWEEP_EMAIL_HTML_ENABLED", "true"), True)
+
+
+def notification_metadata(record_or_metadata: Any) -> Dict[str, Any]:
+    if isinstance(record_or_metadata, dict) and isinstance(record_or_metadata.get("metadata_json"), dict):
+        return dict(record_or_metadata.get("metadata_json") or {})
+    if isinstance(record_or_metadata, dict):
+        return dict(record_or_metadata)
+    return {}
+
+
+def notification_email_payload(record: Dict[str, Any]) -> Dict[str, str]:
+    subject = safe_text(record.get("subject"))
+    body = safe_text(record.get("body"))
+    metadata = notification_metadata(record)
+    if render_transactional_email is None or not email_templates_enabled():
+        return {
+            "subject": subject,
+            "text": body,
+            "html": "",
+            "preheader": "",
+            "template_key": "text_only",
+            "cta_label": "",
+            "cta_url": "",
+        }
+    return render_transactional_email(
+        subject=subject,
+        body=body,
+        event_type=safe_text(record.get("event_type")),
+        metadata=metadata,
+        app_base_url=safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")),
+        brand_name="ErrorSweep",
+    )
 
 
 def queue_email_notification(
@@ -3385,6 +7909,21 @@ def queue_email_notification(
     if not recipient:
         recipient = safe_text((current_user() or {}).get("email", ""))
     provider = email_provider_label()
+    metadata_json = dict(metadata or {})
+    template_preview = {
+        "subject": safe_text(subject),
+        "body": safe_text(body),
+        "event_type": safe_text(event_type),
+        "metadata_json": metadata_json,
+    }
+    rendered = notification_email_payload(template_preview)
+    metadata_json.update({
+        "email_template_key": rendered.get("template_key", "text_only"),
+        "email_preheader": rendered.get("preheader", ""),
+        "email_cta_label": rendered.get("cta_label", ""),
+        "email_cta_url": rendered.get("cta_url", ""),
+        "email_html_enabled": bool(rendered.get("html")),
+    })
     record = {
         "id": uuid.uuid4().hex,
         "created": now_stamp(),
@@ -3398,7 +7937,7 @@ def queue_email_notification(
         "status": "provider_pending" if provider in {"", "manual", "not_configured"} else "queued",
         "error": "",
         "sent_at": "",
-        "metadata_json": metadata or {},
+        "metadata_json": metadata_json,
     }
     record = persist_saas_record("notifications", record)
     st.session_state.setdefault("notifications", [])
@@ -3419,7 +7958,11 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
     recipient = safe_text(record.get("recipient", "")).strip()
     subject = safe_text(record.get("subject", "")).strip()
     body = safe_text(record.get("body", "")).strip()
-    sender = email_from_address()
+    email_payload = notification_email_payload(record)
+    subject = safe_text(email_payload.get("subject") or subject)
+    text_body = safe_text(email_payload.get("text") or body)
+    html_body = safe_text(email_payload.get("html"))
+    sender, sender_email, sender_name = email_sender_parts()
     try:
         if not recipient or "@" not in recipient:
             raise ValueError("Notification recipient is missing or invalid.")
@@ -3430,7 +7973,13 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
             response = requests.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"from": sender, "to": [recipient], "subject": subject, "text": body},
+                json={
+                    "from": sender,
+                    "to": [recipient],
+                    "subject": subject,
+                    "text": text_body,
+                    **({"html": html_body} if html_body else {}),
+                },
                 timeout=20,
             )
             if response.status_code >= 300:
@@ -3444,9 +7993,13 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "personalizations": [{"to": [{"email": recipient}]}],
-                    "from": {"email": sender},
+                    "from": {"email": sender_email, **({"name": sender_name} if sender_name else {})},
                     "subject": subject,
-                    "content": [{"type": "text/plain", "value": body}],
+                    "content": (
+                        [{"type": "text/plain", "value": text_body}, {"type": "text/html", "value": html_body}]
+                        if html_body else
+                        [{"type": "text/plain", "value": text_body}]
+                    ),
                 },
                 timeout=20,
             )
@@ -3463,7 +8016,9 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
             message["From"] = sender
             message["To"] = recipient
             message["Subject"] = subject
-            message.set_content(body)
+            message.set_content(text_body)
+            if html_body:
+                message.add_alternative(html_body, subtype="html")
             with smtplib.SMTP(host, port, timeout=20) as client:
                 if secret("SMTP_TLS", secret("ERRORSWEEP_SMTP_TLS", "true")).strip().lower() not in {"0", "false", "no", "off"}:
                     client.starttls()
@@ -3481,6 +8036,20 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
         LOGGER.warning("Email notification dispatch failed: %s", exc)
     record["provider"] = provider
     record["updated_at"] = now_stamp()
+    if isinstance(record.get("metadata_json"), dict):
+        record["metadata_json"] = {
+            **record["metadata_json"],
+            "email_template_key": email_payload.get("template_key", "text_only"),
+            "email_preheader": email_payload.get("preheader", ""),
+            "email_cta_label": email_payload.get("cta_label", ""),
+            "email_cta_url": email_payload.get("cta_url", ""),
+            "email_html_enabled": bool(html_body),
+        }
+    try:
+        persisted = persist_saas_record("notifications", record)
+        record.update(persisted)
+    except Exception as exc:
+        LOGGER.warning("Unable to persist notification dispatch status: %s", exc)
     return record
 
 
@@ -3499,6 +8068,77 @@ def dispatch_pending_notifications(limit: int = EMAIL_DISPATCH_BATCH_LIMIT) -> T
         else:
             failed += 1
     return sent, failed
+
+
+def platform_setting_value(setting_key: str, default: Any = None) -> Any:
+    for record in st.session_state.get("platform_settings", []):
+        if safe_text(record.get("setting_key")) == safe_text(setting_key):
+            value = _setting_json_value(record)
+            return default if value in (None, "") else value
+    return default
+
+
+def email_deliverability_last_test() -> Dict[str, Any]:
+    value = platform_setting_value("email_deliverability_last_test", {})
+    return value if isinstance(value, dict) else {}
+
+
+def email_deliverability_test_is_recent(record: Optional[Dict[str, Any]] = None, max_age_days: int = 30) -> bool:
+    record = record if isinstance(record, dict) else email_deliverability_last_test()
+    if safe_text(record.get("status")).lower() != "sent":
+        return False
+    tested_at = parse_record_time(record.get("sent_at") or record.get("tested_at"))
+    if tested_at is None:
+        return False
+    return datetime.now(timezone.utc) - tested_at <= timedelta(days=max(1, int(max_age_days or 30)))
+
+
+def run_email_deliverability_test(recipient: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    user = current_user() or {}
+    recipient = safe_text(recipient).strip()
+    provider = email_provider_label()
+    workspace = safe_text(user.get("workspace") or "Platform")
+    tested_at = now_stamp()
+    notification = queue_email_notification(
+        recipient,
+        "ErrorSweep email delivery test",
+        (
+            "This is a controlled ErrorSweep deliverability test. It validates the configured sender, provider route, "
+            "HTML template, and plain-text fallback before public launch."
+        ),
+        "email.deliverability_test",
+        metadata={
+            "workspace": workspace,
+            "provider": provider,
+            "tested_at": tested_at,
+            "status": "Queued",
+            "workspace_url": safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")),
+        },
+        workspace=workspace,
+    )
+    dispatched = dispatch_email_notification(notification)
+    upsert_session_record("notifications", dispatched)
+    result = {
+        "tested_at": tested_at,
+        "sent_at": safe_text(dispatched.get("sent_at")),
+        "recipient": recipient,
+        "provider": provider,
+        "sender": email_from_address(),
+        "status": safe_text(dispatched.get("status")),
+        "error": safe_text(dispatched.get("error")),
+        "notification_id": safe_text(dispatched.get("id")),
+        "template_key": safe_text((dispatched.get("metadata_json") or {}).get("email_template_key") if isinstance(dispatched.get("metadata_json"), dict) else ""),
+        "html_enabled": bool((dispatched.get("metadata_json") or {}).get("email_html_enabled")) if isinstance(dispatched.get("metadata_json"), dict) else False,
+    }
+    try:
+        upsert_platform_setting(
+            "email_deliverability_last_test",
+            result,
+            metadata={"source": "Platform Settings", "provider": provider, "status": result["status"]},
+        )
+    except Exception as exc:
+        LOGGER.warning("Unable to persist email deliverability test result: %s", exc)
+    return dispatched, result
 
 
 def create_task_record(
@@ -3630,6 +8270,167 @@ def task_status_summary(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
     return summary
 
 
+def coerce_json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def coerce_manifest_list(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except Exception:
+            value = []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def manifest_local_path(manifest: Dict[str, Any]) -> str:
+    candidates = [
+        safe_text(manifest.get("local_path")),
+        safe_text(manifest.get("storage_key")) if safe_text(manifest.get("storage_provider")).lower() in {"", "local"} else "",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate and Path(candidate).exists():
+                return candidate
+        except Exception:
+            continue
+    return ""
+
+
+def render_file_manifest_action(manifest: Dict[str, Any], key_prefix: str, label: str = "Download file") -> bool:
+    file_name = safe_text(manifest.get("file_name")) or Path(safe_text(manifest.get("storage_key"))).name or "errorsweep_file"
+    mime_type = safe_text(manifest.get("mime_type")) or "application/octet-stream"
+    local_path = manifest_local_path(manifest)
+    if local_path:
+        try:
+            st.download_button(
+                label,
+                Path(local_path).read_bytes(),
+                file_name=file_name,
+                mime=mime_type,
+                use_container_width=True,
+                key=f"{key_prefix}_download_{safe_text(manifest.get('id')) or hashlib.sha256(local_path.encode('utf-8')).hexdigest()[:12]}",
+            )
+            return True
+        except Exception as exc:
+            LOGGER.warning("Unable to render local manifest download %s: %s", local_path, exc)
+
+    public_url = safe_text(manifest.get("public_url"))
+    if public_url:
+        st.link_button(label, public_url, use_container_width=True)
+        return True
+
+    storage_key = safe_text(manifest.get("storage_key"))
+    if storage_key and signed_url_for_key is not None:
+        try:
+            signed_url = signed_url_for_key(storage_key)
+            if signed_url:
+                st.link_button(label, signed_url, use_container_width=True)
+                return True
+        except Exception as exc:
+            LOGGER.warning("Unable to create signed URL for manifest %s: %s", storage_key, exc)
+    return False
+
+
+def task_review_job_id(task: Dict[str, Any]) -> str:
+    metadata = coerce_json_dict(task.get("metadata_json"))
+    pro_summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
+    return safe_text(
+        metadata.get("review_job_id")
+        or pro_summary.get("review_job_id")
+        or task.get("review_job_id")
+        or ""
+    )
+
+
+def task_source_page(task: Dict[str, Any]) -> str:
+    task_type = safe_text(task.get("task_type")).lower()
+    if task_type in {"qa", "qa_workflow"}:
+        return "ErrorSweep QA"
+    if task_type in {"pro_translation", "pro", "translate_review"}:
+        return "ErrorSweep Pro"
+    if task_type in {"subtitle", "subtitle_editor", "transcription", "media"}:
+        return "Subtitle / Transcription Editor"
+    return ""
+
+
+def render_task_navigation_links(task: Dict[str, Any]) -> None:
+    task_id = safe_text(task.get("id"))
+    review_job_id = task_review_job_id(task)
+    source_page = task_source_page(task)
+    links: List[Tuple[str, str, bool]] = []
+    if task_id:
+        links.append(("Monitor in Jobs", task_monitor_link(task_id), False))
+    if source_page:
+        links.append((f"Back to {source_page.replace('ErrorSweep ', '')}", app_page_link(source_page), False))
+    if review_job_id:
+        links.append(("Open Human Review Editor", human_review_editor_link(review_job_id), True))
+    if not links:
+        return
+
+    rendered = []
+    seen_urls: Set[str] = set()
+    for label, url, primary in links:
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        cls = "es-task-action-link primary" if primary else "es-task-action-link"
+        target_attr = 'target="_blank" rel="noopener"' if primary else 'target="_self"'
+        rendered.append(f'<a class="{cls}" href="{escape(url)}" {target_attr}>{escape(label)}</a>')
+    if rendered:
+        st.markdown(f'<div class="es-task-actions">{"".join(rendered)}</div>', unsafe_allow_html=True)
+
+
+def render_editor_open_link(label: str, url: str) -> None:
+    if not safe_text(url):
+        return
+    st.markdown(
+        f"""
+        <a class="es-task-action-link primary" href="{escape(url)}" target="_blank" rel="noopener"
+           style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_task_result_actions(task: Dict[str, Any], key_prefix: str) -> None:
+    metadata = coerce_json_dict(task.get("metadata_json"))
+    result_file = metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {}
+    result_files = coerce_manifest_list(metadata.get("result_files"))
+    if result_file:
+        result_files.insert(0, result_file)
+
+    summary = metadata.get("qa_summary") if isinstance(metadata.get("qa_summary"), dict) else metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
+    if summary:
+        summary_bits = []
+        for key in ("result", "qa_score", "status", "segments", "total_findings", "missing_or_review"):
+            if key in summary and safe_text(summary.get(key)) != "":
+                summary_bits.append(f"{key.replace('_', ' ').title()}: {safe_text(summary.get(key))}")
+        if summary_bits:
+            st.caption(" | ".join(summary_bits))
+
+    render_task_navigation_links(task)
+
+    action_columns = st.columns(1) if result_files else [st.container()]
+    if result_files:
+        with action_columns[0]:
+            rendered = render_file_manifest_action(result_files[0], f"{key_prefix}_result", "Download result")
+            if not rendered:
+                st.caption("Result file is recorded but is not directly downloadable from this deployment.")
+
+
 def render_task_queue_panel(limit: int = 12) -> None:
     tasks = st.session_state.get("task_queue", [])
     st.markdown("### Async task queue")
@@ -3643,7 +8444,18 @@ def render_task_queue_panel(limit: int = 12) -> None:
         ("Completed", summary.get("completed", 0), "finished"),
         ("Failed", summary.get("failed", 0), "needs retry"),
     ])
-    latest = tasks[:limit]
+    focused_task_id = safe_text(query_get("task_id") or st.session_state.get("task_id", ""))
+    focused_task = next((task for task in tasks if safe_text(task.get("id")) == focused_task_id), None) if focused_task_id else None
+    latest = []
+    if focused_task:
+        latest.append(focused_task)
+        st.caption(f"Focused task: {focused_task_id[:12]}")
+    for task in tasks:
+        if focused_task and safe_text(task.get("id")) == focused_task_id:
+            continue
+        if len(latest) >= limit:
+            break
+        latest.append(task)
     for idx, task in enumerate(latest):
         label = safe_text(task.get("label") or task.get("task_type") or "Task")
         status = safe_text(task.get("status") or "queued")
@@ -3657,6 +8469,7 @@ def render_task_queue_panel(limit: int = 12) -> None:
             c3.progress(progress / 100, text=f"{progress}%")
             if safe_text(task.get("error")):
                 st.caption(f"Error: {safe_text(task.get('error'))[:240]}")
+            render_task_result_actions(task, f"task_{idx}_{safe_text(task.get('id'))}")
             if status.lower() in {"failed", "cancelled"}:
                 if st.button("Queue retry request", key=f"retry_task_{idx}_{task.get('id')}", use_container_width=True):
                     update_task_record(
@@ -3676,6 +8489,24 @@ def render_task_queue_panel(limit: int = 12) -> None:
                 row["metadata_json"] = json.dumps(row["metadata_json"], ensure_ascii=False)
             rows.append(row)
         st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+
+
+def render_usage_task_links(limit: int = 8) -> None:
+    tasks = st.session_state.get("task_queue", [])
+    if not tasks:
+        return
+    st.markdown("#### Workflow task links")
+    for idx, task in enumerate(tasks[:limit]):
+        label = safe_text(task.get("label") or task.get("task_type") or "Task")
+        status = safe_text(task.get("status") or "queued")
+        updated = format_local_time(task.get("updated_at", task.get("created_at", "")))
+        with st.container(border=True):
+            c1, c2 = st.columns([0.70, 0.30])
+            c1.markdown(f"**{label}**")
+            c1.caption(f"{safe_text(task.get('task_type', 'workflow'))} | {updated}")
+            c2.markdown(f"`{status}`")
+            c2.caption(f"{int(task.get('processed_units') or 0)}/{int(task.get('total_units') or 0)} units")
+            render_task_navigation_links(task)
 
 
 def hero(kicker: str, title: str, subtitle: str) -> None:
@@ -4052,6 +8883,261 @@ def format_money(amount: Any, currency: str = "INR", decimals: bool = False) -> 
     return f"{safe_text(currency or 'INR')} {value:,.{precision}f}"
 
 
+def money_value(amount: Any) -> float:
+    try:
+        return max(0.0, float(amount or 0))
+    except Exception:
+        return 0.0
+
+
+def default_tax_rate_percent() -> float:
+    try:
+        return max(0.0, float(secret("ERRORSWEEP_INVOICE_TAX_RATE", "18")))
+    except Exception:
+        return 18.0
+
+
+def invoice_number() -> str:
+    prefix = safe_text(secret("ERRORSWEEP_INVOICE_PREFIX", "ES"))
+    period = datetime.now(local_timezone()).strftime("%Y%m")
+    existing = [
+        item for item in st.session_state.get("invoices", [])
+        if safe_text(item.get("invoice_number")).startswith(f"{prefix}-{period}-")
+    ]
+    return f"{prefix}-{period}-{len(existing) + 1:04d}"
+
+
+def invoice_amounts(total_amount: Any, tax_rate_percent: Any) -> Dict[str, float]:
+    total = money_value(total_amount)
+    try:
+        tax_rate = max(0.0, float(tax_rate_percent or 0))
+    except Exception:
+        tax_rate = 0.0
+    subtotal = total / (1 + tax_rate / 100) if tax_rate else total
+    tax_amount = max(0.0, total - subtotal)
+    return {
+        "subtotal": round(subtotal, 2),
+        "tax_rate_percent": round(tax_rate, 2),
+        "tax_amount": round(tax_amount, 2),
+        "total": round(total, 2),
+    }
+
+
+def create_invoice_record(
+    workspace: str,
+    customer_email: str,
+    plan_name: str,
+    amount: Any,
+    currency: str = "INR",
+    customer_gstin: str = "",
+    billing_period: str = "",
+    notes: str = "",
+    source_payment_id: str = "",
+) -> Dict[str, Any]:
+    user = current_user() or {}
+    amounts = invoice_amounts(amount, default_tax_rate_percent())
+    invoice = {
+        "id": uuid.uuid4().hex,
+        "workspace": safe_text(workspace or user.get("workspace") or "Demo Workspace"),
+        "user_email": safe_text(user.get("email")),
+        "invoice_number": invoice_number(),
+        "customer_email": safe_text(customer_email),
+        "customer_gstin": safe_text(customer_gstin),
+        "plan": safe_text(plan_name or "Trial"),
+        "billing_period": safe_text(billing_period or datetime.now(local_timezone()).strftime("%B %Y")),
+        "currency": safe_text(currency or "INR"),
+        "subtotal": amounts["subtotal"],
+        "tax_rate_percent": amounts["tax_rate_percent"],
+        "tax_amount": amounts["tax_amount"],
+        "total": amounts["total"],
+        "status": "Draft",
+        "source_payment_id": safe_text(source_payment_id),
+        "notes": safe_text(notes),
+        "metadata_json": {
+            "seller_name": safe_text(secret("ERRORSWEEP_BILLING_LEGAL_NAME", "Nawin Corp")),
+            "seller_gstin": safe_text(secret("ERRORSWEEP_BILLING_GSTIN", "")),
+            "seller_address": safe_text(secret("ERRORSWEEP_BILLING_ADDRESS", "")),
+        },
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    }
+    invoice = persist_saas_record("invoices", invoice)
+    upsert_session_record("invoices", invoice)
+    add_audit("Invoice generated", f"{invoice['invoice_number']} for {invoice['workspace']} / {format_money(invoice['total'], invoice['currency'])}")
+    queue_email_notification(
+        safe_text(customer_email),
+        f"ErrorSweep invoice generated: {invoice['invoice_number']}",
+        f"Invoice {invoice['invoice_number']} was generated for {invoice['workspace']} total {format_money(invoice['total'], invoice['currency'], decimals=True)}.",
+        "billing.invoice_generated",
+        metadata={"invoice_id": invoice["id"], "invoice_number": invoice["invoice_number"], "workspace": invoice["workspace"]},
+        workspace=invoice["workspace"],
+    )
+    return invoice
+
+
+def build_invoice_workbook(invoice: Dict[str, Any]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Invoice"
+    meta = invoice.get("metadata_json") or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = {}
+
+    ws["A1"] = "ErrorSweep Invoice"
+    ws["A1"].font = Font(bold=True, size=18, color="FFFFFF")
+    ws["A1"].fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    ws.merge_cells("A1:D1")
+
+    rows = [
+        ("Invoice number", invoice.get("invoice_number", "")),
+        ("Status", invoice.get("status", "")),
+        ("Issued at", format_local_time(invoice.get("created_at", ""))),
+        ("Billing period", invoice.get("billing_period", "")),
+        ("Seller", meta.get("seller_name", "Nawin Corp")),
+        ("Seller GSTIN", meta.get("seller_gstin", "")),
+        ("Seller address", meta.get("seller_address", "")),
+        ("Customer workspace", invoice.get("workspace", "")),
+        ("Customer email", invoice.get("customer_email", "")),
+        ("Customer GSTIN", invoice.get("customer_gstin", "")),
+    ]
+    row_index = 3
+    for label, value in rows:
+        ws.cell(row=row_index, column=1, value=label)
+        ws.cell(row=row_index, column=2, value=value)
+        ws.cell(row=row_index, column=1).font = Font(bold=True)
+        row_index += 1
+
+    row_index += 1
+    headers = ["Description", "Subtotal", "Tax %", "Tax Amount", "Total"]
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(row=row_index, column=col, value=header)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+    row_index += 1
+    description = f"ErrorSweep {invoice.get('plan', '')} subscription - {invoice.get('billing_period', '')}"
+    ws.cell(row=row_index, column=1, value=description)
+    ws.cell(row=row_index, column=2, value=float(invoice.get("subtotal") or 0))
+    ws.cell(row=row_index, column=3, value=float(invoice.get("tax_rate_percent") or 0))
+    ws.cell(row=row_index, column=4, value=float(invoice.get("tax_amount") or 0))
+    ws.cell(row=row_index, column=5, value=float(invoice.get("total") or 0))
+    for col in range(2, 6):
+        ws.cell(row=row_index, column=col).number_format = '#,##0.00'
+
+    row_index += 2
+    ws.cell(row=row_index, column=1, value="Notes")
+    ws.cell(row=row_index, column=1).font = Font(bold=True)
+    ws.cell(row=row_index, column=2, value=invoice.get("notes", ""))
+    ws.merge_cells(start_row=row_index, start_column=2, end_row=row_index, end_column=5)
+    ws.cell(row=row_index + 2, column=1, value="This is a system-generated draft invoice/receipt record. Replace with tax-advisor approved templates before public statutory invoicing.")
+    ws.merge_cells(start_row=row_index + 2, start_column=1, end_row=row_index + 2, end_column=5)
+
+    widths = {"A": 28, "B": 28, "C": 14, "D": 18, "E": 18}
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+def render_invoice_panel(workspace: str, subscription: Dict[str, Any]) -> None:
+    st.markdown("### Invoices and receipts")
+    st.caption("Generate downloadable draft invoice/receipt records for subscription payments. Live statutory invoicing still needs your payment gateway and tax-advisor approved template.")
+    role = current_role()
+    can_generate = role in {"Platform Owner", "Workspace Owner", "Billing Admin"}
+    plan = plan_record(subscription.get("plan", "Trial"))
+    default_amount = float(subscription.get("base_amount") or plan.get("monthly") or 0)
+    user = current_user() or {}
+    with st.form("invoice_generation_form", enter_to_submit=False):
+        c1, c2, c3 = st.columns(3)
+        invoice_workspace = c1.text_input("Workspace", value=workspace, disabled=not is_owner())
+        customer_email = c2.text_input("Customer email", value=safe_text(user.get("email")))
+        invoice_plan = c3.selectbox(
+            "Plan",
+            [item["name"] for item in PLAN_CATALOG],
+            index=[item["name"] for item in PLAN_CATALOG].index(plan["name"]) if plan["name"] in [item["name"] for item in PLAN_CATALOG] else 0,
+        )
+        c4, c5, c6 = st.columns(3)
+        invoice_amount = c4.number_input("Total amount", min_value=0.0, value=default_amount, step=100.0)
+        invoice_currency = c5.text_input("Currency", value=safe_text(subscription.get("currency") or plan.get("currency", "INR")))
+        customer_gstin = c6.text_input("Customer GSTIN / tax ID", value="")
+        billing_period = st.text_input("Billing period", value=datetime.now(local_timezone()).strftime("%B %Y"))
+        notes = st.text_area("Invoice notes", height=80, value="Subscription payment recorded for ErrorSweep SaaS access.")
+        create_invoice = st.form_submit_button("Generate invoice record", use_container_width=True, disabled=not can_generate)
+    if create_invoice:
+        if not safe_text(customer_email):
+            st.error("Customer email is required for an invoice record.")
+            return
+        invoice = create_invoice_record(
+            invoice_workspace,
+            customer_email,
+            invoice_plan,
+            invoice_amount,
+            currency=invoice_currency,
+            customer_gstin=customer_gstin,
+            billing_period=billing_period,
+            notes=notes,
+        )
+        st.success(f"Invoice generated: {invoice['invoice_number']}")
+
+    invoice_rows = [
+        item for item in st.session_state.get("invoices", [])
+        if safe_text(item.get("workspace")) == workspace or is_owner()
+    ]
+    if invoice_rows:
+        metrics([
+            ("Invoices", len(invoice_rows), "records"),
+            ("Draft total", format_money(sum(money_value(item.get("total")) for item in invoice_rows), invoice_rows[0].get("currency", "INR"), decimals=True), "tracked"),
+            ("Tax total", format_money(sum(money_value(item.get("tax_amount")) for item in invoice_rows), invoice_rows[0].get("currency", "INR"), decimals=True), "estimated"),
+            ("Tax rate", f"{default_tax_rate_percent():.0f}%", "default"),
+        ])
+        display_rows = []
+        for item in invoice_rows[:100]:
+            display_rows.append({
+                "invoice_number": item.get("invoice_number", ""),
+                "workspace": item.get("workspace", ""),
+                "customer_email": item.get("customer_email", ""),
+                "plan": item.get("plan", ""),
+                "billing_period": item.get("billing_period", ""),
+                "subtotal": item.get("subtotal", ""),
+                "tax_amount": item.get("tax_amount", ""),
+                "total": item.get("total", ""),
+                "status": item.get("status", ""),
+                "created_at": item.get("created_at", ""),
+            })
+        st.dataframe(pd.DataFrame(display_records(display_rows)), use_container_width=True, hide_index=True)
+        selected_label = st.selectbox(
+            "Download invoice",
+            [f"{safe_text(item.get('invoice_number'))} | {safe_text(item.get('workspace'))} | {format_money(item.get('total'), item.get('currency', 'INR'), decimals=True)}" for item in invoice_rows],
+        )
+        selected_number = selected_label.split("|", 1)[0].strip()
+        selected_invoice = next((item for item in invoice_rows if safe_text(item.get("invoice_number")) == selected_number), invoice_rows[0])
+        st.download_button(
+            "Download invoice workbook",
+            build_invoice_workbook(selected_invoice),
+            file_name=f"{safe_text(selected_invoice.get('invoice_number', 'errorsweep_invoice')).replace('/', '-')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        st.download_button(
+            "Download invoice records CSV",
+            rows_to_csv(display_records(invoice_rows)),
+            file_name="errorsweep_invoice_records.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    else:
+        st.info("No invoice records yet.")
+
+
 def configured_trial_days() -> int:
     try:
         return max(1, int(secret("ERRORSWEEP_TRIAL_DAYS", safe_text(plan_record("Trial").get("trial_days", 14)))))
@@ -4342,8 +9428,259 @@ def billing_provider_ready(provider: Optional[str] = None) -> bool:
     return False
 
 
+def billing_live_checkout_enabled() -> bool:
+    return safe_text(secret("ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT", "")).lower() in {"1", "true", "yes", "on"}
+
+
+def provider_plan_reference(provider: str, plan_name: str) -> str:
+    provider = safe_text(provider).lower()
+    slug = plan_env_slug(plan_name)
+    if provider == "stripe":
+        keys = (
+            f"ERRORSWEEP_STRIPE_PRICE_ID_{slug}",
+            f"STRIPE_PRICE_ID_{slug}",
+            "ERRORSWEEP_STRIPE_PRICE_ID",
+            "STRIPE_PRICE_ID",
+        )
+    elif provider == "razorpay":
+        keys = (
+            f"ERRORSWEEP_RAZORPAY_PLAN_ID_{slug}",
+            f"RAZORPAY_PLAN_ID_{slug}",
+            "ERRORSWEEP_RAZORPAY_PLAN_ID",
+            "RAZORPAY_PLAN_ID",
+        )
+    else:
+        keys = ()
+    for key in keys:
+        value = secret(key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def billing_return_url(kind: str, checkout_id: str = "", plan_name: str = "") -> str:
+    key = "ERRORSWEEP_BILLING_SUCCESS_URL" if kind == "success" else "ERRORSWEEP_BILLING_CANCEL_URL"
+    configured = secret(key, "").strip()
+    if configured:
+        return configured
+    base = secret("ERRORSWEEP_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    page = "billing_success" if kind == "success" else "billing_cancel"
+    query = f"?public={page}&checkout_id={quote(safe_text(checkout_id))}&plan={quote(safe_text(plan_name))}"
+    return f"{base}/{query}" if base else query
+
+
+def build_provider_checkout_request(
+    checkout_id: str,
+    provider: str,
+    plan: Dict[str, Any],
+    post_plan: Optional[Dict[str, Any]],
+    workspace: str,
+    email: str,
+    cycle: str,
+    amount: float,
+    mandate_amount: float,
+    trial_days: int,
+    trial_ends_at: str,
+) -> Dict[str, Any]:
+    provider = safe_text(provider).lower()
+    subscription_plan = post_plan or plan
+    subscription_plan_name = safe_text(subscription_plan.get("name"))
+    reference_id = provider_plan_reference(provider, subscription_plan_name)
+    missing: List[str] = []
+    if not billing_provider_ready(provider):
+        missing.append(f"{provider} credentials")
+    if not reference_id:
+        missing.append("provider plan/price id")
+
+    if provider == "stripe":
+        payload = {
+            "mode": "subscription",
+            "client_reference_id": checkout_id,
+            "customer_email": safe_text(email),
+            "success_url": billing_return_url("success", checkout_id, subscription_plan_name),
+            "cancel_url": billing_return_url("cancel", checkout_id, subscription_plan_name),
+            "line_items[0][price]": reference_id,
+            "line_items[0][quantity]": "1",
+            "metadata[workspace]": workspace,
+            "metadata[checkout_id]": checkout_id,
+            "metadata[plan]": safe_text(plan.get("name")),
+            "metadata[post_trial_plan]": subscription_plan_name if post_plan else "",
+            "subscription_data[metadata][workspace]": workspace,
+            "subscription_data[metadata][checkout_id]": checkout_id,
+            "subscription_data[metadata][plan]": subscription_plan_name,
+        }
+        if trial_days:
+            payload["subscription_data[trial_period_days]"] = str(trial_days)
+        return {
+            "provider": "stripe",
+            "ready": not missing,
+            "missing": missing,
+            "method": "POST",
+            "endpoint": "https://api.stripe.com/v1/checkout/sessions",
+            "content_type": "application/x-www-form-urlencoded",
+            "auth": "Bearer STRIPE_SECRET_KEY",
+            "payload": payload,
+            "expected_url_field": "url",
+            "expected_id_field": "id",
+        }
+
+    if provider == "razorpay":
+        try:
+            total_count = max(1, int(float(secret("ERRORSWEEP_RAZORPAY_TOTAL_COUNT", "120") or 120)))
+        except Exception:
+            total_count = 120
+        start_at = ""
+        if trial_days:
+            try:
+                start_at = str(int(datetime.fromisoformat(trial_ends_at.replace("Z", "+00:00")).timestamp()))
+            except Exception:
+                start_at = str(int(time.time() + trial_days * 86400))
+        payload = {
+            "plan_id": reference_id,
+            "total_count": total_count,
+            "quantity": 1,
+            "customer_notify": 1,
+            "notes": {
+                "workspace": workspace,
+                "checkout_id": checkout_id,
+                "plan": safe_text(plan.get("name")),
+                "post_trial_plan": subscription_plan_name if post_plan else "",
+                "monthly_mandate_amount": str(mandate_amount),
+                "currency": safe_text(subscription_plan.get("currency") or "INR"),
+            },
+        }
+        if start_at:
+            payload["start_at"] = int(start_at)
+        return {
+            "provider": "razorpay",
+            "ready": not missing,
+            "missing": missing,
+            "method": "POST",
+            "endpoint": "https://api.razorpay.com/v1/subscriptions",
+            "content_type": "application/json",
+            "auth": "Basic RAZORPAY_KEY_ID:RAZORPAY_KEY_SECRET",
+            "payload": payload,
+            "expected_url_field": "short_url",
+            "expected_id_field": "id",
+        }
+
+    return {
+        "provider": provider or "manual",
+        "ready": False,
+        "missing": ["supported provider"],
+        "method": "",
+        "endpoint": "",
+        "content_type": "",
+        "auth": "",
+        "payload": {},
+        "expected_url_field": "",
+        "expected_id_field": "",
+    }
+
+
+def provider_checkout_configured(plan_name: str, post_trial_plan: str = "") -> bool:
+    provider = billing_provider_label()
+    if provider not in {"stripe", "razorpay"} or not billing_provider_ready(provider):
+        return False
+    target_plan = post_trial_plan if safe_text(plan_name).lower() == "trial" and post_trial_plan else plan_name
+    return bool(provider_plan_reference(provider, target_plan))
+
+
+def billing_provider_checkout_bridge_ready(provider: Optional[str] = None) -> bool:
+    provider = safe_text(provider or billing_provider_label()).lower()
+    if provider not in {"stripe", "razorpay"} or not billing_provider_ready(provider):
+        return False
+    return any(provider_plan_reference(provider, plan_name) for plan_name in ("Pro", "Agency", "Enterprise"))
+
+
+def provider_checkout_request_curl(request_config: Dict[str, Any]) -> str:
+    provider = safe_text(request_config.get("provider"))
+    endpoint = safe_text(request_config.get("endpoint"))
+    if not endpoint:
+        return ""
+    if provider == "stripe":
+        lines = [
+            f"curl {endpoint} \\",
+            "  -u \"$STRIPE_SECRET_KEY:\" \\",
+        ]
+        payload = request_config.get("payload") if isinstance(request_config.get("payload"), dict) else {}
+        for key, value in payload.items():
+            lines.append(f"  -d \"{safe_text(key)}={safe_text(value)}\" \\")
+        lines[-1] = lines[-1].rstrip(" \\")
+        return "\n".join(lines)
+    if provider == "razorpay":
+        payload = json.dumps(request_config.get("payload") or {}, indent=2)
+        return (
+            f"curl -X POST {endpoint} \\\n"
+            "  -u \"$RAZORPAY_KEY_ID:$RAZORPAY_KEY_SECRET\" \\\n"
+            "  -H \"Content-Type: application/json\" \\\n"
+            f"  -d '{payload}'"
+        )
+    return ""
+
+
+def create_live_provider_checkout(request_config: Dict[str, Any]) -> Dict[str, str]:
+    provider = safe_text(request_config.get("provider")).lower()
+    if not request_config.get("ready"):
+        return {"status": "not_ready", "checkout_url": "", "provider_session_id": "", "error": ", ".join(request_config.get("missing") or [])}
+    if not billing_live_checkout_enabled():
+        return {"status": "payload_ready", "checkout_url": "", "provider_session_id": "", "error": ""}
+    try:
+        if provider == "stripe":
+            response = requests.post(
+                request_config["endpoint"],
+                data=request_config.get("payload") or {},
+                auth=(secret("STRIPE_SECRET_KEY", ""), ""),
+                timeout=25,
+            )
+        elif provider == "razorpay":
+            response = requests.post(
+                request_config["endpoint"],
+                json=request_config.get("payload") or {},
+                auth=(secret("RAZORPAY_KEY_ID", ""), secret("RAZORPAY_KEY_SECRET", "")),
+                timeout=25,
+            )
+        else:
+            return {"status": "unsupported", "checkout_url": "", "provider_session_id": "", "error": "Unsupported provider"}
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text[:1000]}
+        url_field = safe_text(request_config.get("expected_url_field"))
+        id_field = safe_text(request_config.get("expected_id_field"))
+        if response.status_code >= 400:
+            return {
+                "status": "provider_error",
+                "checkout_url": "",
+                "provider_session_id": safe_text(data.get(id_field)),
+                "error": safe_text(data.get("error") or data.get("message") or data)[:500],
+            }
+        return {
+            "status": "provider_created",
+            "checkout_url": safe_text(data.get(url_field)),
+            "provider_session_id": safe_text(data.get(id_field)),
+            "error": "",
+        }
+    except Exception as exc:
+        LOGGER.warning("Live provider checkout creation failed: %s", exc)
+        return {"status": "provider_exception", "checkout_url": "", "provider_session_id": "", "error": safe_text(exc)[:500]}
+
+
 def workspace_subscription(workspace: str = "") -> Dict[str, Any]:
     workspace = safe_text(workspace or (current_user() or {}).get("workspace") or "Demo Workspace")
+    if safe_text(workspace).lower() == UNLIMITED_ACCESS_WORKSPACE.lower():
+        return {
+            "workspace": UNLIMITED_ACCESS_WORKSPACE,
+            "plan": "Unlimited",
+            "status": "Active",
+            "billing_cycle": "internal",
+            "currency": "INR",
+            "base_amount": 0,
+            "included_segments": 1_000_000_000,
+            "included_characters": 1_000_000_000_000,
+            "included_seats": 1_000_000,
+            "provider": "internal",
+        }
     subscriptions = [
         item for item in st.session_state.get("subscriptions", [])
         if safe_text(item.get("workspace")) == workspace
@@ -4496,6 +9833,9 @@ def check_workspace_usage_allowance(rows: List[Dict[str, Any]], purpose: str, wo
         "segment_limit": allowance["segments"],
         "character_limit": allowance["characters"],
     }
+    if safe_text(workspace).lower() == UNLIMITED_ACCESS_WORKSPACE.lower() or plan_name.lower() == "unlimited":
+        details["unlimited"] = True
+        return True, "", details
     if status in {"cancelled", "canceled", "expired", "past_due", "unpaid", "inactive"}:
         return False, f"{purpose} is blocked because the {workspace} subscription is {subscription.get('status', status)}. Activate or renew the plan from Billing.", details
 
@@ -4551,16 +9891,41 @@ def create_checkout_intent(
     trial_ends_at = (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat() if is_trial else ""
     provider = billing_provider_label()
     checkout_base = secret("ERRORSWEEP_CHECKOUT_BASE_URL", "").strip().rstrip("/")
+    checkout_id = uuid.uuid4().hex
     configured_payment_link = sanitize_payment_link(payment_link) or sanitize_payment_link(
         monthly_mandate_link_for_plan(post_plan["name"], cycle) if is_trial and post_plan else monthly_mandate_link_for_plan(plan["name"], cycle)
     )
-    checkout_url = configured_payment_link or (f"{checkout_base}?plan={quote(plan['name'])}&cycle={quote(cycle)}&workspace={quote(workspace)}" if checkout_base else "")
+    provider_request = build_provider_checkout_request(
+        checkout_id,
+        provider,
+        plan,
+        post_plan,
+        workspace,
+        user.get("email", ""),
+        cycle,
+        amount,
+        mandate_amount,
+        trial_days,
+        trial_ends_at,
+    )
+    provider_result = create_live_provider_checkout(provider_request) if (not configured_payment_link and provider_request.get("ready")) else {
+        "status": "not_ready",
+        "checkout_url": "",
+        "provider_session_id": "",
+        "error": "" if configured_payment_link else ", ".join(provider_request.get("missing") or []),
+    }
+    provider_checkout_url = sanitize_payment_link(provider_result.get("checkout_url", ""))
+    checkout_url = configured_payment_link or provider_checkout_url or (f"{checkout_base}?plan={quote(plan['name'])}&cycle={quote(cycle)}&workspace={quote(workspace)}" if checkout_base else "")
     if is_trial:
-        status = "trial_mandate_pending" if checkout_url else "trial_mandate_link_missing"
+        status = "trial_mandate_pending" if checkout_url else "provider_checkout_ready" if provider_request.get("ready") else "trial_mandate_link_missing"
     else:
-        status = "monthly_mandate_pending" if checkout_url else "monthly_mandate_link_missing"
+        status = "monthly_mandate_pending" if checkout_url else "provider_checkout_ready" if provider_request.get("ready") else "monthly_mandate_link_missing"
+    if provider_result.get("status") == "provider_created" and checkout_url:
+        status = "provider_checkout_created"
+    elif provider_result.get("status") in {"provider_error", "provider_exception"}:
+        status = "provider_checkout_error"
     intent = persist_saas_record("checkout_sessions", {
-        "id": uuid.uuid4().hex,
+        "id": checkout_id,
         "workspace": workspace,
         "user_email": user.get("email", ""),
         "plan": plan["name"],
@@ -4570,7 +9935,7 @@ def create_checkout_intent(
         "provider": provider,
         "status": status,
         "checkout_url": checkout_url,
-        "provider_session_id": "",
+        "provider_session_id": safe_text(provider_result.get("provider_session_id")),
         "metadata_json": {
             "included_segments": plan["segments"],
             "included_characters": plan["characters"],
@@ -4586,6 +9951,13 @@ def create_checkout_intent(
             "monthly_mandate_amount": mandate_amount,
             "post_trial_monthly_amount": mandate_amount if is_trial else 0,
             "post_trial_currency": (post_plan or plan)["currency"],
+            "provider_checkout_status": safe_text(provider_result.get("status")),
+            "provider_checkout_error": safe_text(provider_result.get("error")),
+            "provider_checkout_auto_create": billing_live_checkout_enabled(),
+            "provider_checkout_ready": bool(provider_request.get("ready")),
+            "provider_checkout_missing": provider_request.get("missing") or [],
+            "provider_checkout_request": provider_request,
+            "provider_checkout_curl": provider_checkout_request_curl(provider_request),
         },
         "created_at": now_stamp(),
         "updated_at": now_stamp(),
@@ -5021,20 +10393,27 @@ def launch_readiness_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
     email_ready = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local"
     billing_provider = billing_provider_label()
     billing_webhook_ready = bool(secret("STRIPE_WEBHOOK_SECRET", "") or secret("RAZORPAY_WEBHOOK_SECRET", "") or secret("ERRORSWEEP_BILLING_WEBHOOK_SECRET", ""))
+    billing_webhook_receiver_ready = secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL")
     storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "configured": False, "mode": "local_fallback"}
     async_health = async_backend_status() if async_backend_status is not None else {"provider": "local", "ready": False, "mode": "local_inline"}
+    tenant_findings = tenant_isolation_findings()
+    high_tenant_findings = sum(1 for row in tenant_findings if row.get("severity") == "High")
+    medium_tenant_findings = sum(1 for row in tenant_findings if row.get("severity") == "Medium")
+    subprocessor_summary = subprocessor_launch_summary()
+    sso_summary = enterprise_sso_summary()
+    provider_checkout_ready = billing_provider_checkout_bridge_ready(billing_provider)
     rows = [
         {
             "Requirement": "Billing & subscriptions",
-            "Current status": "Mandates + webhook events ready" if st.session_state.get("billing_events") else "Mandate checkout foundation available",
-            "Launch gate": "Ready to test provider" if billing_provider_ready(billing_provider) and billing_webhook_ready else "Needs live provider + webhook secret",
-            "Next action": "Set ERRORSWEEP_BILLING_PROVIDER, Stripe/Razorpay keys, monthly mandate links, and webhook secret; then test webhook reconciliation.",
+            "Current status": "Provider checkout + receiver/webhooks ready" if provider_checkout_ready and billing_webhook_ready and billing_webhook_receiver_ready else "Mandate checkout foundation available",
+            "Launch gate": "Ready to test provider" if provider_checkout_ready and billing_webhook_ready and billing_webhook_receiver_ready else "Needs checkout bridge + webhook receiver",
+            "Next action": "Set Stripe price IDs or Razorpay plan IDs, provider keys, webhook secret, deploy billing_webhook_receiver.py, set ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL, and test checkout plus webhook reconciliation.",
         },
         {
             "Requirement": "Async task queue",
             "Current status": f"{async_health.get('provider', 'local')} / {async_health.get('mode', 'local_inline')}",
-            "Launch gate": "External worker configured" if async_health.get("mode") == "external" and async_health.get("ready") else "Needs worker service",
-            "Next action": "Set ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL, then run QA/Pro jobs through the worker before high-volume public launch.",
+            "Launch gate": "External worker configured" if async_health.get("mode") == "external" and async_health.get("ready") and Path("async_workflow_processor.py").exists() else "Needs worker service",
+            "Next action": "Deploy async_task_worker.py plus async_workflow_processor.py, set ERRORSWEEP_ASYNC_WORKER_URL and ERRORSWEEP_ASYNC_WORKER_TOKEN, then run processor smoke tests and QA/Pro handoffs before high-volume public launch.",
         },
         {
             "Requirement": "Cloud object storage",
@@ -5044,27 +10423,45 @@ def launch_readiness_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
         },
         {
             "Requirement": "Authentication & onboarding",
-            "Current status": "Password hashing, email verification, and reset links ready",
-            "Launch gate": "Needs SSO provider" if not secret("ERRORSWEEP_ENTERPRISE_SSO_ENABLED") else "SSO flag configured",
-            "Next action": "Configure OAuth/SAML for enterprise tenants and test verification/reset delivery through the email provider.",
+            "Current status": f"Password auth ready; {sso_summary['ready']} ready SSO connection(s); handoff {'configured' if secret_is_configured('ERRORSWEEP_SSO_HANDOFF_SECRET') else 'pending'}",
+            "Launch gate": "SSO bridge ready" if sso_summary["ready"] and secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET") else "Needs SSO provider" if not sso_summary["total"] else "Needs SSO handoff",
+            "Next action": "Register workspace SSO metadata in Platform Settings, set ERRORSWEEP_SSO_HANDOFF_SECRET, and test the signed handoff route in staging.",
+        },
+        {
+            "Requirement": "Tenant isolation",
+            "Current status": f"{high_tenant_findings} high / {medium_tenant_findings} medium findings",
+            "Launch gate": "Ready" if high_tenant_findings == 0 else "Fix high-risk tenant findings",
+            "Next action": "Review Platform Settings tenant isolation diagnostics and resolve duplicate/missing workspace ownership before public multi-tenant launch.",
         },
         {
             "Requirement": "Legal & compliance",
-            "Current status": "Draft policy pages and consent banner ready",
+            "Current status": "Draft policy pages, legal version controls, and consent capture ready",
             "Launch gate": "Needs legal approval" if safe_text(secret("ERRORSWEEP_LEGAL_REVIEWED", "")).lower() not in {"1", "true", "yes"} else "Legal flag approved",
-            "Next action": "Replace draft Terms/Privacy/Security with lawyer-reviewed Terms, DPA, Cookie Notice, and privacy policy.",
+            "Next action": "Replace draft Terms/Privacy/Security/DPA with lawyer-reviewed Terms, DPA, Cookie Notice, and privacy policy.",
+        },
+        {
+            "Requirement": "Subprocessor register",
+            "Current status": f"{subprocessor_summary['active_external']} active external / {subprocessor_summary['blockers']} blockers",
+            "Launch gate": "Ready" if subprocessor_summary["blockers"] == 0 else "Needs processor approval",
+            "Next action": "Review active external data routes in Platform Settings and mark approval/DPA/customer notice status before public launch.",
         },
         {
             "Requirement": "CDN / WAF / SSL",
-            "Current status": "App security controls ready",
+            "Current status": "App-level throttles ready; external edge still required",
             "Launch gate": "Needs deployment edge" if not secret("ERRORSWEEP_WAF_PROVIDER") else "Edge provider configured",
             "Next action": "Deploy behind Cloudflare/AWS CloudFront or equivalent with HTTPS, rate limits, and WAF rules.",
         },
         {
             "Requirement": "Transactional email",
-            "Current status": f"Outbox + dispatch foundation ({email_provider})",
+            "Current status": f"Outbox + dispatch + templates ({email_provider})",
             "Launch gate": "Needs provider secrets/from address" if not email_ready else "Ready to send",
-            "Next action": "Configure Resend, SendGrid, or SMTP credentials and verify the sender domain.",
+            "Next action": "Configure Resend, SendGrid, or SMTP credentials, verify the sender domain, and send template test messages from Platform Settings.",
+        },
+        {
+            "Requirement": "Operational backups",
+            "Current status": "Manual JSON snapshots, selected restore, and scheduled worker path ready",
+            "Launch gate": "Scheduled backup ready" if secret_is_configured("ERRORSWEEP_BACKUP_PROVIDER") and safe_text(secret("ERRORSWEEP_BACKUP_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"} else "Needs scheduled backup worker",
+            "Next action": "Run operational_backup_worker.py with ERRORSWEEP_BACKUP_WORKER_ENABLED=true and a configured backup provider before public launch.",
         },
         {
             "Requirement": "Production persistence",
@@ -5072,8 +10469,552 @@ def launch_readiness_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
             "Launch gate": "Ready" if supabase_ready else "Needs Supabase schema/secrets",
             "Next action": "Run the Supabase release schema and configure SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.",
         },
+        {
+            "Requirement": "Production smoke test",
+            "Current status": "Standalone smoke-test runner available" if Path("production_smoke_test.py").exists() else "Smoke-test runner missing",
+            "Launch gate": "Run before deploy",
+            "Next action": "Run `python production_smoke_test.py --strict --markdown` in staging/CI after secrets are configured.",
+        },
     ]
     return rows
+
+
+def secret_is_configured(name: str) -> bool:
+    return bool(safe_text(secret(name, "")).strip())
+
+
+def any_secret_configured(names: List[str]) -> bool:
+    return any(secret_is_configured(name) for name in names)
+
+
+def deployment_pack_status() -> Dict[str, Any]:
+    required_files = [
+        "Dockerfile",
+        "docker-compose.production.yml",
+        "deploy/.env.production.example",
+        "deploy/README_DEPLOYMENT.md",
+        "deploy/release_check.py",
+    ]
+    required_services = [
+        "errorsweep-app:",
+        "errorsweep-async-receiver:",
+        "errorsweep-worker-supervisor:",
+        "errorsweep-billing-webhook:",
+    ]
+    present_files = [path for path in required_files if Path(path).exists()]
+    compose_path = Path("docker-compose.production.yml")
+    compose_text = ""
+    if compose_path.exists():
+        try:
+            compose_text = compose_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            compose_text = ""
+    present_services = [service for service in required_services if service in compose_text]
+    return {
+        "required_files": required_files,
+        "present_files": present_files,
+        "required_services": required_services,
+        "present_services": present_services,
+        "files_ready": len(present_files) == len(required_files),
+        "services_ready": len(present_services) == len(required_services),
+    }
+
+
+def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+    health = health or {}
+    storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "configured": False, "mode": "local_fallback"}
+    async_health = async_backend_status() if async_backend_status is not None else {"provider": "local", "ready": False, "mode": "local_inline"}
+    billing_provider = billing_provider_label()
+    email_provider = email_provider_label()
+    email_worker_enabled = safe_text(secret("ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    deployment_status = deployment_pack_status()
+    rows: List[Dict[str, str]] = []
+
+    def add(area: str, variable: str, configured: bool, required_when: str, notes: str) -> None:
+        rows.append({
+            "Area": area,
+            "Variable / option": variable,
+            "Status": "Configured" if configured else "Missing",
+            "Required when": required_when,
+            "Notes": notes,
+        })
+
+    add("Core", "ERRORSWEEP_ENV=production", is_production_mode(), "Public launch", "Enables production safety checks.")
+    add("Core", "ERRORSWEEP_SESSION_SECRET", secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET, "Public launch", "Use a long random value. Never use the dev default.")
+    add("Core", "ERRORSWEEP_PUBLIC_BASE_URL", secret_is_configured("ERRORSWEEP_PUBLIC_BASE_URL"), "Public links", "Used in verification/reset and outbound links.")
+    add("Persistence", "SUPABASE_URL", bool(health.get("supabase_configured")) or secret_is_configured("SUPABASE_URL"), "Public launch", "Production database endpoint.")
+    add("Persistence", "SUPABASE_ANON_KEY", secret_is_configured("SUPABASE_ANON_KEY"), "Public launch", "Client-safe Supabase anon key for Streamlit/deployment secret parity.")
+    add("Persistence", "SUPABASE_SERVICE_ROLE_KEY", secret_is_configured("SUPABASE_SERVICE_ROLE_KEY"), "Public launch", "Server-side key for SaaS records and storage.")
+    add("Storage", "ERRORSWEEP_OBJECT_STORAGE_PROVIDER", storage_health.get("provider") != "local" and storage_health.get("configured"), "Multi-instance public launch", "Use supabase, s3, or gcs.")
+    add("Storage", "SUPABASE_STORAGE_BUCKET / S3_BUCKET / GCS_BUCKET", bool(storage_health.get("configured")) and storage_health.get("provider") != "local", "Uploaded files/media", "Stores job attachments, previews, and generated assets.")
+    add("Async", "ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL", async_health.get("mode") == "external" and async_health.get("ready"), "Heavy QA/Pro jobs", "Moves long jobs outside Streamlit requests.")
+    add("Async", "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true", safe_text(secret("ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED", "")).lower() in {"1", "true", "yes", "on"}, "Heavy QA/Pro jobs", "Run async_task_worker.py as the HTTP receiver when using ERRORSWEEP_ASYNC_WORKER_URL.")
+    add("Async", "async_workflow_processor.py", Path("async_workflow_processor.py").exists(), "Heavy QA/Pro jobs", "Processes worker-spooled QA/Pro payloads and writes result files outside Streamlit.")
+    add("Async", "ERRORSWEEP_ASYNC_PROCESSOR_ENABLED=true", safe_text(secret("ERRORSWEEP_ASYNC_PROCESSOR_ENABLED", "")).lower() in {"1", "true", "yes", "on"}, "Heavy QA/Pro jobs", "Marks the deployed background processor loop as enabled for launch checks.")
+    add("Async", "ERRORSWEEP_ASYNC_PROCESS_ON_ACCEPT or processor schedule", safe_text(secret("ERRORSWEEP_ASYNC_PROCESS_ON_ACCEPT", "")).lower() in {"1", "true", "yes", "on"} or Path("async_workflow_processor.py").exists(), "Heavy QA/Pro jobs", "Run async_workflow_processor.py --loop, --once, or enable controlled process-on-accept for small deployments.")
+    add("Async", "ERRORSWEEP_ASYNC_WORKER_TOKEN", secret_is_configured("ERRORSWEEP_ASYNC_WORKER_TOKEN"), "HTTP worker", "Protects worker handoff requests.")
+    add("Workers", "worker_supervisor.py", Path("worker_supervisor.py").exists(), "Production worker operations", "Starts and monitors async processor, email dispatch, backup, and optional billing webhook receiver.")
+    add("Workers", "ERRORSWEEP_WORKER_SUPERVISOR_ENABLED=true", safe_text(secret("ERRORSWEEP_WORKER_SUPERVISOR_ENABLED", "")).lower() in {"1", "true", "yes", "on"}, "Production worker operations", "Run worker_supervisor.py as the managed background service in production.")
+    add("Billing", "ERRORSWEEP_BILLING_PROVIDER", billing_provider in {"stripe", "razorpay"}, "Paid plans", "Set stripe or razorpay.")
+    add("Billing", "Stripe or Razorpay API keys", billing_provider_ready(billing_provider), "Paid plans", "Use STRIPE_SECRET_KEY or RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET.")
+    add("Billing", "STRIPE_PRICE_ID_* / RAZORPAY_PLAN_ID_*", billing_provider_checkout_bridge_ready(billing_provider), "Provider checkout", "Required for ErrorSweep to prepare subscription checkout sessions from plan selection.")
+    add("Billing", "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT", billing_live_checkout_enabled(), "Live checkout API", "When true, ErrorSweep calls Stripe/Razorpay to create the checkout/subscription URL. Leave false for payload-only testing.")
+    add("Billing", "STRIPE_WEBHOOK_SECRET / RAZORPAY_WEBHOOK_SECRET", any_secret_configured(["STRIPE_WEBHOOK_SECRET", "RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"]), "Billing reconciliation", "Required before applying live webhook events.")
+    add("Billing", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"), "Live billing webhooks", "Public HTTPS endpoint for billing_webhook_receiver.py, for example https://billing.your-domain.com/webhooks/billing/razorpay.")
+    add("Billing", "ERRORSWEEP_MONTHLY_MANDATE_LINK_*", any_secret_configured(["ERRORSWEEP_MONTHLY_MANDATE_LINK", "ERRORSWEEP_CARD_UPI_MANDATE_LINK", "ERRORSWEEP_TRIAL_MANDATE_LINK"]), "Mandate checkout", "Configure plan-specific Pro/Agency/Enterprise links where possible.")
+    add("Email", "ERRORSWEEP_EMAIL_PROVIDER", email_provider in {"resend", "sendgrid", "smtp"}, "Verification/reset/invites", "Use resend, sendgrid, or smtp.")
+    add("Email", "ERRORSWEEP_EMAIL_HTML_ENABLED", email_templates_enabled() and render_transactional_email is not None, "Transactional email", "Sends branded HTML with plain-text fallback for Resend, SendGrid, and SMTP.")
+    add("Email", "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true", email_worker_enabled, "Public launch", "Run email_dispatch_worker.py so queued notifications send without opening Platform Settings.")
+    add("Email", "Platform Settings: email_deliverability_last_test", email_deliverability_test_is_recent(), "Public launch", "Send a test message from Platform Settings after provider credentials and sender domain are configured.")
+    add("Email", "Provider API key or SMTP credentials", any_secret_configured(["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY", "SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY", "SMTP_HOST", "ERRORSWEEP_SMTP_HOST"]), "Transactional email", "Needed for live delivery.")
+    add("Email", "ERRORSWEEP_EMAIL_FROM / verified sender", email_from_address() != "no-reply@errorsweep.local", "Transactional email", "Use a verified domain address.")
+    sso_summary = enterprise_sso_summary()
+    add("SSO", "Platform Settings: enterprise_sso_connections", sso_summary["ready"] > 0, "Enterprise launch", "At least one enabled workspace connection with domain and IdP metadata.")
+    add("SSO", "ERRORSWEEP_ENTERPRISE_SSO_ENABLED", secret_is_configured("ERRORSWEEP_ENTERPRISE_SSO_ENABLED") or sso_summary["enabled"] > 0, "Enterprise launch", "Environment flag or enabled Platform Settings connection.")
+    add("SSO", "ERRORSWEEP_SSO_ISSUER_URL / METADATA_URL / CLIENT_ID", sso_summary["metadata"] > 0 or any_secret_configured(["ERRORSWEEP_SSO_ISSUER_URL", "ERRORSWEEP_SSO_METADATA_URL", "ERRORSWEEP_SSO_CLIENT_ID", "ERRORSWEEP_SSO_ENTITY_ID"]), "Enterprise launch", "Public IdP metadata for OIDC/SAML. Keep client secrets outside this register.")
+    add("SSO", "ERRORSWEEP_SSO_HANDOFF_SECRET", secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET"), "Live SSO handoff", "Shared secret used by the trusted IdP/broker to sign short-lived ErrorSweep handoff tokens.")
+    add("SSO", "ERRORSWEEP_SSO_LOGIN_URL / connection login_url", sso_summary["login_urls"] > 0 or secret_is_configured("ERRORSWEEP_SSO_LOGIN_URL"), "Login button routing", "Provider or broker URL shown on the public login surface.")
+    add("Legal", "ERRORSWEEP_LEGAL_REVIEWED=true", safe_text(secret("ERRORSWEEP_LEGAL_REVIEWED", "")).lower() in {"1", "true", "yes"}, "Public launch", "Set only after replacing draft policies with approved docs.")
+    add("Legal", "Platform Settings: subprocessor_register", subprocessor_launch_summary().get("blockers", 0) == 0, "Public launch", "Approve active external processors and DPA/customer notice status.")
+    add("Security", "Platform Settings: abuse_protection", all(value > 0 for key, value in abuse_protection_settings().items() if key != "window_minutes"), "Public launch", "App-level throttles for auth, billing, support, and privacy workflows.")
+    add("Edge", "ERRORSWEEP_WAF_PROVIDER", secret_is_configured("ERRORSWEEP_WAF_PROVIDER"), "Public launch", "Cloudflare, CloudFront, or equivalent HTTPS/WAF/rate-limit layer.")
+    add("Release", "Dockerfile", Path("Dockerfile").exists(), "Container deploy", "Builds the Streamlit app image with production health checks.")
+    add("Release", "docker-compose.production.yml", Path("docker-compose.production.yml").exists(), "Container deploy", "Runs app, async receiver, worker supervisor, billing webhook receiver, and optional Redis.")
+    add("Release", "deploy/.env.production.example", Path("deploy/.env.production.example").exists(), "Container deploy", "Copy to deploy/.env.production and fill real values outside git.")
+    add("Release", "deploy/release_check.py", Path("deploy/release_check.py").exists(), "Every deployment", "Runs offline release checks for packaging, compose wiring, ignored secrets, env template coverage, and Python syntax.")
+    add("Release", "deployment service wiring", bool(deployment_status["services_ready"]), "Container deploy", "Compose file includes app, async receiver, worker supervisor, and billing webhook services.")
+    add("Release", "production_smoke_test.py --strict", Path("production_smoke_test.py").exists(), "Every deployment", "Run the standalone smoke-test runner in CI/CD or staging before release.")
+    backup_worker_enabled = safe_text(secret("ERRORSWEEP_BACKUP_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    add("Backup", "ERRORSWEEP_BACKUP_PROVIDER", secret_is_configured("ERRORSWEEP_BACKUP_PROVIDER"), "Public launch", "Track the scheduled database/storage backup provider in production.")
+    add("Backup", "ERRORSWEEP_BACKUP_WORKER_ENABLED=true", backup_worker_enabled, "Public launch", "Run operational_backup_worker.py on a schedule for redacted SaaS snapshots.")
+    managed_ai_enabled = safe_text(secret("ERRORSWEEP_MANAGED_AI_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    managed_ai_ready = managed_ai_enabled and secret_is_configured("ERRORSWEEP_MANAGED_AI_BASE_URL")
+    add("AI", "OPENAI_API_KEY or managed AI endpoint", secret_is_configured("OPENAI_API_KEY") or managed_ai_ready, "Production AI fallback", "BYO user keys are preferred, but public launch needs a platform fallback or live managed OpenAI-compatible/vLLM endpoint.")
+    add("AI", "GEMINI_API_KEY", secret_is_configured("GEMINI_API_KEY"), "Optional platform route", "Configure if Gemini OpenAI-compatible routing will be offered as a platform-managed option.")
+    add("MT", "OPUS_MT_ENDPOINT", secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "No-key MT", "Lightweight fallback for tested European language pairs.")
+    add("MT", "INDICTRANS2_ENDPOINT", secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Indian-language no-key MT", "Required for Indian-language built-in MT coverage.")
+    add("MT", "MADLAD_ENDPOINT", secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Broad no-key MT fallback", "Use when production GPU capacity is approved.")
+    add("Feature flags", "public_registration", feature_flag("public_registration"), "Trial signup", "Controls public workspace creation.")
+    add("Feature flags", "billing_collection", feature_flag("billing_collection"), "Paid plans", "Controls checkout/mandate creation.")
+    add("Feature flags", "self_hosted_engines", feature_flag("self_hosted_engines"), "No-key MT", "Controls built-in MT routing when users do not provide API keys.")
+    return rows
+
+
+def production_env_template() -> str:
+    return dedent(
+        """
+        # ErrorSweep production launch template
+        # Fill values in your deployment provider or Streamlit secrets. Do not commit real secrets.
+
+        ERRORSWEEP_ENV=production
+        ERRORSWEEP_PUBLIC_BASE_URL=https://app.your-domain.com
+        ERRORSWEEP_SESSION_SECRET=replace-with-a-long-random-secret
+
+        # Supabase persistence
+        SUPABASE_URL=https://your-project.supabase.co
+        SUPABASE_ANON_KEY=replace-with-anon-key
+        SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key
+
+        # Platform AI fallback: BYO user keys are preferred at runtime
+        OPENAI_API_KEY=
+        ERRORSWEEP_OPENAI_DEFAULT_MODEL=gpt-4o-mini
+        GEMINI_API_KEY=
+        ERRORSWEEP_MANAGED_AI_ENABLED=false
+        ERRORSWEEP_MANAGED_AI_BASE_URL=
+        ERRORSWEEP_MANAGED_AI_API_KEY=
+        ERRORSWEEP_MANAGED_AI_MODEL=errorsweep-managed
+
+        # Object storage: choose one provider
+        ERRORSWEEP_OBJECT_STORAGE_PROVIDER=supabase
+        SUPABASE_STORAGE_BUCKET=errorsweep-files
+        # S3_BUCKET=
+        # AWS_REGION=ap-south-1
+        # S3_ENDPOINT_URL=
+        # GCS_BUCKET=
+
+        # Async workers: choose HTTP worker or Redis/Celery
+        ERRORSWEEP_ASYNC_WORKER_URL=https://worker.your-domain.com/tasks
+        ERRORSWEEP_ASYNC_WORKER_TOKEN=replace-with-worker-token
+        ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true
+        ERRORSWEEP_ASYNC_WORKER_REQUIRE_TOKEN=true
+        ERRORSWEEP_ASYNC_WORKER_HOST=0.0.0.0
+        ERRORSWEEP_ASYNC_WORKER_PORT=8300
+        ERRORSWEEP_ASYNC_WORKER_DIR=
+        ERRORSWEEP_ASYNC_PROCESSOR_ENABLED=true
+        ERRORSWEEP_ASYNC_PROCESS_ON_ACCEPT=false
+        ERRORSWEEP_ASYNC_PROCESSOR_INTERVAL=10
+        ERRORSWEEP_ASYNC_RESULT_DIR=
+        # REDIS_URL=
+        # CELERY_BROKER_URL=
+
+        # Worker supervisor: one managed process can run enabled background workers
+        ERRORSWEEP_WORKER_SUPERVISOR_ENABLED=true
+        ERRORSWEEP_SUPERVISOR_ENABLE_ASYNC_PROCESSOR=true
+        ERRORSWEEP_SUPERVISOR_ENABLE_EMAIL_WORKER=true
+        ERRORSWEEP_SUPERVISOR_ENABLE_BACKUP_WORKER=true
+        ERRORSWEEP_SUPERVISOR_ENABLE_BILLING_RECEIVER=false
+        ERRORSWEEP_SUPERVISOR_POLL_SECONDS=10
+        ERRORSWEEP_SUPERVISOR_LOG_DIR=
+        ERRORSWEEP_SUPERVISOR_STATUS_FILE=
+
+        # Billing: choose stripe or razorpay
+        ERRORSWEEP_BILLING_PROVIDER=razorpay
+        RAZORPAY_KEY_ID=
+        RAZORPAY_KEY_SECRET=
+        RAZORPAY_WEBHOOK_SECRET=
+        ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL=https://billing.your-domain.com/webhooks/billing/razorpay
+        ERRORSWEEP_WEBHOOK_APPLY_UPDATES=true
+        RAZORPAY_PLAN_ID_PRO=
+        RAZORPAY_PLAN_ID_AGENCY=
+        RAZORPAY_PLAN_ID_ENTERPRISE=
+        # STRIPE_SECRET_KEY=
+        # STRIPE_WEBHOOK_SECRET=
+        # STRIPE_PRICE_ID_PRO=
+        # STRIPE_PRICE_ID_AGENCY=
+        # STRIPE_PRICE_ID_ENTERPRISE=
+        ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=false
+        ERRORSWEEP_MONTHLY_MANDATE_LINK_PRO=
+        ERRORSWEEP_MONTHLY_MANDATE_LINK_AGENCY=
+        ERRORSWEEP_MONTHLY_MANDATE_LINK_ENTERPRISE=
+        ERRORSWEEP_TRIAL_MANDATE_LINK=
+
+        # Transactional email: choose resend, sendgrid, or smtp
+        ERRORSWEEP_EMAIL_PROVIDER=resend
+        ERRORSWEEP_EMAIL_HTML_ENABLED=true
+        ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true
+        ERRORSWEEP_EMAIL_WORKER_INTERVAL_SECONDS=60
+        ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT=25
+        ERRORSWEEP_EMAIL_FROM=ErrorSweep <no-reply@your-domain.com>
+        RESEND_API_KEY=
+        # SENDGRID_API_KEY=
+        # SMTP_HOST=
+        # SMTP_PORT=587
+        # SMTP_USER=
+        # SMTP_PASSWORD=
+        # SMTP_TLS=true
+
+        # Enterprise and legal launch flags
+        ERRORSWEEP_ENTERPRISE_SSO_ENABLED=false
+        ERRORSWEEP_SSO_PROVIDER=okta
+        ERRORSWEEP_SSO_PROTOCOL=OIDC
+        ERRORSWEEP_SSO_WORKSPACE=Enterprise Workspace
+        ERRORSWEEP_SSO_DOMAINS=customer.com
+        ERRORSWEEP_SSO_ISSUER_URL=
+        ERRORSWEEP_SSO_CLIENT_ID=
+        ERRORSWEEP_SSO_REDIRECT_URI=https://app.your-domain.com/?public=sso_handoff
+        ERRORSWEEP_SSO_LOGIN_URL=
+        ERRORSWEEP_SSO_HANDOFF_SECRET=replace-with-long-random-shared-secret
+        # ERRORSWEEP_SSO_METADATA_URL=
+        # ERRORSWEEP_SSO_ENTITY_ID=
+        # ERRORSWEEP_SSO_JIT_PROVISIONING=true
+        # ERRORSWEEP_SSO_ROLE_MAPPING=owners:Workspace Owner, reviewers:Reviewer
+        ERRORSWEEP_LEGAL_REVIEWED=false
+        ERRORSWEEP_WAF_PROVIDER=cloudflare
+        ERRORSWEEP_SMOKE_TEST_LOG_LEVEL=WARNING
+        ERRORSWEEP_BACKUP_PROVIDER=supabase-pitr-and-storage-lifecycle
+        ERRORSWEEP_BACKUP_WORKER_ENABLED=true
+        ERRORSWEEP_BACKUP_INTERVAL_HOURS=24
+        ERRORSWEEP_BACKUP_RETENTION_DAYS=30
+        ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
+        ERRORSWEEP_BACKUP_OUTPUT_DIR=
+
+        # Self-hosted MT endpoints for no-key translation
+        INDICTRANS2_ENDPOINT=https://mt.your-domain.com/indictrans2/translate
+        MADLAD_ENDPOINT=https://mt.your-domain.com/madlad/translate
+        OPUS_MT_ENDPOINT=https://mt.your-domain.com/opus/translate
+        SELF_HOSTED_MT_TIMEOUT=300
+        """
+    ).strip() + "\n"
+
+
+def missing_launch_configuration_template(rows: List[Dict[str, str]]) -> str:
+    missing = [row for row in rows if row.get("Status") == "Missing"]
+    if not missing:
+        return "# All tracked production launch configuration checks are currently configured.\n"
+    lines = ["# Missing ErrorSweep launch configuration", "# Fill only the providers you plan to use.", ""]
+    for row in missing:
+        variable = safe_text(row.get("Variable / option"))
+        lines.append(f"# {row.get('Area')}: {row.get('Notes')}")
+        if " or " in variable or "/" in variable or "=" in variable:
+            lines.append(f"# {variable}")
+        else:
+            lines.append(f"{variable}=")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def launch_preflight_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+    health = health or {}
+    rows: List[Dict[str, str]] = []
+
+    def add(check: str, status: str, evidence: str, action: str) -> None:
+        rows.append({
+            "Check": check,
+            "Status": status,
+            "Evidence": evidence,
+            "Action": action,
+        })
+
+    public_url = safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")).strip()
+    supabase_tables = health.get("saas_tables") or {}
+    supabase_ready = bool(health.get("supabase_configured")) and bool(supabase_tables) and all(safe_text(value) == "ok" for value in supabase_tables.values())
+    storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "configured": False, "mode": "local_fallback"}
+    async_health = async_backend_status() if async_backend_status is not None else {"provider": "local", "ready": False, "mode": "local_inline"}
+    billing_provider = billing_provider_label()
+    email_provider = email_provider_label()
+    webhook_ready = any_secret_configured(["STRIPE_WEBHOOK_SECRET", "RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"])
+    webhook_receiver_url = safe_text(secret("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", "")).strip()
+    billing_reconciliation_rows = billing_reconciliation_findings()
+    high_billing_reconciliation = sum(1 for row in billing_reconciliation_rows if row.get("Severity") == "High")
+    mandate_ready = any_secret_configured(["ERRORSWEEP_MONTHLY_MANDATE_LINK", "ERRORSWEEP_CARD_UPI_MANDATE_LINK", "ERRORSWEEP_TRIAL_MANDATE_LINK"])
+    provider_checkout_ready = billing_provider_checkout_bridge_ready(billing_provider)
+    abuse_settings = abuse_protection_settings()
+    abuse_ready = all(value > 0 for key, value in abuse_settings.items() if key != "window_minutes")
+    tenant_findings = tenant_isolation_findings()
+    high_tenant_findings = sum(1 for row in tenant_findings if row.get("severity") == "High")
+    medium_tenant_findings = sum(1 for row in tenant_findings if row.get("severity") == "Medium")
+    subprocessor_summary = subprocessor_launch_summary()
+    sso_summary = enterprise_sso_summary()
+    sso_handoff_ready = sso_summary["ready"] > 0 and secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET")
+    deployment_status = deployment_pack_status()
+
+    add(
+        "Production mode",
+        "Pass" if is_production_mode() else "Warn",
+        "Production" if is_production_mode() else "Local/development mode",
+        "Set ERRORSWEEP_ENV=production before public traffic.",
+    )
+    add(
+        "Session secret",
+        "Pass" if secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET else "Blocker",
+        "Custom secret configured" if secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET else "Default or missing session secret",
+        "Configure ERRORSWEEP_SESSION_SECRET with a long random value.",
+    )
+    add(
+        "Public base URL",
+        "Pass" if public_url.startswith("https://") else "Warn" if public_url else "Blocker",
+        "HTTPS public URL configured" if public_url.startswith("https://") else "Public URL missing or not HTTPS",
+        "Set ERRORSWEEP_PUBLIC_BASE_URL to the deployed HTTPS app URL.",
+    )
+    add(
+        "Deployment pack",
+        "Pass" if deployment_status["files_ready"] and deployment_status["services_ready"] else "Warn",
+        f"{len(deployment_status['present_files'])}/{len(deployment_status['required_files'])} files; {len(deployment_status['present_services'])}/{len(deployment_status['required_services'])} services",
+        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, and deploy/release_check.py with the release branch.",
+    )
+    add(
+        "Supabase persistence",
+        "Pass" if supabase_ready else "Blocker",
+        "SaaS tables reachable" if supabase_ready else safe_text(health.get("storage_mode", "Supabase not configured")),
+        "Run the release schema and set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.",
+    )
+    add(
+        "App abuse throttles",
+        "Pass" if abuse_ready else "Warn",
+        f"{abuse_settings.get('window_minutes')}m window; {'all sensitive limits enabled' if abuse_ready else 'one or more limits disabled'}",
+        "Keep app-level throttles enabled and add CDN/WAF limits at the edge.",
+    )
+    add(
+        "Tenant isolation",
+        "Pass" if high_tenant_findings == 0 else "Blocker",
+        f"{high_tenant_findings} high / {medium_tenant_findings} medium findings",
+        "Fix high-risk tenant ownership issues before public multi-tenant launch.",
+    )
+    add(
+        "Subprocessor approvals",
+        "Pass" if subprocessor_summary["blockers"] == 0 else "Blocker",
+        f"{subprocessor_summary['active_external']} active external / {subprocessor_summary['blockers']} blockers",
+        "Approve active external processors and DPA/customer notice status in Platform Settings.",
+    )
+    add(
+        "Object storage",
+        "Pass" if storage_health.get("mode") == "cloud" and storage_health.get("configured") else "Warn",
+        f"{storage_health.get('provider', 'local')} / {storage_health.get('mode', 'local_fallback')}",
+        "Configure Supabase Storage, S3, or GCS before multi-instance uploads.",
+    )
+    add(
+        "Async worker",
+        "Pass" if async_health.get("mode") == "external" and async_health.get("ready") else "Warn",
+        f"{async_health.get('provider', 'local')} / {async_health.get('mode', 'local_inline')}",
+        "Deploy async_task_worker.py or a Redis/Celery worker for large QA/Pro jobs.",
+    )
+    async_service_enabled = safe_text(secret("ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    add(
+        "Async worker receiver",
+        "Pass" if async_service_enabled and Path("async_task_worker.py").exists() else "Warn",
+        "Receiver enabled" if async_service_enabled else "Receiver not enabled",
+        "Run async_task_worker.py with ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true when using HTTP task handoff.",
+    )
+    add(
+        "Billing provider",
+        "Pass" if billing_provider_ready(billing_provider) else "Blocker",
+        f"{billing_provider} provider" if billing_provider_ready(billing_provider) else "Live billing credentials missing",
+        "Configure Stripe or Razorpay keys.",
+    )
+    add(
+        "Provider checkout bridge",
+        "Pass" if provider_checkout_ready else "Warn",
+        "Plan IDs/price IDs configured" if provider_checkout_ready else "Stripe price IDs or Razorpay plan IDs missing",
+        "Configure STRIPE_PRICE_ID_* or RAZORPAY_PLAN_ID_* for Pro/Agency/Enterprise plan checkout creation.",
+    )
+    add(
+        "Billing webhooks",
+        "Pass" if webhook_ready else "Blocker",
+        "Webhook secret configured" if webhook_ready else "Webhook secret missing",
+        "Configure Stripe/Razorpay webhook secret before applying live payment events.",
+    )
+    add(
+        "Billing webhook receiver",
+        "Pass" if webhook_receiver_url.startswith("https://") else "Warn" if webhook_receiver_url.startswith("http://127.0.0.1") or webhook_receiver_url.startswith("http://localhost") else "Blocker",
+        webhook_receiver_url or "Receiver URL missing",
+        "Deploy billing_webhook_receiver.py and set ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL to the provider-facing HTTPS endpoint.",
+    )
+    add(
+        "Billing reconciliation",
+        "Pass" if high_billing_reconciliation == 0 else "Blocker",
+        f"{high_billing_reconciliation} high / {len(billing_reconciliation_rows)} total findings",
+        "Resolve high-risk webhook, checkout, subscription, payment, and invoice mismatches before public billing.",
+    )
+    add(
+        "Monthly mandate links",
+        "Pass" if mandate_ready else "Warn",
+        "Mandate link configured" if mandate_ready else "Mandate links missing",
+        "Configure plan-specific monthly mandate links for Trial/Pro/Agency/Enterprise.",
+    )
+    add(
+        "Operational backups",
+        "Pass" if secret_is_configured("ERRORSWEEP_BACKUP_PROVIDER") else "Warn",
+        safe_text(secret("ERRORSWEEP_BACKUP_PROVIDER", "")) or "Manual snapshots only",
+        "Configure scheduled Supabase/database and object-storage backups before public launch.",
+    )
+    backup_worker_enabled = safe_text(secret("ERRORSWEEP_BACKUP_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    add(
+        "Backup worker",
+        "Pass" if backup_worker_enabled else "Blocker" if is_production_mode() else "Warn",
+        "Scheduled worker enabled" if backup_worker_enabled else "Manual backup only",
+        "Run operational_backup_worker.py as a scheduled/background process and verify the file manifest/audit record.",
+    )
+    supervisor_enabled = safe_text(secret("ERRORSWEEP_WORKER_SUPERVISOR_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    add(
+        "Worker supervisor",
+        "Pass" if supervisor_enabled and Path("worker_supervisor.py").exists() else "Warn",
+        "Supervisor enabled" if supervisor_enabled else "Supervisor not enabled",
+        "Run worker_supervisor.py as the managed background process for async, email, backups, and optional billing receiver.",
+    )
+    add(
+        "Transactional email",
+        "Pass" if email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local" else "Blocker",
+        f"{email_provider} / {email_from_address()}",
+        "Configure provider credentials and a verified sender domain.",
+    )
+    add(
+        "Email templates",
+        "Pass" if email_templates_enabled() and render_transactional_email is not None else "Warn",
+        "Branded HTML + plain text" if email_templates_enabled() and render_transactional_email is not None else "Plain-text only",
+        "Keep ERRORSWEEP_EMAIL_HTML_ENABLED=true and preview transactional templates before launch.",
+    )
+    email_worker_enabled = safe_text(secret("ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+    add(
+        "Email dispatch worker",
+        "Pass" if email_worker_enabled else "Blocker" if is_production_mode() else "Warn",
+        "Automated worker enabled" if email_worker_enabled else "Manual outbox dispatch only",
+        "Run email_dispatch_worker.py as a scheduled/background process so queued notifications send automatically.",
+    )
+    last_email_test = email_deliverability_last_test()
+    email_test_recent = email_deliverability_test_is_recent(last_email_test)
+    add(
+        "Email deliverability test",
+        "Pass" if email_test_recent else "Blocker" if is_production_mode() else "Warn",
+        (
+            f"{safe_text(last_email_test.get('status')) or 'not run'}"
+            + (f" at {format_local_time(last_email_test.get('sent_at') or last_email_test.get('tested_at'))}" if safe_text(last_email_test.get("sent_at") or last_email_test.get("tested_at")) else "")
+        ),
+        "Send a test message from Platform Settings after configuring provider credentials and a verified sender domain.",
+    )
+    add(
+        "Legal approval",
+        "Pass" if safe_text(secret("ERRORSWEEP_LEGAL_REVIEWED", "")).lower() in {"1", "true", "yes"} else "Blocker",
+        "Legal reviewed flag set" if safe_text(secret("ERRORSWEEP_LEGAL_REVIEWED", "")).lower() in {"1", "true", "yes"} else "Draft policies still marked unreviewed",
+        "Replace draft policies and set ERRORSWEEP_LEGAL_REVIEWED=true only after approval.",
+    )
+    add(
+        "CDN/WAF edge",
+        "Pass" if secret_is_configured("ERRORSWEEP_WAF_PROVIDER") else "Blocker",
+        safe_text(secret("ERRORSWEEP_WAF_PROVIDER", "")) or "No edge provider configured",
+        "Deploy behind HTTPS CDN/WAF with rate limits.",
+    )
+    add(
+        "Production smoke test runner",
+        "Pass" if Path("production_smoke_test.py").exists() else "Blocker",
+        "Available" if Path("production_smoke_test.py").exists() else "Missing",
+        "Run `python production_smoke_test.py --strict --markdown` in staging or CI/CD before release.",
+    )
+    add(
+        "Enterprise SSO",
+        "Pass" if sso_handoff_ready else "Warn",
+        f"{sso_summary['ready']} ready / {sso_summary['enabled']} enabled / {sso_summary['total']} tracked; handoff secret {'set' if secret_is_configured('ERRORSWEEP_SSO_HANDOFF_SECRET') else 'missing'}",
+        "Register and enable at least one workspace SSO connection, configure ERRORSWEEP_SSO_HANDOFF_SECRET, and test ?public=sso_handoff in staging.",
+    )
+    add(
+        "Public registration flag",
+        "Pass" if feature_flag("public_registration") else "Warn",
+        "Trial signup enabled" if feature_flag("public_registration") else "Trial signup disabled",
+        "Enable only when onboarding, billing, email, and legal gates are ready.",
+    )
+    add(
+        "Billing collection flag",
+        "Pass" if feature_flag("billing_collection") else "Blocker",
+        "Checkout creation enabled" if feature_flag("billing_collection") else "Checkout creation disabled",
+        "Enable before accepting paid plan mandates.",
+    )
+    add(
+        "Self-hosted MT flag",
+        "Pass" if feature_flag("self_hosted_engines") else "Warn",
+        "No-key MT enabled" if feature_flag("self_hosted_engines") else "No-key MT disabled",
+        "Enable only when MT workers are deployed or keep disabled and rely on BYO keys/human review.",
+    )
+
+    if builtin_engine_status is None:
+        add("Self-hosted MT", "Warn", "MT diagnostics unavailable", "Verify IndicTrans2/MADLAD/OPUS workers manually.")
+    else:
+        try:
+            mt_rows = builtin_engine_status(timeout=2)
+            ready_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled") and row.get("ready")]
+            enabled_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled")]
+            add(
+                "Self-hosted MT",
+                "Pass" if ready_engines else "Warn",
+                ", ".join(ready_engines) if ready_engines else f"Enabled but not ready: {', '.join(enabled_engines) or 'none'}",
+                "Start or deploy MT workers for no-key translation coverage.",
+            )
+        except Exception as exc:
+            add("Self-hosted MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Check MT worker endpoints and logs.")
+
+    return rows
+
+
+def launch_preflight_report(rows: List[Dict[str, str]]) -> str:
+    counts = {
+        "Pass": sum(1 for row in rows if row.get("Status") == "Pass"),
+        "Warn": sum(1 for row in rows if row.get("Status") == "Warn"),
+        "Blocker": sum(1 for row in rows if row.get("Status") == "Blocker"),
+    }
+    lines = [
+        "# ErrorSweep Launch Preflight Report",
+        "",
+        f"Generated: {now_stamp()}",
+        f"Pass: {counts['Pass']} | Warnings: {counts['Warn']} | Blockers: {counts['Blocker']}",
+        "",
+        "| Check | Status | Evidence | Action |",
+        "|---|---|---|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(safe_text(row.get(key, "")).replace("|", "\\|") for key in ["Check", "Status", "Evidence", "Action"])
+            + " |"
+        )
+    return "\n".join(lines).strip() + "\n"
 
 
 def split_text_lines(text: str) -> List[str]:
@@ -5106,11 +11047,12 @@ def format_time(seconds: float, comma: bool = True) -> str:
     return f"{h:02d}:{m:02d}:{int(s):02d}.{int((s % 1) * 1000):03d}"
 
 
-def parse_srt_or_vtt(text: str) -> List[Dict[str, Any]]:
+def parse_srt_or_vtt(text: str, export_kind: str = "") -> List[Dict[str, Any]]:
     text = text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
     blocks = re.split(r"\n\s*\n", text.strip())
     rows = []
-    for block in blocks:
+    cue_index = 0
+    for block_index, block in enumerate(blocks):
         lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
         if not lines:
             continue
@@ -5124,15 +11066,19 @@ def parse_srt_or_vtt(text: str) -> List[Dict[str, Any]]:
             content = " ".join(lines[idx:])
             if content:
                 n = len(rows)
-                rows.append({
+                item = {
                     "id": n + 1, "start": n * 4.0, "end": n * 4.0 + 3.0,
                     "source": content, "target": "", "status": "Untranslated", "match": ""
-                })
+                }
+                if export_kind:
+                    item["export_ref"] = {"kind": export_kind, "cue_index": cue_index, "block_index": block_index}
+                rows.append(item)
+                cue_index += 1
             continue
         start_s, end_s = [x.strip().split(" ")[0] for x in lines[idx].split("-->", 1)]
         content = " ".join(lines[idx + 1:]).strip()
         n = len(rows)
-        rows.append({
+        item = {
             "id": n + 1,
             "start": parse_timecode(start_s),
             "end": parse_timecode(end_s),
@@ -5140,7 +11086,11 @@ def parse_srt_or_vtt(text: str) -> List[Dict[str, Any]]:
             "target": "",
             "status": "Untranslated",
             "match": "",
-        })
+        }
+        if export_kind:
+            item["export_ref"] = {"kind": export_kind, "cue_index": cue_index, "block_index": block_index}
+        rows.append(item)
+        cue_index += 1
     return rows
 
 
@@ -5155,6 +11105,263 @@ def parse_uploaded_text(uploaded_file) -> str:
             LOGGER.warning("Unable to decode uploaded text with %s: %s", enc, exc)
             continue
     return data.decode("utf-8", errors="replace")
+
+
+PRO_EXPORT_SUPPORTED_EXTENSIONS = {
+    ".csv", ".docx", ".html", ".htm", ".json", ".pptx", ".srt", ".txt",
+    ".vtt", ".xlsx", ".xlf", ".xliff", ".xml",
+}
+
+
+def build_pro_export_source_asset(uploaded_file: Any) -> Dict[str, Any]:
+    """Capture original upload metadata for same-format Pro editor export."""
+    if uploaded_file is None:
+        return {}
+    try:
+        data = uploaded_file.getvalue()
+    except Exception as exc:
+        LOGGER.warning("Unable to read Pro source file for export metadata: %s", exc)
+        return {}
+    name = safe_text(getattr(uploaded_file, "name", "translated_file")) or "translated_file"
+    suffix = Path(name).suffix.lower()
+    return {
+        "file_name": name,
+        "suffix": suffix,
+        "mime_type": safe_text(getattr(uploaded_file, "type", "")) or "application/octet-stream",
+        "size_bytes": len(data),
+        "bytes_b64": base64.b64encode(data).decode("ascii"),
+        "supported": suffix in PRO_EXPORT_SUPPORTED_EXTENSIONS,
+    }
+
+
+def recover_pro_export_source_for_file(file_name: str = "") -> Dict[str, Any]:
+    """Best-effort recovery for older Pro review sessions missing export metadata."""
+    uploaded = st.session_state.get("pro_file")
+    if uploaded is None:
+        return {}
+    uploaded_name = safe_text(getattr(uploaded, "name", ""))
+    expected_name = safe_text(file_name)
+    if expected_name and uploaded_name and uploaded_name.lower() != expected_name.lower():
+        return {}
+    asset = build_pro_export_source_asset(uploaded)
+    if asset:
+        st.session_state.review_workspace_export_source = asset
+    return asset
+
+
+def plain_text_export_rows(text: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    lines = re.split(r"\r\n|\n|\r", safe_text(text))
+    for line_index, line in enumerate(lines):
+        source = line.strip()
+        if not source:
+            continue
+        rows.append({
+            "id": len(rows) + 1,
+            "source": source,
+            "target": "",
+            "status": "Untranslated",
+            "match": "",
+            "export_ref": {"kind": "text_line", "line_index": line_index},
+        })
+    return rows
+
+
+def json_export_rows(data: bytes) -> List[Dict[str, Any]]:
+    try:
+        payload = json.loads(data.decode("utf-8-sig"))
+    except Exception:
+        return []
+    rows: List[Dict[str, Any]] = []
+
+    def visit(value: Any, path: List[Any]) -> None:
+        if isinstance(value, str) and value.strip():
+            rows.append({
+                "id": len(rows) + 1,
+                "source": value.strip(),
+                "target": "",
+                "status": "Untranslated",
+                "match": "",
+                "export_ref": {"kind": "json_path", "path": path},
+            })
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, [*path, index])
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, [*path, key])
+
+    visit(payload, [])
+    return rows
+
+
+def xml_export_rows(data: bytes, kind: str = "xml_text") -> List[Dict[str, Any]]:
+    if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+        return []
+    try:
+        if "defusedxml" in getattr(ET, "__name__", ""):
+            root = ET.fromstring(data, forbid_dtd=True, forbid_entities=True)
+        else:
+            root = ET.fromstring(data)
+    except Exception:
+        return []
+    rows: List[Dict[str, Any]] = []
+    text_index = 0
+    for element in root.iter():
+        text = safe_text(element.text).strip()
+        if text:
+            rows.append({
+                "id": len(rows) + 1,
+                "source": text,
+                "target": "",
+                "status": "Untranslated",
+                "match": "",
+                "export_ref": {"kind": kind, "text_index": text_index},
+            })
+            text_index += 1
+    return rows
+
+
+def _xml_local_name(tag: Any) -> str:
+    return safe_text(tag).split("}")[-1].lower()
+
+
+def _xml_child_by_local(element: Any, local_name: str) -> Optional[Any]:
+    wanted = safe_text(local_name).lower()
+    for child in list(element):
+        if _xml_local_name(getattr(child, "tag", "")) == wanted:
+            return child
+    return None
+
+
+def _xml_text_content(element: Any) -> str:
+    try:
+        return safe_text("".join(element.itertext())).strip()
+    except Exception:
+        return safe_text(getattr(element, "text", "")).strip()
+
+
+def xliff_export_rows(data: bytes) -> List[Dict[str, Any]]:
+    if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+        return []
+    try:
+        if "defusedxml" in getattr(ET, "__name__", ""):
+            root = ET.fromstring(data, forbid_dtd=True, forbid_entities=True)
+        else:
+            root = ET.fromstring(data)
+    except Exception:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    unit_index = 0
+    for element in root.iter():
+        if _xml_local_name(getattr(element, "tag", "")) not in {"trans-unit", "segment"}:
+            continue
+        source_element = _xml_child_by_local(element, "source")
+        if source_element is None:
+            continue
+        target_element = _xml_child_by_local(element, "target")
+        source_text = _xml_text_content(source_element)
+        target_text = _xml_text_content(target_element) if target_element is not None else ""
+        if not source_text and not target_text:
+            continue
+        rows.append({
+            "id": len(rows) + 1,
+            "source": source_text,
+            "target": target_text,
+            "status": "Existing" if target_text else "Untranslated",
+            "match": "",
+            "export_ref": {"kind": "xliff_unit", "unit_index": unit_index},
+        })
+        unit_index += 1
+    return rows
+
+
+class _ExportHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: List[Dict[str, Any]] = []
+        self.text_index = 0
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        if tag.lower() in {"script", "style"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style"} and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        text = safe_text(data).strip()
+        if not text:
+            return
+        self.rows.append({
+            "id": len(self.rows) + 1,
+            "source": text,
+            "target": "",
+            "status": "Untranslated",
+            "match": "",
+            "export_ref": {"kind": "html_text", "text_index": self.text_index},
+        })
+        self.text_index += 1
+
+
+def html_export_rows(text: str) -> List[Dict[str, Any]]:
+    parser = _ExportHtmlParser()
+    try:
+        parser.feed(safe_text(text))
+        parser.close()
+    except Exception as exc:
+        LOGGER.warning("Unable to parse HTML export rows: %s", exc)
+    return parser.rows or [
+        {**row, "export_ref": {"kind": "html_text", "text_index": idx}}
+        for idx, row in enumerate({"id": i + 1, "source": line, "target": "", "status": "Untranslated", "match": ""} for i, line in enumerate(split_text_lines(text)))
+    ]
+
+
+def parse_context_upload(uploaded_file) -> Dict[str, str]:
+    """Parse an optional context/reference file for the Human Review context viewer."""
+    if uploaded_file is None:
+        return {}
+    name = safe_text(getattr(uploaded_file, "name", "context"))
+    suffix = Path(name).suffix.lower()
+    text = ""
+    try:
+        data = uploaded_file.getvalue()
+        if suffix == ".docx":
+            doc = Document(io.BytesIO(data))
+            paragraphs = [safe_text(p.text) for p in doc.paragraphs if safe_text(p.text)]
+            table_lines = []
+            for table in doc.tables:
+                for row in table.rows:
+                    values = [safe_text(cell.text) for cell in row.cells if safe_text(cell.text)]
+                    if values:
+                        table_lines.append(" | ".join(values))
+            text = "\n".join(paragraphs + table_lines)
+        elif suffix == ".xlsx":
+            wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+            lines = []
+            for ws in wb.worksheets:
+                if len(wb.worksheets) > 1:
+                    lines.append(f"[{ws.title}]")
+                for row in ws.iter_rows(values_only=True):
+                    values = [safe_text(cell) for cell in row if safe_text(cell)]
+                    if values:
+                        lines.append(" | ".join(values))
+            text = "\n".join(lines)
+        else:
+            text = parse_uploaded_text(uploaded_file)
+    except Exception as exc:
+        LOGGER.warning("Unable to parse context upload %s: %s", name, exc)
+        return {"fileName": name, "text": "", "error": f"Could not parse context file: {exc}"}
+
+    text = safe_text(text).strip()
+    if not text:
+        return {"fileName": name, "text": "", "error": "Context file did not contain readable text."}
+    return {"fileName": name, "text": text[:200_000]}
 
 
 def inspect_rules_zip(uploaded_file) -> Dict[str, Any]:
@@ -5523,6 +11730,7 @@ def _extract_rows_from_table(
     source_idx: Optional[int] = None,
     target_idx: Optional[int] = None,
     header_idx: Optional[int] = None,
+    export_ref_base: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     if not data:
         return []
@@ -5540,11 +11748,13 @@ def _extract_rows_from_table(
         target_indices = [fallback] if fallback is not None else []
 
     rows: List[Dict[str, Any]] = []
-    for row in data[header_idx + 1:]:
+    for data_idx, row in enumerate(data[header_idx + 1:], start=header_idx + 1):
         source = _row_value(row, source_idx)
         target = ""
+        selected_target_idx: Optional[int] = None
         for idx in target_indices:
             target = _row_value(row, idx)
+            selected_target_idx = idx
             if target:
                 break
         if _looks_like_scorecard_label(source) and (not target or _looks_like_scorecard_label(target)):
@@ -5553,13 +11763,21 @@ def _extract_rows_from_table(
             continue
         if source.lower() in {"source", "source text"} and target.lower() in {"target", "translation", "original translation"}:
             continue
-        rows.append({
+        item = {
             "id": len(rows) + 1,
             "source": source,
             "target": target,
             "status": "Existing" if target else "Untranslated",
             "match": "",
-        })
+        }
+        if export_ref_base is not None:
+            item["export_ref"] = {
+                **export_ref_base,
+                "row_index": data_idx,
+                "source_col": source_idx,
+                "target_col": selected_target_idx if selected_target_idx is not None else (target_indices[0] if target_indices else None),
+            }
+        rows.append(item)
     return rows
 
 
@@ -5766,11 +11984,118 @@ def _docx_table_rows(data: bytes) -> List[List[Tuple[str, ...]]]:
         table_rows: List[Tuple[str, ...]] = []
         for row in table.findall("./w:tr", ns):
             cells = tuple(_docx_cell_text(cell, ns) for cell in row.findall("./w:tc", ns))
-            if any(safe_text(cell) for cell in cells):
-                table_rows.append(cells)
-        if table_rows:
+            table_rows.append(cells)
+        if any(any(safe_text(cell) for cell in row) for row in table_rows):
             tables.append(table_rows)
     return tables
+
+
+def _xml_text_items(data: bytes) -> List[str]:
+    if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+        return []
+    try:
+        if "defusedxml" in getattr(ET, "__name__", ""):
+            root = ET.fromstring(data, forbid_dtd=True, forbid_entities=True)
+        else:
+            root = ET.fromstring(data)
+    except Exception:
+        return []
+    items: List[str] = []
+    for element in root.iter():
+        text = safe_text(element.text).strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def _pptx_text_items(data: bytes) -> List[str]:
+    items: List[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            slide_names = sorted(
+                name for name in archive.namelist()
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            )
+            for name in slide_names:
+                xml_data = archive.read(name)
+                for text in _xml_text_items(xml_data):
+                    if text:
+                        items.append(text)
+    except Exception as exc:
+        LOGGER.warning("Unable to extract PPTX text: %s", exc)
+    return items
+
+
+def pptx_export_rows(data: bytes) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            slide_names = sorted(
+                name for name in archive.namelist()
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            )
+            for name in slide_names:
+                xml_data = archive.read(name)
+                if b"<!DOCTYPE" in xml_data.upper() or b"<!ENTITY" in xml_data.upper():
+                    continue
+                try:
+                    if "defusedxml" in getattr(ET, "__name__", ""):
+                        root = ET.fromstring(xml_data, forbid_dtd=True, forbid_entities=True)
+                    else:
+                        root = ET.fromstring(xml_data)
+                except Exception:
+                    continue
+                paragraph_index = 0
+                for paragraph in root.iter():
+                    if safe_text(paragraph.tag).split("}")[-1] != "p":
+                        continue
+                    text = "".join(
+                        safe_text(node.text)
+                        for node in paragraph.iter()
+                        if safe_text(node.tag).split("}")[-1] == "t"
+                    ).strip()
+                    if not text:
+                        paragraph_index += 1
+                        continue
+                    rows.append({
+                        "id": len(rows) + 1,
+                        "source": text,
+                        "target": "",
+                        "status": "Untranslated",
+                        "match": "",
+                        "export_ref": {"kind": "pptx_paragraph", "slide_path": name, "paragraph_index": paragraph_index},
+                    })
+                    paragraph_index += 1
+    except Exception as exc:
+        LOGGER.warning("Unable to extract PPTX export rows: %s", exc)
+    return rows
+
+
+def _json_text_items(data: bytes) -> List[str]:
+    try:
+        payload = json.loads(data.decode("utf-8-sig"))
+    except Exception:
+        return []
+    items: List[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            items.append(value.strip())
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+
+    visit(payload)
+    return items
+
+
+def _html_text_items(text: str) -> List[str]:
+    stripped = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.I | re.S)
+    stripped = re.sub(r"<[^>]+>", "\n", stripped)
+    return split_text_lines(stripped)
 
 
 def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[str, Any]]:
@@ -5783,9 +12108,9 @@ def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[s
             wb = load_workbook(io.BytesIO(uploaded_file.getvalue()), data_only=True)
             best_rows = []
             best_rank = (-1, -1)
-            for ws in wb.worksheets:
+            for sheet_idx, ws in enumerate(wb.worksheets):
                 data = list(ws.iter_rows(values_only=True))
-                extracted = _extract_rows_from_table(data, mode=mode)
+                extracted = _extract_rows_from_table(data, mode=mode, export_ref_base={"kind": "xlsx_cell", "sheet_index": sheet_idx, "sheet_name": ws.title})
                 header_idx, headers = _find_table_header(data)
                 header_score = _score_header_row(list(data[header_idx])) if data else 0
                 rank = (header_score, len(extracted))
@@ -5794,7 +12119,11 @@ def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[s
                     best_rows = extracted
             rows.extend(best_rows)
         elif name.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(uploaded_file.getvalue()))
+            data_bytes = uploaded_file.getvalue()
+            text = parse_uploaded_text(uploaded_file)
+            first_line = safe_text(text).splitlines()[0] if safe_text(text).splitlines() else ""
+            delimiter = "\t" if first_line.count("\t") > max(first_line.count(","), first_line.count(";")) else ";" if first_line.count(";") > first_line.count(",") else ","
+            df = pd.read_csv(io.BytesIO(data_bytes), sep=delimiter)
             cols = [c.lower() for c in df.columns.astype(str)]
             src_col = df.columns[0]
             tgt_col = df.columns[1] if len(df.columns) > 1 else None
@@ -5808,11 +12137,24 @@ def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[s
                 src = safe_text(row.get(src_col, ""))
                 tgt = safe_text(row.get(tgt_col, "")) if tgt_col is not None else ""
                 if src or tgt:
-                    rows.append({"id": len(rows)+1, "source": src, "target": tgt, "status": "Existing" if tgt else "Untranslated", "match": ""})
+                    rows.append({
+                        "id": len(rows)+1,
+                        "source": src,
+                        "target": tgt,
+                        "status": "Existing" if tgt else "Untranslated",
+                        "match": "",
+                        "export_ref": {
+                            "kind": "csv_row",
+                            "row_index": len(rows) + 1,
+                            "source_col": int(df.columns.get_loc(src_col)),
+                            "target_col": int(df.columns.get_loc(tgt_col)) if tgt_col is not None else (1 if len(df.columns) > 1 else len(df.columns)),
+                            "delimiter": delimiter,
+                        },
+                    })
         elif name.endswith(".docx"):
             data = uploaded_file.getvalue()
-            for table in _docx_table_rows(data):
-                extracted = _extract_rows_from_table(table, mode=mode)
+            for table_idx, table in enumerate(_docx_table_rows(data)):
+                extracted = _extract_rows_from_table(table, mode=mode, export_ref_base={"kind": "docx_table", "table_index": table_idx})
                 for item in extracted:
                     item["id"] = len(rows) + 1
                     rows.append(item)
@@ -5822,14 +12164,23 @@ def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[s
                     txt = safe_text(p.text)
                     if txt:
                         rows.append({"id": len(rows)+1, "source": txt, "target": "", "status": "Untranslated", "match": ""})
+        elif name.endswith(".pptx"):
+            rows.extend(pptx_export_rows(uploaded_file.getvalue()))
+        elif name.endswith(".json"):
+            rows.extend(json_export_rows(uploaded_file.getvalue()))
+        elif name.endswith((".xml", ".xlf", ".xliff")):
+            data = uploaded_file.getvalue()
+            rows.extend(xliff_export_rows(data))
+            if not rows:
+                rows.extend(xml_export_rows(data, kind="xml_text"))
+        elif name.endswith((".html", ".htm")):
+            rows.extend(html_export_rows(parse_uploaded_text(uploaded_file)))
         else:
             text = parse_uploaded_text(uploaded_file)
             if name.endswith((".srt", ".vtt")):
-                rows = parse_srt_or_vtt(text)
+                rows = parse_srt_or_vtt(text, export_kind="vtt_cue" if name.endswith(".vtt") else "srt_cue")
             else:
-                lines = split_text_lines(text)
-                for line in lines:
-                    rows.append({"id": len(rows)+1, "source": line, "target": "", "status": "Untranslated", "match": ""})
+                rows.extend(plain_text_export_rows(text))
     except Exception as exc:
         st.error(f"Could not parse uploaded file: {exc}")
     return rows
@@ -5854,6 +12205,140 @@ def rows_to_srt(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
     return "\n".join(out).encode("utf-8")
 
 
+def media_export_qa_findings(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows or [], start=1):
+        row_findings: List[Dict[str, Any]] = []
+        start = row.get("start", (idx - 1) * 4)
+        end = row.get("end", (idx - 1) * 4 + 3)
+        target = safe_text(row.get("target") or row.get("translation") or "")
+        source = safe_text(row.get("source") or "")
+        try:
+            start_value = float(start)
+            end_value = float(end)
+        except Exception:
+            start_value = 0.0
+            end_value = 0.0
+            row_findings.append({"row": idx, "severity": "Blocker", "message": "Start or end time is not numeric."})
+        if end_value <= start_value:
+            row_findings.append({"row": idx, "severity": "Blocker", "message": "End time must be after start time."})
+        if not target.strip():
+            row_findings.append({"row": idx, "severity": "Warn", "message": "Target/transcript text is blank."})
+        duration = max(0.1, end_value - start_value)
+        cps = round(len(target or source) / duration)
+        if cps > 20:
+            row_findings.append({"row": idx, "severity": "Warn", "message": f"Reading speed is {cps} CPS."})
+        if len(target) > 84:
+            row_findings.append({"row": idx, "severity": "Warn", "message": "Target text is long for a two-line subtitle."})
+        for item in row_findings:
+            item["start"] = format_time(start, comma=True) if isinstance(start, (int, float)) else safe_text(start)
+            item["end"] = format_time(end, comma=True) if isinstance(end, (int, float)) else safe_text(end)
+            item["text"] = target or source
+        findings.extend(row_findings)
+    return findings
+
+
+def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_name: str = "") -> bytes:
+    findings = media_export_qa_findings(rows)
+    confirmed = sum(1 for row in rows or [] if bool(row.get("confirmed") or row.get("done")) or safe_text(row.get("status")).lower() == "approved")
+    wb = Workbook()
+    ws_summary = wb.active
+    ws_summary.title = "Summary"
+    ws_findings = wb.create_sheet("QA Findings")
+
+    dark = "1F2937"
+    blue = "D9EAF7"
+    green = "D9EAD3"
+    yellow = "FFF2CC"
+    red = "F4CCCC"
+    border = Side(style="thin", color="A6A6A6")
+
+    ws_summary.merge_cells("A1:D1")
+    ws_summary["A1"] = f"ErrorSweep {safe_text(workflow) or 'Media'} QA Report"
+    ws_summary["A1"].font = Font(bold=True, size=16, color="FFFFFF")
+    ws_summary["A1"].fill = PatternFill("solid", fgColor=dark)
+    ws_summary["A1"].alignment = Alignment(horizontal="center")
+    summary_rows = [
+        ("Generated", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        ("File", safe_text(file_name) or "media_editor"),
+        ("Rows", len(rows or [])),
+        ("Confirmed", f"{confirmed} / {len(rows or [])}"),
+        ("Findings", len(findings)),
+    ]
+    for idx, (label, value) in enumerate(summary_rows, start=3):
+        ws_summary.cell(idx, 1, label)
+        ws_summary.cell(idx, 2, value)
+        ws_summary.cell(idx, 1).font = Font(bold=True)
+        ws_summary.cell(idx, 1).fill = PatternFill("solid", fgColor=blue)
+    ws_summary.cell(9, 1, "Result")
+    ws_summary.cell(9, 2, "REVIEW" if findings else "PASS")
+    ws_summary.cell(9, 1).font = Font(bold=True)
+    ws_summary.cell(9, 1).fill = PatternFill("solid", fgColor=blue)
+    ws_summary.cell(9, 2).font = Font(bold=True)
+    ws_summary.cell(9, 2).fill = PatternFill("solid", fgColor=yellow if findings else green)
+
+    headers = ["Row", "Severity", "Finding", "Start", "End", "Text"]
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws_findings.cell(1, col_idx, header)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor=blue)
+    if findings:
+        for row_idx, item in enumerate(findings, start=2):
+            values = [item.get("row"), item.get("severity"), item.get("message"), item.get("start"), item.get("end"), item.get("text")]
+            for col_idx, value in enumerate(values, start=1):
+                cell = ws_findings.cell(row_idx, col_idx, value)
+                if col_idx == 2:
+                    cell.fill = PatternFill("solid", fgColor=red if safe_text(value).lower() == "blocker" else yellow)
+                    cell.font = Font(bold=True)
+    else:
+        ws_findings.append(["-", "Clear", "No timing or quality warnings detected at export.", "", "", ""])
+
+    for ws in wb.worksheets:
+        ws.sheet_view.showGridLines = False
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.border = Border(left=border, right=border, top=border, bottom=border)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+    ws_summary.column_dimensions["A"].width = 24
+    ws_summary.column_dimensions["B"].width = 42
+    widths = {"A": 10, "B": 14, "C": 52, "D": 18, "E": 18, "F": 58}
+    for col, width in widths.items():
+        ws_findings.column_dimensions[col].width = width
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+
+def rows_to_text_script(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
+    parts: List[str] = []
+    for idx, row in enumerate(rows or [], start=1):
+        text = safe_text(row.get("target" if use_target else "source", ""))
+        if not text:
+            text = safe_text(row.get("source", ""))
+        parts.append(
+            f"[{idx}] {format_time(row.get('start', (idx - 1) * 4), comma=True)} - {format_time(row.get('end', (idx - 1) * 4 + 3), comma=True)}\n{text}"
+        )
+    return "\n\n".join(parts).encode("utf-8")
+
+
+def media_export_zip(rows: List[Dict[str, Any]], workflow: str, file_name: str = "media_editor", include_csv: bool = False) -> bytes:
+    workflow_label = safe_text(workflow) or "Media"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        if workflow_label.lower().startswith("transcription"):
+            package.writestr("transcription_script.srt", rows_to_srt(rows, use_target=True))
+            package.writestr("transcription_script.txt", rows_to_text_script(rows, use_target=True))
+        else:
+            package.writestr("source_script.srt", rows_to_srt(rows, use_target=False))
+            package.writestr("target_script.srt", rows_to_srt(rows, use_target=True))
+        if include_csv:
+            package.writestr("segments.csv", rows_to_csv(rows))
+        package.writestr("qa_run_report.xlsx", media_export_qa_workbook(rows, workflow_label, file_name))
+    return buffer.getvalue()
+
+
 @st.cache_resource
 def get_review_session_store() -> Dict[str, Dict[str, Any]]:
     """Small in-memory review-session store.
@@ -5866,7 +12351,15 @@ def get_review_session_store() -> Dict[str, Dict[str, Any]]:
     return {}
 
 
-def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_language: str, file_name: str, rules: Optional[Dict[str, Any]] = None) -> str:
+def save_review_session_to_store(
+    rows: List[Dict[str, Any]],
+    title: str,
+    target_language: str,
+    file_name: str,
+    rules: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, str]] = None,
+    export_source: Optional[Dict[str, Any]] = None,
+) -> str:
     """Save a Pro review job for separate-tab editor use.
 
     v42 release hardening:
@@ -5886,6 +12379,8 @@ def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_
         "user_email": user.get("email", ""),
         "status": "draft",
         "rules": rules or {},
+        "context": context or {},
+        "export_source": export_source or {},
     }
     payload = {
         "job_id": session_id,
@@ -5897,6 +12392,8 @@ def save_review_session_to_store(rows: List[Dict[str, Any]], title: str, target_
         "file_name": file_name,
         "created": metadata["created"],
         "job_type": "cat",
+        "context": context or {},
+        "export_source": export_source or {},
     }
     get_review_session_store()[session_id] = payload
 
@@ -6359,11 +12856,22 @@ def load_review_session_from_store(session_id: str) -> bool:
     st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "ErrorSweep Pro"
     st.session_state.review_workspace_language = metadata.get("target_language") or payload.get("target_language") or ""
     st.session_state.review_workspace_file_name = metadata.get("file_name") or payload.get("file_name") or ""
+    st.session_state.review_workspace_context = metadata.get("context") or payload.get("context") or {}
+    export_source = metadata.get("export_source") or payload.get("export_source") or recover_pro_export_source_for_file(st.session_state.review_workspace_file_name)
+    st.session_state.review_workspace_export_source = export_source or {}
     st.session_state.active_review_session_id = session_id
     return True
 
 
-def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "ErrorSweep Pro", target_language: str = "", file_name: str = "", rules: Optional[Dict[str, Any]] = None) -> None:
+def prepare_human_review_session(
+    rows: List[Dict[str, Any]],
+    source: str = "ErrorSweep Pro",
+    target_language: str = "",
+    file_name: str = "",
+    rules: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, str]] = None,
+    export_source: Optional[Dict[str, Any]] = None,
+) -> None:
     """Store rows in a durable Human Review session before opening the editor.
 
     This fixes the blank-page issue: the review workspace reads from
@@ -6389,6 +12897,7 @@ def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "Erro
             "notes": row.get("notes", ""),
             "start": row.get("start", ""),
             "end": row.get("end", ""),
+            "export_ref": row.get("export_ref", {}),
         })
     # Store in more than one session key. Some Streamlit reruns can make a hidden
     # route render before the editor reads review_segments; these backup keys let
@@ -6400,13 +12909,16 @@ def prepare_human_review_session(rows: List[Dict[str, Any]], source: str = "Erro
     st.session_state.pro_post_edit_rows = prepared
     st.session_state.pro_post_edit_language = target_language
     st.session_state.pro_post_edit_file_name = file_name
+    st.session_state.pro_post_edit_context = context or {}
     st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = 0
     st.session_state.review_workspace_title = source
     st.session_state.review_workspace_language = target_language
     st.session_state.review_workspace_file_name = file_name
+    st.session_state.review_workspace_context = context or {}
+    st.session_state.review_workspace_export_source = export_source or {}
     st.session_state.review_workspace_created = now_stamp() if "now_stamp" in globals() else ""
-    session_id = save_review_session_to_store(prepared, source, target_language, file_name, rules=rules)
+    session_id = save_review_session_to_store(prepared, source, target_language, file_name, rules=rules, context=context, export_source=export_source)
     query_set("review_id", session_id)
 
 
@@ -6441,30 +12953,17 @@ def go_to_human_review_workspace() -> None:
     restore_human_review_session_from_cache()
     session_id = st.session_state.get("active_review_session_id")
     if session_id:
-        query_set("review_id", str(session_id))
-    open_page("Human Review Workspace")
+        navigate_to_human_review_editor(str(session_id))
+        return
+    st.error("Missing review_id. Run Pro translation before opening Human Review.")
 
 
 def current_session_token_for_links() -> str:
-    token = query_get("es_session")
-    if token:
-        return token
-    user = current_user() or {}
-    if not user:
-        return ""
-    payload = {**user, "exp": int(time.time()) + SESSION_TTL_SECONDS}
-    try:
-        return sign_payload(payload)
-    except Exception as exc:
-        LOGGER.debug("Unable to sign editor session link: %s", exc)
-        return ""
+    return ""
 
 
 def external_editor_url(editor_type: str, job_id: str) -> str:
     parts = []
-    token = current_session_token_for_links()
-    if token:
-        parts.append(f"es_session={quote(token)}")
     parts.append(f"es_editor={quote(editor_type)}")
     parts.append(f"job_id={quote(str(job_id))}")
     return "?" + "&".join(parts)
@@ -6518,15 +13017,17 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
         "target_language": payload.get("target_language", ""),
         "file_name": payload.get("file_name", ""),
     }
+    export_source = metadata.get("export_source") or payload.get("export_source") or {}
     get_review_session_store()[job_id] = {
         "rows": rows,
-        "metadata": metadata,
+        "metadata": {**metadata, "export_source": export_source},
         "rules": payload.get("rules") or metadata.get("rules") or {},
         "title": metadata.get("title", "ErrorSweep CAT"),
         "target_language": metadata.get("target_language", ""),
         "file_name": metadata.get("file_name", ""),
         "created": metadata.get("created", ""),
         "job_type": payload.get("job_type", "cat"),
+        "export_source": export_source,
     }
 
     if update_editor_job is not None:
@@ -6543,6 +13044,272 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
             LOGGER.warning("Unable to update external editor job %s in persistent store: %s", job_id, exc)
 
 
+
+
+def build_editor_language_resources(rules: Optional[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, str]]]:
+    """Collect all language assets shown in the CAT editor side panel."""
+    base_rules = workspace_rules()
+    candidate_rules = [base_rules]
+    if isinstance(rules, dict):
+        candidate_rules.append(rules)
+
+    glossary: List[Dict[str, str]] = []
+    seen_glossary: Set[Tuple[str, str]] = set()
+    for rule_pack in candidate_rules:
+        for item in rule_pack.get("glossary", []) if isinstance(rule_pack, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            source_term = safe_text(item.get("source_term") or item.get("source") or item.get("term"))
+            target_term = safe_text(item.get("target_term") or item.get("target"))
+            if not source_term or not target_term:
+                continue
+            key = (source_term.lower(), target_term.lower())
+            if key in seen_glossary:
+                continue
+            seen_glossary.add(key)
+            source_name = safe_text(item.get("source_name") or item.get("origin") or item.get("notes"))
+            if not source_name and item.get("source_term"):
+                source_name = safe_text(item.get("source"))
+            glossary.append(
+                {
+                    "source": source_term,
+                    "target": target_term,
+                    "source_name": source_name,
+                }
+            )
+
+    dnt: List[Dict[str, str]] = []
+    seen_dnt: Set[str] = set()
+    for rule_pack in candidate_rules:
+        for item in rule_pack.get("dnt", []) if isinstance(rule_pack, dict) else []:
+            term = safe_text(item.get("term") if isinstance(item, dict) else item)
+            if not term:
+                continue
+            key = term.lower()
+            if key in seen_dnt:
+                continue
+            seen_dnt.add(key)
+            dnt.append(
+                {
+                    "term": term,
+                    "source_name": safe_text((item.get("source") or item.get("source_name")) if isinstance(item, dict) else "Saved DNT"),
+                }
+            )
+
+    tm: List[Dict[str, str]] = []
+    seen_tm: Set[Tuple[str, str]] = set()
+    for item in st.session_state.get("tm", []):
+        if not isinstance(item, dict):
+            continue
+        source = safe_text(item.get("source"))
+        target = safe_text(item.get("target"))
+        if not source and not target:
+            continue
+        key = (source.lower(), target.lower())
+        if key in seen_tm:
+            continue
+        seen_tm.add(key)
+        tm.append(
+            {
+                "source": source,
+                "target": target,
+                "language": safe_text(item.get("language")),
+                "note": safe_text(item.get("notes") or item.get("status") or item.get("approved_by")),
+            }
+        )
+
+    return {"glossary": glossary, "dnt": dnt, "tm": tm}
+
+
+def render_reference_cat_editor_shell(
+    editor_rows: List[Dict[str, Any]],
+    metadata: Dict[str, Any],
+    qa_by_idx: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+    rules: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render the supplied two-column CAT editor HTML as the translation editor shell."""
+    reference_path = Path(__file__).resolve().parent / "assets" / "cat_editor_reference.html"
+    if not reference_path.exists():
+        st.error("CAT editor reference HTML is missing. Restore assets/cat_editor_reference.html.")
+        return
+
+    title = safe_text(metadata.get("title", "ErrorSweep CAT")) or "ErrorSweep CAT"
+    file_name = safe_text(metadata.get("file_name", "translation_job")) or "translation_job"
+    language = safe_text(metadata.get("target_language", "Target")) or "Target"
+    source_language = safe_text(metadata.get("source_language", "en")) or "en"
+    uploaded_context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+    export_source = metadata.get("export_source") if isinstance(metadata.get("export_source"), dict) else {}
+    if not export_source:
+        export_source = st.session_state.get("review_workspace_export_source") if isinstance(st.session_state.get("review_workspace_export_source"), dict) else {}
+    if not export_source:
+        export_source = recover_pro_export_source_for_file(file_name)
+    if export_source:
+        metadata["export_source"] = export_source
+    qa_by_idx = qa_by_idx or {}
+
+    html = reference_path.read_text(encoding="utf-8")
+    component_rows: List[Dict[str, Any]] = []
+    for idx, row in enumerate(editor_rows):
+        findings = qa_by_idx.get(idx, [])
+        match_value = safe_text(row.get("match") or row.get("match_score") or row.get("score") or "MT") or "MT"
+        if match_value.endswith("%"):
+            match_value = match_value[:-1]
+        component_rows.append(
+            {
+                "id": safe_text(row.get("id") or idx + 1),
+                "source": safe_text(row.get("source", "")),
+                "target": safe_text(row.get("target") or row.get("translation") or ""),
+                "match": match_value,
+                "qa": "Needs review" if findings else "Clear",
+                "done": is_segment_confirmed(row),
+                "start": safe_text(row.get("start", "")),
+                "end": safe_text(row.get("end", "")),
+                "export_ref": row.get("export_ref", {}) if isinstance(row.get("export_ref", {}), dict) else {},
+            }
+        )
+
+    rows_json = json.dumps(component_rows, ensure_ascii=False)
+    uploaded_context_json = json.dumps(uploaded_context or {}, ensure_ascii=False)
+    export_asset_json = json.dumps(export_source or {}, ensure_ascii=False)
+    language_resources_json = json.dumps(build_editor_language_resources(rules), ensure_ascii=False)
+    html = re.sub(r"const rows = \[.*?\];", lambda _match: f"const rows = {rows_json};", html, flags=re.S)
+    html = re.sub(
+        r"const uploadedContext = \{.*?\};",
+        lambda _match: f"const uploadedContext = {uploaded_context_json};",
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = re.sub(
+        r"const exportAsset = \{.*?\};",
+        lambda _match: f"const exportAsset = {export_asset_json};",
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = re.sub(
+        r"const languageResources = \{.*?\};",
+        lambda _match: f"const languageResources = {language_resources_json};",
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = re.sub(
+        r'<div class="title">.*?</div>',
+        f'<div class="title">{escape(file_name)} / {escape(title)} / {escape(language)} Review</div>',
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = re.sub(
+        r'<div class="subtitle">.*?</div>',
+        f'<div class="subtitle">ErrorSweep CAT Editor &middot; Pro Human Review &middot; File: {escape(file_name)}</div>',
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = html.replace("Source (en)", f"Source ({escape(source_language)})")
+    html = html.replace("Target (te)", f"Target ({escape(language)})")
+
+    confirmed = sum(1 for row in editor_rows if is_segment_confirmed(row))
+    total = len(editor_rows)
+    source_words = sum(len(re.findall(r"\S+", safe_text(row.get("source", "")))) for row in editor_rows)
+    target_words = sum(len(re.findall(r"\S+", safe_text(row.get("target") or row.get("translation") or ""))) for row in editor_rows)
+    source_chars = sum(len(safe_text(row.get("source", ""))) for row in editor_rows)
+    target_chars = sum(len(safe_text(row.get("target") or row.get("translation") or "")) for row in editor_rows)
+    footer_html = f"""
+        <footer class="editor-footer">
+          <div><b>Confirmed segments</b> {confirmed:,} / {total:,} &middot; <b>words</b> {target_words:,} / {source_words:,} &middot; <b>chars</b> {target_chars:,} / {source_chars:,}</div>
+          <div>Active chars <span id="activeChars">0</span> &middot; modified by reviewer</div>
+        </footer>
+    """
+    html = re.sub(r'<footer class="editor-footer">.*?</footer>', footer_html, html, count=1, flags=re.S)
+
+    st.markdown(
+        """
+        <div id="human-review-editor-page-marker" class="human-review-editor-page human_review_editor_page" aria-hidden="true"></div>
+        <style>
+        body:has(#human-review-editor-page-marker),
+        body:has(#human-review-editor-page-marker) [data-testid="stAppViewContainer"],
+        body:has(#human-review-editor-page-marker) [data-testid="stMain"] {
+            height:100dvh !important;
+            max-height:100dvh !important;
+            overflow:hidden !important;
+            background:#080a12 !important;
+        }
+        body:has(#human-review-editor-page-marker) [data-testid="stHeader"],
+        body:has(#human-review-editor-page-marker) [data-testid="stToolbar"],
+        body:has(#human-review-editor-page-marker) footer {
+            display:none !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content {
+            width:100% !important;
+            max-width:var(--es-shell-content-width) !important;
+            min-width:0 !important;
+            padding:var(--es-shell-frame-padding) !important;
+            margin:0 auto !important;
+            overflow:hidden !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div,
+        body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
+        body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
+            width:100% !important;
+            max-width:100% !important;
+            min-width:0 !important;
+            margin:0 auto !important;
+            padding:0 !important;
+            left:auto !important;
+            right:auto !important;
+            transform:none !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
+        body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
+            height:100% !important;
+            max-height:100% !important;
+            width:100% !important;
+            max-width:100% !important;
+            min-height:0 !important;
+            margin:0 auto !important;
+            padding:0 !important;
+            overflow:hidden !important;
+            border:0 !important;
+            border-radius:0 !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {
+            gap:0 !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker) {
+            height:0 !important;
+            max-height:0 !important;
+            min-height:0 !important;
+            margin:0 !important;
+            padding:0 !important;
+            overflow:hidden !important;
+        }
+        body:has(#human-review-editor-page-marker) iframe {
+            width:100% !important;
+            max-width:100% !important;
+            min-width:0 !important;
+            height:100% !important;
+            display:block !important;
+            border:0 !important;
+        }
+        #human-review-editor-page-marker,
+        .human-review-editor-page,
+        .human_review_editor_page {
+            display:none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    components.html(html, height=900, scrolling=False)
+
+
 def render_external_cat_editor(job_id: str) -> None:
     payload = load_external_editor_payload(job_id)
     if not payload:
@@ -6553,210 +13320,47 @@ def render_external_cat_editor(job_id: str) -> None:
     if not rows:
         st.error("This editor job has no rows. Please rerun Pro translation and open the editor again.")
         return
+    if not (metadata.get("export_source") or payload.get("export_source")):
+        recovered_export_source = recover_pro_export_source_for_file(metadata.get("file_name") or payload.get("file_name") or "")
+        if recovered_export_source:
+            metadata["export_source"] = recovered_export_source
+            payload["metadata"] = metadata
+            payload["export_source"] = recovered_export_source
+            save_external_editor_payload(job_id, payload)
 
-    st.markdown(
-        """
-        <style>
-        .block-container { max-width: 100vw !important; padding: .15rem .25rem .25rem .25rem !important; }
-        .es-editor-shell { border: 1px solid rgba(148,163,184,.25); background:#080a12; min-height: calc(100vh - 10px); overflow:hidden; }
-        .es-editor-top { height: 50px; display:flex; align-items:center; justify-content:space-between; padding:0 14px; background:#242a2f; border-bottom:1px solid rgba(255,255,255,.08); }
-        .es-editor-brand { display:flex; align-items:center; gap:10px; font-weight:900; color:#fff; }
-        .es-editor-logo { width:32px; height:32px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#00d985,#34bdf6,#8b5cf6); color:#061018; font-weight:1000; }
-        .es-editor-pill { display:inline-flex; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:900; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); color:#e5edff; }
-        .es-editor-pill.green { background:rgba(0,217,133,.14); border-color:rgba(0,217,133,.35); color:#63ffc4; }
-        .es-editor-tabs { height:36px; display:flex; align-items:center; gap:0; background:#eef2f7; color:#0f172a; border-bottom:1px solid #cbd5e1; }
-        .es-editor-tab { height:36px; padding:0 22px; display:flex; align-items:center; font-weight:800; font-size:13px; border-right:1px solid #cbd5e1; }
-        .es-editor-tab.active { background:#fff; border-bottom:2px solid #00d985; }
-        .es-context-preview { height:96px; background:#e9eef5; border-bottom:1px solid #cbd5e1; display:flex; justify-content:center; }
-        .es-context-phone { width:430px; background:#1f2027; display:flex; align-items:center; justify-content:center; }
-        .es-context-highlight { padding:8px 54px; border-radius:999px; background:#4b5563; color:#7dd3fc; border:2px dashed #7dd3fc; font-weight:800; }
-        .es-formatbar { height:32px; display:flex; align-items:center; gap:12px; background:#313940; color:#fff; border-bottom:1px solid rgba(255,255,255,.10); padding:0 10px; font-size:13px; }
-        .es-side-card { background:#f5f6f8; color:#1f2937; border-left:1px solid #cbd5e1; height: calc(100vh - 254px); overflow-y:auto; }
-        .es-side-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #cbd5e1; font-weight:900; }
-        .es-side-section { padding:14px; border-bottom:1px solid #d8dee8; }
-        .es-side-title { font-size:13px; font-weight:900; color:#4b5563; margin-bottom:8px; }
-        .es-resource { display:grid; grid-template-columns:38px 1fr; border:1px solid #d1d5db; background:#fff; margin-bottom:8px; }
-        .es-resource-code { background:#cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; }
-        .es-resource-body { padding:8px; font-size:13px; }
-        .es-muted { color:#64748b; font-size:12px; }
-        div[data-testid="stDataEditor"] { border-radius:0 !important; border:0 !important; contain:paint !important; isolation:isolate !important; overflow:hidden !important; }
-        div[data-testid="stDataEditor"] textarea, div[data-testid="stDataEditor"] input { font-size:14px !important; }
-        div[data-testid="stDataEditor"] textarea:not(:focus), div[data-testid="stDataEditor"] input:not(:focus) { opacity:0 !important; pointer-events:none !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    for idx, row in enumerate(rows):
+        source_value = safe_text(row.get("source", ""))
+        target_key = f"ext_cat_target_{job_id}_{idx}"
+        done_key = f"ext_cat_done_{job_id}_{idx}"
+        if target_key not in st.session_state:
+            st.session_state[target_key] = repair_localization_translation(source_value, row.get("target", ""))
+        if done_key not in st.session_state:
+            st.session_state[done_key] = is_segment_confirmed(row)
 
-    title = safe_text(metadata.get("title", "ErrorSweep CAT")) or "ErrorSweep CAT"
-    file_name = safe_text(metadata.get("file_name", "translation_job")) or "translation_job"
+    current_rows: List[Dict[str, Any]] = []
+    for idx, original in enumerate(rows):
+        row = dict(original)
+        target_value = safe_text(st.session_state.get(f"ext_cat_target_{job_id}_{idx}", row.get("target", "")))
+        done_value = bool(st.session_state.get(f"ext_cat_done_{job_id}_{idx}", is_segment_confirmed(row)))
+        row["id"] = row.get("id") or idx + 1
+        row["target"] = target_value
+        row["translation"] = target_value
+        set_segment_confirmed(row, done_value, target_value)
+        current_rows.append(row)
+
     language = safe_text(metadata.get("target_language", "Target")) or "Target"
-    completion = compute_review_completion(rows)
+    rules = payload.get("rules") or metadata.get("rules") or workspace_rules()
+    gate_findings = delivery_quality_findings(current_rows, language, "Human Review", rules)
+    qa_by_idx: Dict[int, List[Dict[str, Any]]] = {idx: [] for idx in range(len(current_rows))}
+    for finding in gate_findings:
+        segment_ref = safe_text(finding.get("Segment ID") or finding.get("Location"))
+        match = re.search(r"\d+", segment_ref)
+        if match:
+            qa_idx = int(match.group(0)) - 1
+            if 0 <= qa_idx < len(current_rows):
+                qa_by_idx.setdefault(qa_idx, []).append(finding)
 
-    st.markdown(
-        f"""
-        <div class="es-editor-shell">
-          <div class="es-editor-top">
-            <div class="es-editor-brand"><div class="es-editor-logo">ES</div><div><div>{escape(file_name)}</div><div class="es-muted">{escape(title)} · Target: {escape(language)} · Job: {escape(job_id[:10])}</div></div></div>
-            <div style="display:flex; align-items:center; gap:8px;"><span class="es-editor-pill green">Accepted</span><span class="es-editor-pill">TM</span><span class="es-editor-pill">TB</span><span class="es-editor-pill">MT</span></div>
-          </div>
-          <div class="es-editor-tabs"><div class="es-editor-tab active">Context</div><div class="es-editor-tab">Quality Checks</div><div class="es-editor-tab">Search TM</div><div class="es-editor-tab">Glossary</div><div style="margin-left:auto; padding-right:14px; font-size:13px;">Mode: <b>Highlight strings</b></div></div>
-          <div class="es-context-preview"><div class="es-context-phone"><div class="es-context-highlight">Open account settings</div></div></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    toolbar_cols = st.columns([0.45, 0.18, 0.13, 0.10, 0.14], gap="small")
-    with toolbar_cols[0]:
-        search = st.text_input("Search", placeholder="Search source and translations", label_visibility="collapsed", key=f"ext_cat_search_{job_id}")
-    with toolbar_cols[1]:
-        status_filter = st.selectbox("Status", ["All", "MT", "Needs Review", "Approved", "Untranslated", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Rejected", "Needs Rework"], label_visibility="collapsed", key=f"ext_cat_status_{job_id}")
-    with toolbar_cols[2]:
-        pending_only = st.checkbox("Pending", value=False, key=f"ext_cat_pending_{job_id}")
-    with toolbar_cols[3]:
-        st.metric("Rows", len(rows))
-    with toolbar_cols[4]:
-        st.metric("Approved", completion["approved"])
-
-    st.markdown('<div class="es-formatbar"><b>B</b><i>I</i><u>U</u><span>↶</span><span>↷</span><span>BR</span><span>NBSP</span><span>✓</span></div>', unsafe_allow_html=True)
-
-    filtered_indexes = []
-    needle = safe_text(search).lower().strip()
-    for i, r in enumerate(rows):
-        src = safe_text(r.get("source", ""))
-        tgt = safe_text(r.get("target", ""))
-        status = safe_text(r.get("status", "Needs Review")) or "Needs Review"
-        if needle and needle not in src.lower() and needle not in tgt.lower():
-            continue
-        if status_filter != "All" and status != status_filter:
-            continue
-        if pending_only and status in {"Approved", "100%", "101%"}:
-            continue
-        filtered_indexes.append(i)
-    if not filtered_indexes:
-        filtered_indexes = list(range(len(rows)))
-
-    grid_rows = []
-    for i in filtered_indexes:
-        r = rows[i]
-        status = safe_text(r.get("status", "Needs Review")) or "Needs Review"
-        sensitive_kinds = detect_sensitive_text(f"{r.get('source', '')} {r.get('target', '')}")
-        grid_rows.append({
-            "No": i + 1,
-            "Source (EN)": safe_text(r.get("source", "")),
-            "Target": repair_localization_translation(r.get("source", ""), r.get("target", "")),
-            "Match": safe_text(r.get("match", "MT")) or "MT",
-            "Status": status,
-            "QA": "PII" if sensitive_kinds else ("OK" if status in {"Approved", "100%", "101%"} else "Open"),
-            "Notes": safe_text(r.get("notes", "")),
-            "Location": safe_text(r.get("location", f"Segment {i+1}")),
-        })
-
-    grid_col, side_col = st.columns([0.81, 0.19], gap="small")
-    with grid_col:
-        edited_df = st.data_editor(
-            pd.DataFrame(grid_rows),
-            use_container_width=True,
-            hide_index=True,
-            height=620,
-            num_rows="fixed",
-            disabled=["No", "Source (EN)", "Match", "QA", "Location"],
-            column_order=["No", "Source (EN)", "Target", "Match", "QA", "Status", "Notes", "Location"],
-            column_config={
-                "No": st.column_config.NumberColumn("#", width="small"),
-                "Source (EN)": st.column_config.TextColumn("Source (EN)", width="large"),
-                "Target": st.column_config.TextColumn("Target", width="large"),
-                "Match": st.column_config.TextColumn("Match", width="small"),
-                "QA": st.column_config.TextColumn("QA", width="small"),
-                "Status": st.column_config.SelectboxColumn("Status", options=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"], width="medium"),
-                "Notes": st.column_config.TextColumn("Notes", width="medium"),
-                "Location": st.column_config.TextColumn("Location", width="medium"),
-            },
-            key=f"external_cat_grid_{job_id}",
-        )
-
-        current_rows = [dict(r) for r in rows]
-        for _, erow in edited_df.iterrows():
-            idx = int(erow["No"]) - 1
-            if 0 <= idx < len(current_rows):
-                current_rows[idx]["target"] = safe_text(erow.get("Target", ""))
-                current_rows[idx]["translation"] = safe_text(erow.get("Target", ""))
-                current_rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
-                current_rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
-                current_rows[idx].setdefault("location", f"Segment {idx+1}")
-        gate_rules = payload.get("rules") or metadata.get("rules") or workspace_rules()
-        gate_findings = delivery_quality_findings(current_rows, language, "Human Review", gate_rules)
-        gate_summary = render_delivery_gate(current_rows, gate_findings, "Pre-delivery quality gate")
-
-        action_cols = st.columns([1, 1, 1, 1, 1])
-        if action_cols[0].button("Save Page", type="primary", use_container_width=True, key=f"ext_cat_save_{job_id}"):
-            for _, erow in edited_df.iterrows():
-                idx = int(erow["No"]) - 1
-                if 0 <= idx < len(rows):
-                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
-                    rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
-                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
-            payload["rows"] = rows
-            save_external_editor_payload(job_id, payload)
-            st.success("Saved editor changes.")
-        if action_cols[1].button("Approve visible", use_container_width=True, key=f"ext_cat_approve_{job_id}"):
-            for _, erow in edited_df.iterrows():
-                idx = int(erow["No"]) - 1
-                if 0 <= idx < len(rows):
-                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
-                    rows[idx]["status"] = "Approved" if safe_text(erow.get("Target", "")).strip() else "Needs Review"
-                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
-            payload["rows"] = rows
-            save_external_editor_payload(job_id, payload)
-            st.success("Visible rows approved.")
-        if action_cols[2].button("Submit", use_container_width=True, key=f"ext_cat_submit_{job_id}"):
-            if not gate_summary.get("ready"):
-                st.error("Submit blocked by the pre-delivery quality gate. Resolve blocking QA issues first.")
-                st.stop()
-            for r in rows:
-                if safe_text(r.get("target", "")).strip() and safe_text(r.get("status", "")) not in {"Rejected", "Needs Rework"}:
-                    r["status"] = "Approved"
-            payload["rows"] = rows
-            payload.setdefault("metadata", metadata)["submitted_at"] = now_stamp()
-            save_external_editor_payload(job_id, payload)
-            st.success("Submitted reviewed job.")
-        if action_cols[3].button("Refresh", use_container_width=True, key=f"ext_cat_refresh_{job_id}"):
-            st.rerun()
-        if action_cols[4].button("Back to Pro", use_container_width=True, key=f"ext_cat_back_{job_id}"):
-            query_clear("es_editor")
-            query_clear("job_id")
-            open_page("ErrorSweep Pro")
-
-        dl1, dl2, dl3 = st.columns(3)
-        base = re.sub(r"\.[^.]+$", "", file_name) or "reviewed_translation"
-        dl1.download_button("Download reviewed Excel", build_reviewed_translation_workbook(current_rows), file_name=f"{base}_reviewed.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, disabled=not gate_summary.get("ready"))
-        dl2.download_button("Download reviewed CSV", rows_to_csv(current_rows), file_name=f"{base}_reviewed.csv", mime="text/csv", use_container_width=True, disabled=not gate_summary.get("ready"))
-        dl3.download_button("Download target text", build_reviewed_plain_text(current_rows), file_name=f"{base}_target.txt", mime="text/plain", use_container_width=True, disabled=not gate_summary.get("ready"))
-        if not gate_summary.get("ready"):
-            st.download_button("Download QA gate findings", rows_to_csv(gate_findings), file_name=f"{base}_qa_gate_findings.csv", mime="text/csv", use_container_width=True)
-
-    with side_col:
-        st.markdown('<div class="es-side-card">', unsafe_allow_html=True)
-        st.markdown('<div class="es-side-head"><span>Additional Details</span><span class="es-editor-pill" style="background:#f97316;color:white;">1</span></div>', unsafe_allow_html=True)
-        selected_no = int(edited_df.iloc[0]["No"]) if not edited_df.empty else 1
-        selected_idx = max(0, min(selected_no - 1, len(rows) - 1))
-        selected = rows[selected_idx]
-        matches = compute_matches(safe_text(selected.get("source", "")))
-        st.markdown('<div class="es-side-section"><div class="es-side-title">Language Resources</div>', unsafe_allow_html=True)
-        if matches["glossary"]:
-            for g in matches["glossary"][:5]:
-                st.markdown(f'<div class="es-resource"><div class="es-resource-code">GT</div><div class="es-resource-body"><b>{escape(g.get("target", ""))}</b><br><span class="es-muted">{escape(g.get("source", ""))}</span></div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="es-resource"><div class="es-resource-code">GT</div><div class="es-resource-body"><b>Glossary</b><br><span class="es-muted">No glossary hit.</span></div></div>', unsafe_allow_html=True)
-        if matches["tm"]:
-            for m in matches["tm"][:3]:
-                st.markdown(f'<div class="es-resource"><div class="es-resource-code">TM</div><div class="es-resource-body"><b>{escape(m.get("type", "TM"))}</b><br><span class="es-muted">{escape(m.get("target", ""))}</span></div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="es-side-section"><div class="es-side-title">Quality Checks</div><div class="es-resource"><div class="es-resource-code">QA</div><div class="es-resource-body">Check placeholders, glossary, DNT, punctuation, and number consistency before submit.</div></div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="es-side-section"><div class="es-side-title">Selected Row</div><div class="es-resource"><div class="es-resource-code">#</div><div class="es-resource-body"><b>{selected_idx+1}</b><br><span class="es-muted">{escape(safe_text(selected.get("location", "")))}</span></div></div></div>', unsafe_allow_html=True)
-        st.markdown('<div class="es-side-section"><div class="es-side-title">Issues</div><button style="width:100%;border:1px solid #94a3b8;background:white;padding:8px;font-weight:800;">Open New Issue</button><div class="es-muted" style="margin-top:8px;">View related source issues (0)</div></div>', unsafe_allow_html=True)
-        st.markdown('<div class="es-side-section"><div class="es-side-title">History</div><div class="es-muted">Saved changes are stored under this job_id.</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    render_reference_cat_editor_shell(current_rows, metadata, qa_by_idx, rules=rules)
 
 
 def render_external_media_editor(job_id: str) -> None:
@@ -6766,16 +13370,28 @@ def render_external_media_editor(job_id: str) -> None:
         return
     rows = payload.get("rows") or []
     metadata = payload.get("metadata") or payload
+    if not rows:
+        st.warning("No media rows found for this editor job.")
+        return
+
+    media_source, media_type, media_name = read_media_preview_bytes(metadata)
+    file_name = safe_text(metadata.get("file_name") or media_name or "media_job")
+    render_reference_media_editor_shell(job_id, rows, metadata, media_source, media_type, media_name or file_name)
+    return
+
     workflow = metadata.get("workflow") or metadata.get("title", "Media Editor")
     file_name = metadata.get("file_name", "media_job")
     target_language = metadata.get("target_language", "")
 
+    st.markdown('<div id="media-editor-page-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
     st.markdown(
         """
         <style>
-        [data-testid="stSidebar"] {display:none !important;}
-        [data-testid="stHeader"] {display:none !important;}
-        .block-container {max-width: 100% !important; padding: 0.6rem 0.8rem 1rem !important;}
+        #media-editor-page-marker {display:none !important;}
+        body:has(#media-editor-page-marker) [data-testid="stSidebar"] {display:none !important;}
+        body:has(#media-editor-page-marker) [data-testid="stHeader"] {display:none !important;}
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content {padding: var(--es-shell-frame-padding) !important;}
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {max-width: var(--es-shell-content-width) !important;}
         .es-media-top {display:flex;justify-content:space-between;align-items:center;background:#242a2f;color:white;border:1px solid #334155;border-radius:10px;padding:10px 14px;margin-bottom:10px;}
         .es-media-title {font-weight:900;font-size:15px;}
         .es-media-sub {font-size:12px;color:#cbd5e1;margin-top:2px;}
@@ -6803,26 +13419,31 @@ def render_external_media_editor(job_id: str) -> None:
     with preview_col:
         render_media_preview(media_bytes, media_type, media_name or file_name)
         render_waveform_preview(rows, 0)
+        render_interactive_media_timeline(rows, 0, key=f"external_media_timeline_{job_id}")
     with job_col:
         st.caption("Edit timing and transcript/subtitle text directly in the grid. Keep the media preview visible while reviewing timing and transcript/subtitle text.")
         st.metric("Rows", len(rows))
-        st.metric("Approved", sum(1 for r in rows if safe_text(r.get("status", "")) == "Approved"))
+        st.metric("Confirmed", sum(1 for r in rows if is_segment_confirmed(r)))
         timing_issues = validate_timing_rows(rows)
         if timing_issues:
             st.warning(f"{len(timing_issues)} timing issue(s) need review.")
 
     df = pd.DataFrame(rows)
-    wanted = [c for c in ["id", "start", "end", "source", "target", "status", "match"] if c in df.columns]
+    if "confirmed" not in df.columns:
+        df["confirmed"] = [is_segment_confirmed(r) for r in rows]
+    wanted = [c for c in ["id", "start", "end", "source", "target", "confirmed", "status", "match"] if c in df.columns]
     if wanted:
         df = df[wanted]
 
     render_segment_timeline(rows, 0)
 
     column_config = {}
+    if "confirmed" in df.columns:
+        column_config["confirmed"] = st.column_config.CheckboxColumn("Done", width="small", help="Segment completed confirmation")
     if "target" in df.columns:
         column_config["target"] = st.column_config.TextColumn("Target Subtitle / Transcript", width="large")
     if "source" in df.columns:
-        column_config["source"] = st.column_config.TextColumn("Source / Speaker Note", width="large", disabled=True)
+        column_config["source"] = st.column_config.TextColumn("Source / Speaker Note", width="large")
     if "start" in df.columns:
         column_config["start"] = st.column_config.NumberColumn("Start", format="%.3f")
     if "end" in df.columns:
@@ -6835,29 +13456,283 @@ def render_external_media_editor(job_id: str) -> None:
         height=470,
         num_rows="dynamic",
         column_config=column_config,
-        disabled=[c for c in df.columns if c not in {"target", "start", "end", "status", "match"}],
+        disabled=[c for c in df.columns if c not in {"confirmed", "target", "start", "end", "status", "match"}],
         key=f"external_media_grid_{job_id}",
     )
 
+    media_rows_for_download = edited.to_dict(orient="records")
+    for media_row in media_rows_for_download:
+        set_segment_confirmed(media_row, bool(media_row.get("confirmed")), safe_text(media_row.get("target", "")))
+    unconfirmed_media = unconfirmed_segment_count(media_rows_for_download)
+    if unconfirmed_media:
+        st.warning(f"Download is locked until all media segments are ticked complete. Pending: {unconfirmed_media}.")
+
     c1, c2, c3, c4 = st.columns(4)
     if c1.button("Save Draft", use_container_width=True, key=f"media_save_{job_id}"):
-        new_rows = edited.to_dict(orient="records")
+        new_rows = media_rows_for_download
+        for new_row in new_rows:
+            target_value = safe_text(new_row.get("target", ""))
+            set_segment_confirmed(new_row, bool(new_row.get("confirmed")), target_value)
         payload["rows"] = new_rows
         save_external_editor_payload(job_id, payload)
         st.success("Media editor draft saved.")
-    c2.download_button("Download CSV", rows_to_csv(edited.to_dict(orient="records")), file_name=f"{re.sub(r'[^A-Za-z0-9_-]+','_', str(file_name))}_media_editor.csv", mime="text/csv", use_container_width=True)
-    c3.download_button("Download SRT", rows_to_srt(edited.to_dict(orient="records"), use_target=True), file_name=f"{re.sub(r'[^A-Za-z0-9_-]+','_', str(file_name))}_output.srt", mime="text/plain", use_container_width=True)
+    media_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(file_name)).strip("_") or "media_editor"
+    c2.download_button("Download CSV ZIP", media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=True), file_name=f"{media_slug}_csv_package.zip", mime="application/zip", use_container_width=True, disabled=unconfirmed_media > 0)
+    c3.download_button("Download SRT ZIP", media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=False), file_name=f"{media_slug}_srt_package.zip", mime="application/zip", use_container_width=True, disabled=unconfirmed_media > 0)
     if c4.button("Back", use_container_width=True, key=f"media_back_{job_id}"):
         query_clear("es_editor")
         query_clear("job_id")
         open_page("Subtitle / Transcription Editor")
 
 
+def media_editor_time_text(value: Any, fallback_seconds: float) -> str:
+    raw = safe_text(value)
+    if ":" in raw:
+        return raw.replace(".", ",")
+    try:
+        return format_time(float(value), comma=True)
+    except Exception:
+        return format_time(fallback_seconds, comma=True)
+
+
+def media_preview_component_payload(media_source: Optional[Any], mime: str, name: str = "") -> Dict[str, str]:
+    mime = safe_text(mime) or "video/mp4"
+    name = safe_text(name)
+    if not media_source:
+        return {
+            "src": "",
+            "mime": mime,
+            "name": name,
+            "note": "No media preview source is available for this job.",
+        }
+
+    if isinstance(media_source, (bytes, bytearray)):
+        encoded = base64.b64encode(bytes(media_source)).decode("ascii")
+        return {"src": f"data:{mime};base64,{encoded}", "mime": mime, "name": name, "note": ""}
+
+    source_text = safe_text(media_source)
+    if source_text.startswith(("http://", "https://", "data:")):
+        return {"src": source_text, "mime": mime, "name": name, "note": ""}
+
+    try:
+        media_path = Path(source_text)
+        if media_path.exists() and media_path.is_file():
+            file_name = name or media_path.name
+            size_bytes = media_path.stat().st_size
+            if size_bytes <= 40 * 1024 * 1024:
+                encoded = base64.b64encode(media_path.read_bytes()).decode("ascii")
+                return {"src": f"data:{mime};base64,{encoded}", "mime": mime, "name": file_name, "note": ""}
+            return {
+                "src": "",
+                "mime": mime,
+                "name": file_name,
+                "note": f"{file_name} is stored locally and is too large to embed in this editor preview.",
+            }
+    except Exception as exc:
+        LOGGER.warning("Unable to prepare media preview for component: %s", exc)
+
+    return {
+        "src": "",
+        "mime": mime,
+        "name": name,
+        "note": "Media preview is not available in this editor window.",
+    }
+
+
+def render_reference_media_editor_shell(
+    job_id: str,
+    rows: List[Dict[str, Any]],
+    metadata: Dict[str, Any],
+    media_source: Optional[Any],
+    media_type: str,
+    media_name: str,
+) -> None:
+    """Render the supplied media-editor reference HTML inside the Dashboard-aligned shell."""
+    reference_path = Path(__file__).resolve().parent / "assets" / "media_editor_reference.html"
+    if not reference_path.exists():
+        st.error("Media editor reference HTML is missing. Restore assets/media_editor_reference.html.")
+        return
+
+    timing_issues = validate_timing_rows(rows)
+    timing_by_row: Dict[int, List[Dict[str, Any]]] = {}
+    for issue in timing_issues:
+        try:
+            row_number = int(issue.get("row", 0))
+        except Exception:
+            row_number = 0
+        if row_number > 0:
+            timing_by_row.setdefault(row_number - 1, []).append(issue)
+
+    component_rows: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows or []):
+        qa_items = row.get("qa_findings") if isinstance(row.get("qa_findings"), list) else []
+        quality: List[Dict[str, str]] = []
+        for finding in qa_items[:4]:
+            if not isinstance(finding, dict):
+                continue
+            label = safe_text(finding.get("Severity") or finding.get("severity") or finding.get("Status") or "Review")
+            message = safe_text(finding.get("Explanation") or finding.get("issue") or finding.get("message") or finding.get("Check"))
+            if label or message:
+                quality.append({"label": label or "Review", "message": message or "Needs review."})
+        for issue in timing_by_row.get(idx, []):
+            quality.append({"label": "Timing", "message": safe_text(issue.get("issue") or "Review segment timing.")})
+
+        component_rows.append(
+            {
+                "id": safe_text(row.get("id") or idx + 1),
+                "start": media_editor_time_text(row.get("start"), idx * 4.0),
+                "end": media_editor_time_text(row.get("end"), idx * 4.0 + 3.0),
+                "source": safe_text(row.get("source") or row.get("text") or row.get("speaker_note") or ""),
+                "target": safe_text(row.get("target") or row.get("translation") or ""),
+                "status": safe_text(row.get("status") or row.get("match") or "Untranslated") or "Untranslated",
+                "match": safe_text(row.get("match") or row.get("match_score") or ""),
+                "done": is_segment_confirmed(row),
+                "qa": quality,
+            }
+        )
+
+    file_name = safe_text(metadata.get("file_name") or media_name or "media_editor") or "media_editor"
+    file_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", file_name).strip("_") or "errorsweep_media_editor"
+    payload = {
+        "job_id": safe_text(job_id),
+        "file_slug": file_slug,
+        "metadata": {
+            "title": safe_text(metadata.get("title") or "ErrorSweep Media Editor") or "ErrorSweep Media Editor",
+            "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
+            or "Subtitle / Transcription Workspace",
+            "file_name": file_name,
+            "target_language": safe_text(metadata.get("target_language") or ""),
+        },
+        "media": media_preview_component_payload(media_source, media_type, media_name or file_name),
+        "rows": component_rows,
+        "resources": build_editor_language_resources(workspace_rules()),
+    }
+
+    html = reference_path.read_text(encoding="utf-8")
+    html = html.replace("__MEDIA_EDITOR_PAYLOAD__", json.dumps(payload, ensure_ascii=False))
+
+    st.markdown(
+        """
+        <div id="media-editor-page-marker" class="media-editor-page" aria-hidden="true"></div>
+        <style>
+        body:has(#media-editor-page-marker),
+        body:has(#media-editor-page-marker) [data-testid="stAppViewContainer"],
+        body:has(#media-editor-page-marker) [data-testid="stMain"] {
+            height:100dvh !important;
+            max-height:100dvh !important;
+            overflow:hidden !important;
+            background:#080a12 !important;
+        }
+        body:has(#media-editor-page-marker) [data-testid="stSidebar"],
+        body:has(#media-editor-page-marker) [data-testid="stHeader"],
+        body:has(#media-editor-page-marker) [data-testid="stToolbar"],
+        body:has(#media-editor-page-marker) footer {
+            display:none !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content {
+            width:100% !important;
+            max-width:var(--es-shell-content-width) !important;
+            min-width:0 !important;
+            padding:var(--es-shell-frame-padding) !important;
+            margin:0 auto !important;
+            overflow:hidden !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_app_shell,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div,
+        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
+        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
+            width:100% !important;
+            max-width:100% !important;
+            min-width:0 !important;
+            margin:0 auto !important;
+            padding:0 !important;
+            left:auto !important;
+            right:auto !important;
+            transform:none !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
+        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
+            height:100% !important;
+            max-height:100% !important;
+            width:100% !important;
+            max-width:100% !important;
+            min-height:0 !important;
+            margin:0 auto !important;
+            padding:0 !important;
+            overflow:hidden !important;
+            border:0 !important;
+            border-radius:0 !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {
+            gap:0 !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(#media-editor-page-marker) {
+            height:0 !important;
+            max-height:0 !important;
+            min-height:0 !important;
+            margin:0 !important;
+            padding:0 !important;
+            overflow:hidden !important;
+        }
+        body:has(#media-editor-page-marker) iframe {
+            width:100% !important;
+            max-width:100% !important;
+            min-width:0 !important;
+            height:100% !important;
+            display:block !important;
+            border:0 !important;
+        }
+        #media-editor-page-marker,
+        .media-editor-page {
+            display:none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    components.html(html, height=900, scrolling=False)
+
+
 def render_external_editor_router() -> bool:
-    editor_type = query_get("es_editor")
+    route = get_current_route()
+    if route.get("route") == "human_review_editor":
+        review_id = safe_text(route.get("review_id") or query_get("review_id"))
+        if not review_id:
+            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            return True
+        if not load_external_editor_payload(review_id):
+            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            return True
+        render_external_cat_editor(review_id)
+        return True
+    requested_page = safe_text(route.get("page") or route.get("es_page"))
+    if requested_page in HUMAN_REVIEW_EDITOR_PAGES:
+        review_id = safe_text(route.get("review_id") or query_get("review_id"))
+        if not review_id:
+            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            return True
+        if not load_external_editor_payload(review_id):
+            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            return True
+        render_external_cat_editor(review_id)
+        return True
+    editor_type = safe_text(route.get("es_editor") or query_get("es_editor"))
     if not editor_type:
         return False
-    job_id = query_get("job_id")
+    if editor_type == "human_review":
+        review_id = safe_text(route.get("review_id") or query_get("review_id"))
+        if not review_id:
+            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            return True
+        if not load_external_editor_payload(review_id):
+            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            return True
+        render_external_cat_editor(review_id)
+        return True
+    job_id = safe_text(route.get("job_id") or query_get("job_id"))
     if editor_type == "cat":
         render_external_cat_editor(job_id)
         return True
@@ -6909,11 +13784,59 @@ def build_reviewed_plain_text(rows: List[Dict[str, Any]]) -> bytes:
     return "\n".join(repair_localization_translation(r.get("source", ""), r.get("target", "")) for r in rows).encode("utf-8-sig")
 
 
+def is_segment_confirmed(row: Dict[str, Any]) -> bool:
+    raw = row.get("confirmed", row.get("segment_confirmed", ""))
+    if isinstance(raw, bool):
+        return raw
+    if safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved"}:
+        return True
+    return safe_text(row.get("status", "")) == "Approved"
+
+
+def set_segment_confirmed(row: Dict[str, Any], confirmed: bool, target: str = "") -> None:
+    row["confirmed"] = bool(confirmed)
+    row["segment_confirmed"] = bool(confirmed)
+    if confirmed:
+        row["status"] = "Approved"
+        row["confirmed_by"] = current_editor_identity()
+        row["confirmed_at"] = now_stamp()
+        if target:
+            row["target"] = target
+            row["translation"] = target
+    else:
+        row.pop("confirmed_by", None)
+        row.pop("confirmed_at", None)
+        if safe_text(row.get("status", "")) == "Approved":
+            row["status"] = "Needs Review" if safe_text(target or row.get("target", "")).strip() else "Untranslated"
+
+
+def render_segment_confirmation_checkbox(row: Dict[str, Any], key_prefix: str, target: str = "") -> bool:
+    before = is_segment_confirmed(row)
+    confirmed = st.checkbox(
+        "Segment completed",
+        value=before,
+        key=f"{key_prefix}_segment_completed",
+        help="Tick this after translation or editing is complete. Unticked segments remain pending.",
+    )
+    if confirmed != before:
+        set_segment_confirmed(row, confirmed, target)
+        return True
+    return False
+
+
+def unconfirmed_segment_count(rows: List[Dict[str, Any]]) -> int:
+    return sum(1 for row in rows if not is_segment_confirmed(row))
+
+
+def all_segments_confirmed(rows: List[Dict[str, Any]]) -> bool:
+    return bool(rows) and unconfirmed_segment_count(rows) == 0
+
+
 def compute_review_completion(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     total = len(rows)
     translated = sum(1 for r in rows if safe_text(r.get("target", "")).strip())
-    approved = sum(1 for r in rows if safe_text(r.get("status", "")) == "Approved")
-    needs_review = sum(1 for r in rows if "Review" in safe_text(r.get("status", "")) or not safe_text(r.get("target", "")).strip())
+    approved = sum(1 for r in rows if is_segment_confirmed(r))
+    needs_review = sum(1 for r in rows if not is_segment_confirmed(r) or not safe_text(r.get("target", "")).strip())
     return {"total": total, "translated": translated, "approved": approved, "needs_review": needs_review}
 
 
@@ -6935,6 +13858,348 @@ def compute_matches(source: str) -> Dict[str, List[Dict[str, str]]]:
     return {"tm": tm_hits[:5], "glossary": gloss_hits[:8], "dnt": dnt_hits[:8]}
 
 
+def editor_predictive_suggestions(source: str, target: str, matches: Dict[str, List[Dict[str, str]]], limit: int = 5) -> List[Dict[str, str]]:
+    """Return lightweight CAT suggestions from TM, glossary, DNT, and tokens."""
+    source = safe_text(source)
+    target = safe_text(target)
+    suggestions: List[Dict[str, str]] = []
+    seen: set = set()
+
+    def push(kind: str, text: str, reason: str) -> None:
+        cleaned = repair_localization_translation(source, safe_text(text))
+        if not cleaned:
+            return
+        key = cleaned.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        suggestions.append({"type": kind, "text": cleaned, "reason": reason})
+
+    for item in matches.get("tm", [])[:3]:
+        push(item.get("type", "TM"), item.get("target", ""), "Translation memory suggestion")
+    if target:
+        for item in matches.get("glossary", [])[:5]:
+            src = safe_text(item.get("source"))
+            tgt = safe_text(item.get("target"))
+            if src and tgt and src.lower() in source.lower() and tgt.lower() not in target.lower():
+                push("Glossary", target + (" " if target and not target.endswith(" ") else "") + tgt, f"Missing glossary target for {src}")
+    for token in extract_protected_tokens(source)[:5]:
+        if token and token not in target:
+            push("Protected token", (target + " " + token).strip(), f"Preserve {token}")
+    for item in matches.get("dnt", [])[:5]:
+        term = safe_text(item.get("term"))
+        if term and term not in target:
+            push("DNT", (target + " " + term).strip(), f"Keep do-not-translate term {term}")
+    if not suggestions and target:
+        repaired = repair_localization_translation(source, target)
+        if repaired and repaired != target:
+            push("Repaired Suggestion", repaired, "Protected tokens were repaired from the source")
+    return suggestions[:limit]
+
+
+def extract_protected_tokens(text: str) -> List[str]:
+    tokens = LOCALIZATION_PROTECTED_RE.findall(safe_text(text))
+    return list(dict.fromkeys(safe_text(token) for token in tokens if safe_text(token)))
+
+
+def highlight_protected_tokens_html(text: str) -> str:
+    value = safe_text(text)
+    if not value:
+        return ""
+    parts: List[str] = []
+    last = 0
+    for match in LOCALIZATION_PROTECTED_RE.finditer(value):
+        parts.append(escape(value[last:match.start()]))
+        token = match.group(0)
+        parts.append(f'<span class="es-token-protected">{escape(token)}</span>')
+        last = match.end()
+    parts.append(escape(value[last:]))
+    return "".join(parts)
+
+
+def apply_editor_find_replace(rows: List[Dict[str, Any]], find_text: str, replace_text: str, scope: str = "Target", use_regex: bool = False, case_sensitive: bool = False) -> Tuple[List[Dict[str, Any]], int, str]:
+    """Bulk find/replace for editor rows. Returns updated rows, count, error."""
+    find_text = safe_text(find_text)
+    replace_text = safe_text(replace_text)
+    if not find_text:
+        return rows, 0, "Enter text or a regex pattern to find."
+    updated = [dict(row) for row in rows]
+    fields = ["target"] if scope == "Target" else ["source"] if scope == "Source" else ["source", "target"]
+    count = 0
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        pattern = re.compile(find_text if use_regex else re.escape(find_text), flags=flags)
+    except re.error as exc:
+        return rows, 0, f"Invalid regex: {exc}"
+    for row in updated:
+        for field in fields:
+            value = safe_text(row.get(field, ""))
+            new_value, replacements = pattern.subn(replace_text, value)
+            if replacements:
+                row[field] = repair_localization_translation(row.get("source", ""), new_value) if field == "target" else new_value
+                if field == "target":
+                    row["translation"] = row[field]
+                    if safe_text(row.get("status")) in {"Approved", "100%", "101%"}:
+                        row["status"] = "Needs Review"
+                count += replacements
+    return updated, count, ""
+
+
+def row_comments(row: Dict[str, Any]) -> List[Dict[str, str]]:
+    raw = row.get("comments_json") or row.get("comments") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    comments: List[Dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            comments.append({
+                "author": safe_text(item.get("author") or item.get("user") or "Reviewer"),
+                "body": safe_text(item.get("body") or item.get("comment") or ""),
+                "mentions": safe_text(item.get("mentions") or ""),
+                "created_at": safe_text(item.get("created_at") or item.get("time") or ""),
+            })
+    return [item for item in comments if item.get("body")]
+
+
+def add_row_comment(row: Dict[str, Any], body: str) -> None:
+    body = safe_text(body)
+    if not body:
+        return
+    mentions = ", ".join(sorted(set(re.findall(r"@([A-Za-z0-9_.-]+)", body))))
+    comments = row_comments(row)
+    comments.append({
+        "author": safe_text((current_user() or {}).get("email", "reviewer@errorsweep.local")),
+        "body": body,
+        "mentions": mentions,
+        "created_at": now_stamp(),
+    })
+    row["comments"] = comments
+    row["comments_json"] = json.dumps(comments, ensure_ascii=False)
+
+
+def current_editor_identity() -> str:
+    user = current_user() or {}
+    return safe_text(user.get("email") or user.get("name") or "local_reviewer@errorsweep.local")
+
+
+def render_row_lock_controls(row: Dict[str, Any], key_prefix: str) -> bool:
+    owner = safe_text(row.get("locked_by"))
+    locked_at = safe_text(row.get("locked_at"))
+    current = current_editor_identity()
+    changed = False
+    if owner:
+        st.caption(f"Locked by {owner}" + (f" at {format_local_time(locked_at)}" if locked_at else ""))
+        label = "Release lock" if owner == current else "Take over lock"
+        if st.button(label, key=f"{key_prefix}_unlock", use_container_width=True):
+            if owner == current:
+                row.pop("locked_by", None)
+                row.pop("locked_at", None)
+            else:
+                row["locked_by"] = current
+                row["locked_at"] = now_stamp()
+            changed = True
+    else:
+        st.caption("No active row lock.")
+        if st.button("Lock selected row", key=f"{key_prefix}_lock", use_container_width=True):
+            row["locked_by"] = current
+            row["locked_at"] = now_stamp()
+            changed = True
+    return changed
+
+
+def install_editor_keyboard_shortcut_listener() -> None:
+    components.html(
+        """
+        <script>
+        (function() {
+          const root = window.parent || window;
+          const doc = root.document;
+          const installKey = "__errorsweepShortcutDoneV4";
+          if (root[installKey]) return;
+          root[installKey] = true;
+
+          function buttonByText(text) {
+            const wanted = text.trim().toLowerCase();
+            return Array.from(doc.querySelectorAll("button")).find((button) => {
+              return (button.innerText || "").replace(/\\s+/g, " ").trim().toLowerCase() === wanted;
+            });
+          }
+
+          function focusedRowCheckbox() {
+            let active = doc.activeElement;
+            if (!active || !["TEXTAREA", "INPUT"].includes(active.tagName)) return null;
+            let row = active.closest('div[data-testid="stHorizontalBlock"]');
+            while (row) {
+              const checkbox = row.querySelector('div[data-testid="stCheckbox"] input[type="checkbox"]');
+              if (checkbox) return checkbox;
+              const parent = row.parentElement;
+              row = parent ? parent.closest('div[data-testid="stHorizontalBlock"]') : null;
+            }
+            return null;
+          }
+
+          function approveFocusedSegment() {
+            const checkbox = focusedRowCheckbox();
+            if (checkbox && !checkbox.checked) {
+              const label = checkbox.closest("label");
+              (label || checkbox).click();
+              return true;
+            }
+            const completeButton = buttonByText("Complete");
+            if (completeButton) {
+              completeButton.click();
+              return true;
+            }
+            return false;
+          }
+
+          doc.addEventListener("keydown", function(e) {
+            const key = (e.key || "").toLowerCase();
+            if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "s") {
+              e.preventDefault();
+              e.stopPropagation();
+              const saveButton = buttonByText("Save file");
+              if (saveButton) saveButton.click();
+              return;
+            }
+            if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === "Enter") {
+              e.preventDefault();
+              e.stopPropagation();
+              approveFocusedSegment();
+              return;
+            }
+            if (e.altKey && !e.ctrlKey && !e.shiftKey && key === "n") {
+              e.preventDefault();
+              e.stopPropagation();
+              const nextButton = buttonByText("Next pending");
+              if (nextButton) nextButton.click();
+              return;
+            }
+            if (e.altKey && !e.ctrlKey && !e.shiftKey && key === "p") {
+              e.preventDefault();
+              e.stopPropagation();
+              const prevButton = buttonByText("Prev pending");
+              if (prevButton) prevButton.click();
+              return;
+            }
+            if (e.altKey && !e.ctrlKey && !e.shiftKey && key === "1") {
+              e.preventDefault();
+              e.stopPropagation();
+              const suggestionButton = buttonByText("Use suggestion");
+              if (suggestionButton) suggestionButton.click();
+              return;
+            }
+            if (e.altKey && !e.ctrlKey && !e.shiftKey && key === "q") {
+              e.preventDefault();
+              e.stopPropagation();
+              const qaButton = Array.from(doc.querySelectorAll("button")).find((button) => /^(E\\d+|W\\d+|OK|PII)$/i.test((button.innerText || "").trim()));
+              if (qaButton) qaButton.click();
+              return;
+            }
+            const combo = (e.ctrlKey ? "Ctrl+" : "") + (e.shiftKey ? "Shift+" : "") + (e.altKey ? "Alt+" : "") + e.key;
+            if (["Alt+1", "Ctrl+Shift+T"].includes(combo)) {
+              const note = doc.getElementById("errorsweep-shortcut-note");
+              if (note) note.textContent = combo + " captured.";
+            }
+          }, true);
+        })();
+        </script>
+        <div id="errorsweep-shortcut-note" style="display:none;">Shortcut listener active.</div>
+        """,
+        height=0,
+    )
+
+
+def render_keyboard_shortcuts_hint(key_prefix: str) -> None:
+    shortcuts = [
+        ("Ctrl+S", "Save file"),
+        ("Ctrl+Enter", "Complete selected row"),
+        ("Alt+N", "Next pending segment"),
+        ("Alt+P", "Previous pending segment"),
+        ("Alt+1", "Use top TM suggestion"),
+        ("Alt+Q", "Open QA details"),
+    ]
+    html = "".join(
+        f'<div class="es-cat-mini-row"><b>{escape(combo)}</b><br><span class="es-small">{escape(desc)}</span></div>'
+        for combo, desc in shortcuts
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    install_editor_keyboard_shortcut_listener()
+
+
+def render_contextual_copilot(source: str, target: str, matches: Dict[str, List[Dict[str, str]]], key_prefix: str) -> None:
+    question = st.text_input("Ask copilot", placeholder="Ask about tone, date format, terminology, or why QA flagged this row", key=f"{key_prefix}_copilot_q")
+    if st.button("Analyze row", key=f"{key_prefix}_copilot_btn", use_container_width=True):
+        hints = []
+        if matches.get("glossary"):
+            hints.append("Glossary: " + "; ".join(f"{safe_text(g.get('source'))} -> {safe_text(g.get('target'))}" for g in matches["glossary"][:4]))
+        if matches.get("dnt"):
+            hints.append("DNT: " + ", ".join(safe_text(d.get("term")) for d in matches["dnt"][:6]))
+        tokens = extract_protected_tokens(source)
+        if tokens:
+            hints.append("Protected tokens: " + ", ".join(tokens[:6]))
+        if not safe_text(target):
+            hints.append("Target is empty; route to MT/BYO AI or human translation.")
+        elif len(safe_text(target)) < max(4, len(safe_text(source)) * 0.25):
+            hints.append("Target is much shorter than source; check for dropped meaning.")
+        if not hints:
+            hints.append("No obvious deterministic issue found. Review style, locale, and client rules.")
+        if question:
+            hints.insert(0, f"Question: {question}")
+        st.info("\n".join(f"- {hint}" for hint in hints))
+
+
+def render_row_comments(row: Dict[str, Any], key_prefix: str) -> bool:
+    comments = row_comments(row)
+    if comments:
+        for comment in comments[-5:]:
+            mention_text = f" Mentions: {comment['mentions']}" if comment.get("mentions") else ""
+            st.markdown(
+                f'<div class="es-cat-mini-row"><b>{escape(comment["author"])}</b><br>{escape(comment["body"])}<br><span class="es-small">{escape(comment["created_at"])}{escape(mention_text)}</span></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown('<div class="es-cat-assist-empty">No comments yet.</div>', unsafe_allow_html=True)
+    new_comment = st.text_area("Add comment", height=74, placeholder="Ask @reviewer or add context for this segment", key=f"{key_prefix}_comment")
+    if st.button("Add comment", key=f"{key_prefix}_add_comment", use_container_width=True, disabled=not safe_text(new_comment)):
+        add_row_comment(row, new_comment)
+        return True
+    return False
+
+
+def render_interactive_media_timeline(rows: List[Dict[str, Any]], current_idx: int = 0, key: str = "timeline") -> None:
+    if not rows:
+        return
+    total = max(float(safe_text(row.get("end")) or 0) for row in rows)
+    total = max(total, 1.0)
+    blocks = []
+    for idx, row in enumerate(rows[:160]):
+        start = float(row.get("start") or 0)
+        end = float(row.get("end") or start + 0.1)
+        left = max(0, min(100, start / total * 100))
+        width = max(1.2, min(100 - left, (end - start) / total * 100))
+        active = idx == current_idx
+        color = "#00d985" if active else "#38bdf8" if safe_text(row.get("status")) == "Approved" else "#8b5cf6"
+        blocks.append(
+            f'<div title="Segment {idx + 1}: {escape(format_time(start))} - {escape(format_time(end))}" '
+            f'style="position:absolute;left:{left:.2f}%;width:{width:.2f}%;top:{18 + (idx % 4) * 18}px;height:12px;border-radius:8px;background:{color};box-shadow:0 0 18px rgba(56,189,248,.35);"></div>'
+        )
+    components.html(
+        f"""
+        <div style="height:108px;background:#080b14;border:1px solid rgba(148,163,184,.25);border-radius:12px;padding:10px;color:#dbeafe;font-family:Inter,Arial,sans-serif;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:8px;"><b>Timeline</b><span>{escape(format_time(total))}</span></div>
+          <div style="position:relative;height:82px;background:linear-gradient(90deg,rgba(14,165,233,.08),rgba(139,92,246,.10));border-radius:10px;overflow:hidden;">{''.join(blocks)}</div>
+        </div>
+        """,
+        height=126,
+    )
+
+
 def openai_client() -> Optional[OpenAI]:
     key = secret("OPENAI_API_KEY")
     if not key:
@@ -6948,6 +14213,8 @@ def current_ai_route_label() -> str:
         provider = safe_text(st.session_state.get("byo_ai_provider", "Custom API"))
         model = safe_text(st.session_state.get("byo_openai_model", ""))
         return f"BYO {provider} active" + (f" ({model})" if model else "")
+    if not feature_flag("self_hosted_engines"):
+        return "Self-hosted MT disabled by Platform Settings"
     if current_builtin_engine_label is not None:
         try:
             return current_builtin_engine_label()
@@ -7062,6 +14329,9 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str,
     """
     if not texts:
         return []
+    if not feature_flag("main_api_translation"):
+        st.warning("Translation routing is disabled by Platform Settings. Rows were sent to Human Review without MT.")
+        return ["" for _ in texts]
 
     user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
     rules_text = rules_summary_for_ai(rules)
@@ -7139,6 +14409,9 @@ Output shape:
     # NO USER KEY PATH: commercial-safe self-hosted MT.
     # IndicTrans2 for Indian languages, MADLAD-400 when enabled, and OPUS-MT fallback.
     # ----------------------------------------------------------
+    if not feature_flag("self_hosted_engines"):
+        st.warning("No API key was provided and self-hosted MT is disabled by Platform Settings. Use Human Review for translation.")
+        return ["" for _ in texts]
     if builtin_translate_batch is None:
         st.error("Built-in translation router is missing. Add translator_router.py and selfhosted_mt_clients.py beside app.py.")
         return ["" for _ in texts]
@@ -7385,8 +14658,47 @@ def run_global_qa_for_row(row: Dict[str, Any], target_language: str, domain: str
 def summarize_qa_findings(findings: List[Dict[str, Any]]) -> str:
     if not findings:
         return ""
-    top = findings[0]
-    return f"{top.get('Severity', 'Review')}: {top.get('Error Type', 'QA')}"
+    labels = [qa_finding_label(finding) for finding in findings[:4]]
+    return ", ".join(label for label in labels if label)
+
+
+def qa_finding_label(finding: Any) -> str:
+    if isinstance(finding, dict):
+        severity = safe_text(finding.get("Severity") or finding.get("severity") or "Review").title()
+        kind = safe_text(
+            finding.get("Error Type")
+            or finding.get("error_type")
+            or finding.get("Check")
+            or finding.get("Issue")
+            or finding.get("issue")
+            or "QA"
+        )
+        return f"{severity}: {kind}"
+    return safe_text(finding)
+
+
+def readable_qa_findings(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(label for label in (qa_finding_label(item) for item in value[:6]) if label)
+    if isinstance(value, dict):
+        return qa_finding_label(value)
+    return safe_text(value)
+
+
+def rows_for_display(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    display_rows: List[Dict[str, Any]] = []
+    for row in rows or []:
+        item = dict(row)
+        if "qa_findings" in item:
+            item["qa_findings"] = readable_qa_findings(item.get("qa_findings"))
+        if "qa_summary" in item:
+            item["qa_summary"] = readable_qa_findings(item.get("qa_summary")) or safe_text(item.get("qa_summary"))
+        if "issues" in item:
+            item["issues"] = readable_qa_findings(item.get("issues")) or safe_text(item.get("issues"))
+        display_rows.append(item)
+    return display_rows
 
 
 def qa_severity_rank(severity: str) -> int:
@@ -7503,8 +14815,15 @@ def delivery_gate_summary(rows: List[Dict[str, Any]], findings: List[Dict[str, A
     return summary
 
 
-def render_delivery_gate(rows: List[Dict[str, Any]], findings: List[Dict[str, Any]], title: str = "Delivery readiness") -> Dict[str, Any]:
+def render_delivery_gate(
+    rows: List[Dict[str, Any]],
+    findings: List[Dict[str, Any]],
+    title: str = "Delivery readiness",
+    render: bool = True,
+) -> Dict[str, Any]:
     summary = delivery_gate_summary(rows, findings)
+    if not render:
+        return summary
     st.markdown(f"### {title}")
     metrics([
         ("Gate", "PASS" if summary["ready"] else "FAIL", f"{summary['qa_score']}%"),
@@ -7723,7 +15042,43 @@ def validate_timing_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Login
 # ==========================================================
 
-def render_landing_page() -> None:
+def render_router_debug_panel(resolved_route: Optional[Dict[str, Any]] = None, decision: str = "") -> None:
+    if query_get("debug_router") != "1":
+        return
+    route = resolved_route or get_current_route()
+    raw_es_page = query_get("es_page")
+    normalized_es_page = normalize_es_page(raw_es_page)
+    selected_page = safe_text(route.get("page") or route.get("es_page") or normalized_es_page)
+    st.info("Router debug panel")
+    st.json({
+        "raw_query_params": {key: query_get(key) for key in ["route", "public", "es_page", "es_editor", "job_id", "review_id", "return_to", "debug_router"]},
+        "raw_es_page": raw_es_page,
+        "normalized_es_page": normalized_es_page,
+        "resolved_route": route,
+        "authenticated": bool(current_user()),
+        "return_to": query_get("return_to") or safe_text(st.session_state.get("auth_return_to", "")),
+        "review_id": route.get("review_id") or query_get("review_id") or st.session_state.get("active_review_session_id", ""),
+        "selected_renderer": route.get("selected_renderer") or (selected_page if selected_page in PAGE_RENDERERS else route.get("public") or route.get("route") or ""),
+        "redirect_reason": route.get("redirect_reason") or safe_text(st.session_state.get("_router_redirect_reason", "")),
+        "session_route": st.session_state.get("route") or st.session_state.get("current_route") or st.session_state.get("page"),
+        "decision": decision,
+    })
+
+
+def render_landing_page(reason: str = "explicit_landing") -> None:
+    route = get_current_route()
+    review_id = query_get("review_id") or safe_text(st.session_state.get("active_review_session_id", ""))
+    LOGGER.warning(
+        "LANDING_RENDERED reason=%s query_params=%s route=%s session_route=%s authenticated=%s review_id=%s user=%s",
+        reason,
+        {key: query_get(key) for key in ["route", "public", "es_page", "es_editor", "job_id", "review_id", "return_to"]},
+        route,
+        st.session_state.get("route") or st.session_state.get("current_route") or st.session_state.get("page"),
+        bool(current_user()),
+        review_id,
+        safe_text((current_user() or {}).get("email")),
+    )
+    render_router_debug_panel(route, f"landing:{reason}")
     local_status = current_ai_route_label()
     st.html(
         dedent(f"""
@@ -7745,7 +15100,7 @@ def render_landing_page() -> None:
                 <a class="es-lp-link" href="#pricing">Pricing</a>
               </div>
               <div class="es-lp-actions">
-                <a class="es-lp-btn" href="{public_page_link('login')}" target="_self">Login</a>
+                <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
                 <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Sign up</a>
               </div>
             </div>
@@ -7764,7 +15119,7 @@ def render_landing_page() -> None:
                   </p>
                   <div class="es-lp-hero-actions">
                     <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
-                    <a class="es-lp-btn" href="{public_page_link('login')}" target="_self">Login</a>
+                    <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
                   </div>
                 </div>
               </div>
@@ -7957,7 +15312,7 @@ def render_landing_page() -> None:
                 <p>Start with AI QA, translation review, scorecards, and managed workflows, then scale into full localization operations.</p>
                 <div class="es-lp-hero-actions">
                   <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
-                  <a class="es-lp-btn" href="{public_page_link('login')}" target="_self">Login</a>
+                  <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
                 </div>
               </div>
             </div>
@@ -8005,6 +15360,9 @@ def render_landing_page() -> None:
 
 
 def render_login() -> None:
+    signup_enabled = feature_flag("public_registration")
+    signup_href = public_page_link("signup") if signup_enabled else public_page_link("landing")
+    signup_label = "Sign up" if signup_enabled else "Signups closed"
     st.html(
         dedent(f"""
         <div class="es-auth-shell">
@@ -8017,12 +15375,22 @@ def render_login() -> None:
           </div>
           <div class="es-auth-links">
             <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
-            <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Sign up</a>
+            <a class="es-lp-btn primary" href="{signup_href}" target="_self">{signup_label}</a>
           </div>
         </div>
         """).strip(),
     )
     st.markdown("## Login to ErrorSweep")
+
+    if is_authenticated():
+        if not safe_text(st.session_state.get("_post_login_tool_launch_url", "")):
+            st.session_state["_post_login_tool_launch_url"] = app_page_link("Dashboard")
+            st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
+        if not safe_text(st.session_state.get("_post_login_session_token", "")):
+            st.session_state["_post_login_session_token"] = signed_session_token_for_user(current_user() or {})
+        render_post_login_tool_launch_bridge()
+        st.caption("You can keep this login tab open. Normal app navigation happens in the ErrorSweep Tool tab.")
+        return
 
     tabs = st.tabs(["Platform owner", "Workspace user", "Demo access"])
 
@@ -8033,17 +15401,30 @@ def render_login() -> None:
         with st.form("owner_login"):
             email = st.text_input("Owner email", value=owner_user if not owner_is_configured else "")
             password = st.text_input("Owner password", type="password")
-            accepted = st.checkbox(COMPLIANCE_ACK_LABEL, key="owner_compliance_ack")
+            accepted = st.checkbox(compliance_ack_label(), key="owner_compliance_ack")
             submitted = st.form_submit_button("Sign in as Platform Owner", use_container_width=True)
-        sso1, sso2 = st.columns(2)
-        sso1.button("Continue with Enterprise SSO", disabled=True, use_container_width=True, key="owner_entra_sso")
-        sso2.button("Continue with Okta", disabled=True, use_container_width=True, key="owner_okta_sso")
+        render_sso_login_controls("owner")
         if submitted:
             if not accepted:
                 st.error("Please accept the workspace compliance terms before signing in.")
-            elif owner_is_configured and hmac.compare_digest(email.strip(), owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
+                return
+            else:
+                allowed_attempt, throttle_message = consume_abuse_attempt("owner_login", email.strip() or owner_user)
+                if not allowed_attempt:
+                    st.error(throttle_message)
+                    return
+            if owner_is_configured and hmac.compare_digest(email.strip(), owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
+                clear_abuse_attempts("owner_login", email.strip() or owner_user)
                 login_user(email, "Platform Owner", "owner", "Platform")
+                record_consent_acceptance(email, "Platform Owner", "owner", "Platform", "owner_login")
                 add_audit("Owner sign-in", email)
+                st.rerun()
+            elif safe_text(email).strip().lower() == UNLIMITED_ACCESS_EMAIL and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
+                clear_abuse_attempts("owner_login", email.strip() or UNLIMITED_ACCESS_EMAIL)
+                ensure_unlimited_access_account()
+                login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
+                record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "owner_login")
+                add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
                 st.rerun()
             elif not owner_is_configured:
                 st.warning("Owner password hash is not configured. Use Demo access while building.")
@@ -8058,16 +15439,30 @@ def render_login() -> None:
         with st.form("user_login"):
             email = st.text_input("User email", value=user_name if not user_is_configured else "")
             password = st.text_input("User password", type="password")
-            accepted = st.checkbox(COMPLIANCE_ACK_LABEL, key="user_compliance_ack")
+            accepted = st.checkbox(compliance_ack_label(), key="user_compliance_ack")
             submitted = st.form_submit_button("Sign in", use_container_width=True)
-        sso1, sso2 = st.columns(2)
-        sso1.button("Continue with Enterprise SSO", disabled=True, use_container_width=True, key="user_entra_sso")
-        sso2.button("Continue with Okta", disabled=True, use_container_width=True, key="user_okta_sso")
+        render_sso_login_controls("user")
         if submitted:
             if not accepted:
                 st.error("Please accept the workspace compliance terms before signing in.")
-            elif user_is_configured and hmac.compare_digest(email.strip(), user_name.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
-                login_user(email, default_role, "workspace", secret("ERRORSWEEP_ORG_NAME", "Demo Workspace"))
+                return
+            else:
+                allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", email.strip() or user_name)
+                if not allowed_attempt:
+                    st.error(throttle_message)
+                    return
+            if safe_text(email).strip().lower() == UNLIMITED_ACCESS_EMAIL and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
+                clear_abuse_attempts("workspace_login", email.strip())
+                ensure_unlimited_access_account()
+                login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
+                record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "workspace_login")
+                add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
+                st.rerun()
+            if user_is_configured and hmac.compare_digest(email.strip(), user_name.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
+                configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
+                clear_abuse_attempts("workspace_login", email.strip() or user_name)
+                login_user(email, default_role, "workspace", configured_workspace)
+                record_consent_acceptance(email, default_role, "workspace", configured_workspace, "workspace_login")
                 add_audit("Workspace user sign-in", email)
                 st.rerun()
             else:
@@ -8082,7 +15477,11 @@ def render_login() -> None:
                         if not email_provider_label() or email_provider_label() == "not_configured":
                             st.caption(f"Local verification link: {verify_url}")
                         return
-                    login_user(email.strip(), matched.get("role", default_role) or default_role, "workspace", matched.get("workspace", "Demo Workspace") or "Demo Workspace")
+                    matched_role = matched.get("role", default_role) or default_role
+                    matched_workspace = matched.get("workspace", "Demo Workspace") or "Demo Workspace"
+                    clear_abuse_attempts("workspace_login", email.strip())
+                    login_user(email.strip(), matched_role, "workspace", matched_workspace)
+                    record_consent_acceptance(email.strip(), matched_role, "workspace", matched_workspace, "workspace_login")
                     add_audit("Workspace user sign-in", email.strip())
                     st.rerun()
                 elif not user_is_configured and not matched:
@@ -8092,6 +15491,10 @@ def render_login() -> None:
         with st.expander("Forgot password?", expanded=False):
             reset_email = st.text_input("Account email", key="password_reset_email")
             if st.button("Send password reset link", use_container_width=True, key="send_password_reset"):
+                allowed_attempt, throttle_message = consume_abuse_attempt("password_reset", reset_email.strip() or "anonymous")
+                if not allowed_attempt:
+                    st.error(throttle_message)
+                    return
                 matched = next(
                     (
                         u for u in load_saas_records("users", include_all_workspaces=True, limit=1000)
@@ -8110,25 +15513,52 @@ def render_login() -> None:
 
     with tabs[2]:
         st.markdown("### Demo Access")
-        if is_production_mode():
-            st.warning("Demo access is disabled in production.")
+        if is_production_mode() or not feature_flag("demo_access"):
+            st.warning("Demo access is disabled by environment or Platform Settings.")
             return
         demo_role = st.selectbox(
             "Preview as",
             ["Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"],
         )
-        accepted = st.checkbox(COMPLIANCE_ACK_LABEL, key="demo_compliance_ack")
+        accepted = st.checkbox(compliance_ack_label(), key="demo_compliance_ack")
         if st.button("Enter demo workspace", use_container_width=True):
             if not accepted:
                 st.error("Please accept the workspace compliance terms before entering the demo workspace.")
             else:
+                allowed_attempt, throttle_message = consume_abuse_attempt("demo_access", demo_role)
+                if not allowed_attempt:
+                    st.error(throttle_message)
+                    return
                 account_type = "owner" if demo_role == "Platform Owner" else "workspace"
-                login_user(f"{demo_role.lower().replace(' ', '_')}@errorsweep.local", demo_role, account_type, "Demo Workspace")
+                demo_email = f"{demo_role.lower().replace(' ', '_')}@errorsweep.local"
+                login_user(demo_email, demo_role, account_type, "Demo Workspace")
+                record_consent_acceptance(demo_email, demo_role, account_type, "Demo Workspace", "demo_login")
                 add_audit("Demo login", demo_role)
                 st.rerun()
 
 
 def render_signup() -> None:
+    if not feature_flag("public_registration"):
+        st.html(
+            dedent(f"""
+            <div class="es-auth-shell">
+              <div class="es-lp-brand">
+                <div class="es-lp-logo">ES</div>
+                <div>
+                  <div class="es-lp-brand-name">ErrorSweep</div>
+                  <div class="es-lp-brand-sub">Nawin Corp</div>
+                </div>
+              </div>
+              <div class="es-auth-links">
+                <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
+                <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
+              </div>
+            </div>
+            """).strip(),
+        )
+        st.markdown("## Public registration is closed")
+        st.info("Trial workspace creation is currently disabled by Platform Settings. Existing users can still log in.")
+        return
     st.html(
         dedent(f"""
         <div class="es-auth-shell">
@@ -8141,7 +15571,7 @@ def render_signup() -> None:
           </div>
           <div class="es-auth-links">
             <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
-            <a class="es-lp-btn primary" href="{public_page_link('login')}" target="_self">Login</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
           </div>
         </div>
         """).strip(),
@@ -8154,7 +15584,7 @@ def render_signup() -> None:
         email = st.text_input("Work email")
         workspace = st.text_input("Company / workspace", value="Demo Workspace")
         password = st.text_input("Password", type="password")
-        accepted = st.checkbox(COMPLIANCE_ACK_LABEL, key="signup_compliance_ack")
+        accepted = st.checkbox(compliance_ack_label(), key="signup_compliance_ack")
         submitted = st.form_submit_button("Create workspace", use_container_width=True)
 
     if submitted:
@@ -8163,6 +15593,10 @@ def render_signup() -> None:
             return
         if not accepted:
             st.error("Please accept the workspace compliance terms before creating a workspace.")
+            return
+        allowed_attempt, throttle_message = consume_abuse_attempt("signup", email.strip() or workspace.strip() or "anonymous")
+        if not allowed_attempt:
+            st.error(throttle_message)
             return
         existing_user = next(
             (
@@ -8208,11 +15642,13 @@ def render_signup() -> None:
             workspace=workspace.strip(),
         )
         if is_production_mode():
+            record_consent_acceptance(email.strip(), "Workspace Owner", "workspace", workspace.strip(), "signup_pending_verification")
             st.success("Workspace created. Please verify your email before signing in.")
             if email_provider_label() == "not_configured":
                 st.caption(f"Local verification link: {verify_url}")
             return
         login_user(email.strip(), "Workspace Owner", "workspace", workspace.strip())
+        record_consent_acceptance(email.strip(), "Workspace Owner", "workspace", workspace.strip(), "signup")
         st.rerun()
 
 
@@ -8243,6 +15679,22 @@ def render_public_document(kind: str) -> None:
                 "Editor jobs and SaaS records persist through Supabase when configured, with local atomic JSON fallback for development.",
                 "Built-in no-key MT can run through local/self-hosted engines, reducing reliance on user API keys.",
                 "Sensitive-text indicators help reviewers identify emails, phone-like values, and credential-like content before routing externally.",
+            ],
+        },
+        "cookies": {
+            "title": "Cookie Notice",
+            "body": [
+                "ErrorSweep uses essential session storage for login, workspace routing, security, auditability, and download tracking.",
+                "Optional analytics or product diagnostics should only be enabled after the customer chooses the appropriate privacy option.",
+                "Customers can request export, correction, deletion, restriction, or consent-withdrawal review from the privacy request tracker.",
+            ],
+        },
+        "dpa": {
+            "title": "Data Processing Addendum",
+            "body": [
+                "This draft DPA summary records the intended processing scope for localization QA, translation review, media editing, and scorecard delivery.",
+                "Production launch still requires lawyer-reviewed data-processing terms, subprocessors, retention windows, and customer approval language.",
+                "Workspace owners should keep client rules, data-routing instructions, and external AI permissions attached to each workspace before processing content.",
             ],
         },
     }
@@ -8283,7 +15735,7 @@ def render_verify_email() -> None:
           </div>
           <div class="es-auth-links">
             <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
-            <a class="es-lp-btn primary" href="{public_page_link('login')}" target="_self">Login</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
           </div>
         </div>
         """).strip(),
@@ -8321,7 +15773,7 @@ def render_password_reset() -> None:
           </div>
           <div class="es-auth-links">
             <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
-            <a class="es-lp-btn primary" href="{public_page_link('login')}" target="_self">Login</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
           </div>
         </div>
         """).strip(),
@@ -8357,8 +15809,86 @@ def render_password_reset() -> None:
             st.error("The account for this reset link could not be found.")
 
 
+def render_sso_handoff() -> None:
+    st.html(
+        dedent(f"""
+        <div class="es-auth-shell">
+          <div class="es-lp-brand">
+            <div class="es-lp-logo">ES</div>
+            <div>
+              <div class="es-lp-brand-name">ErrorSweep</div>
+              <div class="es-lp-brand-sub">Nawin Corp</div>
+            </div>
+          </div>
+          <div class="es-auth-links">
+            <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
+          </div>
+        </div>
+        """).strip(),
+    )
+    st.markdown("## Enterprise SSO")
+    token = query_get("token")
+    payload, error = verify_sso_handoff_token(token)
+    if error:
+        st.error(error)
+        st.info("Ask your workspace owner to confirm the SSO login URL, handoff secret, domain, and provider metadata in Platform Settings.")
+        return
+    if sso_handoff_token_used(token):
+        st.error("This SSO handoff token has already been used. Start a fresh SSO login from your identity provider.")
+        return
+    connection_id, connection, match_error = find_sso_connection_for_payload(payload or {})
+    if match_error or not connection:
+        st.error(match_error or "No matching SSO connection was found.")
+        return
+
+    email = safe_text((payload or {}).get("email"))
+    workspace = safe_text(connection.get("workspace") or (payload or {}).get("workspace") or "Demo Workspace")
+    provider = safe_text(connection.get("provider") or (payload or {}).get("provider") or "Enterprise SSO")
+    role = safe_sso_role(payload or {}, connection)
+    st.success("Signed SSO handoff verified.")
+    st.dataframe(pd.DataFrame([{
+        "email": email,
+        "workspace": workspace,
+        "provider": provider,
+        "role": role,
+        "connection_id": connection_id,
+    }]), use_container_width=True, hide_index=True)
+
+    with st.form("sso_handoff_confirm", enter_to_submit=False):
+        accepted = st.checkbox(compliance_ack_label(), key="sso_handoff_compliance_ack")
+        submitted = st.form_submit_button("Continue to ErrorSweep", use_container_width=True)
+    if submitted:
+        if not accepted:
+            st.error("Please accept the workspace compliance terms before continuing.")
+            return
+        allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", email)
+        if not allowed_attempt:
+            st.error(throttle_message)
+            return
+        user_record, user_error = ensure_sso_user(payload or {}, connection)
+        if user_error or not user_record:
+            st.error(user_error or "Unable to create or load the SSO user.")
+            return
+        login_role = safe_text(user_record.get("role") or role or "User")
+        login_workspace = safe_text(user_record.get("workspace") or workspace)
+        consume_sso_handoff_token(token, payload or {}, connection_id, login_workspace)
+        clear_abuse_attempts("workspace_login", email)
+        record_consent_acceptance(email, login_role, "workspace", login_workspace, "sso_handoff")
+        add_audit("Enterprise SSO sign-in", f"{email} via {provider} into {login_workspace}")
+        login_user(email, login_role, "workspace", login_workspace)
+        st.rerun()
+
+
 def render_public_app() -> None:
-    route = (query_get("public") or "landing").strip().lower()
+    legacy_public_route = safe_text(query_get("route") or query_get("public")).strip().lower()
+    route = (
+        public_route_for_es_page(query_get("es_page"))
+        or (legacy_public_route if legacy_public_route in PUBLIC_ROUTES else "")
+        or public_route_for_es_page(legacy_public_route)
+        or "landing"
+    ).strip().lower()
+    render_router_debug_panel({"route": route, "public": route}, f"public:{route}")
     if route == "login":
         render_login()
     elif route == "signup":
@@ -8367,10 +15897,15 @@ def render_public_app() -> None:
         render_verify_email()
     elif route == "reset":
         render_password_reset()
-    elif route in {"terms", "privacy", "security"}:
+    elif route == "sso_handoff":
+        render_sso_handoff()
+    elif route in {"terms", "privacy", "security", "cookies", "dpa"}:
         render_public_document(route)
+    elif route == "landing":
+        render_landing_page("explicit_public_landing")
     else:
-        render_landing_page()
+        st.error(f"Unknown public route: {route}")
+        st.stop()
 
 
 # ==========================================================
@@ -8451,6 +15986,7 @@ def _legacy_page_dashboard_unused() -> None:
         st.markdown(f'<div class="es-activity-drawer">{activity_html}</div>', unsafe_allow_html=True)
 
 def page_dashboard() -> None:
+    st.markdown('<div id="errorsweep-dashboard-page-marker" class="errorsweep_dashboard_page" aria-hidden="true"></div>', unsafe_allow_html=True)
     user = current_user() or {}
     pending_review = sum(1 for r in st.session_state.review_segments if r.get("status") not in ("Approved", "Rejected"))
     total_jobs = len(st.session_state.jobs)
@@ -8471,90 +16007,90 @@ def page_dashboard() -> None:
     ]
     st.html(
         dedent(f"""
-        <section class="es-personal-hero">
-          <div class="es-hero-row">
-            <div>
-              <div class="es-kicker">Workspace command center</div>
-              <div class="es-welcome-title">Good {escape('morning' if datetime.now().hour < 12 else 'afternoon' if datetime.now().hour < 17 else 'evening')}, {escape(first_name_from_user(user))}</div>
-              <div class="es-hero-summary">
-                You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
+            <section class="es-personal-hero">
+              <div class="es-hero-row">
+                <div>
+                  <div class="es-kicker">Workspace command center</div>
+                  <div class="es-welcome-title">Good {escape('morning' if datetime.now().hour < 12 else 'afternoon' if datetime.now().hour < 17 else 'evening')}, {escape(first_name_from_user(user))}</div>
+                  <div class="es-hero-summary">
+                    You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
+                  </div>
+                  <div class="es-fab-row">
+                    <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
+                    <a class="es-fab-action" href="{page_link('ErrorSweep Pro')}" target="_self">Run Pro Translation</a>
+                    <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
+                    <a class="es-fab-action secondary" href="{page_link('ErrorSweep QA')}" target="_self">Run QA</a>
+                  </div>
+                </div>
+                <div class="es-hero-orb">ErrorSweep<br/>Live</div>
               </div>
-              <div class="es-fab-row">
-                <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
-                <a class="es-fab-action" href="{page_link('ErrorSweep Pro')}" target="_self">Run Pro Translation</a>
-                <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
-                <a class="es-fab-action secondary" href="{page_link('ErrorSweep QA')}" target="_self">Run QA</a>
-              </div>
-            </div>
-            <div class="es-hero-orb">ErrorSweep<br/>Live</div>
-          </div>
-        </section>
+            </section>
 
-        <div class="es-bento">
-          <div class="es-bento-card wide">
-            <div class="es-metric-label">Mission Control</div>
-            <div class="es-metric-value">{total_jobs}</div>
-            <div class="es-small">Jobs across QA, Pro, subtitle, transcription, and scorecard workflows.</div>
-            {area_chart_svg(spark_base, "mission")}
-          </div>
-          <div class="es-bento-card">
-            <div class="es-metric-label">Projects</div>
-            <div class="es-metric-value">{total_projects}</div>
-            <div class="es-small">Client/product workspaces</div>
-            {area_chart_svg([0, total_projects, total_projects + len(st.session_state.glossary)], "projects")}
-          </div>
-          <div class="es-bento-card">
-            <div class="es-metric-label">Language Memory</div>
-            <div class="es-metric-value">{total_memory}</div>
-            <div class="es-small">Approved translations</div>
-            {area_chart_svg([0, max(1, total_memory//3), total_memory], "memory")}
-          </div>
-          <div class="es-bento-card">
-            {radial_progress_svg(tqi_score, "TQI")}
-          </div>
-        </div>
+            <div class="es-bento">
+              <div class="es-bento-card wide">
+                <div class="es-metric-label">Mission Control</div>
+                <div class="es-metric-value">{total_jobs}</div>
+                <div class="es-small">Jobs across QA, Pro, subtitle, transcription, and scorecard workflows.</div>
+                {area_chart_svg(spark_base, "mission")}
+              </div>
+              <div class="es-bento-card">
+                <div class="es-metric-label">Projects</div>
+                <div class="es-metric-value">{total_projects}</div>
+                <div class="es-small">Client/product workspaces</div>
+                {area_chart_svg([0, total_projects, total_projects + len(st.session_state.glossary)], "projects")}
+              </div>
+              <div class="es-bento-card">
+                <div class="es-metric-label">Language Memory</div>
+                <div class="es-metric-value">{total_memory}</div>
+                <div class="es-small">Approved translations</div>
+                {area_chart_svg([0, max(1, total_memory//3), total_memory], "memory")}
+              </div>
+              <div class="es-bento-card">
+                {radial_progress_svg(tqi_score, "TQI")}
+              </div>
+            </div>
 
-        <div class="es-dashboard-grid">
-          <section class="es-dashboard-panel">
-            <div class="es-dashboard-title">
-              <h3>Production workflow</h3>
-              <span class="es-status-pill">Live workspace</span>
-            </div>
-            <div class="es-flow">
-              <div class="es-flow-step">
-                <span class="es-code-chip">01 Intake</span>
-                <b>Create project</b>
-                <div class="es-small">Source language, targets, domain, reusable client rules.</div>
-              </div>
-              <div class="es-flow-step">
-                <span class="es-code-chip">02 Analyze</span>
-                <b>Run QA or Pro</b>
-                <div class="es-small">Detect placeholders, DNT, terminology, and linguistic risk.</div>
-              </div>
-              <div class="es-flow-step">
-                <span class="es-code-chip">03 Review</span>
-                <b>Human workspace</b>
-                <div class="es-small">Edit segments with source, target, memory, and QA context.</div>
-              </div>
-              <div class="es-flow-step">
-                <span class="es-code-chip">04 Deliver</span>
-                <b>Reports</b>
-                <div class="es-small">Export QA reports, subtitles, scorecards, and reviewed files.</div>
-              </div>
-            </div>
-          </section>
+            <div class="es-dashboard-grid">
+              <section class="es-dashboard-panel">
+                <div class="es-dashboard-title">
+                  <h3>Production workflow</h3>
+                  <span class="es-status-pill">Live workspace</span>
+                </div>
+                <div class="es-flow">
+                  <div class="es-flow-step">
+                    <span class="es-code-chip">01 Intake</span>
+                    <b>Create project</b>
+                    <div class="es-small">Source language, targets, domain, reusable client rules.</div>
+                  </div>
+                  <div class="es-flow-step">
+                    <span class="es-code-chip">02 Analyze</span>
+                    <b>Run QA or Pro</b>
+                    <div class="es-small">Detect placeholders, DNT, terminology, and linguistic risk.</div>
+                  </div>
+                  <div class="es-flow-step">
+                    <span class="es-code-chip">03 Review</span>
+                    <b>Human workspace</b>
+                    <div class="es-small">Edit segments with source, target, memory, and QA context.</div>
+                  </div>
+                  <div class="es-flow-step">
+                    <span class="es-code-chip">04 Deliver</span>
+                    <b>Reports</b>
+                    <div class="es-small">Export QA reports, subtitles, scorecards, and reviewed files.</div>
+                  </div>
+                </div>
+              </section>
 
-          <section class="es-dashboard-panel es-orbit">
-            <div class="es-dashboard-title">
-              <h3>System readiness</h3>
-              <span class="es-status-pill">Operational</span>
+              <section class="es-dashboard-panel es-orbit">
+                <div class="es-dashboard-title">
+                  <h3>System readiness</h3>
+                  <span class="es-status-pill">Operational</span>
+                </div>
+                <div class="es-node"><strong>{active_rules} active rules</strong><span>Glossary and DNT terms available to QA and translation.</span></div>
+                <div class="es-node"><strong>{len(st.session_state.audit_logs)} activity events</strong><span>Workspace actions are tracked for owner review.</span></div>
+                <div class="es-node"><strong>{pending_review} review queue</strong><span>Segments waiting for human decision.</span></div>
+                <div class="es-node"><strong>{escape(current_ai_route_label())}</strong><span>Current AI and translation route.</span></div>
+              </section>
             </div>
-            <div class="es-node"><strong>{active_rules} active rules</strong><span>Glossary and DNT terms available to QA and translation.</span></div>
-            <div class="es-node"><strong>{len(st.session_state.audit_logs)} activity events</strong><span>Workspace actions are tracked for owner review.</span></div>
-            <div class="es-node"><strong>{pending_review} review queue</strong><span>Segments waiting for human decision.</span></div>
-            <div class="es-node"><strong>{escape(current_ai_route_label())}</strong><span>Current AI and translation route.</span></div>
-          </section>
-        </div>
         """).strip(),
     )
 
@@ -8585,10 +16121,10 @@ def page_dashboard() -> None:
                 """
         st.html(
             f"""
-            <div class="es-dashboard-panel">
-              <div class="es-dashboard-title"><h3>Needs attention</h3><span class="es-code-chip">Priority queue</span></div>
-              {body_html}
-            </div>
+              <div class="es-dashboard-panel">
+                <div class="es-dashboard-title"><h3>Needs attention</h3><span class="es-code-chip">Priority queue</span></div>
+                {body_html}
+              </div>
             """
         )
     with activity_col:
@@ -8601,164 +16137,346 @@ def page_dashboard() -> None:
         activity_html = "".join(items) or '<span class="es-small">No activity yet.</span>'
         st.html(
             f"""
-            <div class="es-dashboard-panel">
-              <div class="es-dashboard-title"><h3>Activity pulse</h3><span class="es-code-chip">Audit</span></div>
-              <div class="es-activity-drawer">{activity_html}</div>
-            </div>
+              <div class="es-dashboard-panel">
+                <div class="es-dashboard-title"><h3>Activity pulse</h3><span class="es-code-chip">Audit</span></div>
+                <div class="es-activity-drawer">{activity_html}</div>
+              </div>
             """
         )
 
 
-def page_projects() -> None:
-    hero("Projects", "Client and product workspaces", "Create language projects, attach rule packs, and keep memory scoped correctly.")
-    with st.form("create_project", enter_to_submit=False):
-        c1, c2 = st.columns(2)
-        name = c1.text_input("Project name")
-        client = c2.text_input("Client / workspace", value=(current_user() or {}).get("workspace", "Demo Workspace"))
-        c3, c4 = st.columns(2)
-        source_lang = c3.selectbox("Source language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index("English"))
-        target_langs = c4.multiselect(
-            "Target languages",
-            LANGUAGE_CATALOG,
-            default=["French", "Spanish", "German", "Italian", "Portuguese", "Telugu", "Hindi", "Tamil", "Malayalam"],
-        )
-        domain = st.selectbox("Default domain", ["Auto-detect", "Software UI", "Marketing", "Legal", "Medical", "E-learning", "Subtitling", "Gaming", "Finance", "General"])
-        submitted = st.form_submit_button("Create project", use_container_width=True)
+def project_identity(project: Dict[str, Any]) -> str:
+    project_id = safe_text(project.get("id"))
+    if project_id:
+        return project_id
+    fallback = f"{safe_text(project.get('workspace'))}:{safe_text(project.get('client'))}:{safe_text(project.get('project'))}"
+    return fallback or uuid.uuid4().hex
+
+
+def project_display_name(project: Dict[str, Any]) -> str:
+    name = safe_text(project.get("project")) or "Untitled project"
+    client = safe_text(project.get("client")) or safe_text(project.get("workspace")) or "Workspace"
+    return f"{name} - {client}"
+
+
+def project_target_languages(project: Dict[str, Any]) -> List[str]:
+    targets = [safe_text(item) for item in safe_text(project.get("targets")).split(",") if safe_text(item)]
+    return targets or ["French"]
+
+
+def project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+    project_id = project_identity(project)
+    project_name = safe_text(project.get("project")).lower()
+    matches: List[Dict[str, Any]] = []
+    for job in st.session_state.get("jobs", []):
+        job_project_id = safe_text(job.get("project_id"))
+        job_project_name = safe_text(job.get("project")).lower()
+        if job_project_id and job_project_id == project_id:
+            matches.append(job)
+        elif not job_project_id and project_name and job_project_name == project_name:
+            matches.append(job)
+    return matches
+
+
+def project_by_identity(project_id: str) -> Optional[Dict[str, Any]]:
+    wanted = safe_text(project_id)
+    for project in st.session_state.get("projects", []):
+        if project_identity(project) == wanted:
+            return project
+    return None
+
+
+def project_select_options() -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    options: List[str] = []
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for project in st.session_state.get("projects", []):
+        label = project_display_name(project)
+        if label in lookup:
+            label = f"{label} ({project_identity(project)[-6:]})"
+        options.append(label)
+        lookup[label] = project
+    return options, lookup
+
+
+def create_job_for_project(
+    project: Dict[str, Any],
+    *,
+    job_type: str,
+    language: str,
+    assignee: str,
+    note: str,
+    assignment_files: List[Any],
+) -> Optional[Dict[str, Any]]:
+    if not project:
+        st.error("Select a project before creating a job.")
+        return None
+    if not safe_text(language):
+        st.error("Please select a target language before creating the job.")
+        return None
+    if not safe_text(assignee):
+        st.error("Please enter an assignee before creating the job.")
+        return None
+    project_id = project_identity(project)
+    job_id = uuid.uuid4().hex
+    attachment_manifests = save_job_attachment_files(job_id, assignment_files or [])
+    workspace = safe_text(project.get("workspace")) or safe_text((current_user() or {}).get("workspace")) or "Demo Workspace"
+    record = persist_saas_record("jobs", {
+        "id": job_id,
+        "created": now_stamp(),
+        "workspace": workspace,
+        "type": job_type,
+        "language": language,
+        "assignee": assignee,
+        "status": "Draft",
+        "note": note,
+        "segments": 0,
+        "project_id": project_id,
+        "project": safe_text(project.get("project")),
+        "attachment_count": len(attachment_manifests),
+        "attachments_json": attachment_manifests,
+    })
+    st.session_state.jobs.insert(0, record)
+    trim_session_list("jobs")
+    project["id"] = project_id
+    project["job_count"] = len(project_jobs(project))
+    persisted_project = persist_saas_record("projects", project)
+    for idx, item in enumerate(st.session_state.get("projects", [])):
+        if project_identity(item) == project_id:
+            st.session_state.projects[idx] = persisted_project
+            break
+    add_audit("Project job created", f"{safe_text(project.get('project'))}: {job_type} assigned to {assignee}")
+    queue_email_notification(
+        assignee,
+        "New ErrorSweep job assigned",
+        f"A new {job_type} job has been assigned to you for {language} in project '{safe_text(project.get('project'))}'. Attachments: {len(attachment_manifests)}.",
+        "job.assigned",
+        metadata={"job_id": job_id, "project_id": project_id, "project": safe_text(project.get("project")), "job_type": job_type, "language": language, "attachment_count": len(attachment_manifests)},
+        workspace=workspace,
+    )
+    return record
+
+
+def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label: str = "Create job") -> None:
+    targets = project_target_languages(project)
+    default_language = targets[0] if targets[0] in LANGUAGE_CATALOG else "French"
+    with st.form(form_key, enter_to_submit=False):
+        c1, c2, c3 = st.columns(3)
+        job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
+        language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index(default_language), key=f"{form_key}_language")
+        assignee = c3.text_input("Assignee", value="reviewer@errorsweep.local", key=f"{form_key}_assignee")
+        assignment_files = st.file_uploader("Assignment upload (optional)", accept_multiple_files=True, key=f"{form_key}_files", help="Upload any file or ZIP package that should be assigned with this project job.")
+        note = st.text_area("Notes", height=80, key=f"{form_key}_note")
+        submitted = st.form_submit_button(submit_label, use_container_width=True)
     if submitted:
-        if not safe_text(name).strip():
-            st.error("Please enter a project name before creating the project.")
-            return
-        if not safe_text(client).strip():
-            st.error("Please enter a client/workspace before creating the project.")
-            return
-        if not target_langs:
-            st.error("Please select at least one target language before creating the project.")
-            return
-        project_id = f"{safe_text(client).replace(' ', '')}-{safe_text(name).replace(' ', '')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        record = persist_saas_record("projects", {
-            "id": project_id,
-            "created": now_stamp(),
-            "project": name,
-            "client": client,
-            "workspace": client,
-            "source": source_lang,
-            "targets": ", ".join(target_langs),
-            "domain": domain,
-            "status": "Active",
-            "job_count": 0,
-        })
-        st.session_state.projects.append(record)
-        trim_session_list("projects")
-        add_audit("Project created", name)
-        st.success("Project created.")
-
-    if st.session_state.projects:
-        st.dataframe(pd.DataFrame(display_records(st.session_state.projects)), use_container_width=True, hide_index=True)
-    else:
-        st.info("No projects yet.")
+        created = create_job_for_project(project, job_type=job_type, language=language, assignee=assignee, note=note, assignment_files=assignment_files or [])
+        if created:
+            st.success(f"Job created inside {safe_text(project.get('project'))}.")
 
 
-def page_jobs() -> None:
-    hero("Jobs", "Workflow queue", "Track uploads, translation, QA, Pro post-editing, scorecards, and delivery status.")
-    render_task_queue_panel()
-    if st.session_state.jobs:
-        render_jobs_kanban(st.session_state.jobs)
-        labels = [
-            f"{idx + 1}. {safe_text(job.get('type', 'Job'))} - {safe_text(job.get('status', ''))} - {safe_text(job.get('language', job.get('workspace', '')))}"
-            for idx, job in enumerate(st.session_state.jobs)
-        ]
-        with st.expander("Open job context panel", expanded=False):
-            selected = st.selectbox("Job", labels, label_visibility="collapsed")
-            job = st.session_state.jobs[labels.index(selected)]
-            st.html(
-                f"""
-                <div class="es-flyout">
-                  <span class="es-code-chip">Job context</span>
-                  <h3>{escape(safe_text(job.get("type", "Job")))}</h3>
-                  <div class="es-mini-table">
-                    <div class="es-mini-row"><span>Status</span><b>{escape(safe_text(job.get("status", "")))}</b></div>
-                    <div class="es-mini-row"><span>Project</span><b>{escape(safe_text(job.get("project", "")) or "Unlinked")}</b></div>
-                    <div class="es-mini-row"><span>Language</span><b>{escape(safe_text(job.get("language", "")))}</b></div>
-                    <div class="es-mini-row"><span>Attachments</span><b>{escape(safe_text(job.get("attachment_count", 0)))}</b></div>
-                    <div class="es-mini-row"><span>Workspace</span><b>{escape(safe_text(job.get("workspace", "")))}</b></div>
-                    <div class="es-mini-row"><span>Created</span><b>{escape(format_local_time(job.get("created", job.get("created_at", ""))))}</b></div>
-                  </div>
-                  <p class="es-small">{escape(safe_text(job.get("note", "")) or "No job note supplied.")}</p>
-                </div>
-                """
+def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
+    st.html(
+        f"""
+        <div class="es-flyout">
+          <span class="es-code-chip">Job context</span>
+          <h3>{escape(safe_text(job.get("type", "Job")))}</h3>
+          <div class="es-mini-table">
+            <div class="es-mini-row"><span>Status</span><b>{escape(safe_text(job.get("status", "")))}</b></div>
+            <div class="es-mini-row"><span>Project</span><b>{escape(safe_text(job.get("project", "")))}</b></div>
+            <div class="es-mini-row"><span>Language</span><b>{escape(safe_text(job.get("language", "")))}</b></div>
+            <div class="es-mini-row"><span>Attachments</span><b>{escape(safe_text(job.get("attachment_count", 0)))}</b></div>
+            <div class="es-mini-row"><span>Workspace</span><b>{escape(safe_text(job.get("workspace", "")))}</b></div>
+            <div class="es-mini-row"><span>Created</span><b>{escape(format_local_time(job.get("created", job.get("created_at", ""))))}</b></div>
+          </div>
+          <p class="es-small">{escape(safe_text(job.get("note", "")) or "No job note supplied.")}</p>
+        </div>
+        """
+    )
+    attachments = coerce_manifest_list(job.get("attachments_json"))
+    if attachments:
+        st.markdown("#### Job files")
+        for file_idx, manifest in enumerate(attachments[:8]):
+            file_label = safe_text(manifest.get("file_name")) or f"Attachment {file_idx + 1}"
+            rendered = render_file_manifest_action(manifest, f"{key_prefix}_{safe_text(job.get('id'))}_{file_idx}", f"Download {file_label}")
+            if not rendered:
+                st.caption(f"{file_label}: stored, but no direct download route is available in this deployment.")
+
+
+def page_projects() -> None:
+    hero("Projects", "Project-based production work", "Create projects, open project workspaces, and add jobs directly inside each project.")
+    user = current_user() or {}
+    workspace = safe_text(user.get("workspace")) or "Demo Workspace"
+
+    with st.expander("Create project", expanded=not bool(st.session_state.get("projects"))):
+        with st.form("create_project", enter_to_submit=False):
+            c1, c2 = st.columns(2)
+            name = c1.text_input("Project name")
+            client = c2.text_input("Client", value=workspace)
+            c3, c4 = st.columns(2)
+            source_lang = c3.selectbox("Source language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index("English"))
+            target_langs = c4.multiselect(
+                "Target languages",
+                LANGUAGE_CATALOG,
+                default=["French", "Spanish", "German", "Italian", "Portuguese", "Telugu", "Hindi", "Tamil", "Malayalam"],
             )
-        with st.expander("Raw job table", expanded=False):
-            st.dataframe(pd.DataFrame(display_records(st.session_state.jobs)), use_container_width=True, hide_index=True)
-    else:
+            domain = st.selectbox("Default domain", ["Auto-detect", "Software UI", "Marketing", "Legal", "Medical", "E-learning", "Subtitling", "Gaming", "Finance", "General"])
+            submitted = st.form_submit_button("Create project", use_container_width=True)
+        if submitted:
+            if not safe_text(name):
+                st.error("Please enter a project name before creating the project.")
+                return
+            if not safe_text(client):
+                st.error("Please enter a client before creating the project.")
+                return
+            if not target_langs:
+                st.error("Please select at least one target language before creating the project.")
+                return
+            project_id = f"{safe_text(workspace).replace(' ', '')}-{safe_text(name).replace(' ', '')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            record = persist_saas_record("projects", {
+                "id": project_id,
+                "created": now_stamp(),
+                "project": safe_text(name),
+                "client": safe_text(client),
+                "workspace": workspace,
+                "source": source_lang,
+                "targets": ", ".join(target_langs),
+                "domain": domain,
+                "status": "Active",
+                "job_count": 0,
+            })
+            st.session_state.projects.insert(0, record)
+            trim_session_list("projects")
+            st.session_state["selected_project_workspace_id"] = project_identity(record)
+            st.session_state["selected_jobs_project_id"] = project_identity(record)
+            add_audit("Project created", name)
+            st.success("Project created.")
+
+    projects = st.session_state.get("projects", [])
+    if not projects:
         st.html(
             """
             <div class="es-empty-state">
               <div>
                 <div class="es-empty-icon"></div>
-                <h3>No workflow jobs yet</h3>
-                <div class="es-small">Create a manual job, run QA, or start Pro translation to populate the pipeline.</div>
+                <h3>No projects yet</h3>
+                <div class="es-small">Create a project first. Jobs are created inside project workspaces.</div>
               </div>
             </div>
             """
         )
-    st.markdown("### Create manual job")
-    project_options = ["No project selected"]
-    project_lookup: Dict[str, Dict[str, Any]] = {}
-    for project in st.session_state.get("projects", []):
-        label = f"{safe_text(project.get('project', 'Project'))} · {safe_text(project.get('client') or project.get('workspace', 'Workspace'))}"
-        project_options.append(label)
-        project_lookup[label] = project
-    with st.form("manual_job", enter_to_submit=False):
-        c1, c2, c3 = st.columns(3)
-        job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"])
-        language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index("French"))
-        assignee = c3.text_input("Assignee", value="reviewer@errorsweep.local")
-        project_label = st.selectbox("Project context", project_options)
-        assignment_files = st.file_uploader(
-            "Assignment upload (optional)",
-            accept_multiple_files=True,
-            help="Upload any file or ZIP package that should be assigned with this job.",
-        )
-        note = st.text_area("Notes", height=80)
-        submitted = st.form_submit_button("Create job", use_container_width=True)
-    if submitted:
-        if not safe_text(language).strip():
-            st.error("Please select a target language before creating the job.")
-            return
-        if not safe_text(assignee).strip():
-            st.error("Please enter an assignee before creating the job.")
-            return
-        selected_project = project_lookup.get(project_label, {})
-        job_id = uuid.uuid4().hex
-        attachment_manifests = save_job_attachment_files(job_id, assignment_files or [])
-        record = persist_saas_record("jobs", {
-            "id": job_id,
-            "created": now_stamp(),
-            "workspace": (current_user() or {}).get("workspace", "Demo Workspace"),
-            "type": job_type,
-            "language": language,
-            "assignee": assignee,
-            "status": "Draft",
-            "note": note,
-            "project_id": safe_text(selected_project.get("id", "")),
-            "project": safe_text(selected_project.get("project", "")),
-            "attachment_count": len(attachment_manifests),
-            "attachments_json": attachment_manifests,
-        })
-        st.session_state.jobs.insert(0, record)
-        if selected_project:
-            selected_project["job_count"] = int(selected_project.get("job_count") or 0) + 1
-        trim_session_list("jobs")
-        add_audit("Manual job created", f"{job_type} assigned to {assignee}")
-        queue_email_notification(
-            assignee,
-            "New ErrorSweep job assigned",
-            f"A new {job_type} job has been assigned to you for {language}. Attachments: {len(attachment_manifests)}.",
-            "job.assigned",
-            metadata={"job_id": job_id, "job_type": job_type, "language": language, "attachment_count": len(attachment_manifests)},
-        )
-        st.success("Job created.")
+        return
 
+    metrics([
+        ("Projects", len(projects), "active workspaces"),
+        ("Jobs", len(st.session_state.get("jobs", [])), "project-owned tasks"),
+        ("Active", sum(1 for p in projects if safe_text(p.get("status", "Active")).lower() == "active"), "open projects"),
+    ])
+
+    left, main = st.columns([0.28, 0.72], gap="large")
+    with left:
+        st.markdown("### Project list")
+        labels, lookup = project_select_options()
+        selected_label = st.radio("Open project", labels, label_visibility="collapsed", key="project_workspace_radio")
+        selected_project = lookup[selected_label]
+        st.session_state["selected_project_workspace_id"] = project_identity(selected_project)
+        st.session_state["selected_jobs_project_id"] = project_identity(selected_project)
+        st.dataframe(pd.DataFrame(display_records(projects)), use_container_width=True, hide_index=True)
+
+    with main:
+        selected_project = project_by_identity(st.session_state.get("selected_project_workspace_id", "")) or selected_project
+        jobs = project_jobs(selected_project)
+        selected_project["job_count"] = len(jobs)
+        st.markdown(f"### {safe_text(selected_project.get('project'))}")
+        metrics([
+            ("Client", safe_text(selected_project.get("client")) or safe_text(selected_project.get("workspace")), "project owner"),
+            ("Source", safe_text(selected_project.get("source", "")), "source language"),
+            ("Jobs", len(jobs), "inside project"),
+        ])
+        st.caption(
+            f"Targets: {safe_text(selected_project.get('targets')) or 'Not set'} | "
+            f"Domain: {safe_text(selected_project.get('domain')) or 'General'} | "
+            f"Status: {safe_text(selected_project.get('status')) or 'Active'}"
+        )
+        st.markdown("#### Create job in this project")
+        render_project_job_form(selected_project, f"project_page_job_{project_identity(selected_project)}")
+        st.markdown("#### Project jobs")
+        if jobs:
+            render_jobs_kanban(jobs)
+            st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+        else:
+            st.info("No jobs in this project yet.")
+
+
+def page_jobs() -> None:
+    hero("Jobs", "Project job queue", "Select a project on the left, then create and manage jobs inside that project.")
+    projects = st.session_state.get("projects", [])
+    if not projects:
+        st.html(
+            """
+            <div class="es-empty-state">
+              <div>
+                <div class="es-empty-icon"></div>
+                <h3>Create a project first</h3>
+                <div class="es-small">Every job belongs to a project. Open Projects to create the first project workspace.</div>
+              </div>
+            </div>
+            """
+        )
+        st.link_button("Open Projects", page_link("Projects"), use_container_width=True)
+        return
+
+    left, main = st.columns([0.20, 0.80], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("### Projects")
+            st.caption("Project name - client name")
+            labels, lookup = project_select_options()
+            selected_id = safe_text(st.session_state.get("selected_jobs_project_id"))
+            default_index = 0
+            if selected_id:
+                for idx, label in enumerate(labels):
+                    if project_identity(lookup[label]) == selected_id:
+                        default_index = idx
+                        break
+            selected_label = st.radio("Project list", labels, index=default_index, label_visibility="collapsed", key="jobs_project_radio")
+            selected_project = lookup[selected_label]
+            st.session_state["selected_jobs_project_id"] = project_identity(selected_project)
+            st.caption(f"{len(projects)} project{'s' if len(projects) != 1 else ''}")
+
+    with main:
+        with st.container(border=True):
+            selected_project = project_by_identity(st.session_state.get("selected_jobs_project_id", "")) or selected_project
+            jobs = project_jobs(selected_project)
+            selected_project["job_count"] = len(jobs)
+            st.markdown(f"### Jobs in {safe_text(selected_project.get('project'))}")
+            st.caption(
+                f"Client: {safe_text(selected_project.get('client')) or safe_text(selected_project.get('workspace'))} | "
+                f"Targets: {safe_text(selected_project.get('targets')) or 'Not set'}"
+            )
+            metrics([
+                ("Jobs", len(jobs), "selected project"),
+                ("Draft", sum(1 for job in jobs if safe_text(job.get("status")).lower() == "draft"), "not started"),
+                ("Completed", sum(1 for job in jobs if safe_text(job.get("status")).lower() == "completed"), "delivered"),
+            ])
+            if jobs:
+                render_jobs_kanban(jobs)
+                st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+                labels_for_jobs = [
+                    f"{idx + 1}. {safe_text(job.get('type', 'Job'))} - {safe_text(job.get('status', ''))} - {safe_text(job.get('language', ''))}"
+                    for idx, job in enumerate(jobs)
+                ]
+                with st.expander("Open job context panel", expanded=False):
+                    selected_job_label = st.selectbox("Job", labels_for_jobs, label_visibility="collapsed", key="selected_project_job_context")
+                    selected_job = jobs[labels_for_jobs.index(selected_job_label)]
+                    render_project_job_details(selected_job, "selected_project_job")
+            else:
+                st.info("No jobs have been created inside this project yet.")
+            with st.expander("Create job in this project", expanded=not bool(jobs)):
+                render_project_job_form(selected_project, f"jobs_page_job_{project_identity(selected_project)}")
+            focused_task_id = safe_text(query_get("task_id") or st.session_state.get("task_id", ""))
+            if st.session_state.get("task_queue"):
+                with st.expander("Workflow task monitor", expanded=bool(focused_task_id)):
+                    render_task_queue_panel()
+    return
 
 def page_qa() -> None:
     hero("ErrorSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
@@ -8930,7 +16648,7 @@ def page_qa() -> None:
         st.download_button(
             "Download Professional QA Excel",
             create_qa_excel_report(findings, report_rows),
-            file_name="ErrorSweep_QA_Report.xlsx",
+            file_name="qa_run_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -8947,11 +16665,16 @@ def page_qa() -> None:
 
 def page_pro() -> None:
     hero("ErrorSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
+    if not feature_flag("pro_human_review"):
+        st.warning("ErrorSweep Pro and Human Review are currently disabled by Platform Settings.")
+        return
     st.caption(f"AI access: {current_ai_route_label()}")
     render_privacy_route_notice("Translation route")
     render_stepper(["Upload source", "Translate with rules", "Open Human Review"], active_idx=0)
     with st.expander("Built-in MT engine diagnostics", expanded=False):
-        if builtin_engine_status is None:
+        if not feature_flag("self_hosted_engines"):
+            st.info("Self-hosted MT diagnostics are hidden because self-hosted engines are disabled by Platform Settings.")
+        elif builtin_engine_status is None:
             st.warning("Built-in MT router diagnostics are unavailable.")
         else:
             status_rows = builtin_engine_status()
@@ -8982,11 +16705,20 @@ def page_pro() -> None:
     if st.session_state.get("review_segments") or st.session_state.get("last_pro_review_segments"):
         restore_human_review_session_from_cache()
         st.success("A Pro Human Review session is ready.")
-        if st.button("Open Human Review workspace", type="primary", use_container_width=True, key="open_existing_pro_review"):
-            go_to_human_review_workspace()
-    render_upload_dropzone("Drop source or bilingual content here", "ErrorSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / SRT")
-    uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="pro_file")
+        review_job_id = safe_text(st.session_state.get("active_review_session_id") or query_get("review_id"))
+        if review_job_id:
+            render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
+        else:
+            st.error("Missing review_id. Run Pro translation before opening Human Review.")
+    render_upload_dropzone("Drop source or bilingual content here", "ErrorSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
+    uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "pptx", "txt", "html", "json", "xml", "xlf", "xliff", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
+    context_upload = st.file_uploader(
+        "Upload context file (optional)",
+        type=["txt", "md", "csv", "tsv", "xlsx", "docx"],
+        key="pro_context_file",
+        help="Optional reference context shown in the Human Review context viewer. The active segment is highlighted when it appears in this file.",
+    )
     render_rules_zip_warning(rules_zip)
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
     target_language = c1.text_input("Target language", value="French")
@@ -9000,8 +16732,14 @@ def page_pro() -> None:
             metadata={"file_name": getattr(uploaded, "name", ""), "target_language": target_language, "domain": domain_choice},
         )
         update_task_record(task["id"], status="running", progress=5)
+        pro_export_source = build_pro_export_source_asset(uploaded)
         rows = extract_rows_from_upload(uploaded)
-        for upload in (uploaded, rules_zip):
+        uploaded_context = parse_context_upload(context_upload) if context_upload is not None else {}
+        if uploaded_context.get("error"):
+            st.warning(uploaded_context["error"])
+        elif uploaded_context.get("text"):
+            st.info(f"Context loaded: {safe_text(uploaded_context.get('fileName'))}")
+        for upload in (uploaded, rules_zip, context_upload):
             try:
                 if upload is not None and hasattr(upload, "seek"):
                     upload.seek(0)
@@ -9028,6 +16766,7 @@ def page_pro() -> None:
                 "target_language": target_language,
                 "domain": domain_choice,
                 "review_threshold": threshold,
+                "context_file_name": safe_text(uploaded_context.get("fileName")),
                 "estimated_usage": usage_details,
             },
         ):
@@ -9136,6 +16875,8 @@ def page_pro() -> None:
             target_language=target_language,
             file_name=getattr(uploaded, "name", "uploaded_file"),
             rules=client_rules,
+            context=uploaded_context,
+            export_source=pro_export_source,
         )
         status = "Completed" if missing == 0 else ("Needs Human Review" if missing_rate <= threshold / 100 else "Blocked")
         pro_job = persist_saas_record("jobs", {
@@ -9187,7 +16928,7 @@ def page_pro() -> None:
             st.success("Translation completed. Review is ready for approval.")
 
         render_delivery_gate(review_rows, gate_findings, "Draft delivery gate")
-        st.dataframe(pd.DataFrame(review_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows_for_display(review_rows)), use_container_width=True, hide_index=True)
 
         # v41: External editor launcher. The CAT editor opens in a new browser tab
         # by job_id, so it feels like a professional editor window instead of a
@@ -9197,7 +16938,7 @@ def page_pro() -> None:
         with cta1:
             review_job_id = st.session_state.get("active_review_session_id") or query_get("review_id")
             if review_job_id:
-                render_external_editor_link("Open Human Review Editor", "cat", str(review_job_id))
+                render_editor_open_link("Open Human Review Editor", human_review_editor_link(str(review_job_id)))
             else:
                 st.error("Review job was not created. Please rerun Pro translation.")
         with cta2:
@@ -9233,509 +16974,28 @@ def render_assist_panel(source: str) -> None:
         st.caption("No DNT hits.")
 
 
+
 def render_text_review_editor() -> None:
-    """Full-width CAT-style Pro post-editing workspace.
-
-    This version is intentionally closer to CAT tools such as Phrase/Memsource:
-    a compact job bar, filter row, spreadsheet-like source/target grid, match
-    score/status columns, and a right CAT panel. It opens as a dedicated page
-    without the normal platform navigation so the grid can use the full screen.
-    """
-    st.markdown(
-        """
-        <style>
-        .block-container {
-            max-width: 100vw !important;
-            padding: .45rem .75rem .65rem .75rem !important;
-        }
-        .es-cat-app-shell {
-            min-height: calc(100vh - 16px);
-            background: rgba(8, 10, 19, .98);
-            border: 1px solid rgba(84,105,180,.20);
-            border-radius: 16px;
-            overflow: hidden;
-        }
-        .es-cat-topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 10px 14px;
-            background: #24252b;
-            border-bottom: 1px solid rgba(255,255,255,.09);
-        }
-        .es-cat-brandline {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-width: 0;
-            color: #fff;
-            font-weight: 800;
-            font-size: 15px;
-        }
-        .es-cat-pill {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-size: 12px;
-            font-weight: 900;
-            border: 1px solid rgba(255,255,255,.15);
-            background: rgba(255,255,255,.06);
-            color: #eaf2ff;
-            white-space: nowrap;
-        }
-        .es-cat-pill.green { background: rgba(0,217,133,.13); border-color: rgba(0,217,133,.32); color: #66ffc4; }
-        .es-cat-pill.amber { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); color: #ffd38a; }
-        .es-cat-toolbar2 {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            padding: 7px 14px;
-            background: #1f2026;
-            border-bottom: 1px solid rgba(255,255,255,.08);
-            color: rgba(255,255,255,.72);
-            font-size: 14px;
-        }
-        .es-cat-tool-icon {
-            width: 28px; height: 28px; border-radius: 7px;
-            display: inline-flex; align-items: center; justify-content: center;
-            background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.06);
-        }
-        .es-cat-metrics {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 8px;
-            padding: 10px 14px 6px 14px;
-            background: #0b0d17;
-        }
-        .es-cat-metric {
-            background: rgba(18,21,38,.76);
-            border: 1px solid rgba(84,105,180,.20);
-            border-radius: 10px;
-            padding: 8px 10px;
-        }
-        .es-cat-metric-label { font-family: Space Mono, monospace; color: #9aa7da; font-size: 10px; text-transform: uppercase; }
-        .es-cat-metric-value { color:#fff; font-size:20px; font-weight:900; line-height: 1.1; }
-        .es-cat-filterbar {
-            display: grid;
-            grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) 180px 120px;
-            gap: 10px;
-            padding: 8px 14px 10px 14px;
-            background: #0b0d17;
-            border-bottom: 1px solid rgba(255,255,255,.08);
-        }
-        .es-cat-grid-title {
-            display: grid;
-            grid-template-columns: 56px minmax(270px, 1fr) minmax(270px, 1fr) 74px 90px 90px;
-            gap: 0;
-            padding: 7px 12px;
-            background: #161820;
-            border: 1px solid rgba(255,255,255,.08);
-            border-bottom: none;
-            border-radius: 12px 12px 0 0;
-            font-family: Space Mono, monospace;
-            color: #aeb8dc;
-            text-transform: uppercase;
-            font-size: 10px;
-            font-weight: 700;
-        }
-        .es-cat-grid-card {
-            border: 1px solid rgba(255,255,255,.08);
-            border-radius: 0 0 12px 12px;
-            overflow: hidden;
-            background: #10121b;
-        }
-        .es-cat-side-card {
-            border: 1px solid rgba(255,255,255,.10);
-            background: #151721;
-            border-radius: 12px;
-            padding: 10px;
-            height: 735px;
-            overflow-y: auto;
-        }
-        .es-cat-seg-preview {
-            background: #0e1018;
-            border: 1px solid rgba(255,255,255,.08);
-            border-radius: 10px;
-            padding: 10px;
-            margin-bottom: 10px;
-        }
-        .es-cat-assist-title {
-            font-size: 13px;
-            font-weight: 900;
-            color: #fff;
-            margin: 12px 0 5px 0;
-        }
-        .es-cat-assist-empty { color:#8d95bb; font-size:12px; }
-        .es-cat-mini-row {
-            border-bottom: 1px solid rgba(255,255,255,.06);
-            padding: 7px 0;
-            color: #dbe6ff;
-            font-size: 12px;
-        }
-        div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
-            border-radius: 0 !important;
-            border: none !important;
-            contain: paint !important;
-            isolation: isolate !important;
-            overflow: hidden !important;
-        }
-        div[data-testid="stDataEditor"] [role="grid"] {
-            font-size: 13px !important;
-        }
-        div[data-testid="stDataEditor"] textarea:not(:focus),
-        div[data-testid="stDataEditor"] input:not(:focus),
-        div[data-testid="stDataFrame"] textarea:not(:focus),
-        div[data-testid="stDataFrame"] input:not(:focus) {
-            opacity: 0 !important;
-            pointer-events: none !important;
-        }
-        div[data-testid="stDataEditor"] textarea,
-        div[data-testid="stDataEditor"] input {
-            font-size: 13px !important;
-        }
-        @media (max-width: 1100px) {
-            .es-cat-filterbar { grid-template-columns: 1fr; }
-            .es-cat-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    """Render Human Review Workspace with the supplied CAT editor reference HTML."""
     rows = st.session_state.get("review_segments", []) or []
     if not rows:
-        st.info("No Pro translated rows are loaded. Run ErrorSweep Pro first, then click Open Human Review workspace.")
+        st.warning("No review segments are loaded yet.")
         return
 
-    completion = compute_review_completion(rows)
-    file_name = safe_text(st.session_state.get("review_workspace_file_name", "Current file")) or "Current file"
-    language = safe_text(st.session_state.get("review_workspace_language", "Target")) or "Target"
-    title = safe_text(st.session_state.get("review_workspace_title", "Pro Human Review")) or "Pro Human Review"
+    metadata = {
+        "title": safe_text(st.session_state.get("review_workspace_source", "Human Review")) or "Human Review",
+        "file_name": safe_text(st.session_state.get("review_workspace_file_name", "human_review")) or "human_review",
+        "target_language": safe_text(st.session_state.get("review_workspace_language", "Target")) or "Target",
+        "source_language": safe_text(st.session_state.get("review_workspace_source_language", "en")) or "en",
+        "context": st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
+        "export_source": st.session_state.get("review_workspace_export_source") or {},
+    }
+    qa_by_idx: Dict[int, List[Dict[str, Any]]] = {}
+    for idx, row in enumerate(rows):
+        findings = row.get("qa_findings") if isinstance(row, dict) else None
+        qa_by_idx[idx] = findings if isinstance(findings, list) else []
 
-    # Top job bar like a CAT tool.
-    st.markdown(
-        f"""
-        <div class="es-cat-app-shell">
-          <div class="es-cat-topbar">
-            <div class="es-cat-brandline">
-              <span style="font-size:18px;">▣</span>
-              <span>ErrorSweep CAT</span>
-              <span style="color:#9aa0b9; font-weight:600;">/ {escape(title)} / {escape(file_name)} / {escape(language)}</span>
-            </div>
-            <div style="display:flex; gap:8px; align-items:center;">
-              <span class="es-cat-pill green">Accepted</span>
-              <span class="es-cat-pill">TM</span>
-              <span class="es-cat-pill">TB</span>
-              <span class="es-cat-pill amber">MT</span>
-            </div>
-          </div>
-          <div class="es-cat-toolbar2">
-            <span class="es-cat-tool-icon">B</span><span class="es-cat-tool-icon"><i>I</i></span><span class="es-cat-tool-icon">U</span>
-            <span class="es-cat-tool-icon">⌘</span><span class="es-cat-tool-icon">✓</span><span class="es-cat-tool-icon">↶</span><span class="es-cat-tool-icon">↷</span>
-            <span style="margin-left:auto; color:#8ea1dc; font-size:12px;">Post-editing workspace · source left · target right</span>
-          </div>
-          <div class="es-cat-metrics">
-            <div class="es-cat-metric"><div class="es-cat-metric-label">Confirmed</div><div class="es-cat-metric-value">{completion['approved']}</div></div>
-            <div class="es-cat-metric"><div class="es-cat-metric-label">Segments</div><div class="es-cat-metric-value">{completion['total']}</div></div>
-            <div class="es-cat-metric"><div class="es-cat-metric-label">Translated</div><div class="es-cat-metric-value">{completion['translated']}</div></div>
-            <div class="es-cat-metric"><div class="es-cat-metric-label">Needs Review</div><div class="es-cat-metric-value">{completion['needs_review']}</div></div>
-          </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Filter controls need Streamlit widgets, so they sit visually inside the shell.
-    with st.container():
-        f1, f2, f3, f4 = st.columns([1.25, 1.25, .7, .55])
-        with f1:
-            source_filter = st.text_input("Filter source", value="", placeholder="Filter source (en)", key="cat_v40_source_filter", label_visibility="collapsed")
-        with f2:
-            target_filter = st.text_input("Filter target", value="", placeholder="Filter target", key="cat_v40_target_filter", label_visibility="collapsed")
-        with f3:
-            status_options = ["All"] + sorted({safe_text(r.get("status", "Untranslated")) or "Untranslated" for r in rows})
-            status_filter = st.selectbox("Status", status_options, key="cat_v40_status_filter", label_visibility="collapsed")
-        with f4:
-            pending_only = st.checkbox("Pending", value=False, key="cat_v40_pending_only")
-
-    filtered_indexes: List[int] = []
-    for i, r in enumerate(rows):
-        src = safe_text(r.get("source", ""))
-        tgt = safe_text(r.get("target", ""))
-        status = safe_text(r.get("status", "Untranslated")) or "Untranslated"
-        if source_filter and source_filter.lower() not in src.lower():
-            continue
-        if target_filter and target_filter.lower() not in tgt.lower():
-            continue
-        if status_filter != "All" and status != status_filter:
-            continue
-        if pending_only and status in {"Approved", "101%", "100%"}:
-            continue
-        filtered_indexes.append(i)
-
-    if not filtered_indexes:
-        st.warning("No segments match the current filters.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    current_idx = int(st.session_state.get("selected_review_index", filtered_indexes[0]) or filtered_indexes[0])
-    if current_idx not in filtered_indexes:
-        current_idx = filtered_indexes[0]
-        st.session_state.selected_review_index = current_idx
-
-    # Build the editable grid. Source and target appear side-by-side like Excel/CAT.
-    grid_rows = []
-    for i in filtered_indexes:
-        r = rows[i]
-        status = safe_text(r.get("status", "MT" if safe_text(r.get("target", "")) else "Needs Review"))
-        match = safe_text(r.get("match", "MT" if safe_text(r.get("target", "")) else "Untranslated"))
-        # Score column emulates Phrase/Memsource match percentage badges.
-        if match in {"100%", "101%"}:
-            score = match
-        elif "Fuzzy" in match:
-            score = match.replace("Fuzzy", "").strip() or "85%"
-        elif status in {"Approved", "100%", "101%"}:
-            score = "100"
-        elif match == "MT":
-            score = "MT"
-        elif match == "Untranslated":
-            score = "-"
-        else:
-            score = match or "MT"
-        sensitive_kinds = detect_sensitive_text(f"{r.get('source', '')} {r.get('target', '')}")
-        source_text = safe_text(r.get("source", ""))
-        grid_rows.append({
-            "No": i + 1,
-            "Source": source_text,
-            "Target": repair_localization_translation(source_text, r.get("target", "")),
-            "Score": score,
-            "Status": status,
-            "QA": "✓" if status in {"Approved", "100%", "101%"} else "◯",
-            "Notes": safe_text(r.get("notes", "")),
-            "Location": safe_text(r.get("location", f"Segment {i+1}")),
-        })
-        if sensitive_kinds:
-            grid_rows[-1]["QA"] = "PII"
-        elif r.get("qa_findings"):
-            grid_rows[-1]["QA"] = "QA"
-        else:
-            grid_rows[-1]["QA"] = "OK" if status in {"Approved", "100%", "101%"} else "Open"
-
-    main_col, side_col = st.columns([4.25, 1.15], gap="small")
-    with main_col:
-        st.markdown(
-            '<div class="es-cat-grid-title"><div>No</div><div>Source</div><div>Target</div><div>Score</div><div>Status</div><div>QA</div></div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="es-cat-grid-card">', unsafe_allow_html=True)
-        edited_df = st.data_editor(
-            pd.DataFrame(grid_rows),
-            use_container_width=True,
-            hide_index=True,
-            height=700,
-            num_rows="fixed",
-            column_order=["No", "Source", "Target", "Score", "Status", "QA", "Notes", "Location"],
-            disabled=["No", "Source", "Score", "QA", "Location"],
-            column_config={
-                "No": st.column_config.NumberColumn("", width="small"),
-                "Source": st.column_config.TextColumn("Source", width="large", help="Read-only source segment"),
-                "Target": st.column_config.TextColumn("Target", width="large", help="Editable reviewed translation"),
-                "Score": st.column_config.TextColumn("", width="small"),
-                "Status": st.column_config.SelectboxColumn(
-                    "Status",
-                    width="medium",
-                    options=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
-                ),
-                "QA": st.column_config.TextColumn("", width="small"),
-                "Notes": st.column_config.TextColumn("Notes", width="medium"),
-                "Location": st.column_config.TextColumn("Location", width="medium"),
-            },
-            key="cat_v40_excel_grid",
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        b1, b2, b3, b4, b5 = st.columns([1, 1, 1, 1, 1])
-        if b1.button("Save edits", type="primary", use_container_width=True):
-            for _, erow in edited_df.iterrows():
-                idx = int(erow["No"]) - 1
-                if 0 <= idx < len(rows):
-                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
-                    rows[idx]["status"] = safe_text(erow.get("Status", "")) or "Needs Review"
-                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
-            st.session_state.review_segments = rows
-            st.session_state.last_pro_review_segments = rows
-            st.session_state.latest_human_review_segments = rows
-            st.toast("Saved grid edits.")
-            st.rerun()
-
-        if b2.button("Approve visible", use_container_width=True):
-            for _, erow in edited_df.iterrows():
-                idx = int(erow["No"]) - 1
-                if 0 <= idx < len(rows) and safe_text(erow.get("Target", "")).strip():
-                    rows[idx]["target"] = safe_text(erow.get("Target", ""))
-                    rows[idx]["status"] = "Approved"
-                    rows[idx]["notes"] = safe_text(erow.get("Notes", ""))
-            st.session_state.review_segments = rows
-            st.toast("Visible translated rows approved.")
-            st.rerun()
-
-        if b3.button("Next pending", use_container_width=True):
-            next_idx = None
-            for i, r in enumerate(rows):
-                if safe_text(r.get("status", "")) not in {"Approved", "101%", "100%"} or not safe_text(r.get("target", "")).strip():
-                    next_idx = i
-                    break
-            if next_idx is not None:
-                st.session_state.selected_review_index = next_idx
-                st.rerun()
-            else:
-                st.success("All rows look complete.")
-
-        if b4.button("Save to TM", use_container_width=True):
-            saved = 0
-            for r in rows:
-                src = safe_text(r.get("source", ""))
-                tgt = safe_text(r.get("target", ""))
-                if src and tgt and safe_text(r.get("status", "")) in {"Approved", "100%", "101%"}:
-                    st.session_state.tm.append({
-                        "source": src,
-                        "target": tgt,
-                        "language": safe_text(st.session_state.get("review_workspace_language", "")),
-                        "created": now_stamp(),
-                        "approved_by": (current_user() or {}).get("email", ""),
-                    })
-                    trim_session_list("tm")
-                    saved += 1
-            st.success(f"Saved {saved} approved segment(s) to TM.")
-
-        if b5.button("Back to Pro", use_container_width=True):
-            open_page("ErrorSweep Pro")
-
-        reviewed_base_name = safe_text(st.session_state.get("review_workspace_file_name", "human_review_output")) or "human_review_output"
-        reviewed_base_name = re.sub(r"\.[^.]+$", "", reviewed_base_name)
-        dl1, dl2, dl3 = st.columns(3)
-        dl1.download_button(
-            "Download reviewed Excel",
-            build_reviewed_translation_workbook(rows),
-            file_name=f"{reviewed_base_name}_reviewed_translation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        dl2.download_button(
-            "Download reviewed CSV",
-            rows_to_csv(rows),
-            file_name=f"{reviewed_base_name}_reviewed_translation.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-        dl3.download_button(
-            "Download target text",
-            build_reviewed_plain_text(rows),
-            file_name=f"{reviewed_base_name}_target_text.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-
-    with side_col:
-        st.markdown('<div class="es-cat-side-card">', unsafe_allow_html=True)
-        select_labels = [f"{i+1} · {safe_text(rows[i].get('source',''))[:42] or safe_text(rows[i].get('target',''))[:42]}" for i in filtered_indexes]
-        selected_label = st.selectbox(
-            "CAT",
-            select_labels,
-            index=filtered_indexes.index(current_idx) if current_idx in filtered_indexes else 0,
-            key="cat_v40_focus_select",
-            label_visibility="collapsed",
-        )
-        selected_idx = filtered_indexes[select_labels.index(selected_label)]
-        st.session_state.selected_review_index = selected_idx
-        focused = rows[selected_idx]
-        focused_sensitive = detect_sensitive_text(f"{focused.get('source', '')} {focused.get('target', '')}")
-        status = safe_text(focused.get("status", "Needs Review"))
-        match = safe_text(focused.get("match", "MT"))
-        chip_class = "green" if status in {"Approved", "100%", "101%"} else "amber" if "Review" in status or status in {"MT", "Untranslated", "Needs Rework"} else "red"
-        st.markdown(
-            f"""
-            <div class="es-cat-seg-preview">
-              <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
-                <div class="es-small">Segment {selected_idx + 1} / {len(rows)}</div>
-                <div><span class="es-cat-pill {chip_class}">{escape(status)}</span></div>
-              </div>
-              <div style="margin-top:8px;"><span class="es-cat-pill">{escape(match)}</span></div>
-              <div class="es-small" style="margin-top:8px;">{escape(safe_text(focused.get('location','')))}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="es-cat-assist-title">Source</div>', unsafe_allow_html=True)
-        if focused_sensitive:
-            st.warning(f"Sensitive data indicator: {', '.join(focused_sensitive)}. Keep this row on approved local routes unless client consent exists.")
-        st.markdown(highlight_localization_text(focused.get("source", "")), unsafe_allow_html=True)
-        st.text_area("Source preview", value=safe_text(focused.get("source", "")), height=105, disabled=True, label_visibility="collapsed", key=f"v40_src_{selected_idx}")
-        st.markdown('<div class="es-cat-assist-title">Target</div>', unsafe_allow_html=True)
-        st.markdown(highlight_localization_text(focused.get("target", "")), unsafe_allow_html=True)
-        focused_target = st.text_area("Target preview", value=safe_text(focused.get("target", "")), height=135, label_visibility="collapsed", key=f"v40_tgt_{selected_idx}")
-        if safe_text(focused.get("target", "")) and focused_target != safe_text(focused.get("target", "")):
-            st.markdown('<div class="es-cat-assist-title">Inline diff</div>', unsafe_allow_html=True)
-            st.markdown(inline_diff_html(focused.get("target", ""), focused_target), unsafe_allow_html=True)
-        focused_status = st.selectbox(
-            "Status",
-            ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
-            index=["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(status) if status in ["MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 5,
-            key=f"v40_status_{selected_idx}",
-        )
-        c1, c2 = st.columns(2)
-        if c1.button("Save", key=f"v40_save_{selected_idx}", use_container_width=True):
-            rows[selected_idx]["target"] = focused_target
-            rows[selected_idx]["status"] = focused_status
-            st.session_state.review_segments = rows
-            st.toast("Saved selected segment.")
-            st.rerun()
-        if c2.button("Approve", key=f"v40_approve_{selected_idx}", use_container_width=True):
-            rows[selected_idx]["target"] = focused_target
-            rows[selected_idx]["status"] = "Approved"
-            st.session_state.review_segments = rows
-            st.toast("Approved selected segment.")
-            st.rerun()
-
-        st.markdown('<div class="es-cat-assist-title">TM matches</div>', unsafe_allow_html=True)
-        matches = compute_matches(safe_text(focused.get("source", "")))
-        if matches["tm"]:
-            for m in matches["tm"][:7]:
-                st.markdown(f'<div class="es-cat-mini-row"><b>{escape(m.get("type","TM"))}</b> · {escape(m.get("source",""))}<br><span class="es-small">{escape(m.get("target",""))}</span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="es-cat-assist-empty">No TM match.</div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="es-cat-assist-title">Glossary</div>', unsafe_allow_html=True)
-        if matches["glossary"]:
-            for g in matches["glossary"][:8]:
-                st.markdown(f'<div class="es-cat-mini-row"><b>{escape(g.get("source",""))}</b> → {escape(g.get("target",""))}<br><span class="es-small">{escape(g.get("notes",""))}</span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="es-cat-assist-empty">No glossary hits.</div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="es-cat-assist-title">DNT</div>', unsafe_allow_html=True)
-        if matches["dnt"]:
-            for d in matches["dnt"][:12]:
-                st.markdown(f'<span class="es-cat-pill amber">{escape(d.get("term",""))}</span> ', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="es-cat-assist-empty">No DNT hits.</div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="es-cat-assist-title">QA Details</div>', unsafe_allow_html=True)
-        qa_findings = focused.get("qa_findings") or []
-        if qa_findings:
-            for finding in qa_findings[:6]:
-                st.markdown(
-                    f'<div class="es-cat-mini-row"><b>{escape(safe_text(finding.get("Severity", "Review")))}</b> '
-                    f'{escape(safe_text(finding.get("Error Type", "QA")))}<br>'
-                    f'<span class="es-small">{escape(safe_text(finding.get("Explanation", "")))}</span></div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.markdown('<div class="es-cat-assist-empty">No rule-engine findings for this row.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+    render_reference_cat_editor_shell([dict(row) for row in rows], metadata, qa_by_idx, rules=workspace_rules())
 
 
 def default_subtitle_segments(count: int = 8, transcription: bool = False) -> List[Dict[str, Any]]:
@@ -9745,7 +17005,7 @@ def default_subtitle_segments(count: int = 8, transcription: bool = False) -> Li
             "id": i + 1,
             "start": round(i * 4.0, 3),
             "end": round(i * 4.0 + 3.5, 3),
-            "source": "" if transcription else f"Source segment {i+1}",
+            "source": "" if transcription else f"Source segment {i + 1}",
             "target": "",
             "status": "Draft" if transcription else "Untranslated",
             "match": "",
@@ -9763,7 +17023,7 @@ def enter_subtitle_workspace(workflow: str, rows: List[Dict[str, Any]], video_fi
         preview = save_media_preview_file(f"session_{uuid.uuid4().hex}", video_file)
         st.session_state.subtitle_video_metadata = preview
         st.session_state.subtitle_video_bytes = None
-        st.session_state.subtitle_video_name = preview.get("media_preview_name", getattr(video_file, "name", "uploaded_video"))
+        st.session_state.subtitle_video_name = preview.get("media_preview_name", getattr(video_file, "name", "uploaded_media"))
         st.session_state.subtitle_video_type = preview.get("media_preview_type", getattr(video_file, "type", "video/mp4") or "video/mp4")
     add_audit(f"{workflow} workspace opened", f"{len(rows)} rows")
 
@@ -9824,46 +17084,45 @@ def render_subtitle_transcription_setup() -> None:
             st.session_state.subtitle_target_language = subtitle_target_language
             if source_file:
                 rows = extract_rows_from_upload(source_file)
-                for i, r in enumerate(rows):
-                    r.setdefault("start", i * 4.0)
-                    r.setdefault("end", i * 4.0 + 3.5)
-                    r.setdefault("target", "")
-                    r.setdefault("status", "Untranslated")
-                    r.setdefault("match", "")
+                for i, row in enumerate(rows):
+                    row.setdefault("start", i * 4.0)
+                    row.setdefault("end", i * 4.0 + 3.5)
+                    row.setdefault("target", "")
+                    row.setdefault("status", "Untranslated")
+                    row.setdefault("match", "")
+            elif user_key_available:
+                with st.spinner("No source file uploaded. Transcribing source from video/audio using user API key..."):
+                    transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                rows = []
+                for i, transcript_row in enumerate(transcript_rows):
+                    rows.append({
+                        "id": i + 1,
+                        "start": transcript_row.get("start", i * 3.5),
+                        "end": transcript_row.get("end", i * 3.5 + 3.0),
+                        "source": transcript_row.get("target", ""),
+                        "target": "",
+                        "status": "Transcribed Source" if transcript_row.get("target") else "Untranslated",
+                        "match": transcript_row.get("match", "STT"),
+                    })
+                if usage.get("error") and not usage.get("success"):
+                    st.warning(f"Speech transcription was not available: {usage.get('error')}. Blank rows were created for manual subtitling.")
             else:
-                if user_key_available:
-                    with st.spinner("No source file uploaded. Transcribing source from video/audio using user API key..."):
-                        transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
-                    rows = []
-                    for i, tr in enumerate(transcript_rows):
-                        rows.append({
-                            "id": i + 1,
-                            "start": tr.get("start", i * 3.5),
-                            "end": tr.get("end", i * 3.5 + 3.0),
-                            "source": tr.get("target", ""),
-                            "target": "",
-                            "status": "Transcribed Source" if tr.get("target") else "Untranslated",
-                            "match": tr.get("match", "STT"),
-                        })
-                    if usage.get("error") and not usage.get("success"):
-                        st.warning(f"Speech transcription was not available: {usage.get('error')}. Blank rows were created for manual subtitling.")
-                else:
-                    rows = default_subtitle_segments(int(starter_rows), transcription=False)
-                    for r in rows:
-                        r["source"] = ""
-                        r["target"] = ""
-                        r["status"] = "Draft"
-                        r["match"] = "Manual"
-                    st.info("No source file and no user API key were provided. Blank subtitle rows were created for manual source/target editing.")
+                rows = default_subtitle_segments(int(starter_rows), transcription=False)
+                for row in rows:
+                    row["source"] = ""
+                    row["target"] = ""
+                    row["status"] = "Draft"
+                    row["match"] = "Manual"
+                st.info("No source file and no user API key were provided. Blank subtitle rows were created for manual source/target editing.")
 
             if target_file:
                 target_rows = extract_rows_from_upload(target_file)
-                for i, tr in enumerate(target_rows):
+                for i, target_row in enumerate(target_rows):
                     if i < len(rows):
-                        rows[i]["target"] = tr.get("target") or tr.get("source") or ""
+                        rows[i]["target"] = target_row.get("target") or target_row.get("source") or ""
                         rows[i]["status"] = "Existing" if rows[i]["target"] else rows[i].get("status", "Untranslated")
 
-            has_source_text = any(safe_text(r.get("source", "")) for r in rows)
+            has_source_text = any(safe_text(row.get("source", "")) for row in rows)
             if auto_generate and rows and has_source_text:
                 with st.spinner("Generating target subtitle draft..."):
                     rows, missing = translate_subtitle_sources(rows, subtitle_target_language, domain="Subtitling", rules=workspace_rules())
@@ -9938,11 +17197,12 @@ def render_focused_subtitle_workspace() -> None:
     with video_col:
         render_media_preview(video_source, video_type, video_name)
         render_waveform_preview(rows, st.session_state.get("selected_subtitle_index", 0))
+        render_interactive_media_timeline(rows, st.session_state.get("selected_subtitle_index", 0), key="focused_media_timeline")
     with meta_col:
         st.markdown("#### Job notes")
         st.caption("Use the selected segment below to write transcript/subtitle text. Use the collapsed grid for detailed timing edits.")
         st.metric("Rows", len(rows))
-        st.metric("Approved", sum(1 for r in rows if r.get("status") == "Approved"))
+        st.metric("Confirmed", sum(1 for r in rows if is_segment_confirmed(r)))
         timing_issues = validate_timing_rows(rows)
         if timing_issues:
             st.warning(f"{len(timing_issues)} timing issue(s) need review.")
@@ -9961,6 +17221,7 @@ def render_focused_subtitle_workspace() -> None:
             if not preview:
                 preview = "Empty transcript row" if workflow == "Transcription" else "Empty subtitle row"
             status = seg.get("status", "Draft")
+            status = f"{'✓' if is_segment_confirmed(seg) else '□'} {status}"
             st.caption(f"{i+1}. {time_label} · {status}")
             if st.button(preview[:80], key=f"focused_pick_{i}", use_container_width=True):
                 st.session_state.selected_subtitle_index = i
@@ -9988,26 +17249,33 @@ def render_focused_subtitle_workspace() -> None:
             index=["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(row.get("status", "Draft")) if row.get("status", "Draft") in ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 0,
             key=f"focus_status_{idx}",
         )
+        if render_segment_confirmation_checkbox(row, f"focus_confirm_{idx}", target_text):
+            st.session_state.subtitle_segments = rows
+            st.rerun()
 
         b1, b2, b3, b4 = st.columns(4)
         if b1.button("Save", key=f"focus_save_{idx}", use_container_width=True):
             rows[idx]["target"] = target_text
             rows[idx]["status"] = status
+            set_segment_confirmed(rows[idx], status == "Approved" or is_segment_confirmed(rows[idx]), target_text)
             st.success("Saved.")
         if b2.button("Approve", key=f"focus_approve_{idx}", use_container_width=True):
             rows[idx]["target"] = target_text
-            rows[idx]["status"] = "Approved"
+            set_segment_confirmed(rows[idx], True, target_text)
             st.success("Approved.")
         if b3.button("Split", key=f"focus_split_{idx}", use_container_width=True):
             start = float(rows[idx]["start"])
             end = float(rows[idx]["end"])
             mid = round((start + end) / 2, 3)
             rows[idx]["end"] = mid
-            rows.insert(idx + 1, {**rows[idx], "id": len(rows) + 1, "start": mid, "end": end, "source": "", "target": "", "status": "Draft"})
+            new_segment = {**rows[idx], "id": len(rows) + 1, "start": mid, "end": end, "source": "", "target": "", "status": "Draft"}
+            set_segment_confirmed(new_segment, False, "")
+            rows.insert(idx + 1, new_segment)
             st.rerun()
         if b4.button("Next", key=f"focus_next_{idx}", use_container_width=True):
             rows[idx]["target"] = target_text
             rows[idx]["status"] = status
+            set_segment_confirmed(rows[idx], status == "Approved" or is_segment_confirmed(rows[idx]), target_text)
             st.session_state.selected_subtitle_index = min(idx + 1, len(rows) - 1)
             st.rerun()
 
@@ -10016,13 +17284,16 @@ def render_focused_subtitle_workspace() -> None:
 
     # No duration scale: compact timing/text grid only, hidden by default.
     with st.expander("Timing and text grid", expanded=bool(st.session_state.get("show_timing_grid", False))):
-        grid_cols = ["id", "start", "end", "source", "target", "status", "match"] if workflow == "Subtitling" else ["id", "start", "end", "target", "status"]
+        for seg in rows:
+            seg["confirmed"] = is_segment_confirmed(seg)
+        grid_cols = ["id", "start", "end", "source", "target", "confirmed", "status", "match"] if workflow == "Subtitling" else ["id", "start", "end", "target", "confirmed", "status"]
         edited = st.data_editor(
             pd.DataFrame(rows)[grid_cols],
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
             height=230,
+            column_config={"confirmed": st.column_config.CheckboxColumn("Done", width="small", help="Segment completed confirmation")},
             key="focused_subtitle_grid",
         )
         c1, c2, c3 = st.columns(3)
@@ -10032,10 +17303,16 @@ def render_focused_subtitle_workspace() -> None:
             if timing_issues:
                 st.error("; ".join(f"Row {item['row']}: {item['issue']}" for item in timing_issues[:5]))
             else:
+                for updated_row in updated_rows:
+                    set_segment_confirmed(updated_row, bool(updated_row.get("confirmed")), safe_text(updated_row.get("target", "")))
                 st.session_state.subtitle_segments = updated_rows
                 st.success("Grid saved.")
-        c2.download_button("Download CSV", rows_to_csv(st.session_state.subtitle_segments), "subtitle_transcription_editor.csv", "text/csv", use_container_width=True)
-        c3.download_button("Download SRT", rows_to_srt(st.session_state.subtitle_segments, use_target=True), "subtitle_transcription_output.srt", "text/plain", use_container_width=True)
+        unconfirmed = unconfirmed_segment_count(st.session_state.subtitle_segments)
+        if unconfirmed:
+            st.warning(f"Download is locked until all subtitle/transcription segments are ticked complete. Pending: {unconfirmed}.")
+        legacy_file_name = safe_text(st.session_state.get("subtitle_video_name") or "subtitle_transcription")
+        c2.download_button("Download CSV ZIP", media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=True), "subtitle_transcription_csv_package.zip", "application/zip", use_container_width=True, disabled=unconfirmed > 0)
+        c3.download_button("Download SRT ZIP", media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=False), "subtitle_transcription_srt_package.zip", "application/zip", use_container_width=True, disabled=unconfirmed > 0)
 
 
 def render_subtitle_transcription_editor() -> None:
@@ -10049,6 +17326,34 @@ def page_subtitle_transcription_editor() -> None:
     # Public/manual editor page. This page is only for subtitle and transcription work.
     # Pro post-editing Human Review is opened only from ErrorSweep Pro via the hidden
     # Human Review Workspace route.
+    st.markdown(
+        """
+        <div id="subtitle-transcription-page-marker" aria-hidden="true"></div>
+        <style>
+        #subtitle-transcription-page-marker { display: none !important; }
+        body:has(#subtitle-transcription-page-marker) [data-testid="stWidgetLabel"],
+        body:has(#subtitle-transcription-page-marker) [data-testid="stWidgetLabel"] p,
+        body:has(#subtitle-transcription-page-marker) .stRadio label,
+        body:has(#subtitle-transcription-page-marker) .stRadio label span,
+        body:has(#subtitle-transcription-page-marker) .stCheckbox label,
+        body:has(#subtitle-transcription-page-marker) .stCheckbox label span,
+        body:has(#subtitle-transcription-page-marker) [data-testid="stFileUploader"] label,
+        body:has(#subtitle-transcription-page-marker) [data-testid="stFileUploader"] label span {
+          color: #dce8ff !important;
+          opacity: 1 !important;
+        }
+        body:has(#subtitle-transcription-page-marker) .stRadio label:has(input:checked),
+        body:has(#subtitle-transcription-page-marker) .stCheckbox label:has(input:checked) {
+          color: #f8fbff !important;
+          font-weight: 800 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not feature_flag("subtitle_editor"):
+        st.warning("Subtitle and transcription workflows are currently disabled by Platform Settings.")
+        return
     if st.session_state.get("subtitle_editor_active"):
         render_focused_subtitle_workspace()
         return
@@ -10062,6 +17367,10 @@ def page_human_review() -> None:
 
 def page_human_review_workspace() -> None:
     """Dedicated CAT-style post-editing route opened from ErrorSweep Pro outputs only."""
+    st.markdown('<div id="human-review-editor-page-marker" class="human_review_editor_page" aria-hidden="true"></div>', unsafe_allow_html=True)
+    if not feature_flag("pro_human_review"):
+        st.warning("Human Review is currently disabled by Platform Settings.")
+        return
     restore_human_review_session_from_cache()
     # Recovery guard: if Streamlit opened this hidden route after a rerun, restore
     # the Pro rows from the persistent Pro result cache. This prevents blank pages.
@@ -10071,12 +17380,13 @@ def page_human_review_workspace() -> None:
             source="ErrorSweep Pro",
             target_language=st.session_state.get("pro_post_edit_language", ""),
             file_name=st.session_state.get("pro_post_edit_file_name", ""),
+            context=st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
         )
 
     if not st.session_state.get("review_segments"):
         st.markdown(
             """
-            <style>.block-container{max-width:100vw!important;padding:1rem!important;}</style>
+            <style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content{padding:var(--es-shell-frame-padding)!important;} body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"]{max-width:var(--es-shell-content-width)!important;}</style>
             """,
             unsafe_allow_html=True,
         )
@@ -10090,12 +17400,18 @@ def page_human_review_workspace() -> None:
 
 
 def page_subtitle_workspace() -> None:
+    if not feature_flag("subtitle_editor"):
+        st.warning("Subtitle workflows are currently disabled by Platform Settings.")
+        return
     st.session_state.subtitle_editor_active = True
     st.session_state.subtitle_workflow = "Subtitling"
     render_focused_subtitle_workspace()
 
 
 def page_transcription_workspace() -> None:
+    if not feature_flag("subtitle_editor"):
+        st.warning("Transcription workflows are currently disabled by Platform Settings.")
+        return
     st.session_state.subtitle_editor_active = True
     st.session_state.subtitle_workflow = "Transcription"
     render_focused_subtitle_workspace()
@@ -10482,6 +17798,9 @@ def create_scorecard_excel(records: List[Dict[str, Any]], summary: Dict[str, Any
 
 def page_scorecards() -> None:
     hero("Scorecards", "Translator vs reviewer quality score", "Compare translator output with reviewer/final output and generate an Excel-only LQA scorecard.")
+    if not feature_flag("scorecards"):
+        st.warning("Scorecard workflows are currently disabled by Platform Settings.")
+        return
     source = st.file_uploader("Source file (optional)", type=["xlsx", "csv", "docx", "txt"], key="score_source")
     translator = st.file_uploader("Translator file", type=["xlsx", "csv", "docx", "txt"], key="score_translator")
     reviewer = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_reviewer")
@@ -10823,6 +18142,9 @@ def page_billing() -> None:
 
     st.markdown("### Choose a plan")
     render_pricing_graphic(subscription.get("plan", "Trial"), subscription.get("billing_cycle", "monthly"))
+    billing_collection_enabled = feature_flag("billing_collection")
+    if not billing_collection_enabled:
+        st.info("Billing checkout collection is currently disabled by Platform Settings. Plans and usage remain visible, but new mandate intents cannot be created.")
 
     with st.form("billing_checkout_intent", enter_to_submit=False):
         c1, c2 = st.columns(2)
@@ -10872,8 +18194,16 @@ def page_billing() -> None:
         create_checkout = st.form_submit_button(
             "Start trial with card/UPI mandate" if selected_plan == "Trial" else "Create card/UPI monthly mandate",
             use_container_width=True,
+            disabled=not billing_collection_enabled,
         )
     if create_checkout:
+        if not billing_collection_enabled:
+            st.error("Billing collection is disabled by Platform Settings.")
+            return
+        allowed_attempt, throttle_message = consume_abuse_attempt("checkout_intent", f"{workspace}:{selected_plan}:{post_trial_plan or billing_cycle}")
+        if not allowed_attempt:
+            st.error(throttle_message)
+            return
         if safe_text(payment_link) and not sanitize_payment_link(payment_link):
             st.error("Please enter a valid http(s) card/UPI monthly mandate link.")
             return
@@ -10884,12 +18214,20 @@ def page_billing() -> None:
             if not accept_trial_terms:
                 st.error("Please confirm the trial cancellation and post-trial subscription terms.")
                 return
-            if not (sanitize_payment_link(payment_link) or sanitize_payment_link(trial_mandate_link_for_plan(post_trial_plan, billing_cycle))):
-                st.error("Trial requires a valid card/UPI mandate link. Paste one here or configure ERRORSWEEP_TRIAL_MANDATE_LINK.")
+            if not (
+                sanitize_payment_link(payment_link)
+                or sanitize_payment_link(trial_mandate_link_for_plan(post_trial_plan, billing_cycle))
+                or provider_checkout_configured(selected_plan, post_trial_plan)
+            ):
+                st.error("Trial requires a valid card/UPI mandate link or configured Stripe/Razorpay subscription checkout plan.")
                 return
         else:
-            if not (sanitize_payment_link(payment_link) or sanitize_payment_link(monthly_mandate_link_for_plan(selected_plan, billing_cycle))):
-                st.error("This subscription requires a valid card/UPI monthly mandate link. Paste one here or configure ERRORSWEEP_MONTHLY_MANDATE_LINK.")
+            if not (
+                sanitize_payment_link(payment_link)
+                or sanitize_payment_link(monthly_mandate_link_for_plan(selected_plan, billing_cycle))
+                or provider_checkout_configured(selected_plan)
+            ):
+                st.error("This subscription requires a valid card/UPI monthly mandate link or configured Stripe/Razorpay subscription checkout plan.")
                 return
         intent = create_checkout_intent(selected_plan, billing_cycle, payment_link=payment_link, post_trial_plan=post_trial_plan)
         if safe_text(intent.get("checkout_url")):
@@ -10899,6 +18237,10 @@ def page_billing() -> None:
             else:
                 st.success("Monthly mandate recorded. Open it below to authorize recurring card/UPI deduction.")
                 st.link_button("Open card / UPI monthly mandate link", intent["checkout_url"], use_container_width=True)
+        elif safe_text(intent.get("status")) == "provider_checkout_ready":
+            st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let ErrorSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
+        elif safe_text(intent.get("status")) == "provider_checkout_error":
+            st.error("Provider checkout creation was attempted but failed. Review the provider error in the checkout intent metadata.")
         elif safe_text(intent.get("status")) == "manual_pending":
             st.info("Checkout intent recorded. Add a hosted mandate link above, or configure Stripe/Razorpay mandate-link secrets to show a live link.")
         elif safe_text(intent.get("status")) == "trial_mandate_link_missing":
@@ -10947,6 +18289,8 @@ def page_billing() -> None:
     else:
         st.info("No active subscription or pending trial mandate is currently available to cancel.")
 
+    render_invoice_panel(workspace, subscription)
+
     if is_owner():
         with st.expander("Owner action: activate selected subscription locally", expanded=False):
             st.caption("Use this only after manual payment confirmation or while testing provider webhooks locally.")
@@ -10976,6 +18320,54 @@ def page_billing() -> None:
     ]
     if checkout_rows:
         st.dataframe(pd.DataFrame(display_records(checkout_rows)), use_container_width=True, hide_index=True)
+        with st.expander("Provider checkout payload / curl", expanded=False):
+            labels = [
+                f"{safe_text(item.get('plan'))} - {safe_text(item.get('status'))} - {safe_text(item.get('id'))[:8]}"
+                for item in checkout_rows
+            ]
+            selected_label = st.selectbox("Checkout intent", labels, key="provider_checkout_payload_select")
+            selected_idx = labels.index(selected_label) if selected_label in labels else 0
+            selected_checkout = checkout_rows[selected_idx]
+            metadata = selected_checkout.get("metadata_json")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            metadata = metadata if isinstance(metadata, dict) else {}
+            provider_request = metadata.get("provider_checkout_request") if isinstance(metadata.get("provider_checkout_request"), dict) else {}
+            provider_curl = safe_text(metadata.get("provider_checkout_curl"))
+            if provider_request:
+                display_request = {
+                    key: value
+                    for key, value in provider_request.items()
+                    if key not in {"auth"}
+                }
+                display_request["auth"] = provider_request.get("auth", "")
+                st.json(display_request)
+                if provider_curl:
+                    st.code(provider_curl, language="bash")
+                d1, d2 = st.columns(2)
+                d1.download_button(
+                    "Download provider checkout JSON",
+                    json.dumps(display_request, indent=2),
+                    file_name="errorsweep_provider_checkout_request.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+                d2.download_button(
+                    "Download provider checkout curl",
+                    provider_curl or "# No curl generated\n",
+                    file_name="errorsweep_provider_checkout_request.sh",
+                    mime="text/x-shellscript",
+                    use_container_width=True,
+                )
+                if safe_text(metadata.get("provider_checkout_error")):
+                    st.error(safe_text(metadata.get("provider_checkout_error")))
+                elif metadata.get("provider_checkout_ready") and not billing_live_checkout_enabled():
+                    st.info("Payload is ready. Auto-creation is off until ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true is configured.")
+            else:
+                st.info("This checkout intent does not contain a provider checkout payload.")
     else:
         st.info("No checkout intents yet.")
 
@@ -11077,6 +18469,8 @@ def page_account() -> None:
         st.session_state.pop("byo_ai_base_url", None)
         st.success("BYO key cleared. Included AI will be used if configured.")
 
+    render_account_support_panel()
+
     st.checkbox("Email notifications", value=True)
     st.checkbox("Show review hints", value=True)
     my_email = safe_text(user.get("email", "")).lower()
@@ -11127,6 +18521,10 @@ def page_admin() -> None:
                 st.session_state[key] = []
             st.session_state["pro_post_editing_ready"] = False
             st.success("Demo workspace data cleared.")
+    render_workspace_privacy_export(key_prefix="admin")
+    render_privacy_request_tracker(key_prefix="admin")
+    st.markdown("### Workspace support queue")
+    render_support_queue_panel(key_prefix="admin")
 
 
 # Owner pages
@@ -11233,6 +18631,8 @@ def page_owner_console() -> None:
     else:
         st.info("No usage logged yet.")
 
+    render_usage_task_links()
+
     st.markdown("### Recent editor jobs")
     editor_jobs = []
     if fetch_persistent_editor_jobs is not None:
@@ -11296,12 +18696,24 @@ def page_all_workspaces() -> None:
     st.dataframe(pd.DataFrame(display_records(st.session_state.workspaces)), use_container_width=True, hide_index=True)
 
 
-def page_platform_settings() -> None:
-    hero("Platform Settings", "Global feature controls", "Owner-only controls for platform features and public availability.")
-    health = persistence_health() if persistence_health is not None else {}
+def platform_settings_workspaces() -> List[str]:
+    export_workspaces = ["Platform"]
+    for item in st.session_state.get("workspaces", []):
+        name = safe_text(item.get("workspace"))
+        if name and name not in export_workspaces:
+            export_workspaces.append(name)
+    return export_workspaces
+
+
+def render_platform_launch_readiness_section(health: Dict[str, Any]) -> None:
     st.markdown("### Public launch readiness")
     readiness_rows = launch_readiness_rows(health)
-    ready_count = sum(1 for row in readiness_rows if safe_text(row.get("Launch gate")).lower() in {"ready", "ready to send", "ready to test provider"} or "configured" in safe_text(row.get("Launch gate")).lower())
+    ready_count = sum(
+        1 for row in readiness_rows
+        if safe_text(row.get("Launch gate")).lower() in {"ready", "ready to send", "ready to test provider"}
+        or "configured" in safe_text(row.get("Launch gate")).lower()
+        or "ready" in safe_text(row.get("Launch gate")).lower()
+    )
     metrics([
         ("Launch items", len(readiness_rows), "tracked"),
         ("Ready/configured", ready_count, "local or external"),
@@ -11310,21 +18722,61 @@ def page_platform_settings() -> None:
     ])
     st.dataframe(pd.DataFrame(readiness_rows), use_container_width=True, hide_index=True)
 
-    st.markdown("### Feature flags")
-    settings = {
-        "Main API translation": True,
-        "Pro post-editing Human Review": True,
-        "Scorecards": True,
-        "Subtitle / Transcription Editor": True,
-        "Public registration": False,
-        "Billing collection": False,
-        "Self-hosted engines": False,
-    }
-    for label, val in settings.items():
-        st.checkbox(label, value=val)
 
+def render_platform_launch_configuration_section(health: Dict[str, Any]) -> None:
+    st.markdown("### Production launch configuration")
+    config_rows = launch_configuration_rows(health)
+    configured_count = sum(1 for row in config_rows if row.get("Status") == "Configured")
+    missing_count = max(0, len(config_rows) - configured_count)
+    metrics([
+        ("Config checks", len(config_rows), "tracked secrets/options"),
+        ("Configured", configured_count, "values present"),
+        ("Missing", missing_count, "needs setup"),
+        ("Secrets shown", "No", "status only"),
+    ])
+    st.caption("This panel only shows whether required configuration exists; it never prints secret values.")
+    st.dataframe(pd.DataFrame(config_rows), use_container_width=True, hide_index=True)
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "Download production .env template",
+        production_env_template(),
+        file_name="errorsweep_production_env_template.env",
+        mime="text/plain",
+        use_container_width=True,
+    )
+    d2.download_button(
+        "Download missing config checklist",
+        missing_launch_configuration_template(config_rows),
+            file_name="errorsweep_missing_launch_config.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+
+def render_platform_feature_flags_section() -> None:
+    st.markdown("### Feature Flags")
+    st.caption("Enable or disable platform capabilities.")
+    with st.form("feature_flags_form", enter_to_submit=False):
+        updates = {}
+        for key, (label, desc) in FEATURE_FLAG_META.items():
+            updates[key] = st.checkbox(label, value=feature_flag(key), help=desc)
+        if st.form_submit_button("Save feature flags", use_container_width=True):
+            changed = set_feature_flags(updates)
+            if changed:
+                st.success(f"Updated {len(changed)} feature flag(s).")
+                st.rerun()
+            else:
+                st.info("No feature flags changed.")
+
+
+def render_platform_object_storage_section() -> None:
     st.markdown("### Object storage")
-    storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "bucket": "local", "configured": False, "mode": "local_fallback"}
+    storage_health = object_storage_status() if object_storage_status is not None else {
+        "provider": "local",
+        "bucket": "local",
+        "configured": False,
+        "mode": "local_fallback",
+    }
     metrics([
         ("Provider", storage_health.get("provider", "local"), storage_health.get("mode", "local_fallback")),
         ("Bucket", storage_health.get("bucket", "local"), "configured" if storage_health.get("configured") else "needs setup"),
@@ -11337,6 +18789,8 @@ def page_platform_settings() -> None:
     else:
         st.info("Object storage is in local fallback mode. Set ERRORSWEEP_OBJECT_STORAGE_PROVIDER plus Supabase Storage, S3, or GCS bucket secrets before public multi-instance launch.")
 
+
+def render_platform_file_manifest_section() -> None:
     st.markdown("### File manifest")
     file_rows = st.session_state.get("files", [])
     if file_rows:
@@ -11356,8 +18810,14 @@ def page_platform_settings() -> None:
     else:
         st.info("No file manifests yet. Manual job assignment uploads and generated downloads will appear here.")
 
+
+def render_platform_async_task_queue_section() -> None:
     st.markdown("### Async task queue")
-    async_health = async_backend_status() if async_backend_status is not None else {"provider": "local", "ready": False, "mode": "local_inline"}
+    async_health = async_backend_status() if async_backend_status is not None else {
+        "provider": "local",
+        "ready": False,
+        "mode": "local_inline",
+    }
     task_rows = st.session_state.get("task_queue", [])
     task_summary = task_status_summary(task_rows)
     metrics([
@@ -11387,6 +18847,26 @@ def page_platform_settings() -> None:
     else:
         st.info("No task queue records yet. QA and Pro workflows will create lifecycle entries as they run.")
 
+
+def render_platform_email_delivery_section() -> None:
+    st.markdown("### Transactional Email")
+    st.caption("Configure provider credentials and test email deliverability.")
+    st.info(f"Current provider: {email_provider_label()}")
+    if st.button("Run deliverability test", use_container_width=True):
+        user = current_user() or {}
+        test_recipient = safe_text(user.get("email"))
+        if test_recipient:
+            with st.spinner(f"Sending test email to {test_recipient}..."):
+                dispatched, result = run_email_deliverability_test(test_recipient)
+            if result.get("status") == "sent":
+                st.success("Test email sent successfully!")
+            else:
+                st.error(f"Test email failed: {result.get('error')}")
+        else:
+            st.error("No user email available for testing.")
+
+
+def render_platform_email_outbox_section() -> None:
     st.markdown("### Email notification outbox")
     notifications = st.session_state.get("notifications", [])
     provider = email_provider_label()
@@ -11422,36 +18902,266 @@ def page_platform_settings() -> None:
     else:
         st.info("No notification records yet. Signup, team invites, QA completion, Pro completion, and payment records will create outbox entries.")
 
+
+def render_platform_release_diagnostics_section(health: Dict[str, Any]) -> None:
     st.markdown("### Release readiness diagnostics")
-    if persistence_health is not None:
-        render_topology_map(health)
-        diagnostic_rows: List[Dict[str, str]] = []
-
-        def collect_diagnostics(prefix: str, value: Any) -> None:
-            if isinstance(value, dict):
-                for child_key, child_value in value.items():
-                    collect_diagnostics(f"{prefix}.{child_key}" if prefix else safe_text(child_key), child_value)
-            else:
-                raw = safe_text(value)
-                state = "Ready" if raw.lower() in {"true", "ok", "connected"} else "Needs setup" if raw.lower() in {"false", "not_checked", "not configured", "not_configured", ""} else raw
-                diagnostic_rows.append({"Check": prefix, "Status": state, "Value": raw})
-
-        collect_diagnostics("", health)
-        st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
-        if health.get("supabase_configured") and health.get("editor_jobs_table") == "ok" and health.get("usage_events_table") == "ok":
-            st.success("Production persistence is connected. Editor jobs and usage events can survive app reboot.")
-        else:
-            st.warning("Production persistence is not fully connected. Run the v42 Supabase SQL schema and add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets.")
-    else:
+    if persistence_health is None:
         st.warning("production_persistence.py is missing.")
+        return
+
+    render_topology_map(health)
+    diagnostic_rows: List[Dict[str, str]] = []
+
+    def collect_diagnostics(prefix: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                collect_diagnostics(f"{prefix}.{child_key}" if prefix else safe_text(child_key), child_value)
+        else:
+            raw = safe_text(value)
+            state = "Ready" if raw.lower() in {"true", "ok", "connected"} else "Needs setup" if raw.lower() in {"false", "not_checked", "not configured", "not_configured", ""} else raw
+            diagnostic_rows.append({"Check": prefix, "Status": state, "Value": raw})
+
+    collect_diagnostics("", health)
+    st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
+    if health.get("supabase_configured") and health.get("editor_jobs_table") == "ok" and health.get("usage_events_table") == "ok":
+        st.success("Production persistence is connected. Editor jobs and usage events can survive app reboot.")
+    else:
+        st.warning("Production persistence is not fully connected. Run the Supabase SQL schema and add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in Streamlit secrets.")
+
+
+def page_platform_settings() -> None:
+    settings_sections = [
+        ("Overview", [
+            ("System Health", "Topology and runtime status"),
+            ("Launch Readiness", "Public launch gates"),
+            ("Production Config", "Secrets and deployment checklist"),
+            ("Release Diagnostics", "Persistence diagnostics"),
+        ]),
+        ("Operations", [
+            ("Feature Flags", "Platform capability switches"),
+            ("Object Storage", "Uploads and generated files"),
+            ("File Manifest", "Stored file records"),
+            ("Async Task Queue", "Worker handoff and task state"),
+            ("Retention Policy", "Cleanup windows"),
+            ("Operational Backups", "Backup and restore"),
+        ]),
+        ("Security", [
+            ("Abuse Protection", "App-level throttles"),
+            ("Tenant Isolation", "Workspace boundary checks"),
+            ("Enterprise SSO", "Identity connections"),
+        ]),
+        ("Compliance", [
+            ("Transactional Email", "Provider and test delivery"),
+            ("Email Outbox", "Queued notifications"),
+            ("Legal Versions", "Document version control"),
+            ("Subprocessors", "Data routing approvals"),
+        ]),
+    ]
+    flat_sections = [label for _, items in settings_sections for label, _ in items]
+    current_section = safe_text(st.session_state.get("platform_settings_section", "System Health"))
+    if current_section not in flat_sections:
+        current_section = "System Health"
+    selected_slug = re.sub(r"[^a-z0-9_]+", "_", current_section.lower()).strip("_")
+    st.markdown(
+        f"""
+        <div id="platform-settings-page-marker" aria-hidden="true"></div>
+        <style>
+        #platform-settings-page-marker {{ display: none !important; }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel {{
+          position: sticky !important;
+          top: 14px !important;
+          align-self: start !important;
+          max-height: calc(100dvh - 180px) !important;
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
+          background: linear-gradient(180deg, rgba(14, 20, 38, .96), rgba(8, 12, 24, .92)) !important;
+          border: 1px solid rgba(99, 120, 190, .34) !important;
+          border-radius: 10px !important;
+          padding: 14px 12px 12px !important;
+          box-shadow: 0 18px 46px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.045) !important;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel > div[data-testid="stVerticalBlock"] {{
+          gap: 4px !important;
+        }}
+        body:has(#platform-settings-page-marker) .es-settings-nav-title {{
+          color: #f8fbff;
+          font-weight: 900;
+          font-size: 18px;
+          margin: 0 0 2px;
+        }}
+        body:has(#platform-settings-page-marker) .es-settings-nav-subtitle {{
+          color: #9fb0db;
+          font-size: 12px;
+          line-height: 1.35;
+          margin: 0 0 14px;
+        }}
+        body:has(#platform-settings-page-marker) .es-settings-nav-group {{
+          color: #75f7c4;
+          font-family: "Space Mono", monospace;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          margin: 12px 2px 4px;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel [data-testid="stButton"] > button,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel .stButton > button,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel button {{
+          min-height: 38px !important;
+          width: 100% !important;
+          justify-content: flex-start !important;
+          border-radius: 8px !important;
+          border: 1px solid rgba(99, 120, 190, .18) !important;
+          background: rgba(9, 14, 28, .74) !important;
+          background-color: rgba(9, 14, 28, .74) !important;
+          background-image: none !important;
+          color: #dce8ff !important;
+          box-shadow: none !important;
+          padding: 8px 10px !important;
+          font-weight: 800 !important;
+          text-align: left !important;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel [data-testid="stButton"] > button *,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel .stButton > button *,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel button * {{
+          color: #dce8ff !important;
+          text-align: left !important;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel [data-testid="stButton"] > button:hover,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel .stButton > button:hover,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_panel button:hover {{
+          border-color: rgba(52, 189, 246, .28) !important;
+          background: rgba(52, 189, 246, .09) !important;
+          background-color: rgba(52, 189, 246, .09) !important;
+          color: #f8fbff !important;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_{selected_slug} [data-testid="stButton"] > button,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_{selected_slug} .stButton > button,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_{selected_slug} button {{
+          border-color: rgba(0, 217, 133, .42) !important;
+          background: linear-gradient(90deg, rgba(0, 217, 133, .18), rgba(52, 189, 246, .10)) !important;
+          background-color: rgba(0, 217, 133, .14) !important;
+          color: #f8fbff !important;
+        }}
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_{selected_slug} button *,
+        body:has(#platform-settings-page-marker) .st-key-platform_settings_nav_{selected_slug} [data-testid="stButton"] > button * {{
+          color: #f8fbff !important;
+        }}
+        body:has(#platform-settings-page-marker) .es-settings-current {{
+          color: #9fb0db;
+          font-size: 13px;
+          margin-bottom: 14px;
+        }}
+        body:has(#platform-settings-page-marker) .es-settings-current b {{
+          color: #f8fbff;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    hero("Platform Settings", "Global system configuration", "Manage legal documents, abuse throttles, subprocessors, operational backups, SSO, and feature flags.")
+    if current_role() != "Platform Owner":
+        st.error("Platform Settings is restricted to Platform Owners.")
+        return
+
+    health = persistence_health() if persistence_health is not None else {}
+
+    nav_col, content_col = st.columns([0.27, 0.73], gap="large")
+    with nav_col:
+        with st.container(key="platform_settings_nav_panel"):
+            st.markdown('<div class="es-settings-nav-title">Settings</div>', unsafe_allow_html=True)
+            st.markdown('<div class="es-settings-nav-subtitle">Platform controls, operations, security, and compliance sections.</div>', unsafe_allow_html=True)
+            for group, items in settings_sections:
+                st.markdown(f'<div class="es-settings-nav-group">{escape(group)}</div>', unsafe_allow_html=True)
+                for label, description in items:
+                    slug = re.sub(r"[^a-z0-9_]+", "_", label.lower()).strip("_")
+                    button_label = f"{label}"
+                    if st.button(button_label, key=f"platform_settings_nav_{slug}", help=description, use_container_width=True):
+                        st.session_state["platform_settings_section"] = label
+                        st.rerun()
+
+    with content_col:
+        selected_section = current_section
+        st.markdown(f'<div class="es-settings-current">Current section: <b>{escape(selected_section)}</b></div>', unsafe_allow_html=True)
+        if selected_section == "System Health":
+            st.markdown("### System Health")
+            render_topology_map(health)
+
+        elif selected_section == "Launch Readiness":
+            render_platform_launch_readiness_section(health)
+
+        elif selected_section == "Production Config":
+            render_platform_launch_configuration_section(health)
+
+        elif selected_section == "Feature Flags":
+            render_platform_feature_flags_section()
+
+        elif selected_section == "Object Storage":
+            render_platform_object_storage_section()
+
+        elif selected_section == "File Manifest":
+            render_platform_file_manifest_section()
+
+        elif selected_section == "Async Task Queue":
+            render_platform_async_task_queue_section()
+
+        elif selected_section == "Retention Policy":
+            render_retention_policy_panel()
+
+        elif selected_section == "Operational Backups":
+            render_operational_backup_panel()
+
+        elif selected_section == "Abuse Protection":
+            render_abuse_protection_panel()
+
+        elif selected_section == "Tenant Isolation":
+            render_tenant_isolation_panel()
+
+        elif selected_section == "Enterprise SSO":
+            render_enterprise_sso_panel()
+
+        elif selected_section == "Transactional Email":
+            render_platform_email_delivery_section()
+
+        elif selected_section == "Email Outbox":
+            render_platform_email_outbox_section()
+
+        elif selected_section == "Legal Versions":
+            render_legal_version_panel()
+
+        elif selected_section == "Subprocessors":
+            render_subprocessor_register_panel()
+
+        elif selected_section == "Release Diagnostics":
+            render_platform_release_diagnostics_section(health)
 
 
 def page_platform_audit_logs() -> None:
-    hero("Platform Audit Logs", "Owner event trail", "Owner-only view of sign-ins, payments, access changes, and administrative actions.")
-    if st.session_state.audit_logs:
-        st.dataframe(pd.DataFrame(display_records(st.session_state.audit_logs)), use_container_width=True, hide_index=True)
-    else:
-        st.info("No audit logs yet.")
+    hero("Platform Audit Logs", "Tamper-evident system activity", "Review global events with cryptographic validation.")
+    if current_role() != "Platform Owner":
+        st.error("Audit Logs is restricted to Platform Owners.")
+        return
+        
+    metrics([
+        ("Total events", len(st.session_state.audit_logs), "system actions"),
+        ("Storage", "Supabase" if persistence_health is not None and persistence_health().get("supabase_configured") else "Local JSON", "backend"),
+        ("Validation", "SHA-256", "cryptographic hash"),
+    ])
+    
+    with st.expander("Generate tamper-evident snapshot", expanded=False):
+        st.caption("Create a cryptographically verifiable JSON snapshot of current audit records.")
+        if st.button("Generate snapshot", use_container_width=True):
+            report = audit_snapshot_report(st.session_state.audit_logs)
+            st.success("Snapshot generated.")
+            st.download_button(
+                "Download verifiable JSON snapshot",
+                audit_snapshot_json(st.session_state.audit_logs),
+                file_name=f"errorsweep_audit_snapshot_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+    st.dataframe(pd.DataFrame(display_records(st.session_state.audit_logs)), use_container_width=True, hide_index=True)
 
 
 PAGE_RENDERERS = {
@@ -11461,9 +19171,9 @@ PAGE_RENDERERS = {
     "ErrorSweep QA": page_qa,
     "ErrorSweep Pro": page_pro,
     "Subtitle / Transcription Editor": page_subtitle_transcription_editor,
-    "Human Review Workspace": page_human_review_workspace,
     "Subtitle Workspace": page_subtitle_workspace,
     "Transcription Workspace": page_transcription_workspace,
+    "Human Review Workspace": page_human_review_workspace,
     "Scorecards": page_scorecards,
     "Memory & Rules": page_memory_rules,
     "Team & Roles": page_team_roles,
@@ -11479,47 +19189,307 @@ PAGE_RENDERERS = {
 }
 
 
-# ==========================================================
-# Main app
-# ==========================================================
+def render_shell_scroll_bridge() -> None:
+    """Keep the authenticated shell locked to two rows after Streamlit mounts wrappers."""
+    components.html(
+        """
+        <script>
+        (() => {
+          const parentDoc = window.parent && window.parent.document;
+          if (!parentDoc) return;
+
+          const applyShellScroll = () => {
+            const rootMarker = parentDoc.getElementById("errorsweep-root-shell-marker");
+            const topMarker = parentDoc.getElementById("errorsweep-shell-top-row-marker");
+            const contentMarker = parentDoc.getElementById("errorsweep-shell-content-row-marker");
+            if (!rootMarker || !topMarker || !contentMarker) return;
+
+            const appShell = parentDoc.querySelector(".st-key-errorsweep_app_shell");
+            if (!appShell) return;
+
+            const appGrid = appShell.matches('[data-testid="stVerticalBlock"]')
+              ? appShell
+              : (appShell.querySelector('[data-testid="stVerticalBlock"]') || appShell);
+
+            const directChildContaining = (parent, target) => {
+              if (!parent || !target) return null;
+              let node = target;
+              while (node && node.parentElement && node.parentElement !== parent) {
+                node = node.parentElement;
+              }
+              return node && node.parentElement === parent ? node : null;
+            };
+
+            const topWrapper = directChildContaining(appGrid, topMarker)
+              || topMarker.closest(".st-key-errorsweep_shell_top");
+            const contentWrapper = directChildContaining(appGrid, contentMarker)
+              || contentMarker.closest(".st-key-errorsweep_shell_content");
+            const contentKey = contentMarker.closest(".st-key-errorsweep_shell_content");
+            const shellFrameWidth = "min(1760px, calc(100vw - 56px))";
+
+            const fullHeight = (node) => {
+              if (!node) return;
+              node.style.height = "100dvh";
+              node.style.maxHeight = "100dvh";
+              node.style.minHeight = "0";
+              node.style.overflow = "hidden";
+            };
+
+            fullHeight(parentDoc.documentElement);
+            fullHeight(parentDoc.body);
+            fullHeight(parentDoc.querySelector(".stApp"));
+            fullHeight(parentDoc.querySelector('[data-testid="stAppViewContainer"]'));
+            fullHeight(parentDoc.querySelector('[data-testid="stMain"]'));
+            fullHeight(parentDoc.querySelector('[data-testid="stMainBlockContainer"]'));
+
+            parentDoc.querySelectorAll(".block-container").forEach((node) => {
+              node.style.height = "100dvh";
+              node.style.maxHeight = "100dvh";
+              node.style.minHeight = "0";
+              node.style.width = "100%";
+              node.style.maxWidth = shellFrameWidth;
+              node.style.minWidth = "0";
+              node.style.margin = "0 auto";
+              node.style.marginLeft = "auto";
+              node.style.marginRight = "auto";
+              node.style.padding = "0";
+              node.style.overflow = "hidden";
+            });
+
+            const rootVertical = parentDoc.querySelector(".block-container > div[data-testid='stVerticalBlock']");
+            if (rootVertical) {
+              rootVertical.style.height = "100dvh";
+              rootVertical.style.maxHeight = "100dvh";
+              rootVertical.style.minHeight = "0";
+              rootVertical.style.display = "grid";
+              rootVertical.style.gridTemplateRows = "minmax(0, 1fr)";
+              rootVertical.style.gridTemplateColumns = "minmax(0, 1fr)";
+              rootVertical.style.alignContent = "start";
+              rootVertical.style.gap = "0";
+              rootVertical.style.margin = "0";
+              rootVertical.style.padding = "0";
+              rootVertical.style.overflow = "hidden";
+            }
+
+            const appShellWrapper = appShell.parentElement;
+            if (appShellWrapper && appShellWrapper !== appGrid) {
+              appShellWrapper.style.height = "100dvh";
+              appShellWrapper.style.maxHeight = "100dvh";
+              appShellWrapper.style.minHeight = "0";
+              appShellWrapper.style.width = "100%";
+              appShellWrapper.style.maxWidth = "100%";
+              appShellWrapper.style.minWidth = "0";
+              appShellWrapper.style.margin = "0";
+              appShellWrapper.style.padding = "0";
+              appShellWrapper.style.overflow = "hidden";
+            }
+
+            appShell.style.height = "100dvh";
+            appShell.style.maxHeight = "100dvh";
+            appShell.style.minHeight = "0";
+            appShell.style.width = "100%";
+            appShell.style.maxWidth = "100%";
+            appShell.style.minWidth = "0";
+            appShell.style.margin = "0";
+            appShell.style.padding = "0";
+            appShell.style.display = "grid";
+            appShell.style.gridTemplateRows = "auto minmax(0, 1fr)";
+            appShell.style.gridTemplateColumns = "minmax(0, 1fr)";
+            appShell.style.overflow = "hidden";
+
+            appGrid.style.height = "100dvh";
+            appGrid.style.maxHeight = "100dvh";
+            appGrid.style.minHeight = "0";
+            appGrid.style.margin = "0";
+            appGrid.style.padding = "0";
+            appGrid.style.display = "grid";
+            appGrid.style.gridTemplateRows = "auto minmax(0, 1fr)";
+            appGrid.style.gridTemplateColumns = "minmax(0, 1fr)";
+            appGrid.style.overflow = "hidden";
+
+            if (topWrapper) {
+              topWrapper.style.gridRow = "1";
+              topWrapper.style.minHeight = "0";
+              topWrapper.style.margin = "0";
+              topWrapper.style.padding = "0";
+              topWrapper.style.overflow = "visible";
+              topWrapper.style.zIndex = "900";
+            }
+
+            const scrollTarget = contentWrapper || contentKey;
+            if (scrollTarget) {
+              scrollTarget.style.gridRow = "2";
+              scrollTarget.style.height = "100%";
+              scrollTarget.style.maxHeight = "100%";
+              scrollTarget.style.minHeight = "0";
+              scrollTarget.style.margin = "0";
+              scrollTarget.style.overflowX = "hidden";
+              scrollTarget.style.overflowY = "scroll";
+              scrollTarget.style.overscrollBehavior = "contain";
+              scrollTarget.style.scrollbarGutter = "stable both-edges";
+            }
+
+            const centerRail = (node) => {
+              if (!node) return;
+              node.style.width = "100%";
+              node.style.maxWidth = shellFrameWidth;
+              node.style.minWidth = "0";
+              node.style.marginLeft = "auto";
+              node.style.marginRight = "auto";
+            };
+
+            if (contentKey) {
+              centerRail(contentKey);
+            } else if (scrollTarget) {
+              centerRail(scrollTarget);
+            }
+
+            parentDoc.querySelectorAll(".st-key-errorsweep_page_frame").forEach((node) => {
+              centerRail(node);
+              node.style.boxSizing = "border-box";
+              node.style.minHeight = "0";
+            });
+
+            if (contentKey && contentKey !== scrollTarget) {
+              contentKey.style.height = "auto";
+              contentKey.style.maxHeight = "none";
+              contentKey.style.minHeight = "0";
+              contentKey.style.overflow = "visible";
+            }
+          };
+
+          applyShellScroll();
+          window.setTimeout(applyShellScroll, 250);
+          window.setTimeout(applyShellScroll, 1000);
+          if (!parentDoc.__errorsweepShellScrollObserver) {
+            parentDoc.__errorsweepShellScrollObserver = new MutationObserver(applyShellScroll);
+            parentDoc.__errorsweepShellScrollObserver.observe(parentDoc.body, { childList: true, subtree: true });
+          }
+        })();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
+def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
+    """Render the authenticated app as a fixed two-row shell."""
+    st.markdown('<div id="errorsweep-root-shell-marker" class="errorsweep_root_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
+    with st.container(key="errorsweep_app_shell", gap=None):
+        with st.container(key="errorsweep_shell_top", gap=None):
+            st.markdown('<div id="errorsweep-shell-top-row-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
+            if show_navigation:
+                render_navigation()
+        with st.container(key="errorsweep_shell_content", gap=None):
+            st.markdown('<div id="errorsweep-shell-content-row-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
+            if page_frame:
+                with st.container(key="errorsweep_page_frame", gap=None):
+                    content_renderer()
+            else:
+                content_renderer()
+            render_shell_scroll_bridge()
+
 
 def render_app() -> None:
-    maybe_cleanup_media_preview_files()
-    if query_get("es_logout"):
+    route = get_current_route()
+    requested_page = safe_text(route.get("page") or route.get("es_page"))
+    editor_type = safe_text(route.get("es_editor") or query_get("es_editor"))
+    external_editor_requested = (
+        route.get("route") == "human_review_editor"
+        or requested_page in HUMAN_REVIEW_EDITOR_PAGES
+        or bool(editor_type)
+    )
+
+    if external_editor_requested:
+        st.session_state.page = "Subtitle / Transcription Editor" if editor_type == "media" else "Human Review Editor"
+        render_root_app_shell(lambda: render_external_editor_router(), page_frame=True, show_navigation=False)
+        return
+    
+    if route.get("route") == "unknown":
+        def render_unknown_route() -> None:
+            st.error(f"Unknown page: {route.get('unknown')}")
+            if st.button("Return to Dashboard"):
+                navigate("Dashboard")
+        st.session_state.page = "Dashboard"
+        render_root_app_shell(render_unknown_route)
+        return
+
+    page = route.get("page")
+    if not page or page not in allowed_pages():
+        def render_unauthorized_route() -> None:
+            st.error("You do not have access to this page.")
+            if st.button("Return to Dashboard"):
+                navigate("Dashboard")
+        st.session_state.page = "Dashboard"
+        render_root_app_shell(render_unauthorized_route)
+        return
+
+    st.session_state.page = page
+    renderer = PAGE_RENDERERS.get(page)
+
+    def render_page_content() -> None:
+        if page == "Human Review Workspace":
+            st.markdown("<style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content { padding: var(--es-shell-frame-padding) !important; }</style>", unsafe_allow_html=True)
+        render_status_incident_banner()
+        if renderer:
+            renderer()
+        else:
+            st.error(f"Renderer for '{page}' is missing.")
+
+    render_root_app_shell(render_page_content)
+
+
+if __name__ == "__main__":
+    render_global_logout_listener()
+
+    if query_get("es_logout") == "1":
         logout()
-        return
-    user = current_user()
-    if not user:
+
+    restore_session_from_query()
+    sync_browser_session_cookie()
+
+    route = get_current_route()
+    explicit_route_target = route_query_has_explicit_target()
+    if not is_authenticated():
+        render_session_restore_bridge()
+    else:
+        render_route_restore_bridge()
+
+    route = get_current_route()
+    if (
+        not is_authenticated()
+        and not explicit_route_target
+        and not protected_route_requested()
+        and not query_get("public")
+        and not query_get("route")
+    ):
+        route = {"route": "landing", "public": "landing", "page": "Landing"}
+
+    if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
+        st.stop()
+
+    if is_authenticated() and route.get("route") in {"signup"}:
+        return_to = safe_text(st.session_state.pop("post_login_return_to", ""))
+        if return_to and apply_return_to(return_to):
+            route = get_current_route()
+        else:
+            target_page = safe_text(st.session_state.get("page") or st.session_state.get("es_page") or "Dashboard")
+            if public_route_for_es_page(target_page):
+                target_page = "Dashboard"
+            st.session_state.page = normalize_es_page(target_page)
+            set_route_query({"es_page": st.session_state.page})
+            route = get_current_route()
+
+    if route.get("route") in PUBLIC_ROUTES:
         render_public_app()
-        return
-    hydrate_saas_state_for_user()
-
-    # v41: external editor routes open as full-window pages in a new tab.
-    # They must render before normal dashboard routing/navigation.
-    if render_external_editor_router():
-        return
-
-    # Restore selected page from URL query when navigation links are used.
-    requested_page = query_get("es_page")
-    if requested_page in allowed_pages():
-        st.session_state.page = requested_page
-
-    # Ensure selected page is allowed.
-    if st.session_state.page not in allowed_pages():
-        st.session_state.page = allowed_pages()[0] if allowed_pages() else "Dashboard"
-
-    page = st.session_state.page
-    renderer = PAGE_RENDERERS.get(page, page_dashboard)
-
-    # Dedicated editor workspaces should feel like full web applications, not
-    # like a normal dashboard page squeezed beside the platform navigation.
-    # This is especially important for the CAT-style Human Review editor.
-    if page in {"Human Review Workspace", "Subtitle Workspace", "Transcription Workspace"}:
-        renderer()
-        return
-
-    render_navigation()
-    renderer()
-
-
-render_app()
+    else:
+        if not is_authenticated():
+            require_auth(route)
+        else:
+            current_route = route
+            sync_browser_route_state(current_route)
+            hydrate_saas_state_for_user()
+            render_app()
+            
+    render_router_debug_panel(decision="render_complete")

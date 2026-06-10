@@ -2,6 +2,48 @@
 
 Based on a review of the ErrorSweep build (v46), these are the currently tracked issues and their resolution status.
 
+## Summary of All Tracked Issues
+
+**Resolved in Latest Pass:**
+1. XML Vulnerability (Billion Laughs) in DOCX Parsing
+2. Server RAM Exhaustion from Media Uploads (OOM Risk)
+3. Insufficient Media Preview Cleanup Trigger
+4. SSRF (Server-Side Request Forgery) Vulnerability via BYO Base URL
+
+**Unresolved & New Issues:**
+* No unresolved issues currently listed.
+
+**Corrected Issues:**
+1. Landing Page Legal Links
+2. Landing Page Claim and Logo Neutrality
+3. Legacy Editor Job Store Race Conditions
+4. Floating Selected Cell Overlay While Scrolling
+5. Local Timestamp Display
+6. Scorecard Excel Source/Target Auto-Detection
+7. Scorecard DOCX Table and Revision Extraction
+8. Scorecard Reference Text and Pass Threshold
+9. Media Preview Disk Cleanup
+10. Code Duplication
+11. MT Token and Emoji Preservation
+12. Privacy Risk with the Public LanguageTool API
+13. Massive Performance Bottleneck in QA Regex Compilation
+14. Silent Failures
+15. Unsupported LibreTranslate Route Removed
+16. CUDA Out-Of-Memory Risk in MT Servers
+17. Insecure Password Storage and Default Secrets
+18. Race Conditions in Local JSON Storage
+19. Unbounded Memory and Disk Growth
+20. API Key Timing Attack Vulnerability
+21. Silent Data Loss in QA Rule Parsing
+22. Scorecard Preview and Manual Mapping Upgrade
+23. Professional QA Report Export
+24. QA Findings Column Order Polish
+25. Rules Intelligence Wiring
+26. Jobs Attachment Persistence Gap
+27. Auth Verification and Reset Flow Gap
+28. Local-Only Upload Storage
+29. Heavy Workflow Request Blocking
+
 ## Resolved in Latest Pass
 
 ### 1. XML Vulnerability (Billion Laughs) in DOCX Parsing

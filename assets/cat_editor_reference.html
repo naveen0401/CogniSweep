@@ -1,0 +1,2521 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ErrorSweep CAT Editor - Two Column Single Page</title>
+  <style>
+    :root {
+      --bg: #080a12;
+      --header: #242a2f;
+      --panel: #101827;
+      --panel-2: #111827;
+      --panel-3: #1f2937;
+      --line: #293241;
+      --line-soft: rgba(148, 163, 184, .24);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --mint: #08d69b;
+      --cyan: #38bdf8;
+      --violet: #8b5cf6;
+      --amber: #f59e0b;
+      --right-bg: #f5f6f8;
+      --right-line: #d1d5db;
+      --right-text: #1f2937;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+
+    .es-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+    .es-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 999px; }
+    .es-scroll::-webkit-scrollbar-track { background: #111827; }
+
+    .app-shell {
+      height: 100dvh;
+      max-height: 100dvh;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+
+    /* Frozen app header: keep this independent from the two-column editor below. */
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      height: 56px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-width: 0;
+      padding: 0 16px;
+      background: var(--header);
+      border-bottom: 1px solid #334155;
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .logo {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      font-weight: 900;
+      color: #090b12;
+      background: linear-gradient(135deg, var(--mint), var(--cyan), var(--violet));
+    }
+    .title-block { min-width: 0; }
+    .title {
+      font-size: 14px;
+      line-height: 1.2;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .subtitle {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+    .btn {
+      height: 32px;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--text);
+      background: #334155;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn-primary { border-color: var(--cyan); background: var(--cyan); color: #07111f; }
+    .btn-mint { border-color: var(--mint); background: var(--mint); color: #07111f; }
+    .export-btn {
+      border-color: #8b5cf6;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      color: #f8fbff;
+      box-shadow: 0 10px 24px rgba(59, 130, 246, .22);
+    }
+    .export-btn.source-missing {
+      border-color: #64748b;
+      background: linear-gradient(135deg, #334155, #4f46e5);
+      color: #f8fbff;
+      opacity: 1;
+    }
+    .btn:disabled {
+      border-color: #64748b !important;
+      background: #475569 !important;
+      color: #cbd5e1 !important;
+      cursor: not-allowed;
+      filter: none;
+      opacity: .72;
+      box-shadow: none;
+    }
+    .pill {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      background: rgba(139, 92, 246, .25);
+      color: #ddd6fe;
+      border: 1px solid rgba(139, 92, 246, .35);
+      white-space: nowrap;
+    }
+
+    /* Everything below the frozen header is a single-page two-column app. */
+    .editor-layout {
+      min-height: 0;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 360px);
+      overflow: hidden;
+      background: #0b1020;
+    }
+
+    .left-column {
+      min-width: 0;
+      min-height: 0;
+      max-width: 100%;
+      display: grid;
+      grid-template-rows: 42px minmax(92px, 130px) 42px 38px minmax(0, 1fr) 32px;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+    }
+
+    .right-column {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--right-bg);
+      color: var(--right-text);
+    }
+
+    .tabs-row {
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      position: relative;
+      z-index: 70;
+      overflow: visible;
+      padding: 0 12px;
+      border-bottom: 1px solid #334155;
+      background: #f0f2f4;
+      color: #0f172a;
+    }
+    .tabs { display: flex; align-items: center; gap: 4px; min-width: 0; height: 100%; overflow: visible; }
+    .tab-menu,
+    .action-menu {
+      position: relative;
+      height: 100%;
+      display: flex;
+      align-items: center;
+    }
+    .tab {
+      height: 100%;
+      border: 0;
+      border-bottom: 3px solid transparent;
+      padding: 0 18px;
+      color: #475569;
+      background: transparent;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .tab.active { color: #0f172a; border-bottom-color: var(--mint); background: white; }
+    .dropdown-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 80;
+      display: none;
+      min-width: 190px;
+      padding: 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: white;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, .18);
+      color: #0f172a;
+    }
+    .dropdown-menu.open { display: grid; gap: 6px; }
+    .dropdown-menu label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
+      padding: 3px 4px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .dropdown-menu label:hover { background: #f1f5f9; }
+    .dropdown-menu input { accent-color: var(--mint); }
+    .mode-actions { display: flex; align-items: center; gap: 8px; color: #334155; font-size: 12px; white-space: nowrap; }
+    .tiny-btn {
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid #cbd5e1;
+      background: white;
+      border-radius: 6px;
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .context-panel {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr) 240px;
+      gap: 10px;
+      padding: 10px 12px;
+      background: #121a2a;
+      border-bottom: 1px solid var(--line);
+    }
+    .context-card {
+      min-height: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: rgba(15, 23, 42, .82);
+      overflow: auto;
+    }
+    .context-card h3 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--cyan);
+    }
+    .context-card p { margin: 0; color: #dbeafe; font-size: 13px; line-height: 1.42; }
+    .context-file-name {
+      margin: 0 0 8px;
+      color: #93c5fd;
+      font-size: 12px;
+      font-weight: 900;
+      overflow-wrap: anywhere;
+    }
+    .context-document {
+      margin: 0;
+      color: #dbeafe;
+      font: inherit;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .context-highlight {
+      padding: 1px 3px;
+      border-radius: 4px;
+      background: #fde047;
+      color: #111827;
+      box-shadow: 0 0 0 1px rgba(250, 204, 21, .45);
+    }
+    .context-preview {
+      display: grid;
+      place-items: center;
+      background: #1f2027;
+      border: 1px solid #334155;
+      border-radius: var(--radius);
+      min-height: 84px;
+    }
+    .context-bubble {
+      border-radius: 999px;
+      padding: 10px 34px;
+      color: var(--cyan);
+      background: #475569;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, .55);
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .search-row {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(420px, 48%) minmax(0, 1fr);
+      align-items: center;
+      position: relative;
+      z-index: 60;
+      overflow: visible;
+      border-bottom: 1px solid var(--line);
+      background: #f7f8fa;
+      color: #0f172a;
+    }
+    .search-box {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 8px;
+      padding: 0 12px;
+      border-right: 1px solid #d1d5db;
+    }
+    .search-box input {
+      width: 100%;
+      height: 30px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      padding: 0 10px;
+      color: #0f172a;
+      background: white;
+      font-size: 13px;
+    }
+    .search-actions {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      padding: 0 14px;
+      font-size: 13px;
+      overflow: visible;
+      white-space: nowrap;
+    }
+    .search-actions > .link-action,
+    .search-actions > .action-menu {
+      flex: 1 1 180px;
+      min-width: 150px;
+    }
+    .link-action {
+      width: 100%;
+      height: 30px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: #0284c7;
+      font-weight: 800;
+    }
+    .link-action:hover {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+    }
+    .filter-dropdown { min-width: 220px; }
+
+    .format-row {
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: #313940;
+      border-bottom: 1px solid var(--line);
+    }
+    .format-row button {
+      height: 28px;
+      min-width: 28px;
+      border: 0;
+      background: transparent;
+      color: white;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .table-wrap { min-height: 0; max-width: 100%; overflow: auto; background: #0e1524; }
+    table { width: 100%; min-width: 920px; border-collapse: collapse; font-size: 13px; }
+    thead { position: sticky; top: 0; z-index: 5; background: #1f2937; color: #cbd5e1; text-align: left; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+    th, td { border: 1px solid #273142; vertical-align: top; }
+    th { padding: 8px 10px; }
+    td { padding: 9px 10px; line-height: 1.45; }
+    tbody { background: #111827; }
+    tr { cursor: pointer; }
+    tr:hover { background: #172033; }
+    tr.row-active { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(56, 189, 248, .12); }
+    .col-id { width: 52px; color: #94a3b8; text-align: right; }
+    .col-source { width: 42%; }
+    .col-target { width: 43%; }
+    .col-match { width: 76px; text-align: center; padding: 0; }
+    .col-confirm { width: 78px; text-align: center; color: var(--mint); font-weight: 900; }
+    .cell-target { padding: 0; }
+    .target-editor {
+      width: 100%;
+      min-height: 42px;
+      display: block;
+      border: 0;
+      outline: none;
+      resize: vertical;
+      overflow: hidden;
+      padding: 9px 10px;
+      color: var(--text);
+      background: transparent;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .target-editor:focus {
+      outline: 2px solid var(--mint);
+      outline-offset: -2px;
+      background: rgba(8, 214, 155, .08);
+    }
+    .target-editor.format-bold { font-weight: 900; }
+    .target-editor.format-italic { font-style: italic; }
+    .target-editor.format-underline { text-decoration: underline; text-underline-offset: 2px; }
+    .confirm-check {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--mint);
+      cursor: pointer;
+    }
+    .confirm-cell {
+      text-align: center;
+      vertical-align: middle;
+    }
+    .done-header {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      color: var(--mint);
+      font-weight: 900;
+    }
+    .confirm-all-check {
+      width: 16px;
+      height: 16px;
+    }
+    .match-badge { display: grid; place-items: center; min-height: 42px; padding: 0 8px; font-weight: 900; white-space: nowrap; }
+    .match-100 { background: #048a33; color: white; }
+    .match-99 { background: #a56600; color: white; }
+    .match-80 { background: repeating-linear-gradient(135deg, #86efac 0 8px, #bbf7d0 8px 16px); color: #064e3b; }
+    .match-mt { background: #1e3a8a; color: #bfdbfe; }
+
+    .editor-footer {
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      overflow: hidden;
+      padding: 0 12px;
+      background: #20252b;
+      border-top: 1px solid #334155;
+      color: #cbd5e1;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .editor-footer b { color: var(--mint); }
+
+    .right-header {
+      height: 46px;
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--right-line);
+      background: white;
+    }
+    .right-header h2 { margin: 0; font-size: 16px; color: #111827; }
+    .counter { border-radius: 999px; padding: 3px 8px; background: #f97316; color: white; font-size: 12px; font-weight: 900; }
+    .details-scroll { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; padding: 14px; }
+    .details-card {
+      border: 1px solid var(--right-line);
+      border-radius: 12px;
+      background: white;
+      margin-bottom: 12px;
+      padding: 14px;
+      box-shadow: 0 1px 1px rgba(15, 23, 42, .04);
+    }
+    .details-card h3 {
+      margin: 0 0 10px;
+      font-size: 12px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .detail-grid { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px 10px; font-size: 13px; }
+    .detail-label { color: #64748b; font-weight: 800; }
+    .detail-value { color: #1f2937; min-width: 0; overflow-wrap: anywhere; }
+    .focus-source { margin: 0 0 12px; line-height: 1.45; color: #1f2937; }
+    .language-resources {
+      display: grid;
+      gap: 12px;
+      color: #1f2937;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .resource-group { display: grid; gap: 7px; }
+    .resource-group h4 {
+      margin: 0;
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .resource-list {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .resource-item {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #f8fafc;
+      overflow-wrap: anywhere;
+    }
+    .resource-term { display: block; font-weight: 900; color: #111827; }
+    .resource-target { display: block; margin-top: 2px; color: #334155; }
+    .resource-note { display: block; margin-top: 4px; color: #64748b; font-size: 11px; }
+    .resource-empty { margin: 0; color: #475569; }
+    .focus-target {
+      width: 100%;
+      min-height: 112px;
+      resize: vertical;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 9px;
+      color: #111827;
+      background: #f8fafc;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .details-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+    @media (max-width: 1100px) {
+      .editor-layout { grid-template-columns: minmax(0, 1fr); }
+      .right-column { display: none; }
+      .context-panel { grid-template-columns: 1fr; }
+      .mode-actions { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header" aria-label="Frozen editor header">
+      <div class="brand">
+        <div class="logo">ES</div>
+        <div class="title-block">
+          <div class="title">Web_2_2-24hr / Automated Project / Telugu Review</div>
+          <div class="subtitle">ErrorSweep CAT Editor · Pro Human Review · File: Translate word.docx</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary submit-btn" disabled>Submit</button>
+        <button class="btn export-btn">Export</button>
+        <span class="pill">Reviewer</span>
+      </div>
+    </header>
+
+    <main class="editor-layout" aria-label="Two column CAT editor below frozen header">
+      <section class="left-column" aria-label="Editor options, context, and segment editor">
+        <div class="tabs-row">
+          <div class="tabs" role="tablist" aria-label="Editor options">
+            <div class="tab-menu context-menu">
+              <button class="tab active context-menu-trigger" data-panel="Context" aria-haspopup="true" aria-expanded="false">Context v</button>
+              <div class="dropdown-menu context-dropdown" role="menu" aria-label="Context view options">
+                <label><input type="checkbox" class="context-option" data-context="source" checked /> Source</label>
+                <label><input type="checkbox" class="context-option" data-context="target" /> Target</label>
+              </div>
+            </div>
+            <button class="tab" data-panel="Quality Checks">Quality Checks</button>
+            <button class="tab" data-panel="Search TM">Search TM</button>
+            <button class="tab" data-panel="Glossary">Glossary</button>
+          </div>
+          <div class="mode-actions">
+            <span>Mode: <b>Highlight strings</b></span>
+            <button class="tiny-btn">New Window</button>
+            <button class="tiny-btn">100%</button>
+          </div>
+        </div>
+
+        <section class="context-panel es-scroll" aria-label="Context space">
+          <div class="context-card es-scroll">
+            <h3>Active context</h3>
+            <p id="contextText">This area stays on the left side. It can contain screenshot context, prior/next segment context, notes, QA summary, or document section details.</p>
+          </div>
+          <div class="context-preview">
+            <div class="context-bubble" id="contextPreview">Open account settings</div>
+          </div>
+          <div class="context-card es-scroll">
+            <h3>Navigation</h3>
+            <p>Use Prev / Next to move between pending rows. This panel scrolls if context becomes long.</p>
+          </div>
+        </section>
+
+        <div class="search-row">
+          <div class="search-box">
+            <input type="search" class="source-search" placeholder="Search source" aria-label="Search source segments" />
+            <input type="search" class="target-search" placeholder="Search target" aria-label="Search target segments" />
+          </div>
+          <div class="search-actions">
+            <button class="link-action find-replace-action">Find & Replace</button>
+            <div class="action-menu filter-menu">
+              <button class="link-action filter-menu-trigger" aria-haspopup="true" aria-expanded="false">Filters v</button>
+              <div class="dropdown-menu filter-dropdown" role="menu" aria-label="Segment filters">
+                <label><input type="checkbox" class="filter-option" data-filter="fuzzy" /> Fuzzy matches</label>
+                <label><input type="checkbox" class="filter-option" data-filter="exact100" /> 100%</label>
+                <label><input type="checkbox" class="filter-option" data-filter="overflow101" /> 101% segments</label>
+                <label><input type="checkbox" class="filter-option" data-filter="mt" /> MT segments</label>
+                <label><input type="checkbox" class="filter-option" data-filter="confirmed" /> Confirmed</label>
+                <label><input type="checkbox" class="filter-option" data-filter="pending" /> Pending</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="format-row" aria-label="Formatting and segment actions">
+          <button title="Bold"><b>B</b></button>
+          <button title="Italic"><i>I</i></button>
+          <button title="Underline"><u>U</u></button>
+          <button title="Undo">↶</button>
+          <button title="Redo">↷</button>
+          <button>BR</button>
+          <button>NBSP</button>
+          <button>Confirm</button>
+          <button>Prev</button>
+          <button>Next</button>
+        </div>
+
+        <div class="table-wrap es-scroll" aria-label="Scrollable segment editor">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">#</th>
+                <th class="col-source">Source (en)</th>
+                <th class="col-target">Target (te)</th>
+                <th class="col-match">Match</th>
+                <th class="col-confirm"><label class="done-header"><input type="checkbox" id="confirmAll" class="confirm-check confirm-all-check" aria-label="Confirm all segments" /><span>Done</span></label></th>
+              </tr>
+            </thead>
+            <tbody id="segmentRows"></tbody>
+          </table>
+        </div>
+
+        <footer class="editor-footer">
+          <div><b>Confirmed segments</b> 12,841 / 12,908 · <b>words</b> 65,507 / 65,799 · <b>chars</b> 339,465 / 341,117</div>
+          <div>Active chars <span id="activeChars">0</span> · modified by reviewer</div>
+        </footer>
+      </section>
+
+      <aside class="right-column" aria-label="Additional Details only">
+        <div class="right-header">
+          <h2>Additional Details</h2>
+          <span class="counter">1</span>
+        </div>
+        <div class="details-scroll es-scroll">
+          <section class="details-card">
+            <h3>Segment metadata</h3>
+            <div class="detail-grid">
+              <div class="detail-label">Variant</div><div class="detail-value" id="detailVariant">Segment 1</div>
+              <div class="detail-label">Original</div><div class="detail-value" id="detailOriginal">0 characters</div>
+              <div class="detail-label">Translation</div><div class="detail-value" id="detailTranslation">0 characters</div>
+              <div class="detail-label">Segment</div><div class="detail-value" id="detailSegment">1 of 9</div>
+              <div class="detail-label">Match</div><div class="detail-value" id="detailMatch">—</div>
+              <div class="detail-label">Status</div><div class="detail-value" id="detailQa">Pending confirmation</div>
+            </div>
+          </section>
+
+          <section class="details-card">
+            <h3>Language Resources</h3>
+            <div class="language-resources" id="languageResources"></div>
+          </section>
+
+          <section class="details-card">
+            <h3>Notes</h3>
+            <p class="focus-source">Edit target text directly in the segment grid. Tick the Done checkbox only after that segment is complete.</p>
+          </section>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const rows = [
+      {id:6602, source:'Failed to update scan configuration for {{repoName}}: {{error}}', target:'{{repoName}} కోసం స్కాన్ కాన్ఫిగరేషన్‌ను నవీకరించడంలో విఫలమైంది: {{error}}', match:'99', qa:'✓'},
+      {id:6604, source:'Advanced voice', target:'అధునాతన వాయిస్', match:'100', qa:'✓'},
+      {id:6605, source:'Customize how ChatGPT responds to you. {{learnMoreLink}}', target:'ChatGPT మీకు ఎలా స్పందిస్తుందో అనుకూలీకరించండి. {{learnMoreLink}}', match:'76', qa:'✓'},
+      {id:6606, source:'This is a conversation between ChatGPT and {{name}}.', target:'ఇది ChatGPT మరియు {{name}} మధ్య సంభాషణ.', match:'91', qa:'✓'},
+      {id:6608, source:'Let ChatGPT browse the internet to find answers.', target:'సమాధానాలను కనుగొనడానికి ChatGPTను ఇంటర్నెట్ బ్రౌజ్ చేయనివ్వండి.', match:'74', qa:''},
+      {id:6610, source:'Let ChatGPT execute code using Code Interpreter.', target:'కోడ్ ఇంటర్‌ప్రెటర్‌ను ఉపయోగించి ChatGPT కోడ్‌ను అమలు చేయనివ్వండి.', match:'74', qa:''},
+      {id:6612, source:'Collaborate with ChatGPT on text and code.', target:'టెక్స్ట్ మరియు కోడ్‌పై ChatGPTతో సహకరించండి.', match:'99', qa:'✓'},
+      {id:6615, source:'This will move {{count}} {{value}} to Archived.', target:'ఇది {{count}} {{value}}ను ఆర్కైవ్‌కి తరలిస్తుంది.', match:'99', qa:'✓'},
+      {id:6617, source:'Open account settings', target:'ఖాతా సెట్టింగ్‌లను తెరవండి', match:'61', qa:'✓'},
+      {id:6619, source:'Open notifications', target:'నోటిఫికేషన్‌లను తెరవండి', match:'MT', qa:''},
+      {id:6620, source:'Invite teammates to collaborate', target:'సహకరించడానికి టీమ్ సభ్యులను ఆహ్వానించండి', match:'MT', qa:'✓'},
+      {id:6621, source:'Review completed segments before submitting.', target:'సమర్పించే ముందు పూర్తైన విభాగాలను సమీక్షించండి.', match:'80', qa:'✓'}
+    ];
+    const uploadedContext = { fileName: '', text: '', error: '' };
+    const exportAsset = {};
+    const languageResources = { glossary: [], dnt: [], tm: [] };
+
+    const tbody = document.getElementById('segmentRows');
+    const sourceSearchInput = document.querySelector('.source-search');
+    const targetSearchInput = document.querySelector('.target-search');
+    const contextPanel = document.querySelector('.context-panel');
+    const footer = document.querySelector('.editor-footer');
+    const tabButtons = Array.from(document.querySelectorAll('.tab'));
+    const formatButtons = Array.from(document.querySelectorAll('.format-row button'));
+    const findReplaceButton = document.querySelector('.find-replace-action');
+    const contextTrigger = document.querySelector('.context-menu-trigger');
+    const contextDropdown = document.querySelector('.context-dropdown');
+    const contextOptionInputs = Array.from(document.querySelectorAll('.context-option'));
+    const filterTrigger = document.querySelector('.filter-menu-trigger');
+    const filterDropdown = document.querySelector('.filter-dropdown');
+    const filterOptionInputs = Array.from(document.querySelectorAll('.filter-option'));
+    const submitButton = document.querySelector('.submit-btn');
+    const exportButton = document.querySelector('.export-btn');
+    const confirmAllCheck = document.getElementById('confirmAll');
+    const tinyButtons = Array.from(document.querySelectorAll('.tiny-btn'));
+    const originalRows = rows.map(row => ({ ...row }));
+    let active = 0;
+    let activePanel = 'Context';
+    let sourceSearchTerm = '';
+    let targetSearchTerm = '';
+    const contextOptions = { source: true, target: false };
+    const filterOptions = { fuzzy: false, exact100: false, overflow101: false, mt: false, confirmed: false, pending: false };
+    let submitted = false;
+    let savedSelection = null;
+    let autoSaveTimer = null;
+    const undoStack = [];
+    const redoStack = [];
+
+    rows.forEach((row) => {
+      row.done = Boolean(row.done ?? row.confirmed ?? false);
+      row.notes = row.notes || '';
+      row.format = {
+        bold: Boolean(row.format?.bold),
+        italic: Boolean(row.format?.italic),
+        underline: Boolean(row.format?.underline),
+      };
+    });
+
+    function pushHistory() {
+      undoStack.push(rows.map(row => ({ ...row })));
+      if (undoStack.length > 40) undoStack.shift();
+      redoStack.length = 0;
+    }
+
+    function restoreSnapshot(snapshot) {
+      rows.splice(0, rows.length, ...snapshot.map(row => ({ ...row })));
+      active = Math.min(active, rows.length - 1);
+      renderRows();
+    }
+
+    function matchClass(m) {
+      if (m === '100') return 'match-100';
+      if (m === '99') return 'match-99';
+      if (!Number.isNaN(Number(m)) && Number(m) >= 80) return 'match-80';
+      return 'match-mt';
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function resourceList(name) {
+      return Array.isArray(languageResources?.[name]) ? languageResources[name] : [];
+    }
+
+    function renderResourceSection(title, items, renderer) {
+      if (!items.length) return '';
+      return `
+        <div class="resource-group">
+          <h4>${escapeHtml(title)} (${items.length})</h4>
+          <ul class="resource-list">${items.map(renderer).join('')}</ul>
+        </div>
+      `;
+    }
+
+    function renderLanguageResources() {
+      const container = document.getElementById('languageResources');
+      if (!container) return;
+      const glossary = resourceList('glossary');
+      const dnt = resourceList('dnt');
+      const tm = resourceList('tm');
+      if (!glossary.length && !dnt.length && !tm.length) {
+        container.innerHTML = '<p class="resource-empty">Glossary, DNT list, and translation memory resources are not available for this task.</p>';
+        return;
+      }
+      container.innerHTML = [
+        renderResourceSection('All Glossary', glossary, item => `
+          <li class="resource-item">
+            <span class="resource-term">${escapeHtml(item.source || item.source_term || item.term || '')}</span>
+            <span class="resource-target">${escapeHtml(item.target || item.target_term || '')}</span>
+            ${item.note || item.source_name ? `<span class="resource-note">${escapeHtml(item.note || item.source_name)}</span>` : ''}
+          </li>
+        `),
+        renderResourceSection('DNT list', dnt, item => `
+          <li class="resource-item">
+            <span class="resource-term">${escapeHtml(item.term || '')}</span>
+            ${item.source_name ? `<span class="resource-note">${escapeHtml(item.source_name)}</span>` : ''}
+          </li>
+        `),
+        renderResourceSection('TMs', tm, item => `
+          <li class="resource-item">
+            <span class="resource-term">${escapeHtml(item.source || '')}</span>
+            <span class="resource-target">${escapeHtml(item.target || '')}</span>
+            ${item.note || item.language ? `<span class="resource-note">${escapeHtml(item.note || item.language)}</span>` : ''}
+          </li>
+        `),
+      ].join('');
+    }
+
+    function sanitizeTargetHtml(html) {
+      const template = document.createElement('template');
+      template.innerHTML = String(html ?? '');
+      const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'BR']);
+      const scrub = (node) => {
+        Array.from(node.childNodes).forEach((child) => {
+          if (child.nodeType === Node.TEXT_NODE) return;
+          if (child.nodeType !== Node.ELEMENT_NODE) {
+            child.remove();
+            return;
+          }
+          scrub(child);
+          if (!allowedTags.has(child.tagName)) {
+            child.replaceWith(...Array.from(child.childNodes));
+            return;
+          }
+          Array.from(child.attributes).forEach((attribute) => child.removeAttribute(attribute.name));
+        });
+      };
+      scrub(template.content);
+      return template.innerHTML;
+    }
+
+    function renderTargetHtml(row) {
+      return row.targetHtml ? sanitizeTargetHtml(row.targetHtml) : escapeHtml(row.target);
+    }
+
+    function targetFormatClass(row) {
+      return [
+        row.format?.bold ? 'format-bold' : '',
+        row.format?.italic ? 'format-italic' : '',
+        row.format?.underline ? 'format-underline' : '',
+      ].filter(Boolean).join(' ');
+    }
+
+    function autoResizeEditor(editor) {
+      if (!editor) return;
+      editor.style.height = 'auto';
+      editor.style.height = `${Math.max(42, editor.scrollHeight)}px`;
+    }
+
+    function syncTargetCell(index, editor) {
+      rows[index].targetHtml = '';
+      rows[index].target = editor.value;
+      rows[index].done = false;
+    }
+
+    function restoreAutosavedDraft() {
+      try {
+        const draft = JSON.parse(localStorage.getItem('errorsweep-cat-editor-draft') || 'null');
+        if (!draft || !Array.isArray(draft.rows)) return;
+        const savedRows = new Map(draft.rows.map(row => [String(row.id), row]));
+        rows.forEach((row) => {
+          const saved = savedRows.get(String(row.id));
+          if (!saved) return;
+          row.target = String(saved.target ?? row.target ?? '');
+          row.targetHtml = '';
+          row.done = Boolean(saved.done);
+          row.format = {
+            bold: Boolean(saved.format?.bold),
+            italic: Boolean(saved.format?.italic),
+            underline: Boolean(saved.format?.underline),
+          };
+        });
+      } catch {
+        localStorage.removeItem('errorsweep-cat-editor-draft');
+      }
+    }
+
+    function visibleRows() {
+      const sourceTerm = sourceSearchTerm.trim().toLowerCase();
+      const targetTerm = targetSearchTerm.trim().toLowerCase();
+      const activeFilters = Object.entries(filterOptions)
+        .filter(([, selected]) => selected)
+        .map(([key]) => key);
+      let list = rows
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => {
+          const matchText = String(row.match).toUpperCase();
+          const matchNumber = Number.parseFloat(row.match);
+          const isMt = matchText === 'MT' || Number.isNaN(matchNumber);
+          const filterMatches = {
+            fuzzy: !isMt && matchNumber < 100,
+            exact100: !isMt && matchNumber === 100,
+            overflow101: !isMt && matchNumber >= 101,
+            mt: isMt,
+            confirmed: row.done,
+            pending: !row.done,
+          };
+          const matchesSource = !sourceTerm || String(row.source).toLowerCase().includes(sourceTerm);
+          const matchesTarget = !targetTerm || String(row.target).toLowerCase().includes(targetTerm);
+          const matchesFilter = !activeFilters.length || activeFilters.some(key => filterMatches[key]);
+          return matchesSource && matchesTarget && matchesFilter;
+        });
+      return list;
+    }
+
+    function renderRows() {
+      const visible = visibleRows();
+      tbody.innerHTML = '';
+      visible.forEach(({ row: r, index: i }) => {
+        const tr = document.createElement('tr');
+        tr.className = i === active ? 'row-active' : '';
+        tr.dataset.rowIndex = i;
+        tr.onclick = (event) => {
+          if (event.target.closest('.target-editor')) {
+            setActiveRow(i);
+            return;
+          }
+          selectRow(i);
+        };
+        tr.innerHTML = `
+          <td class="col-id">${escapeHtml(r.id)}</td>
+          <td class="col-source">${escapeHtml(r.source)}</td>
+          <td class="col-target cell-target"><textarea class="target-editor ${targetFormatClass(r)}" data-row-index="${i}" rows="1" lang="te" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Target segment ${i + 1}">${escapeHtml(r.target)}</textarea></td>
+          <td class="col-match"><div class="match-badge ${matchClass(r.match)}">${escapeHtml(r.match)}${Number.isNaN(Number(r.match)) ? '' : '%'}</div></td>
+          <td class="col-confirm confirm-cell"><input type="checkbox" class="confirm-check" data-row-index="${i}" ${r.done ? 'checked' : ''} aria-label="Confirm segment ${i + 1}"></td>
+        `;
+        const targetCell = tr.querySelector('.target-editor');
+        const confirmCheck = tr.querySelector('.confirm-check');
+        targetCell.addEventListener('input', (event) => {
+          if (targetCell.dataset.composing === 'true' || event.isComposing) {
+            autoResizeEditor(targetCell);
+            return;
+          }
+          syncTargetCell(i, targetCell);
+          autoResizeEditor(targetCell);
+          if (confirmCheck) confirmCheck.checked = false;
+          if (i === active) updateFocus();
+          updateFooter();
+          autoSaveDraft();
+        });
+        targetCell.addEventListener('focus', () => {
+          pushHistory();
+          setActiveRow(i);
+          rememberSelection();
+        });
+        targetCell.addEventListener('mouseup', rememberSelection);
+        targetCell.addEventListener('keyup', rememberSelection);
+        targetCell.addEventListener('compositionstart', () => {
+          targetCell.dataset.composing = 'true';
+        });
+        targetCell.addEventListener('compositionend', () => {
+          targetCell.dataset.composing = '';
+          syncTargetCell(i, targetCell);
+          autoResizeEditor(targetCell);
+          updateFocus();
+          updateFooter();
+          autoSaveDraft();
+        });
+        confirmCheck.addEventListener('click', (event) => event.stopPropagation());
+        confirmCheck.addEventListener('change', () => {
+          pushHistory();
+          rows[i].done = confirmCheck.checked;
+          setActiveRow(i);
+          updateFooter(confirmCheck.checked ? 'Segment confirmed' : 'Segment confirmation removed');
+          autoSaveDraft();
+        });
+        tbody.appendChild(tr);
+        autoResizeEditor(targetCell);
+      });
+      if (!visible.some(item => item.index === active) && visible.length) active = visible[0].index;
+      updateFocus();
+      updateFooter();
+    }
+
+    function selectRow(i) {
+      active = Math.max(0, Math.min(i, rows.length - 1));
+      renderRows();
+    }
+
+    function setActiveRow(i) {
+      active = Math.max(0, Math.min(i, rows.length - 1));
+      Array.from(tbody.querySelectorAll('tr')).forEach(rowEl => {
+        rowEl.classList.toggle('row-active', Number(rowEl.dataset.rowIndex) === active);
+      });
+      updateFocus();
+      updateFooter();
+    }
+
+    function updateFocus() {
+      const r = rows[active] || rows[0];
+      if (!r) return;
+      const contextPreview = document.getElementById('contextPreview');
+      const activeChars = document.getElementById('activeChars');
+      if (contextPreview) contextPreview.innerText = contextPreviewText(r);
+      if (activeChars) activeChars.innerText = `${r.target.length} / ${r.source.length}`;
+      document.getElementById('detailVariant').innerText = `Segment ${active + 1}`;
+      document.getElementById('detailOriginal').innerText = `${r.source.length} characters`;
+      document.getElementById('detailTranslation').innerText = `${r.target.length} characters`;
+      document.getElementById('detailSegment').innerText = `${active + 1} of ${rows.length}`;
+      document.getElementById('detailMatch').innerText = `${r.match}${Number.isNaN(Number(r.match)) ? '' : '%'}`;
+      document.getElementById('detailQa').innerText = r.done ? 'Confirmed' : 'Pending confirmation';
+      renderPanel();
+    }
+
+    function contextPreviewText(row) {
+      if (uploadedContext?.text) {
+        const label = uploadedContext.fileName || uploadedContext.file_name || 'Uploaded context';
+        return label.length > 52 ? `${label.slice(0, 52)}...` : label;
+      }
+      const parts = [];
+      if (contextOptions.source) parts.push(row.source || 'No source text.');
+      if (contextOptions.target) parts.push(row.target || 'No target text.');
+      const value = parts.join(' | ') || 'Select Source or Target';
+      return value.length > 52 ? `${value.slice(0, 52)}...` : value;
+    }
+
+    function activeContextNeedle(row, text) {
+      const candidates = [row.source, row.target]
+        .map(value => String(value || '').trim())
+        .filter(value => value.length >= 3);
+      const lowerText = String(text || '').toLowerCase();
+      return candidates.find(value => lowerText.includes(value.toLowerCase())) || '';
+    }
+
+    function highlightedContextDocument(row) {
+      const rawText = String(uploadedContext?.text || '');
+      const fileName = escapeHtml(uploadedContext?.fileName || uploadedContext?.file_name || 'Uploaded context');
+      if (uploadedContext?.error && !rawText) {
+        return `<p class="resource-empty">${escapeHtml(uploadedContext.error)}</p>`;
+      }
+      if (!rawText) return '';
+      const needle = activeContextNeedle(row, rawText);
+      let documentHtml = escapeHtml(rawText);
+      let matchNote = '<p class="resource-empty">No exact match for this segment was found in the uploaded context.</p>';
+      if (needle) {
+        const start = rawText.toLowerCase().indexOf(needle.toLowerCase());
+        const end = start + needle.length;
+        documentHtml = `${escapeHtml(rawText.slice(0, start))}<mark class="context-highlight">${escapeHtml(rawText.slice(start, end))}</mark>${escapeHtml(rawText.slice(end))}`;
+        matchNote = '';
+      }
+      return `
+        <p class="context-file-name">${fileName}</p>
+        <pre class="context-document">${documentHtml}</pre>
+        ${matchNote}
+      `;
+    }
+
+    function renderContextDetails(row) {
+      if (uploadedContext?.text || uploadedContext?.error) {
+        return highlightedContextDocument(row);
+      }
+      const sections = [];
+      if (contextOptions.source) {
+        sections.push(`<p><b>Source</b><br>${escapeHtml(row.source || 'No source text.')}</p>`);
+      }
+      if (contextOptions.target) {
+        sections.push(`<p><b>Target</b><br>${escapeHtml(row.target || 'No target text.')}</p>`);
+      }
+      return sections.join('<br>') || '<p>Select Source or Target from the Context menu.</p>';
+    }
+
+    function renderPanel() {
+      const r = rows[active] || rows[0];
+      if (!r || !contextPanel) return;
+      const previous = rows[active - 1];
+      const next = rows[active + 1];
+      const cards = {
+        Context: `
+          <div class="context-card es-scroll"><h3>Active context</h3><div id="contextText">${renderContextDetails(r)}</div></div>
+          <div class="context-preview"><div class="context-bubble" id="contextPreview">${escapeHtml(contextPreviewText(r))}</div></div>
+          <div class="context-card es-scroll"><h3>Navigation</h3><p><b>Previous:</b> ${escapeHtml(previous?.source || 'No previous segment.')}</p><p><b>Next:</b> ${escapeHtml(next?.source || 'No next segment.')}</p></div>
+        `,
+        'Quality Checks': `
+          <div class="context-card es-scroll"><h3>Quality status</h3><p>${r.qa ? 'No blocking QA findings for this segment.' : 'Needs review. Confirm placeholders, punctuation, and terminology before approval.'}</p></div>
+          <div class="context-preview"><div class="context-bubble">${escapeHtml(r.qa || 'Needs review')}</div></div>
+          <div class="context-card es-scroll"><h3>Checklist</h3><p>Placeholders preserved<br>Numbers checked<br>Terminology aligned<br>Target not empty</p></div>
+        `,
+        'Search TM': `
+          <div class="context-card es-scroll"><h3>Best TM match</h3><p>${escapeHtml(r.source)}</p></div>
+          <div class="context-preview"><div class="context-bubble">${escapeHtml(r.match)}${Number.isNaN(Number(r.match)) ? '' : '%'} match</div></div>
+          <div class="context-card es-scroll"><h3>Suggestion</h3><p>${escapeHtml(r.target || r.source)}</p></div>
+        `,
+        Glossary: `
+          <div class="context-card es-scroll"><h3>Detected terms</h3><p>${extractTerms(r.source).map(escapeHtml).join('<br>') || 'No glossary terms detected.'}</p></div>
+          <div class="context-preview"><div class="context-bubble">Glossary</div></div>
+          <div class="context-card es-scroll"><h3>DNT / placeholders</h3><p>${extractPlaceholders(r.source).map(escapeHtml).join('<br>') || 'No placeholders detected.'}</p></div>
+        `,
+      };
+      contextPanel.innerHTML = cards[activePanel] || cards.Context;
+      const highlight = contextPanel.querySelector('.context-highlight');
+      if (highlight) highlight.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }
+
+    function extractPlaceholders(text) {
+      return String(text).match(/\{\{[^{}]+\}\}|\{[^{}]+\}|%[sd]/g) || [];
+    }
+
+    function extractTerms(text) {
+      const words = String(text).match(/[A-Z][A-Za-z0-9_-]{2,}|ChatGPT|Docflow/g) || [];
+      return [...new Set(words)].slice(0, 8);
+    }
+
+    function updateFooter(message = '') {
+      const confirmed = rows.filter(row => row.done).length;
+      const sourceWords = rows.reduce((sum, row) => sum + String(row.source).trim().split(/\s+/).filter(Boolean).length, 0);
+      const targetWords = rows.reduce((sum, row) => sum + String(row.target).trim().split(/\s+/).filter(Boolean).length, 0);
+      const sourceChars = rows.reduce((sum, row) => sum + String(row.source).length, 0);
+      const targetChars = rows.reduce((sum, row) => sum + String(row.target).length, 0);
+      footer.innerHTML = `
+        <div><b>Confirmed segments</b> ${confirmed.toLocaleString()} / ${rows.length.toLocaleString()} · <b>words</b> ${targetWords.toLocaleString()} / ${sourceWords.toLocaleString()} · <b>chars</b> ${targetChars.toLocaleString()} / ${sourceChars.toLocaleString()}</div>
+        <div>${message || (submitted ? 'Submitted' : 'Active chars')} <span id="activeChars">${String(rows[active]?.target || '').length} / ${String(rows[active]?.source || '').length}</span> · modified by reviewer</div>
+      `;
+      updateSubmitState();
+    }
+
+    function updateSubmitState() {
+      if (!submitButton) return;
+      const allConfirmed = rows.length > 0 && rows.every(row => row.done);
+      const pendingCount = rows.filter(row => !row.done).length;
+      submitButton.disabled = !allConfirmed;
+      submitButton.classList.toggle('btn-primary', allConfirmed);
+      submitButton.title = allConfirmed ? 'Submit completed task' : `Confirm ${pendingCount} more segment${pendingCount === 1 ? '' : 's'} before submitting`;
+      updateConfirmAllState();
+      updateExportButtonState();
+    }
+
+    function updateConfirmAllState() {
+      if (!confirmAllCheck) return;
+      const confirmedCount = rows.filter(row => row.done).length;
+      confirmAllCheck.checked = rows.length > 0 && confirmedCount === rows.length;
+      confirmAllCheck.indeterminate = confirmedCount > 0 && confirmedCount < rows.length;
+      confirmAllCheck.disabled = rows.length === 0;
+    }
+
+    function autoSaveDraft(message = 'Autosaved') {
+      window.clearTimeout(autoSaveTimer);
+      autoSaveTimer = window.setTimeout(() => {
+        localStorage.setItem('errorsweep-cat-editor-draft', JSON.stringify({ savedAt: new Date().toISOString(), rows }));
+        if (message) updateFooter(message);
+      }, 250);
+    }
+
+    function activeTargetCell() {
+      return tbody.querySelector(`.target-editor[data-row-index="${active}"]`);
+    }
+
+    function rememberSelection() {
+      const target = activeTargetCell();
+      if (!target) return;
+      savedSelection = {
+        index: active,
+        start: target.selectionStart ?? target.value.length,
+        end: target.selectionEnd ?? target.value.length,
+      };
+    }
+
+    function restoreTargetSelection(selectWholeCell = false) {
+      const target = activeTargetCell();
+      if (!target) return null;
+      target.focus();
+      const length = target.value.length;
+      if (savedSelection && savedSelection.index === active && (!selectWholeCell || savedSelection.start !== savedSelection.end)) {
+        target.setSelectionRange(Math.min(savedSelection.start, length), Math.min(savedSelection.end, length));
+      } else if (selectWholeCell) {
+        target.setSelectionRange(0, length);
+      } else {
+        target.setSelectionRange(length, length);
+      }
+      return target;
+    }
+
+    function clearActiveConfirmation(message = 'Segment edited') {
+      rows[active].done = false;
+      const check = tbody.querySelector(`.confirm-check[data-row-index="${active}"]`);
+      if (check) check.checked = false;
+      updateFocus();
+      updateFooter(message);
+      autoSaveDraft();
+    }
+
+    function saveFocused() {
+      const cell = activeTargetCell();
+      if (!cell) return;
+      rows[active].target = cell.value;
+      rows[active].targetHtml = '';
+      rows[active].done = false;
+      renderRows();
+      updateFooter('Saved locally');
+      autoSaveDraft();
+    }
+
+    function confirmActiveSegment() {
+      pushHistory();
+      const cell = activeTargetCell();
+      if (cell) {
+        rows[active].target = cell.value;
+        rows[active].targetHtml = '';
+      }
+      rows[active].done = true;
+      renderRows();
+      updateFooter('Segment confirmed');
+      autoSaveDraft();
+    }
+
+    function approveFocused() {
+      confirmActiveSegment();
+    }
+
+    function applyFormat(action) {
+      pushHistory();
+      const target = activeTargetCell();
+      if (!target) return;
+      if (['B', 'I', 'U'].includes(action)) {
+        const formatKey = action === 'B' ? 'bold' : action === 'I' ? 'italic' : 'underline';
+        rows[active].format[formatKey] = !rows[active].format[formatKey];
+        target.classList.toggle(`format-${formatKey}`, rows[active].format[formatKey]);
+      } else if (action === 'BR') {
+        restoreTargetSelection(false);
+        target.setRangeText('\n', target.selectionStart, target.selectionEnd, 'end');
+        syncTargetCell(active, target);
+        autoResizeEditor(target);
+      } else if (action === 'NBSP') {
+        restoreTargetSelection(false);
+        target.setRangeText('\u00a0', target.selectionStart, target.selectionEnd, 'end');
+        syncTargetCell(active, target);
+        autoResizeEditor(target);
+      }
+      syncTargetCell(active, target);
+      rememberSelection();
+      clearActiveConfirmation(`${action} applied`);
+    }
+
+    function moveActive(direction) {
+      const visible = visibleRows().map(item => item.index);
+      const current = visible.indexOf(active);
+      if (!visible.length) return;
+      const nextIndex = direction === 'prev'
+        ? visible[Math.max(0, current - 1)]
+        : visible[Math.min(visible.length - 1, current + 1)];
+      selectRow(nextIndex ?? visible[0]);
+    }
+
+    function savePage() {
+      localStorage.setItem('errorsweep-cat-editor-draft', JSON.stringify({ savedAt: new Date().toISOString(), rows }));
+      updateFooter('Saved locally');
+    }
+
+    function allRowsConfirmed() {
+      return rows.length > 0 && rows.every(row => row.done);
+    }
+
+    function csvEscape(value, delimiter = ',') {
+      const text = String(value ?? '');
+      return text.includes(delimiter) || /["\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+
+    function crc32(bytes) {
+      let table = crc32.table;
+      if (!table) {
+        table = crc32.table = Array.from({ length: 256 }, (_, index) => {
+          let value = index;
+          for (let bit = 0; bit < 8; bit++) {
+            value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+          }
+          return value >>> 0;
+        });
+      }
+      let crc = 0xffffffff;
+      for (const byte of bytes) {
+        crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+      }
+      return (crc ^ 0xffffffff) >>> 0;
+    }
+
+    function zipU16(value) {
+      return [value & 0xff, (value >>> 8) & 0xff];
+    }
+
+    function zipU32(value) {
+      return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff];
+    }
+
+    function zipDosDateTime(date = new Date()) {
+      const year = Math.max(1980, date.getFullYear());
+      return {
+        time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+        date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+      };
+    }
+
+    function zipContentBytes(content, encoder) {
+      if (content instanceof Uint8Array) return content;
+      if (content instanceof ArrayBuffer) return new Uint8Array(content);
+      return encoder.encode(String(content ?? ''));
+    }
+
+    function zipConcat(chunks) {
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const output = new Uint8Array(total);
+      let cursor = 0;
+      chunks.forEach(chunk => {
+        output.set(chunk, cursor);
+        cursor += chunk.length;
+      });
+      return output;
+    }
+
+    function createZipBytes(files) {
+      const encoder = new TextEncoder();
+      const chunks = [];
+      const central = [];
+      let offset = 0;
+      const stamp = zipDosDateTime();
+      files.forEach(file => {
+        const nameBytes = encoder.encode(file.name);
+        const contentBytes = zipContentBytes(file.content, encoder);
+        const crc = crc32(contentBytes);
+        const localHeader = new Uint8Array([
+          ...zipU32(0x04034b50), ...zipU16(20), ...zipU16(0x0800), ...zipU16(0),
+          ...zipU16(stamp.time), ...zipU16(stamp.date), ...zipU32(crc),
+          ...zipU32(contentBytes.length), ...zipU32(contentBytes.length),
+          ...zipU16(nameBytes.length), ...zipU16(0),
+        ]);
+        chunks.push(localHeader, nameBytes, contentBytes);
+        central.push({ nameBytes, crc, size: contentBytes.length, offset, stamp });
+        offset += localHeader.length + nameBytes.length + contentBytes.length;
+      });
+      const centralStart = offset;
+      central.forEach(entry => {
+        const header = new Uint8Array([
+          ...zipU32(0x02014b50), ...zipU16(20), ...zipU16(20), ...zipU16(0x0800), ...zipU16(0),
+          ...zipU16(entry.stamp.time), ...zipU16(entry.stamp.date), ...zipU32(entry.crc),
+          ...zipU32(entry.size), ...zipU32(entry.size), ...zipU16(entry.nameBytes.length),
+          ...zipU16(0), ...zipU16(0), ...zipU16(0), ...zipU16(0), ...zipU32(0), ...zipU32(entry.offset),
+        ]);
+        chunks.push(header, entry.nameBytes);
+        offset += header.length + entry.nameBytes.length;
+      });
+      const centralSize = offset - centralStart;
+      chunks.push(new Uint8Array([
+        ...zipU32(0x06054b50), ...zipU16(0), ...zipU16(0), ...zipU16(central.length),
+        ...zipU16(central.length), ...zipU32(centralSize), ...zipU32(centralStart), ...zipU16(0),
+      ]));
+      return zipConcat(chunks);
+    }
+
+    function createZipBlob(files) {
+      return new Blob([createZipBytes(files)], { type: 'application/zip' });
+    }
+
+    function downloadBlob(filename, blob) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportAssetReady() {
+      return Boolean(assetFileName() && assetExtension() && exportAsset?.bytes_b64);
+    }
+
+    function updateExportButtonState() {
+      if (!exportButton) return;
+      const allConfirmed = allRowsConfirmed();
+      const pendingCount = rows.filter(row => !row.done).length;
+      const sourceReady = exportAssetReady();
+      exportButton.disabled = !allConfirmed;
+      exportButton.classList.toggle('source-missing', allConfirmed && !sourceReady);
+      exportButton.setAttribute('aria-disabled', String(!allConfirmed));
+      exportButton.title = !allConfirmed
+        ? `Tick ${pendingCount} more segment${pendingCount === 1 ? '' : 's'} Done before exporting`
+        : sourceReady
+        ? `Export translated ${assetExtension()} package`
+        : 'All segments are complete. If this older editor session cannot recover the original uploaded file, reopen the latest Pro run with the source file uploaded.';
+    }
+
+    function finalTarget(row) {
+      return String(row?.target || '').trim() || String(row?.source || '');
+    }
+
+    function rowExportRef(row) {
+      const ref = row?.export_ref || row?.exportRef || {};
+      return ref && typeof ref === 'object' ? ref : {};
+    }
+
+    function exportRowsByKind(kind) {
+      return rows
+        .map(row => ({ row, ref: rowExportRef(row) }))
+        .filter(item => item.ref.kind === kind);
+    }
+
+    function numericRefValue(value, fallback = null) {
+      const numeric = Number(value);
+      return Number.isInteger(numeric) ? numeric : fallback;
+    }
+
+    function exportSourcePairs() {
+      return rows
+        .map(row => ({ source: String(row.source || ''), target: finalTarget(row) }))
+        .filter(pair => pair.source && pair.target && pair.source !== pair.target)
+        .sort((a, b) => b.source.length - a.source.length);
+    }
+
+    function replaceLiteral(value, search, replacement) {
+      if (!search) return value;
+      return String(value).split(search).join(replacement);
+    }
+
+    function replacePlainContent(value) {
+      let output = String(value ?? '');
+      exportSourcePairs().forEach(pair => {
+        output = replaceLiteral(output, pair.source, pair.target);
+      });
+      return output;
+    }
+
+    function replaceXmlContent(value) {
+      let output = String(value ?? '');
+      exportSourcePairs().forEach(pair => {
+        output = replaceLiteral(output, xmlEscape(pair.source), xmlEscape(pair.target));
+        output = replaceLiteral(output, pair.source, pair.target);
+      });
+      return output;
+    }
+
+    function replaceHtmlContent(value) {
+      let output = String(value ?? '');
+      exportSourcePairs().forEach(pair => {
+        output = replaceLiteral(output, escapeHtml(pair.source), escapeHtml(pair.target));
+        output = replaceLiteral(output, pair.source, pair.target);
+      });
+      return output;
+    }
+
+    function replaceJsonContent(value) {
+      let output = String(value ?? '');
+      exportSourcePairs().forEach(pair => {
+        output = replaceLiteral(output, JSON.stringify(pair.source), JSON.stringify(pair.target));
+        output = replaceLiteral(output, pair.source, pair.target);
+      });
+      return output;
+    }
+
+    function xmlElementsByLocalName(root, localName) {
+      return Array.from(root.getElementsByTagName('*')).filter(node => node.localName === localName);
+    }
+
+    function replaceGroupedOfficeText(xml, groupLocalNames) {
+      if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        return replaceXmlContent(xml);
+      }
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(xml, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) {
+        return replaceXmlContent(xml);
+      }
+      let changed = false;
+      groupLocalNames.forEach(groupName => {
+        xmlElementsByLocalName(documentXml, groupName).forEach(group => {
+          const textNodes = xmlElementsByLocalName(group, 't');
+          if (!textNodes.length) return;
+          const combined = textNodes.map(node => node.textContent || '').join('');
+          const updated = replacePlainContent(combined);
+          if (updated === combined) return;
+          textNodes[0].textContent = updated;
+          textNodes.slice(1).forEach(node => { node.textContent = ''; });
+          changed = true;
+        });
+      });
+      return changed ? new XMLSerializer().serializeToString(documentXml) : replaceXmlContent(xml);
+    }
+
+    function replaceOfficeXmlContent(xml, path, ext) {
+      if (ext === '.docx' || ext === '.pptx') return replaceGroupedOfficeText(xml, ['p']);
+      if (ext === '.xlsx') return replaceGroupedOfficeText(xml, ['si', 'is']);
+      return replaceXmlContent(xml);
+    }
+
+    function assetFileName() {
+      return String(exportAsset?.file_name || exportAsset?.name || '').trim();
+    }
+
+    function assetExtension() {
+      const suffix = String(exportAsset?.suffix || '').toLowerCase();
+      if (suffix.startsWith('.')) return suffix;
+      const name = assetFileName();
+      const dot = name.lastIndexOf('.');
+      return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+    }
+
+    function translatedOriginalFileName() {
+      const original = assetFileName() || 'translated_file';
+      const ext = assetExtension();
+      const stem = ext && original.toLowerCase().endsWith(ext) ? original.slice(0, -ext.length) : original;
+      const safeStem = (stem || 'translated_file').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || 'translated_file';
+      return `translated_${safeStem}${ext || '.txt'}`;
+    }
+
+    function exportPackageName() {
+      const original = assetFileName() || document.querySelector('.title')?.innerText || 'translation_editor';
+      const ext = assetExtension();
+      const stem = ext && original.toLowerCase().endsWith(ext) ? original.slice(0, -ext.length) : original;
+      const slug = stem.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'translation_editor';
+      return `${slug}_translation_package.zip`;
+    }
+
+    function base64ToBytes(value) {
+      const binary = atob(String(value || ''));
+      const output = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        output[index] = binary.charCodeAt(index);
+      }
+      return output;
+    }
+
+    function originalAssetBytes() {
+      if (!exportAsset?.bytes_b64) {
+        throw new Error('Original uploaded file metadata is unavailable. Reopen this editor from the Pro translation result.');
+      }
+      return base64ToBytes(exportAsset.bytes_b64);
+    }
+
+    function originalAssetText() {
+      return new TextDecoder('utf-8', { fatal: false }).decode(originalAssetBytes());
+    }
+
+    function detectCsvDelimiter(text) {
+      const firstLine = String(text ?? '').split(/\r\n|\n|\r/)[0] || '';
+      const counts = [
+        ['\t', (firstLine.match(/\t/g) || []).length],
+        [';', (firstLine.match(/;/g) || []).length],
+        [',', (firstLine.match(/,/g) || []).length],
+      ].sort((a, b) => b[1] - a[1]);
+      return counts[0][1] > 0 ? counts[0][0] : ',';
+    }
+
+    function csvDelimiterFromRefs(text) {
+      const refDelimiter = exportRowsByKind('csv_row')
+        .map(item => item.ref.delimiter)
+        .find(value => typeof value === 'string' && value.length);
+      return refDelimiter || detectCsvDelimiter(text);
+    }
+
+    function parseCsvTable(text, delimiter = ',') {
+      const table = [];
+      let row = [];
+      let cell = '';
+      let quoted = false;
+      const input = String(text ?? '');
+      for (let index = 0; index < input.length; index += 1) {
+        const ch = input[index];
+        const next = input[index + 1];
+        if (quoted) {
+          if (ch === '"' && next === '"') {
+            cell += '"';
+            index += 1;
+          } else if (ch === '"') {
+            quoted = false;
+          } else {
+            cell += ch;
+          }
+          continue;
+        }
+        if (ch === '"') {
+          quoted = true;
+        } else if (ch === delimiter) {
+          row.push(cell);
+          cell = '';
+        } else if (ch === '\n') {
+          row.push(cell);
+          table.push(row);
+          row = [];
+          cell = '';
+        } else if (ch !== '\r') {
+          cell += ch;
+        }
+      }
+      row.push(cell);
+      if (row.length > 1 || row[0]) table.push(row);
+      return table;
+    }
+
+    function writeCsvTable(table, delimiter = ',') {
+      return table.map(row => row.map(cell => csvEscape(cell, delimiter)).join(delimiter)).join('\r\n');
+    }
+
+    function translatedCsvSameFormat() {
+      const original = originalAssetText();
+      const delimiter = csvDelimiterFromRefs(original);
+      const table = parseCsvTable(original, delimiter);
+      if (!table.length) return rows.map(row => finalTarget(row)).join('\r\n');
+      const headers = table[0];
+      const refs = exportRowsByKind('csv_row');
+      if (refs.length) {
+        refs.forEach(({ row, ref }) => {
+          const rowIndex = numericRefValue(ref.row_index);
+          const targetCol = numericRefValue(ref.target_col);
+          if (rowIndex === null || targetCol === null) return;
+          const tableRow = table[rowIndex];
+          if (!tableRow) return;
+          while (headers.length <= targetCol) headers.push(headers.length === targetCol ? 'Translation' : '');
+          while (tableRow.length <= targetCol) tableRow.push('');
+          tableRow[targetCol] = finalTarget(row);
+        });
+        return writeCsvTable(table, delimiter);
+      }
+      let targetCol = headers.findIndex(header => /target|translation|translated/i.test(String(header)));
+      if (targetCol < 0) {
+        targetCol = headers.length > 1 ? 1 : headers.length;
+        headers[targetCol] = headers[targetCol] || 'Translation';
+      }
+      rows.forEach((editorRow, index) => {
+        const tableRow = table[index + 1];
+        if (!tableRow) return;
+        while (tableRow.length <= targetCol) tableRow.push('');
+        tableRow[targetCol] = finalTarget(editorRow);
+      });
+      return writeCsvTable(table, delimiter);
+    }
+
+    function parseSeconds(value, fallback) {
+      const raw = String(value ?? '').trim().replace(',', '.');
+      if (!raw) return fallback;
+      const parts = raw.split(':').map(Number);
+      if (parts.length === 3 && parts.every(part => Number.isFinite(part))) {
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      }
+      if (parts.length === 2 && parts.every(part => Number.isFinite(part))) {
+        return parts[0] * 60 + parts[1];
+      }
+      const numeric = Number(raw);
+      return Number.isFinite(numeric) ? numeric : fallback;
+    }
+
+    function cueTime(value, vtt = false) {
+      const totalMs = Math.max(0, Math.round((Number(value) || 0) * 1000));
+      const hours = Math.floor(totalMs / 3600000);
+      const minutes = Math.floor((totalMs % 3600000) / 60000);
+      const seconds = Math.floor((totalMs % 60000) / 1000);
+      const ms = totalMs % 1000;
+      const separator = vtt ? '.' : ',';
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}${separator}${String(ms).padStart(3, '0')}`;
+    }
+
+    function translatedTimedText(vtt = false) {
+      const cues = rows.map((row, index) => {
+        const start = parseSeconds(row.start, index * 4);
+        const end = parseSeconds(row.end, start + 3);
+        return `${vtt ? '' : `${index + 1}\n`}${cueTime(start, vtt)} --> ${cueTime(end, vtt)}\n${finalTarget(row)}\n`;
+      });
+      return vtt ? `WEBVTT\n\n${cues.join('\n')}` : cues.join('\n');
+    }
+
+    function detectNewline(text) {
+      const value = String(text ?? '');
+      if (value.includes('\r\n')) return '\r\n';
+      if (value.includes('\r')) return '\r';
+      return '\n';
+    }
+
+    function translatedTextSamePattern() {
+      const original = originalAssetText();
+      const newline = detectNewline(original);
+      const lines = original.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      const refs = exportRowsByKind('text_line');
+      if (!refs.length) return replacePlainContent(original);
+      refs.forEach(({ row, ref }) => {
+        const lineIndex = numericRefValue(ref.line_index);
+        if (lineIndex === null || !lines[lineIndex]) return;
+        const originalLine = lines[lineIndex];
+        const prefix = (originalLine.match(/^\s*/) || [''])[0];
+        const suffix = (originalLine.match(/\s*$/) || [''])[0];
+        lines[lineIndex] = `${prefix}${finalTarget(row)}${suffix}`;
+      });
+      return lines.join(newline);
+    }
+
+    function setJsonValueAtPath(payload, path, value) {
+      if (!Array.isArray(path) || !path.length) return false;
+      let cursor = payload;
+      for (let index = 0; index < path.length - 1; index += 1) {
+        const key = path[index];
+        if (cursor === null || cursor === undefined || !(key in cursor)) return false;
+        cursor = cursor[key];
+      }
+      const finalKey = path[path.length - 1];
+      if (cursor === null || cursor === undefined || !(finalKey in cursor)) return false;
+      cursor[finalKey] = value;
+      return true;
+    }
+
+    function translatedJsonSamePattern() {
+      const original = originalAssetText();
+      const refs = exportRowsByKind('json_path');
+      if (!refs.length) return replaceJsonContent(original);
+      try {
+        const payload = JSON.parse(original);
+        let changed = 0;
+        refs.forEach(({ row, ref }) => {
+          if (setJsonValueAtPath(payload, ref.path, finalTarget(row))) changed += 1;
+        });
+        const spacing = original.includes('\n') ? 2 : 0;
+        return changed ? JSON.stringify(payload, null, spacing) : replaceJsonContent(original);
+      } catch (error) {
+        return replaceJsonContent(original);
+      }
+    }
+
+    function setTextNodeWithOriginalSpacing(node, value) {
+      const original = String(node.textContent || '');
+      const prefix = (original.match(/^\s*/) || [''])[0];
+      const suffix = (original.match(/\s*$/) || [''])[0];
+      node.textContent = `${prefix}${value}${suffix}`;
+    }
+
+    function xmlTextSlots(root) {
+      const slots = [];
+      Array.from(root.getElementsByTagName('*')).forEach(element => {
+        const textNodes = Array.from(element.childNodes).filter(node => node.nodeType === Node.TEXT_NODE && String(node.textContent || '').trim());
+        if (textNodes.length) slots.push(textNodes[0]);
+      });
+      return slots;
+    }
+
+    function serializeXmlDocument(documentXml, original) {
+      const serialized = new XMLSerializer().serializeToString(documentXml);
+      const declaration = String(original || '').match(/^\s*<\?xml[^>]*\?>/)?.[0] || '';
+      if (declaration && !serialized.trimStart().startsWith('<?xml')) {
+        return `${declaration}${detectNewline(original)}${serialized}`;
+      }
+      return serialized;
+    }
+
+    function xmlChildByLocalName(container, localName) {
+      return Array.from(container.children || []).find(node => node.localName === localName) || null;
+    }
+
+    function xliffSegments(documentXml) {
+      return Array.from(documentXml.getElementsByTagName('*'))
+        .filter(node => node.localName === 'trans-unit' || node.localName === 'segment')
+        .map(container => ({
+          container,
+          source: xmlChildByLocalName(container, 'source'),
+          target: xmlChildByLocalName(container, 'target'),
+        }))
+        .filter(item => item.source);
+    }
+
+    function createXliffTargetElement(documentXml, sourceElement) {
+      const name = sourceElement.prefix ? `${sourceElement.prefix}:target` : 'target';
+      const target = sourceElement.namespaceURI
+        ? documentXml.createElementNS(sourceElement.namespaceURI, name)
+        : documentXml.createElement('target');
+      sourceElement.parentNode.insertBefore(target, sourceElement.nextSibling);
+      return target;
+    }
+
+    function setXmlElementPlainText(element, value) {
+      Array.from(element.childNodes).forEach(child => element.removeChild(child));
+      element.textContent = value;
+    }
+
+    function translatedXliffSamePattern() {
+      const original = originalAssetText();
+      const refs = exportRowsByKind('xliff_unit');
+      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        return replaceXmlContent(original);
+      }
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(original, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) return replaceXmlContent(original);
+      const segments = xliffSegments(documentXml);
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const unitIndex = numericRefValue(ref.unit_index);
+        const segment = unitIndex === null ? null : segments[unitIndex];
+        if (!segment) return;
+        const target = segment.target || createXliffTargetElement(documentXml, segment.source);
+        setXmlElementPlainText(target, finalTarget(row));
+        changed += 1;
+      });
+      return changed ? serializeXmlDocument(documentXml, original) : replaceXmlContent(original);
+    }
+
+    function translatedXmlSamePattern() {
+      const original = originalAssetText();
+      if (exportRowsByKind('xliff_unit').length) {
+        return translatedXliffSamePattern();
+      }
+      const refs = exportRowsByKind('xml_text');
+      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        return replaceXmlContent(original);
+      }
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(original, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) return replaceXmlContent(original);
+      const slots = xmlTextSlots(documentXml);
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const textIndex = numericRefValue(ref.text_index);
+        const node = textIndex === null ? null : slots[textIndex];
+        if (!node) return;
+        setTextNodeWithOriginalSpacing(node, finalTarget(row));
+        changed += 1;
+      });
+      return changed ? serializeXmlDocument(documentXml, original) : replaceXmlContent(original);
+    }
+
+    function htmlTextSlots(root) {
+      const slots = [];
+      const visit = (node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && /^(script|style)$/i.test(node.tagName || '')) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (String(node.textContent || '').trim()) slots.push(node);
+          return;
+        }
+        Array.from(node.childNodes || []).forEach(visit);
+      };
+      visit(root);
+      return slots;
+    }
+
+    function translatedHtmlSamePattern() {
+      const original = originalAssetText();
+      const refs = exportRowsByKind('html_text');
+      if (!refs.length) return replaceHtmlContent(original);
+      let slots = [];
+      let serialize = null;
+      if (/<!doctype|<html[\s>]/i.test(original) && typeof DOMParser !== 'undefined') {
+        const parser = new DOMParser();
+        const documentHtml = parser.parseFromString(original, 'text/html');
+        slots = htmlTextSlots(documentHtml);
+        serialize = () => {
+          const doctype = documentHtml.doctype ? `<!DOCTYPE ${documentHtml.doctype.name}>` : '';
+          return `${doctype}${documentHtml.documentElement.outerHTML}`;
+        };
+      } else {
+        const template = document.createElement('template');
+        template.innerHTML = original;
+        slots = htmlTextSlots(template.content);
+        serialize = () => template.innerHTML;
+      }
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const textIndex = numericRefValue(ref.text_index);
+        const node = textIndex === null ? null : slots[textIndex];
+        if (!node) return;
+        setTextNodeWithOriginalSpacing(node, finalTarget(row));
+        changed += 1;
+      });
+      return changed ? serialize() : replaceHtmlContent(original);
+    }
+
+    function translatedTimedTextSamePattern(vtt = false) {
+      const original = originalAssetText();
+      const refs = exportRowsByKind(vtt ? 'vtt_cue' : 'srt_cue');
+      if (!refs.length) return translatedTimedText(vtt);
+      const newline = detectNewline(original);
+      const normalized = original.replace(/\ufeff/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      const blocks = normalized ? normalized.split(/\n\s*\n/) : [];
+      if (!blocks.length) return translatedTimedText(vtt);
+      const byBlock = new Map();
+      const byCue = new Map();
+      refs.forEach(item => {
+        const blockIndex = numericRefValue(item.ref.block_index);
+        const cueIndex = numericRefValue(item.ref.cue_index);
+        if (blockIndex !== null) byBlock.set(blockIndex, item);
+        if (cueIndex !== null) byCue.set(cueIndex, item);
+      });
+      let cueCursor = 0;
+      const updated = blocks.map((block, blockIndex) => {
+        const lines = block.split('\n');
+        const timingIndex = lines.findIndex(line => line.includes('-->'));
+        if (timingIndex < 0) return block;
+        const item = byBlock.get(blockIndex) || byCue.get(cueCursor);
+        cueCursor += 1;
+        if (!item) return block;
+        const targetLines = finalTarget(item.row).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+        return [...lines.slice(0, timingIndex + 1), ...targetLines].join('\n');
+      });
+      const content = updated.join('\n\n');
+      return content.replace(/\n/g, newline);
+    }
+
+    function zipReadU16(bytes, offset) {
+      return bytes[offset] | (bytes[offset + 1] << 8);
+    }
+
+    function zipReadU32(bytes, offset) {
+      return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+    }
+
+    async function inflateRaw(bytes) {
+      if (typeof DecompressionStream === 'undefined') {
+        throw new Error('This browser cannot read the original Office package for same-format export.');
+      }
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    function findZipEocd(bytes) {
+      for (let offset = bytes.length - 22; offset >= 0; offset -= 1) {
+        if (zipReadU32(bytes, offset) === 0x06054b50) return offset;
+      }
+      return -1;
+    }
+
+    async function readZipEntries(bytes) {
+      const decoder = new TextDecoder();
+      const eocd = findZipEocd(bytes);
+      if (eocd < 0) throw new Error('Original Office file is not a readable ZIP package.');
+      const total = zipReadU16(bytes, eocd + 10);
+      let cursor = zipReadU32(bytes, eocd + 16);
+      const entries = [];
+      for (let entryIndex = 0; entryIndex < total; entryIndex += 1) {
+        if (zipReadU32(bytes, cursor) !== 0x02014b50) break;
+        const method = zipReadU16(bytes, cursor + 10);
+        const compressedSize = zipReadU32(bytes, cursor + 20);
+        const nameLength = zipReadU16(bytes, cursor + 28);
+        const extraLength = zipReadU16(bytes, cursor + 30);
+        const commentLength = zipReadU16(bytes, cursor + 32);
+        const localOffset = zipReadU32(bytes, cursor + 42);
+        const name = decoder.decode(bytes.slice(cursor + 46, cursor + 46 + nameLength));
+        const localNameLength = zipReadU16(bytes, localOffset + 26);
+        const localExtraLength = zipReadU16(bytes, localOffset + 28);
+        const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+        const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+        let content;
+        if (method === 0) {
+          content = compressed;
+        } else if (method === 8) {
+          content = await inflateRaw(compressed);
+        } else {
+          throw new Error(`Unsupported ZIP compression method ${method} in original file.`);
+        }
+        entries.push({ name, content });
+        cursor += 46 + nameLength + extraLength + commentLength;
+      }
+      return entries;
+    }
+
+    function shouldTranslateOfficeXml(path, ext) {
+      const name = String(path || '').toLowerCase();
+      if (!name.endsWith('.xml')) return false;
+      if (ext === '.docx') return /^word\/(document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/.test(name);
+      if (ext === '.pptx') return /^ppt\/(slides\/slide\d+|notesSlides\/notesSlide\d+|comments\/comment\d+)\.xml$/.test(name);
+      if (ext === '.xlsx') return name === 'xl/sharedstrings.xml' || /^xl\/worksheets\/sheet\d+\.xml$/.test(name);
+      return false;
+    }
+
+    function docxTableExportRows() {
+      return exportRowsByKind('docx_table')
+        .filter(item => (
+          item.ref.table_index !== null && item.ref.table_index !== undefined
+          && item.ref.row_index !== null && item.ref.row_index !== undefined
+          && item.ref.target_col !== null && item.ref.target_col !== undefined
+          && Number.isInteger(Number(item.ref.table_index))
+          && Number.isInteger(Number(item.ref.row_index))
+          && Number.isInteger(Number(item.ref.target_col))
+        ));
+    }
+
+    function setOfficeTextNodes(
+      container,
+      value,
+      namespace = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+      runName = 'w:r',
+      textName = 'w:t',
+    ) {
+      const textNodes = xmlElementsByLocalName(container, 't');
+      if (textNodes.length) {
+        textNodes[0].textContent = value;
+        textNodes.slice(1).forEach(node => { node.textContent = ''; });
+        return;
+      }
+      const documentXml = container.ownerDocument;
+      const paragraph = container.localName === 'p'
+        ? container
+        : (xmlElementsByLocalName(container, 'p')[0] || container.appendChild(documentXml.createElementNS(namespace, namespace.includes('drawingml') ? 'a:p' : 'w:p')));
+      const run = paragraph.appendChild(documentXml.createElementNS(namespace, runName));
+      const text = run.appendChild(documentXml.createElementNS(namespace, textName));
+      text.textContent = value;
+    }
+
+    function fillDocxTableTargets(xml) {
+      const refs = docxTableExportRows();
+      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        return replaceOfficeXmlContent(xml, 'word/document.xml', '.docx');
+      }
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(xml, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) {
+        return replaceOfficeXmlContent(xml, 'word/document.xml', '.docx');
+      }
+      const tables = xmlElementsByLocalName(documentXml, 'tbl');
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const table = tables[Number(ref.table_index)];
+        if (!table) return;
+        const tableRows = Array.from(table.children).filter(node => node.localName === 'tr');
+        const tableRow = tableRows[Number(ref.row_index)];
+        if (!tableRow) return;
+        const cells = Array.from(tableRow.children).filter(node => node.localName === 'tc');
+        const targetCell = cells[Number(ref.target_col)];
+        if (!targetCell) return;
+        setOfficeTextNodes(targetCell, finalTarget(row));
+        changed += 1;
+      });
+      if (!changed) {
+        return replaceOfficeXmlContent(xml, 'word/document.xml', '.docx');
+      }
+      return new XMLSerializer().serializeToString(documentXml);
+    }
+
+    function pptxParagraphExportRowsForSlide(slidePath) {
+      return exportRowsByKind('pptx_paragraph')
+        .filter(item => (
+          String(item.ref.slide_path || '').toLowerCase() === String(slidePath || '').toLowerCase()
+          && item.ref.paragraph_index !== null && item.ref.paragraph_index !== undefined
+          && Number.isInteger(Number(item.ref.paragraph_index))
+        ));
+    }
+
+    function fillPptxParagraphTargets(xml, slidePath) {
+      const refs = pptxParagraphExportRowsForSlide(slidePath);
+      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+        return replaceOfficeXmlContent(xml, slidePath, '.pptx');
+      }
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(xml, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) {
+        return replaceOfficeXmlContent(xml, slidePath, '.pptx');
+      }
+      const paragraphs = xmlElementsByLocalName(documentXml, 'p');
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const paragraph = paragraphs[Number(ref.paragraph_index)];
+        if (!paragraph) return;
+        setOfficeTextNodes(
+          paragraph,
+          finalTarget(row),
+          'http://schemas.openxmlformats.org/drawingml/2006/main',
+          'a:r',
+          'a:t',
+        );
+        changed += 1;
+      });
+      return changed ? new XMLSerializer().serializeToString(documentXml) : replaceOfficeXmlContent(xml, slidePath, '.pptx');
+    }
+
+    function worksheetIndexFromPath(path) {
+      const match = String(path || '').toLowerCase().match(/^xl\/worksheets\/sheet(\d+)\.xml$/);
+      return match ? Number(match[1]) - 1 : null;
+    }
+
+    function xlsxCellExportRowsForSheet(sheetIndex) {
+      return exportRowsByKind('xlsx_cell')
+        .filter(item => (
+          numericRefValue(item.ref.sheet_index) === sheetIndex
+          && numericRefValue(item.ref.row_index) !== null
+          && numericRefValue(item.ref.target_col) !== null
+        ));
+    }
+
+    function xlsxColumnNumberFromCellRef(ref) {
+      const letters = String(ref || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || '';
+      let value = 0;
+      for (const letter of letters) value = (value * 26) + letter.charCodeAt(0) - 64;
+      return value;
+    }
+
+    function setXlsxInlineStringCell(documentXml, cellRef, value) {
+      const rowMatch = String(cellRef || '').match(/\d+$/);
+      if (!rowMatch) return false;
+      const rowNumber = Number(rowMatch[0]);
+      const columnNumber = xlsxColumnNumberFromCellRef(cellRef);
+      const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+      let sheetData = xmlElementsByLocalName(documentXml, 'sheetData')[0];
+      if (!sheetData) {
+        sheetData = documentXml.documentElement.appendChild(documentXml.createElementNS(ns, 'sheetData'));
+      }
+      let sheetRow = Array.from(sheetData.children).find(node => node.localName === 'row' && Number(node.getAttribute('r')) === rowNumber);
+      if (!sheetRow) {
+        sheetRow = documentXml.createElementNS(ns, 'row');
+        sheetRow.setAttribute('r', String(rowNumber));
+        const nextRow = Array.from(sheetData.children).find(node => node.localName === 'row' && Number(node.getAttribute('r')) > rowNumber);
+        sheetData.insertBefore(sheetRow, nextRow || null);
+      }
+      let cell = Array.from(sheetRow.children).find(node => node.localName === 'c' && String(node.getAttribute('r')).toUpperCase() === String(cellRef).toUpperCase());
+      if (!cell) {
+        cell = documentXml.createElementNS(ns, 'c');
+        cell.setAttribute('r', cellRef);
+        const nextCell = Array.from(sheetRow.children).find(node => node.localName === 'c' && xlsxColumnNumberFromCellRef(node.getAttribute('r')) > columnNumber);
+        sheetRow.insertBefore(cell, nextCell || null);
+      }
+      Array.from(cell.childNodes).forEach(child => cell.removeChild(child));
+      cell.setAttribute('t', 'inlineStr');
+      const inlineString = cell.appendChild(documentXml.createElementNS(ns, 'is'));
+      const text = inlineString.appendChild(documentXml.createElementNS(ns, 't'));
+      text.setAttribute('xml:space', 'preserve');
+      text.textContent = value;
+      return true;
+    }
+
+    function fillXlsxCellTargets(xml, sheetIndex) {
+      const refs = xlsxCellExportRowsForSheet(sheetIndex);
+      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') return xml;
+      const parser = new DOMParser();
+      const documentXml = parser.parseFromString(xml, 'application/xml');
+      if (documentXml.getElementsByTagName('parsererror').length) return xml;
+      let changed = 0;
+      refs.forEach(({ row, ref }) => {
+        const rowIndex = numericRefValue(ref.row_index);
+        const targetCol = numericRefValue(ref.target_col);
+        if (rowIndex === null || targetCol === null) return;
+        const cellRef = `${excelColumnName(targetCol + 1)}${rowIndex + 1}`;
+        if (setXlsxInlineStringCell(documentXml, cellRef, finalTarget(row))) changed += 1;
+      });
+      return changed ? new XMLSerializer().serializeToString(documentXml) : xml;
+    }
+
+    async function translatedOfficePackage(ext) {
+      const bytes = originalAssetBytes();
+      const entries = await readZipEntries(bytes);
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      const hasDocxRefs = exportRowsByKind('docx_table').length > 0;
+      const hasPptxRefs = exportRowsByKind('pptx_paragraph').length > 0;
+      const hasXlsxRefs = exportRowsByKind('xlsx_cell').length > 0;
+      let replaced = 0;
+      const files = entries.map(entry => {
+        if (!shouldTranslateOfficeXml(entry.name, ext)) return { name: entry.name, content: entry.content };
+        const original = decoder.decode(entry.content);
+        const lowerName = entry.name.toLowerCase();
+        let updated = original;
+        if (ext === '.docx') {
+          updated = hasDocxRefs && lowerName === 'word/document.xml'
+            ? fillDocxTableTargets(original)
+            : replaceOfficeXmlContent(original, entry.name, ext);
+        } else if (ext === '.pptx') {
+          updated = hasPptxRefs && /^ppt\/slides\/slide\d+\.xml$/.test(lowerName)
+            ? fillPptxParagraphTargets(original, entry.name)
+            : (hasPptxRefs ? original : replaceOfficeXmlContent(original, entry.name, ext));
+        } else if (ext === '.xlsx') {
+          const sheetIndex = worksheetIndexFromPath(entry.name);
+          updated = hasXlsxRefs && sheetIndex !== null
+            ? fillXlsxCellTargets(original, sheetIndex)
+            : (hasXlsxRefs ? original : replaceOfficeXmlContent(original, entry.name, ext));
+        }
+        if (updated !== original) replaced += 1;
+        return { name: entry.name, content: encoder.encode(updated) };
+      });
+      if (!replaced) {
+        updateFooter('Export used the original package format; no exact source-text matches were found in the Office XML.');
+      }
+      return createZipBytes(files);
+    }
+
+    async function translatedOriginalFormatFile() {
+      const ext = assetExtension();
+      const supported = new Set(['.csv', '.docx', '.html', '.htm', '.json', '.pptx', '.srt', '.txt', '.vtt', '.xlsx', '.xlf', '.xliff', '.xml']);
+      if (!assetFileName() || !ext) {
+        throw new Error('Original uploaded file metadata is unavailable. Export cannot choose the correct file format.');
+      }
+      if (!supported.has(ext)) {
+        throw new Error(`Same-format export is not supported for ${ext}.`);
+      }
+      let content;
+      if (['.docx', '.pptx', '.xlsx'].includes(ext)) {
+        content = await translatedOfficePackage(ext);
+      } else if (ext === '.csv') {
+        content = translatedCsvSameFormat();
+      } else if (ext === '.txt') {
+        content = translatedTextSamePattern();
+      } else if (ext === '.srt') {
+        content = translatedTimedTextSamePattern(false);
+      } else if (ext === '.vtt') {
+        content = translatedTimedTextSamePattern(true);
+      } else if (ext === '.html' || ext === '.htm') {
+        content = translatedHtmlSamePattern();
+      } else if (ext === '.json') {
+        content = translatedJsonSamePattern();
+      } else {
+        content = translatedXmlSamePattern();
+      }
+      return { name: translatedOriginalFileName(), content };
+    }
+
+    function translationQaFindingsForRow(row, idx) {
+      const findings = [];
+      if (!String(row.target || '').trim()) findings.push({ severity: 'Major', issue: 'Target translation is blank.' });
+      const sourcePlaceholders = extractPlaceholders(row.source);
+      const targetText = String(row.target || '');
+      sourcePlaceholders.forEach(token => {
+        if (!targetText.includes(token)) findings.push({ severity: 'Major', issue: `Missing placeholder ${token}.` });
+      });
+      if (!row.done) findings.push({ severity: 'Review', issue: 'Segment is not confirmed.' });
+      if (row.qa && String(row.qa).trim() && !/^(✓|clear)$/i.test(String(row.qa).trim())) {
+        findings.push({ severity: 'Review', issue: String(row.qa).trim() });
+      }
+      return findings.map(item => ({ row: idx + 1, ...item }));
+    }
+
+    function xmlEscape(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    }
+
+    function excelColumnName(index) {
+      let name = '';
+      let value = index;
+      while (value > 0) {
+        const remainder = (value - 1) % 26;
+        name = String.fromCharCode(65 + remainder) + name;
+        value = Math.floor((value - 1) / 26);
+      }
+      return name;
+    }
+
+    function xlsxCell(value, rowIndex, columnIndex) {
+      const ref = `${excelColumnName(columnIndex)}${rowIndex}`;
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    }
+
+    function xlsxSheetXml(dataRows) {
+      const rowsXml = dataRows.map((cells, rowIndex) => {
+        const excelRow = rowIndex + 1;
+        return `<row r="${excelRow}">${cells.map((cell, colIndex) => xlsxCell(cell, excelRow, colIndex + 1)).join('')}</row>`;
+      }).join('');
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`;
+    }
+
+    function createXlsxBytes(sheetName, dataRows) {
+      const cleanSheetName = (String(sheetName ?? '').replace(/[\\/?*[\]:]/g, ' ').trim() || 'QA Report').slice(0, 31);
+      const now = new Date().toISOString();
+      const files = [
+        {
+          name: '[Content_Types].xml',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+        },
+        {
+          name: '_rels/.rels',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`,
+        },
+        {
+          name: 'xl/workbook.xml',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(cleanSheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        },
+        {
+          name: 'xl/_rels/workbook.xml.rels',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+        },
+        { name: 'xl/worksheets/sheet1.xml', content: xlsxSheetXml(dataRows) },
+        {
+          name: 'docProps/core.xml',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>ErrorSweep</dc:creator><cp:lastModifiedBy>ErrorSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
+        },
+        {
+          name: 'docProps/app.xml',
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ErrorSweep</Application></Properties>`,
+        },
+      ];
+      return createZipBytes(files);
+    }
+
+    function translationQaReportRows() {
+      const findings = rows.flatMap((row, idx) => translationQaFindingsForRow(row, idx));
+      const confirmed = rows.filter(row => row.done).length;
+      const reportRows = [
+        ['ErrorSweep Translation QA Report'],
+        [],
+        ['Rows', rows.length],
+        ['Confirmed', `${confirmed} / ${rows.length}`],
+        ['Findings', findings.length],
+        [],
+        ['Row', 'Severity', 'Finding', 'Source', 'Target'],
+      ];
+      if (findings.length) {
+        findings.forEach(item => {
+          const row = rows[item.row - 1] || {};
+          reportRows.push([item.row, item.severity, item.issue, row.source || '', row.target || '']);
+        });
+      } else {
+        reportRows.push(['-', 'Clear', 'No export QA findings detected.', '', '']);
+      }
+      return reportRows;
+    }
+
+    function translationQaWorkbookBytes() {
+      return createXlsxBytes('QA Report', translationQaReportRows());
+    }
+
+    async function exportTranslationPackage() {
+      const originalLabel = exportButton?.innerText || 'Export';
+      try {
+        if (!allRowsConfirmed()) {
+          const pending = rows.filter(row => !row.done).length;
+          updateExportButtonState();
+          updateFooter(`Tick ${pending} more segment${pending === 1 ? '' : 's'} Done before exporting`);
+          return;
+        }
+        if (!exportAssetReady()) {
+          updateExportButtonState();
+          const message = 'Export is active, but this editor session does not include the original uploaded file. Reopen the latest Pro run or rerun Pro translation with the source file uploaded so same-format export can use that file as the template.';
+          updateFooter(message);
+          alert(message);
+          return;
+        }
+        if (exportButton) {
+          exportButton.disabled = true;
+          exportButton.innerText = 'Exporting';
+        }
+        const translatedFile = await translatedOriginalFormatFile();
+        const zip = createZipBlob([
+          { name: translatedFile.name, content: translatedFile.content },
+          { name: 'qa_run_report.xlsx', content: translationQaWorkbookBytes() },
+        ]);
+        downloadBlob(exportPackageName(), zip);
+        updateFooter(`Exported ${translatedFile.name}`);
+      } catch (error) {
+        const message = `${error?.name ? `${error.name}: ` : ''}${error?.message || error || 'Export failed'}`;
+        updateFooter(message);
+        alert(message);
+      } finally {
+        if (exportButton) {
+          exportButton.innerText = originalLabel;
+          updateExportButtonState();
+        }
+      }
+    }
+
+    function submitPage() {
+      if (!allRowsConfirmed()) {
+        updateFooter(`Confirm ${rows.filter(row => !row.done).length} more segments before submitting`);
+        return;
+      }
+      submitted = true;
+      rows.forEach(row => { if (row.target.trim()) { row.done = true; row.qa = row.qa || '✓'; } });
+      savePage();
+      renderRows();
+      updateFooter('Submitted');
+    }
+
+    tabButtons.forEach(button => {
+      button.addEventListener('click', () => {
+        activePanel = button.dataset.panel || button.innerText.replace('v', '').trim();
+        tabButtons.forEach(tab => tab.classList.toggle('active', tab === button));
+        renderPanel();
+      });
+    });
+
+    function toggleDropdown(dropdown, trigger, forceOpen = null) {
+      const shouldOpen = forceOpen === null ? !dropdown.classList.contains('open') : forceOpen;
+      dropdown.classList.toggle('open', shouldOpen);
+      trigger.setAttribute('aria-expanded', String(shouldOpen));
+    }
+
+    contextTrigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleDropdown(contextDropdown, contextTrigger);
+    });
+
+    contextDropdown.addEventListener('click', (event) => event.stopPropagation());
+    contextOptionInputs.forEach(input => {
+      input.addEventListener('change', () => {
+        contextOptions[input.dataset.context] = input.checked;
+        activePanel = 'Context';
+        tabButtons.forEach(tab => tab.classList.toggle('active', tab === contextTrigger));
+        renderPanel();
+      });
+    });
+
+    sourceSearchInput.addEventListener('input', () => {
+      sourceSearchTerm = sourceSearchInput.value;
+      renderRows();
+    });
+
+    targetSearchInput.addEventListener('input', () => {
+      targetSearchTerm = targetSearchInput.value;
+      renderRows();
+    });
+
+    confirmAllCheck.addEventListener('change', () => {
+      pushHistory();
+      const checked = confirmAllCheck.checked;
+      rows.forEach(row => { row.done = checked; });
+      renderRows();
+      updateFooter(checked ? 'All segments confirmed' : 'All confirmations cleared');
+      autoSaveDraft();
+    });
+
+    findReplaceButton.addEventListener('click', () => {
+      const find = prompt('Find text in visible targets');
+      if (!find) return;
+      const replace = prompt('Replace with', '') ?? '';
+      pushHistory();
+      visibleRows().forEach(({ row }) => { row.target = String(row.target).replaceAll(find, replace); row.targetHtml = ''; row.done = false; });
+      renderRows();
+      updateFooter('Replace applied');
+      autoSaveDraft();
+    });
+
+    filterTrigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleDropdown(filterDropdown, filterTrigger);
+    });
+
+    filterDropdown.addEventListener('click', (event) => event.stopPropagation());
+    filterOptionInputs.forEach(input => {
+      input.addEventListener('change', () => {
+        filterOptions[input.dataset.filter] = input.checked;
+        const activeFilterCount = filterOptionInputs.filter(item => item.checked).length;
+        filterTrigger.textContent = activeFilterCount ? `Filters (${activeFilterCount}) v` : 'Filters v';
+        renderRows();
+        updateFooter(activeFilterCount ? `${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'} active` : 'Filters cleared');
+      });
+    });
+
+    document.addEventListener('click', () => {
+      toggleDropdown(contextDropdown, contextTrigger, false);
+      toggleDropdown(filterDropdown, filterTrigger, false);
+    });
+
+    formatButtons.forEach(button => {
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      button.addEventListener('click', () => {
+        const action = button.innerText.trim();
+        if (['B', 'I', 'U', 'BR', 'NBSP'].includes(action)) applyFormat(action);
+        if (action === 'Confirm') confirmActiveSegment();
+        if (action === 'Prev') moveActive('prev');
+        if (action === 'Next') moveActive('next');
+        if (button.title === 'Undo' && undoStack.length) {
+          redoStack.push(rows.map(row => ({ ...row })));
+          restoreSnapshot(undoStack.pop());
+        }
+        if (button.title === 'Redo' && redoStack.length) {
+          undoStack.push(rows.map(row => ({ ...row })));
+          restoreSnapshot(redoStack.pop());
+        }
+      });
+    });
+
+    submitButton.addEventListener('click', submitPage);
+    exportButton.addEventListener('click', exportTranslationPackage);
+
+    tinyButtons.forEach(button => {
+      if (button.innerText.trim() === 'New Window') {
+        button.addEventListener('click', () => {
+          const win = window.open('', '_blank');
+          if (!win) return;
+          win.document.write(document.documentElement.outerHTML);
+          win.document.close();
+        });
+      }
+      if (button.innerText.trim() === '100%') {
+        button.addEventListener('click', () => {
+          document.querySelector('.table-wrap').scrollTop = 0;
+          updateFooter('View reset to 100%');
+        });
+      }
+    });
+
+    restoreAutosavedDraft();
+    renderRows();
+    renderLanguageResources();
+    updateExportButtonState();
+  </script>
+</body>
+</html>
