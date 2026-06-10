@@ -29,6 +29,115 @@ except Exception:
 from openai import OpenAI
 
 
+def _install_navigation_session_bridge() -> None:
+    """Keep the existing upgraded HTML nav, but make protected links restore auth.
+
+    Streamlit Cloud can drop the in-memory Streamlit session when a custom HTML
+    anchor changes ``?es_page=...``. Dashboard may still work, but other protected
+    routes can stop on the zero-height restore bridge and look blank. This bridge
+    does not replace or restyle the navigation. It only appends the already-signed
+    browser session token to protected in-app navigation clicks as ``es_restore``;
+    app.py then consumes and clears that query parameter during its normal auth
+    restore flow.
+    """
+    if st is None:
+        return
+    try:
+        original_markdown = getattr(st, "markdown", None)
+        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_nav_session_bridge", False):
+            return
+
+        import streamlit.components.v1 as components
+
+        cookie_name_json = json.dumps("errorsweep_session")
+        storage_key_json = json.dumps("errorsweep_session")
+        bridge_js = f"""
+        <script>
+        (() => {{
+          try {{
+            const parentWindow = window.parent || window;
+            const parentDoc = parentWindow.document;
+            if (!parentDoc || parentDoc.__errorsweepNavSessionBridge) return;
+            parentDoc.__errorsweepNavSessionBridge = true;
+            const cookieName = {cookie_name_json};
+            const storageKey = {storage_key_json};
+
+            const readCookie = () => {{
+              try {{
+                const prefix = cookieName + "=";
+                const parts = String(parentDoc.cookie || "").split(";").map((item) => item.trim());
+                for (const part of parts) {{
+                  if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length));
+                }}
+              }} catch (err) {{}}
+              return "";
+            }};
+
+            const readStoredToken = () => {{
+              try {{
+                const storage = parentWindow.localStorage || window.localStorage;
+                return String(storage.getItem(storageKey) || readCookie() || "");
+              }} catch (err) {{
+                return readCookie();
+              }}
+            }};
+
+            const isProtectedPageNavigation = (url) => {{
+              const page = String(url.searchParams.get("es_page") || "").trim().toLowerCase();
+              if (!page) return false;
+              return !["landing", "login", "signup", "terms", "privacy", "security", "cookies", "dpa"].includes(page);
+            }};
+
+            parentDoc.addEventListener("click", (event) => {{
+              const target = event.target;
+              if (!target || !target.closest) return;
+              const anchor = target.closest("a[href]");
+              if (!anchor) return;
+              if (!anchor.closest(".es-topnav") && !anchor.closest(".es-owner-strip") && !anchor.closest(".es-account-menu")) return;
+
+              const rawHref = String(anchor.getAttribute("href") || "");
+              if (!rawHref || rawHref === "#" || rawHref.includes("es_logout=1")) return;
+
+              const loc = parentWindow.location || window.location;
+              const url = new URL(rawHref, loc.href);
+              if (!isProtectedPageNavigation(url)) return;
+
+              const token = readStoredToken();
+              if (!token) return;
+
+              url.searchParams.delete("public");
+              url.searchParams.delete("route");
+              url.searchParams.delete("es_restore_miss");
+              url.searchParams.set("es_restore", token);
+
+              event.preventDefault();
+              event.stopPropagation();
+              loc.assign(url.toString());
+            }}, true);
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """
+
+        def markdown_with_nav_session_bridge(body: Any, *args: Any, **kwargs: Any) -> Any:
+            result = original_markdown(body, *args, **kwargs)
+            try:
+                html = str(body)
+                if '<nav class="es-topnav"' in html or "<nav class='es-topnav'" in html:
+                    components.html(bridge_js, height=0, scrolling=False)
+            except Exception:
+                pass
+            return result
+
+        setattr(markdown_with_nav_session_bridge, "_errorsweep_nav_session_bridge", True)
+        st.markdown = markdown_with_nav_session_bridge
+    except Exception:
+        pass
+
+
+_install_navigation_session_bridge()
+
+
 @dataclass
 class AIRoute:
     provider: str              # user_api | managed_vllm | openai_platform
