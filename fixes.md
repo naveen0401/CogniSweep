@@ -89,7 +89,18 @@ None currently tracked.
 
 ## Unresolved & New Issues
 
+<<<<<<< HEAD
 None currently tracked after this pass.
+=======
+### 1. LibreTranslate Code Residuals
+*   **The Issue:** Despite being marked as resolved (Corrected Issue #15), `local_translation_engine.py` still contains and defaults to `translate_with_libretranslate`.
+
+### 2. Thread Lock vs Process Lock Discrepancy
+*   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not the "process lock" claimed in Corrected Issue #18. This leaves a race condition vulnerability if deployed with multiple worker processes.
+
+### 3. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+*   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
+>>>>>>> 6f25319 (For login purpose.)
 
 ---
 

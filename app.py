@@ -4486,15 +4486,17 @@ def query_get(name: str) -> str:
 
 def query_set(name: str, value: str) -> None:
     try:
-        st.query_params[name] = value
+        params = {k: (v if isinstance(v, list) else [v]) for k, v in st.query_params.items()}
+        params[name] = [value]
+        st.experimental_set_query_params(**params)
     except Exception as exc:
         LOGGER.debug("Unable to set query param %s: %s", name, exc)
 
 
 def query_clear(name: str) -> None:
     try:
-        if name in st.query_params:
-            del st.query_params[name]
+        params = {k: v for k, v in st.query_params.items() if k != name}
+        st.experimental_set_query_params(**params)
     except Exception as exc:
         LOGGER.debug("Unable to clear query param %s: %s", name, exc)
 
@@ -4910,6 +4912,7 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
         if public_route_for_es_page(target_page) == "login":
             target_page = "Dashboard"
     st.session_state["user"] = user
+<<<<<<< HEAD
     st.session_state["authenticated"] = True
     session_token = signed_session_token_for_user(user)
     st.session_state["_pending_session_cookie"] = session_token
@@ -4930,6 +4933,19 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
+=======
+    st.session_state["page"] = "Dashboard"
+    st.session_state["_saas_state_hydrated"] = False
+    payload = {**user, "exp": int(time.time()) + SESSION_TTL_SECONDS}
+    query_clear("public")
+    query_clear("es_page")
+    query_clear("es_logout")
+    query_clear("es_editor")
+    query_clear("job_id")
+    query_clear("review_id")
+    query_set("es_session", sign_payload(payload))
+    query_set("es_page", "Dashboard")
+>>>>>>> 6f25319 (For login purpose.)
 
 
 def restore_session_from_query() -> None:
@@ -5603,6 +5619,12 @@ def page_link(page: str) -> str:
     return "?" + urlencode({"es_page": normalize_es_page(page)})
 
 
+def page_route(page: str) -> None:
+    st.session_state.page = page
+    query_set("es_page", page)
+    st.rerun()
+
+
 def public_page_link(page: str) -> str:
     route = public_route_for_es_page(page) or es_page_alias_key(page)
     page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route, safe_text(page).strip().title() or "Landing")
@@ -6002,6 +6024,7 @@ def apply_return_to(return_to: str) -> bool:
 
 
 def open_page(page: str) -> None:
+<<<<<<< HEAD
     """Open an internal CogniSweep route as a dedicated page in the same session."""
     params: Dict[str, str] = {}
     if page == "Human Review Workspace":
@@ -6009,6 +6032,14 @@ def open_page(page: str) -> None:
         if session_id:
             params["review_id"] = str(session_id)
     navigate(page, params)
+=======
+    """Open an internal ErrorSweep route as a dedicated page in the same session."""
+    page_route(page)
+    if page == "Human Review Workspace":
+        session_id = st.session_state.get("active_review_session_id")
+        if session_id:
+            query_set("review_id", str(session_id))
+>>>>>>> 6f25319 (For login purpose.)
 
 
 def nav_button(page: str, key_prefix: str = "nav") -> None:
@@ -22554,6 +22585,7 @@ if __name__ == "__main__":
 
     if route.get("route") in PUBLIC_ROUTES:
         render_public_app()
+<<<<<<< HEAD
     else:
         if not is_authenticated():
             require_auth(route)
@@ -22564,3 +22596,66 @@ if __name__ == "__main__":
             render_app()
             
     render_router_debug_panel(decision="render_complete")
+=======
+        return
+    hydrate_saas_state_for_user()
+
+    # v41: external editor routes open as full-window pages in a new tab.
+    # They must render before normal dashboard routing/navigation.
+    if render_external_editor_router():
+        return
+
+    # Restore selected page from URL query when navigation links are used.
+    requested_page_raw = query_get("es_page")
+    if requested_page_raw:
+        try:
+            from urllib.parse import unquote
+
+            requested_page = unquote(requested_page_raw).strip()
+        except Exception:
+            requested_page = requested_page_raw.strip() if isinstance(requested_page_raw, str) else requested_page_raw
+
+        # Match case-insensitively against allowed pages and normalize to the canonical page name.
+        match = next((p for p in allowed_pages() if isinstance(requested_page, str) and p.lower() == requested_page.lower()), None)
+        if match:
+            st.session_state.page = match
+        else:
+            LOGGER.info(
+                "render_app: es_page query=%s page_raw=%s allowed=%s current_page=%s",
+                requested_page,
+                requested_page_raw,
+                allowed_pages(),
+                st.session_state.get("page"),
+            )
+
+    # Ensure selected page is allowed.
+    if st.session_state.page not in allowed_pages():
+        st.session_state.page = allowed_pages()[0] if allowed_pages() else "Dashboard"
+
+    if query_get("es_debug").strip().lower() == "1":
+        try:
+            debug_params = dict(st.query_params)
+        except Exception:
+            debug_params = str(st.query_params)
+        st.markdown(
+            f"**DEBUG** current page: `{st.session_state.page}`  \
+            query params: `{debug_params}`  \
+            allowed pages: `{allowed_pages()}`"
+        )
+
+    page = st.session_state.page
+    renderer = PAGE_RENDERERS.get(page, page_dashboard)
+
+    # Dedicated editor workspaces should feel like full web applications, not
+    # like a normal dashboard page squeezed beside the platform navigation.
+    # This is especially important for the CAT-style Human Review editor.
+    if page in {"Human Review Workspace", "Subtitle Workspace", "Transcription Workspace"}:
+        renderer()
+        return
+
+    render_navigation()
+    renderer()
+
+
+render_app()
+>>>>>>> 6f25319 (For login purpose.)
