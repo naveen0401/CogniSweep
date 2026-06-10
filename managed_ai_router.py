@@ -12,11 +12,13 @@ Managed AI endpoint is configured.
 
 from __future__ import annotations
 
-import json
+import functools
 import ipaddress
+import json
 import os
 import re
 import socket
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -27,6 +29,212 @@ except Exception:
     st = None
 
 from openai import OpenAI
+
+
+def _install_navigation_click_bridge() -> None:
+    """Keep the upgraded HTML nav and route its clicks through Streamlit state.
+
+    The product shell uses custom HTML anchors for the top navigation. On
+    Streamlit Cloud those anchors can perform a full browser reload, which can
+    lose the current Streamlit session before protected pages render. This patch
+    leaves the visible navigation untouched and adds off-screen Streamlit buttons
+    that perform the existing ``navigate(page)`` action. A tiny click listener
+    redirects top-nav clicks to those buttons, so navigation happens in-session.
+    """
+    if st is None:
+        return
+    try:
+        original_markdown = getattr(st, "markdown", None)
+        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_nav_click_bridge", False):
+            return
+        import streamlit.components.v1 as components
+
+        def safe_key(value: str) -> str:
+            slug = re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
+            return slug or "page"
+
+        def main_module() -> Any:
+            return sys.modules.get("__main__")
+
+        def normalize_page(page: str) -> str:
+            module = main_module()
+            normalizer = getattr(module, "normalize_es_page", None)
+            if callable(normalizer):
+                try:
+                    return str(normalizer(page))
+                except Exception:
+                    pass
+            return str(page or "Dashboard").strip() or "Dashboard"
+
+        def current_allowed_pages() -> List[str]:
+            module = main_module()
+            allowed = getattr(module, "allowed_pages", None)
+            if callable(allowed):
+                try:
+                    pages = allowed()
+                    if pages:
+                        return [str(page) for page in pages]
+                except Exception:
+                    pass
+            return [
+                "Dashboard",
+                "Projects",
+                "Jobs",
+                "ErrorSweep QA",
+                "ErrorSweep Pro",
+                "Subtitle / Transcription Editor",
+                "Scorecards",
+                "Memory & Rules",
+                "Team & Roles",
+                "Billing",
+                "Account",
+                "Admin",
+            ]
+
+        def navigation_targets() -> List[str]:
+            module = main_module()
+            allowed = current_allowed_pages()
+            allowed_set = set(allowed)
+            workspace_order = list(getattr(module, "WORKSPACE_PAGES", []) or [
+                "Dashboard",
+                "Projects",
+                "Jobs",
+                "ErrorSweep QA",
+                "ErrorSweep Pro",
+                "Subtitle / Transcription Editor",
+                "Scorecards",
+                "Memory & Rules",
+                "Team & Roles",
+                "Billing",
+                "Account",
+                "Admin",
+            ])
+            owner_order = list(getattr(module, "OWNER_PAGES", []) or [])
+            is_owner = getattr(module, "is_owner", None)
+            owner_enabled = False
+            if callable(is_owner):
+                try:
+                    owner_enabled = bool(is_owner())
+                except Exception:
+                    owner_enabled = False
+            targets: List[str] = []
+            for page in workspace_order:
+                normalized = normalize_page(page)
+                if normalized in allowed_set and normalized not in targets:
+                    targets.append(normalized)
+            if owner_enabled:
+                for page in owner_order:
+                    normalized = normalize_page(page)
+                    if normalized in allowed_set and normalized not in targets:
+                        targets.append(normalized)
+            settings_page = "Platform Settings" if owner_enabled else ("Admin" if "Admin" in allowed_set else "Account")
+            for page in ("Jobs", "Account", settings_page):
+                normalized = normalize_page(page)
+                if normalized in allowed_set and normalized not in targets:
+                    targets.append(normalized)
+            return targets
+
+        def render_click_bridge() -> None:
+            module = main_module()
+            navigate = getattr(module, "navigate", None)
+            if not callable(navigate):
+                return
+            targets = navigation_targets()
+            if not targets:
+                return
+            key_map = {page: f"errorsweep_nav_click_{safe_key(page)}" for page in targets}
+            css = """
+            <div id="errorsweep-nav-click-bridge-marker" aria-hidden="true"></div>
+            <style>
+            #errorsweep-nav-click-bridge-marker { display: none !important; }
+            body:has(#errorsweep-nav-click-bridge-marker) .st-key-errorsweep_nav_click_bridge {
+              position: fixed !important;
+              left: -10000px !important;
+              top: auto !important;
+              width: 1px !important;
+              height: 1px !important;
+              min-height: 1px !important;
+              overflow: hidden !important;
+              opacity: 0 !important;
+              z-index: -1 !important;
+            }
+            body:has(#errorsweep-nav-click-bridge-marker) .st-key-errorsweep_nav_click_bridge * {
+              pointer-events: none !important;
+            }
+            </style>
+            """
+            original_markdown(css, unsafe_allow_html=True)
+            with st.container(key="errorsweep_nav_click_bridge"):
+                for page, key in key_map.items():
+                    if st.button(f"Open {page}", key=key):
+                        navigate(page)
+            key_map_json = json.dumps(key_map)
+            components.html(
+                f"""
+                <script>
+                (() => {{
+                  try {{
+                    const parentWindow = window.parent || window;
+                    const parentDoc = parentWindow.document;
+                    if (!parentDoc || parentDoc.__errorsweepNavClickBridge) return;
+                    parentDoc.__errorsweepNavClickBridge = true;
+                    const keyMap = {key_map_json};
+                    const findActionButton = (page) => {{
+                      const key = keyMap[String(page || "")];
+                      if (!key) return null;
+                      return parentDoc.querySelector(".st-key-" + key + " button");
+                    }};
+                    const pageFromHref = (href) => {{
+                      try {{
+                        const loc = parentWindow.location || window.location;
+                        const url = new URL(href, loc.href);
+                        return url.searchParams.get("es_page") || "";
+                      }} catch (err) {{
+                        return "";
+                      }}
+                    }};
+                    parentDoc.addEventListener("click", (event) => {{
+                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      const target = event.target;
+                      if (!target || !target.closest) return;
+                      const anchor = target.closest("a[href]");
+                      if (!anchor) return;
+                      if (!anchor.closest(".es-topnav") && !anchor.closest(".es-owner-strip") && !anchor.closest(".es-account-menu")) return;
+                      const href = String(anchor.getAttribute("href") || "");
+                      if (!href || href === "#" || href.includes("es_logout=1")) return;
+                      const page = pageFromHref(href);
+                      const button = findActionButton(page);
+                      if (!button) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      button.click();
+                    }}, true);
+                  }} catch (err) {{}}
+                }})();
+                </script>
+                """,
+                height=0,
+                scrolling=False,
+            )
+
+        @functools.wraps(original_markdown)
+        def markdown_with_nav_click_bridge(body: Any, *args: Any, **kwargs: Any) -> Any:
+            result = original_markdown(body, *args, **kwargs)
+            try:
+                html = str(body)
+                if '<nav class="es-topnav"' in html or "<nav class='es-topnav'" in html:
+                    render_click_bridge()
+            except Exception:
+                pass
+            return result
+
+        setattr(markdown_with_nav_click_bridge, "_errorsweep_nav_click_bridge", True)
+        st.markdown = markdown_with_nav_click_bridge
+    except Exception:
+        pass
+
+
+_install_navigation_click_bridge()
 
 
 @dataclass
