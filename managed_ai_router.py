@@ -26,18 +26,6 @@ try:
 except Exception:
     st = None
 
-# Streamlit Cloud does not always import repository-level sitecustomize.py before
-# app.py starts. Import it here because app.py imports managed_ai_router during
-# startup, after streamlit/components are already imported. This makes the
-# authenticated navigation/session-restore patch deterministic in production.
-try:
-    import sitecustomize as _errorsweep_sitecustomize
-    _patch_streamlit = getattr(_errorsweep_sitecustomize, "_patch_streamlit", None)
-    if callable(_patch_streamlit):
-        _patch_streamlit()
-except Exception:
-    pass
-
 from openai import OpenAI
 
 
