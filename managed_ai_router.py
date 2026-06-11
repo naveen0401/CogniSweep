@@ -12,7 +12,6 @@ Managed AI endpoint is configured.
 
 from __future__ import annotations
 
-import functools
 import json
 import ipaddress
 import os
@@ -27,103 +26,18 @@ try:
 except Exception:
     st = None
 
+# Streamlit Cloud does not always auto-import repository-level sitecustomize.py
+# early enough. app.py imports this router during startup, so load the invisible
+# session compatibility patch here without changing the visible UI.
+try:
+    import sitecustomize as _errorsweep_sitecustomize
+    _patch_all = getattr(_errorsweep_sitecustomize, "_patch_all", None)
+    if callable(_patch_all):
+        _patch_all()
+except Exception:
+    pass
+
 from openai import OpenAI
-
-
-def _install_editor_link_target_fix() -> None:
-    """Keep editor links in the current authenticated Streamlit session.
-
-    Only editor launch anchors are touched. The visible UI, dashboard, top menu,
-    routing model, and non-editor links are left unchanged. Opening the editor in
-    a new browser tab can drop Streamlit session state on Streamlit Cloud and end
-    on a blank protected route, so editor anchors are converted to same-tab links.
-    """
-    if st is None:
-        return
-    try:
-        original_markdown = getattr(st, "markdown", None)
-        original_html = getattr(st, "html", None)
-        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_editor_link_target_fix", False):
-            return
-
-        import streamlit.components.v1 as components
-
-        editor_markers = (
-            "es_editor=",
-            "Human+Review+Editor",
-            "Human%20Review%20Editor",
-            "review_id=",
-        )
-
-        def looks_like_editor_link_markup(value: Any) -> bool:
-            text = str(value)
-            return "<a" in text and "href=" in text and any(marker in text for marker in editor_markers)
-
-        def rewrite_editor_link_targets(value: Any) -> Any:
-            if not looks_like_editor_link_markup(value):
-                return value
-            text = str(value)
-            return re.sub(r'target\s*=\s*([\"\'])_blank\1', 'target="_self"', text, flags=re.I)
-
-        editor_link_fix_js = """
-        <script>
-        (() => {
-          try {
-            const parentWindow = window.parent || window;
-            const doc = parentWindow.document;
-            if (!doc || doc.__errorsweepEditorLinkTargetFix) return;
-            doc.__errorsweepEditorLinkTargetFix = true;
-            const selector = [
-              'a[href*="es_editor="]',
-              'a[href*="Human+Review+Editor"]',
-              'a[href*="Human%20Review%20Editor"]',
-              'a[href*="review_id="]'
-            ].join(',');
-            const patch = () => {
-              try {
-                doc.querySelectorAll(selector).forEach((anchor) => {
-                  const href = String(anchor.getAttribute('href') || '');
-                  if (!href || href.includes('es_logout=1')) return;
-                  anchor.setAttribute('target', '_self');
-                  anchor.removeAttribute('rel');
-                });
-              } catch (err) {}
-            };
-            patch();
-            if (doc.body) {
-              new MutationObserver(patch).observe(doc.body, { childList: true, subtree: true });
-            }
-          } catch (err) {}
-        })();
-        </script>
-        """
-
-        @functools.wraps(original_markdown)
-        def markdown_with_editor_link_target_fix(body: Any, *args: Any, **kwargs: Any) -> Any:
-            should_patch = looks_like_editor_link_markup(body)
-            result = original_markdown(rewrite_editor_link_targets(body), *args, **kwargs)
-            if should_patch:
-                try:
-                    components.html(editor_link_fix_js, height=0, scrolling=False)
-                except Exception:
-                    pass
-            return result
-
-        setattr(markdown_with_editor_link_target_fix, "_errorsweep_editor_link_target_fix", True)
-        st.markdown = markdown_with_editor_link_target_fix
-
-        if callable(original_html) and not getattr(original_html, "_errorsweep_editor_link_target_fix", False):
-            @functools.wraps(original_html)
-            def html_with_editor_link_target_fix(body: Any, *args: Any, **kwargs: Any) -> Any:
-                return original_html(rewrite_editor_link_targets(body), *args, **kwargs)
-
-            setattr(html_with_editor_link_target_fix, "_errorsweep_editor_link_target_fix", True)
-            st.html = html_with_editor_link_target_fix
-    except Exception:
-        pass
-
-
-_install_editor_link_target_fix()
 
 
 @dataclass
