@@ -1,9 +1,8 @@
-"""Invisible ErrorSweep runtime compatibility and owner-entitlement fixes.
+"""Invisible ErrorSweep runtime compatibility fixes.
 
-This module does not replace the UI, render banners, or change navigation
-styling. It only preserves browser session state across tabs/reloads and ensures
-that the main platform owner account always receives platform-owner privileges
-and unlimited platform allowances.
+No UI is rendered here. This file only normalizes malformed protected-route query
+parameters, keeps editor links usable in new tabs, and ensures the configured
+main owner receives platform-owner unlimited access.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger(__name__)
@@ -25,6 +24,7 @@ SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
 PUBLIC_ES_PAGES = {"landing", "login", "signup", "terms", "privacy", "security", "cookies", "dpa"}
+ROUTE_PARAM_KEYS = {"es_page", "es_editor", "job_id", "review_id", "es_session", "es_restore", "tool_tab", "task_id"}
 EDITOR_HREF_MARKERS = ("es_editor=", "job_id=", "review_id=", "Human+Review+Editor", "Human%20Review%20Editor")
 
 MAIN_PLATFORM_OWNER_EMAIL = "adapalanaveen401@gmail.com"
@@ -53,7 +53,71 @@ def _safe_text(value: Any) -> str:
         return ""
 
 
-def _current_user() -> dict[str, Any]:
+def _query_value(value: Any) -> str:
+    if isinstance(value, list):
+        return _safe_text(value[0] if value else "")
+    return _safe_text(value)
+
+
+def _clean_query_key(key: str) -> str:
+    cleaned = _safe_text(key).strip()
+    cleaned = cleaned.replace("%3B", ";").replace("%3b", ";")
+    while cleaned.startswith((";", "&", "?")):
+        cleaned = cleaned[1:]
+    if cleaned.startswith("amp;"):
+        cleaned = cleaned[4:]
+    if ";" in cleaned:
+        tail = cleaned.split(";")[-1]
+        if tail in ROUTE_PARAM_KEYS:
+            cleaned = tail
+    return cleaned
+
+
+def _normalize_query_params() -> None:
+    """Repair malformed query keys such as `%3Breview_id` -> `review_id`.
+
+    The current blank editor screen was caused by a URL like:
+    `?es_page=Human+Review+Editor&%3Breview_id=<id>`. Streamlit decodes that as
+    a key named `;review_id`, so app.py cannot find `review_id`. Normalize it
+    before the router reads the parameters.
+    """
+    st = _streamlit_module()
+    if st is None:
+        return
+    try:
+        params = st.query_params
+        for raw_key in list(params.keys()):
+            clean_key = _clean_query_key(raw_key)
+            if clean_key != raw_key and clean_key in ROUTE_PARAM_KEYS:
+                value = _query_value(params.get(raw_key, ""))
+                if value and not _query_value(params.get(clean_key, "")):
+                    params[clean_key] = value
+                try:
+                    del params[raw_key]
+                except Exception:
+                    pass
+
+        # Also handle a fully embedded value such as
+        # es_page=Human Review Editor;review_id=<id>.
+        es_page = _query_value(params.get("es_page", ""))
+        embedded = re.search(r"(?:^|[;&])review_id=([^&;]+)", es_page)
+        if embedded and not _query_value(params.get("review_id", "")):
+            params["review_id"] = embedded.group(1)
+            params["es_page"] = re.split(r"[;&]review_id=", es_page, 1)[0].strip() or "Human Review Editor"
+
+        # If any unknown key ends with review_id/job_id/es_editor, copy it to the
+        # canonical key instead of letting the route render as blank/error.
+        for raw_key in list(params.keys()):
+            value = _query_value(params.get(raw_key, ""))
+            low = _safe_text(raw_key).lower()
+            for canonical in ("review_id", "job_id", "es_editor"):
+                if low.endswith(canonical) and value and not _query_value(params.get(canonical, "")):
+                    params[canonical] = value
+    except Exception:
+        LOGGER.debug("Unable to normalize ErrorSweep query params", exc_info=True)
+
+
+def _current_user() -> Dict[str, Any]:
     st = _streamlit_module()
     if st is None:
         return {}
@@ -64,7 +128,7 @@ def _current_user() -> dict[str, Any]:
         return {}
 
 
-def _is_main_owner_user(user: dict[str, Any] | None = None) -> bool:
+def _is_main_owner_user(user: Optional[Dict[str, Any]] = None) -> bool:
     candidate = user if isinstance(user, dict) else _current_user()
     email = _safe_text(candidate.get("email")).strip().lower()
     role = _safe_text(candidate.get("role")).strip()
@@ -72,7 +136,7 @@ def _is_main_owner_user(user: dict[str, Any] | None = None) -> bool:
     return email == MAIN_PLATFORM_OWNER_EMAIL or role == "Platform Owner" or account_type == "owner"
 
 
-def _unlimited_subscription(workspace: str = PLATFORM_WORKSPACE) -> dict[str, Any]:
+def _unlimited_subscription(workspace: str = PLATFORM_WORKSPACE) -> Dict[str, Any]:
     workspace = _safe_text(workspace).strip() or PLATFORM_WORKSPACE
     return {
         "workspace": workspace,
@@ -91,7 +155,7 @@ def _unlimited_subscription(workspace: str = PLATFORM_WORKSPACE) -> dict[str, An
     }
 
 
-def _unlimited_plan() -> dict[str, Any]:
+def _unlimited_plan() -> Dict[str, Any]:
     return {
         "name": "Unlimited",
         "monthly": 0,
@@ -105,7 +169,7 @@ def _unlimited_plan() -> dict[str, Any]:
     }
 
 
-def _replace_or_insert_record(rows: list[dict[str, Any]], matcher: Callable[[dict[str, Any]], bool], record: dict[str, Any]) -> None:
+def _replace_or_insert_record(rows: List[Dict[str, Any]], matcher: Callable[[Dict[str, Any]], bool], record: Dict[str, Any]) -> None:
     for index, item in enumerate(list(rows)):
         if isinstance(item, dict) and matcher(item):
             rows[index] = {**item, **record}
@@ -114,7 +178,6 @@ def _replace_or_insert_record(rows: list[dict[str, Any]], matcher: Callable[[dic
 
 
 def _ensure_owner_entitlements() -> None:
-    """Make the requested owner account platform-owner + unlimited at runtime."""
     st = _streamlit_module()
     if st is None:
         return
@@ -125,7 +188,6 @@ def _ensure_owner_entitlements() -> None:
         email = _safe_text(user.get("email")).strip().lower()
         if email != MAIN_PLATFORM_OWNER_EMAIL:
             return
-
         user.update({
             "email": MAIN_PLATFORM_OWNER_EMAIL,
             "role": "Platform Owner",
@@ -139,22 +201,21 @@ def _ensure_owner_entitlements() -> None:
         st.session_state["authenticated"] = True
 
         users = st.session_state.setdefault("users", [])
-        owner_user = {
-            "email": MAIN_PLATFORM_OWNER_EMAIL,
-            "workspace": PLATFORM_WORKSPACE,
-            "role": "Platform Owner",
-            "account_type": "owner",
-            "plan": "Unlimited",
-            "status": "Active",
-            "email_verified": True,
-        }
         _replace_or_insert_record(
             users,
             lambda item: _safe_text(item.get("email")).strip().lower() == MAIN_PLATFORM_OWNER_EMAIL,
-            owner_user,
+            {
+                "email": MAIN_PLATFORM_OWNER_EMAIL,
+                "workspace": PLATFORM_WORKSPACE,
+                "role": "Platform Owner",
+                "account_type": "owner",
+                "plan": "Unlimited",
+                "status": "Active",
+                "email_verified": True,
+            },
         )
-
         workspaces = st.session_state.setdefault("workspaces", [])
+        subscriptions = st.session_state.setdefault("subscriptions", [])
         for workspace_name in (PLATFORM_WORKSPACE, LEGACY_UNLIMITED_WORKSPACE):
             _replace_or_insert_record(
                 workspaces,
@@ -168,28 +229,31 @@ def _ensure_owner_entitlements() -> None:
                     "jobs": 0,
                 },
             )
-
-        subscriptions = st.session_state.setdefault("subscriptions", [])
-        for workspace_name in (PLATFORM_WORKSPACE, LEGACY_UNLIMITED_WORKSPACE):
-            subscription = _unlimited_subscription(workspace_name)
             _replace_or_insert_record(
                 subscriptions,
                 lambda item, workspace_name=workspace_name: _safe_text(item.get("workspace")).strip().lower() == workspace_name.lower(),
-                subscription,
+                _unlimited_subscription(workspace_name),
             )
     except Exception:
         LOGGER.debug("Unable to ensure ErrorSweep owner entitlements", exc_info=True)
 
 
 def _patch_app_functions() -> None:
-    """Patch allowance functions after app.py defines them; no UI changes."""
     global _APP_FUNCTIONS_PATCHED
     if _APP_FUNCTIONS_PATCHED:
         return
     module = _main_module()
     if module is None:
         return
-    required = ["workspace_subscription", "workspace_usage_allowance", "workspace_seat_state", "check_workspace_usage_allowance", "check_workspace_seat_allowance", "current_role", "is_owner"]
+    required = [
+        "workspace_subscription",
+        "workspace_usage_allowance",
+        "workspace_seat_state",
+        "check_workspace_usage_allowance",
+        "check_workspace_seat_allowance",
+        "current_role",
+        "is_owner",
+    ]
     if not all(callable(getattr(module, name, None)) for name in required):
         return
 
@@ -219,7 +283,7 @@ def _patch_app_functions() -> None:
         return _is_main_owner_user() or bool(original_is_owner())
 
     @functools.wraps(original_workspace_subscription)
-    def workspace_subscription_with_unlimited_owner(workspace: str = "") -> dict[str, Any]:
+    def workspace_subscription_with_unlimited_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
         workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or PLATFORM_WORKSPACE)
         if _is_unlimited_context(workspace_name):
@@ -227,15 +291,13 @@ def _patch_app_functions() -> None:
         return original_workspace_subscription(workspace)
 
     @functools.wraps(original_workspace_usage_allowance)
-    def workspace_usage_allowance_with_unlimited_owner(workspace: str = "") -> dict[str, Any]:
+    def workspace_usage_allowance_with_unlimited_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
         workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or PLATFORM_WORKSPACE)
         if _is_unlimited_context(workspace_name):
-            subscription = _unlimited_subscription(workspace_name or PLATFORM_WORKSPACE)
-            plan = _unlimited_plan()
             return {
-                "subscription": subscription,
-                "plan": plan,
+                "subscription": _unlimited_subscription(workspace_name or PLATFORM_WORKSPACE),
+                "plan": _unlimited_plan(),
                 "segments": UNLIMITED_SEGMENTS,
                 "characters": UNLIMITED_CHARACTERS,
                 "seats": UNLIMITED_SEATS,
@@ -243,16 +305,14 @@ def _patch_app_functions() -> None:
         return original_workspace_usage_allowance(workspace)
 
     @functools.wraps(original_workspace_seat_state)
-    def workspace_seat_state_with_unlimited_owner(workspace: str = "") -> dict[str, Any]:
+    def workspace_seat_state_with_unlimited_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
         workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or PLATFORM_WORKSPACE)
         if _is_unlimited_context(workspace_name):
-            subscription = _unlimited_subscription(workspace_name or PLATFORM_WORKSPACE)
-            plan = _unlimited_plan()
             return {
                 "workspace": workspace_name or PLATFORM_WORKSPACE,
-                "subscription": subscription,
-                "plan": plan,
+                "subscription": _unlimited_subscription(workspace_name or PLATFORM_WORKSPACE),
+                "plan": _unlimited_plan(),
                 "used": 1,
                 "limit": UNLIMITED_SEATS,
                 "available": UNLIMITED_SEATS - 1,
@@ -260,12 +320,16 @@ def _patch_app_functions() -> None:
         return original_workspace_seat_state(workspace)
 
     @functools.wraps(original_check_workspace_usage_allowance)
-    def check_workspace_usage_allowance_with_unlimited_owner(rows: list[dict[str, Any]], purpose: str, workspace: str = ""):
+    def check_workspace_usage_allowance_with_unlimited_owner(rows: List[Dict[str, Any]], purpose: str, workspace: str = ""):
         _ensure_owner_entitlements()
         workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or PLATFORM_WORKSPACE)
         if _is_unlimited_context(workspace_name):
             requested_segments = len(rows or [])
-            requested_characters = sum(len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", ""))) for row in (rows or []) if isinstance(row, dict))
+            requested_characters = sum(
+                len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", "")))
+                for row in (rows or [])
+                if isinstance(row, dict)
+            )
             return True, "", {
                 "workspace": workspace_name or PLATFORM_WORKSPACE,
                 "plan": "Unlimited",
@@ -301,12 +365,11 @@ def _patch_app_functions() -> None:
 
 
 def _current_session_token() -> str:
-    """Create a valid app session token using app.py's own signer."""
     st = _streamlit_module()
     if st is None:
         return ""
     try:
-        pending = str(st.session_state.get("_pending_session_cookie", "") or "")
+        pending = _safe_text(st.session_state.get("_pending_session_cookie", ""))
         if pending:
             return pending
     except Exception:
@@ -317,7 +380,7 @@ def _current_session_token() -> str:
     signer = getattr(_main_module(), "signed_session_token_for_user", None)
     if callable(signer):
         try:
-            return str(signer(user) or "")
+            return _safe_text(signer(user))
         except Exception:
             LOGGER.debug("Unable to sign ErrorSweep session token", exc_info=True)
     return ""
@@ -329,10 +392,14 @@ def _append_query(url: str, **updates: str) -> str:
     try:
         split = urlsplit(url)
         pairs = dict(parse_qsl(split.query, keep_blank_values=True))
+        clean_pairs: Dict[str, str] = {}
+        for key, value in pairs.items():
+            clean_key = _clean_query_key(key)
+            clean_pairs[clean_key] = value
         for key, value in updates.items():
             if value:
-                pairs[key] = value
-        return urlunsplit((split.scheme, split.netloc, split.path, urlencode(pairs), split.fragment))
+                clean_pairs[key] = value
+        return urlunsplit((split.scheme, split.netloc, split.path, urlencode(clean_pairs), split.fragment))
     except Exception:
         return url
 
@@ -394,12 +461,22 @@ def _session_bootstrap_script(*, enable_tool_tab: bool = False) -> str:
     try {{
       doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
     }} catch (err) {{}}
-    try {{
-      parentWindow.localStorage.setItem(storageKey, token);
-    }} catch (err) {{}}
+    try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
 
     try {{
       const current = new URL(parentWindow.location.href);
+      const repairParam = (bad, good) => {{
+        if (current.searchParams.has(bad) && !current.searchParams.has(good)) {{
+          current.searchParams.set(good, current.searchParams.get(bad) || "");
+          current.searchParams.delete(bad);
+        }}
+      }};
+      repairParam(";review_id", "review_id");
+      repairParam("amp;review_id", "review_id");
+      repairParam(";job_id", "job_id");
+      repairParam("amp;job_id", "job_id");
+      repairParam(";es_editor", "es_editor");
+      repairParam("amp;es_editor", "es_editor");
       const page = String(current.searchParams.get("es_page") || "").trim().toLowerCase();
       const protectedTarget = Boolean(
         current.searchParams.get("es_editor") ||
@@ -407,10 +484,8 @@ def _session_bootstrap_script(*, enable_tool_tab: bool = False) -> str:
         current.searchParams.get("review_id") ||
         (page && !publicPages.includes(page))
       );
-      if (protectedTarget && current.searchParams.get("es_session") !== token) {{
-        current.searchParams.set("es_session", token);
-        parentWindow.history.replaceState(null, "", current.toString());
-      }}
+      if (protectedTarget && current.searchParams.get("es_session") !== token) current.searchParams.set("es_session", token);
+      if (current.href !== parentWindow.location.href) parentWindow.history.replaceState(null, "", current.toString());
     }} catch (err) {{}}
 
     const patchEditorLinks = () => {{
@@ -426,6 +501,12 @@ def _session_bootstrap_script(*, enable_tool_tab: bool = False) -> str:
           const raw = String(anchor.getAttribute("href") || "");
           if (!raw || raw.includes("es_logout=1")) return;
           const url = new URL(raw, parentWindow.location.href);
+          [";review_id", "amp;review_id"].forEach((bad) => {{
+            if (url.searchParams.has(bad) && !url.searchParams.has("review_id")) {{
+              url.searchParams.set("review_id", url.searchParams.get(bad) || "");
+              url.searchParams.delete(bad);
+            }}
+          }});
           url.searchParams.set("es_session", token);
           anchor.setAttribute("href", url.pathname + url.search + url.hash);
           anchor.setAttribute("target", "_blank");
@@ -469,6 +550,7 @@ def _patch_streamlit() -> None:
 
     @functools.wraps(original_markdown)
     def markdown_with_session_links(body: Any, *args: Any, **kwargs: Any) -> Any:
+        _normalize_query_params()
         _ensure_owner_entitlements()
         _patch_app_functions()
         text = str(body)
@@ -492,6 +574,7 @@ def _patch_streamlit() -> None:
     if callable(original_html):
         @functools.wraps(original_html)
         def html_with_session_links(body: Any, *args: Any, **kwargs: Any) -> Any:
+            _normalize_query_params()
             _ensure_owner_entitlements()
             _patch_app_functions()
             return original_html(_rewrite_anchor_hrefs(body, editor_only=True, keep_editor_new_tab=True), *args, **kwargs)
@@ -502,12 +585,13 @@ def _patch_streamlit() -> None:
 
 
 def _patch_all() -> None:
+    _normalize_query_params()
     _patch_streamlit()
     _ensure_owner_entitlements()
     _patch_app_functions()
 
 
-def _import_hook(name: str, globals: Any = None, locals: Any = None, fromlist: tuple[Any, ...] = (), level: int = 0) -> Any:
+def _import_hook(name: str, globals: Any = None, locals: Any = None, fromlist: Tuple[Any, ...] = (), level: int = 0) -> Any:
     module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     if name == "streamlit" or name.startswith("streamlit."):
         _patch_all()
