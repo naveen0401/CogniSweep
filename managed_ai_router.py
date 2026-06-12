@@ -23,12 +23,19 @@ import sys
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
 except Exception:
     st = None
+
+
+_PUBLIC_ES_PAGES = {"landing", "login", "signup", "verify", "reset", "terms", "privacy", "security", "cookies", "dpa", "sso handoff", "billing success", "billing cancel"}
+_PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"}
+_SESSION_COOKIE_NAME = "errorsweep_session"
+_SESSION_STORAGE_KEY = "errorsweep_session"
+_SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
 
 
 def _install_signup_scroll_fix() -> None:
@@ -105,6 +112,137 @@ def _install_signup_scroll_fix() -> None:
         pass
 
 
+def _compact_page(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("+", " ").replace("_", " ").replace("-", " ").strip().lower())
+
+
+def _href_needs_session(href: str) -> bool:
+    if not href or href.startswith("#") or href.lower().startswith(("mailto:", "tel:", "javascript:")):
+        return False
+    try:
+        split = urlsplit(href)
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        page = _compact_page(query.get("es_page", ""))
+        if page and page in _PUBLIC_ES_PAGES:
+            return False
+        return any(query.get(key) for key in _PROTECTED_LINK_KEYS) and bool(page or query.get("es_editor") or query.get("job_id") or query.get("review_id") or query.get("task_id"))
+    except Exception:
+        return False
+
+
+def _append_session_to_href(href: str, token: str) -> str:
+    if not token or not _href_needs_session(href):
+        return href
+    try:
+        split = urlsplit(href)
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        query["es_session"] = token
+        return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+    except Exception:
+        return href
+
+
+def _rewrite_protected_links(markup: Any, token: str) -> Any:
+    if not token:
+        return markup
+    text = str(markup)
+    if "href=" not in text:
+        return markup
+
+    def replace_href(match: re.Match[str]) -> str:
+        quote = match.group(1)
+        href = match.group(2)
+        return f"href={quote}{_append_session_to_href(href, token)}{quote}"
+
+    return re.sub(r'href\s*=\s*([\"\'])(.*?)\1', replace_href, text, flags=re.I)
+
+
+def _current_signed_session_token() -> str:
+    if st is None:
+        return ""
+    try:
+        for key in ("_pending_session_cookie", "_post_login_session_token"):
+            value = str(st.session_state.get(key, "") or "")
+            if value:
+                return value
+        user = st.session_state.get("user") or {}
+        if not user:
+            return ""
+        signer = getattr(sys.modules.get("__main__"), "signed_session_token_for_user", None)
+        if callable(signer):
+            token = str(signer(user) or "")
+            if token:
+                st.session_state["_pending_session_cookie"] = token
+                st.session_state["_post_login_session_token"] = token
+                return token
+    except Exception:
+        return ""
+    return ""
+
+
+def _protected_page_session_script(token: str) -> str:
+    token_json = json.dumps(token)
+    cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
+    public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
+    return f"""
+    <script>
+    (() => {{
+      try {{
+        const parentWindow = window.parent || window;
+        const doc = parentWindow.document;
+        const token = {token_json};
+        const cookieName = {cookie_name_json};
+        const storageKey = {storage_key_json};
+        const publicPages = {public_pages_json};
+        const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
+        try {{
+          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+        }} catch (err) {{}}
+        try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
+        const url = new URL(parentWindow.location.href);
+        const page = String(url.searchParams.get("es_page") || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+        const protectedTarget = Boolean(url.searchParams.get("es_editor") || url.searchParams.get("job_id") || url.searchParams.get("review_id") || url.searchParams.get("task_id") || (page && !publicPages.includes(page)));
+        if (protectedTarget && url.searchParams.get("es_session") !== token) {{
+          url.searchParams.set("es_session", token);
+          parentWindow.history.replaceState(null, "", url.toString());
+        }}
+      }} catch (err) {{}}
+    }})();
+    </script>
+    """
+
+
+def _install_authenticated_reload_bridge() -> None:
+    """Keep session token on protected links/current URL so reloads do not blank."""
+    if st is None:
+        return
+    try:
+        original_markdown = getattr(st, "markdown", None)
+        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_authenticated_reload_bridge", False):
+            return
+
+        @functools.wraps(original_markdown)
+        def markdown_with_authenticated_reload(body: Any, *args: Any, **kwargs: Any) -> Any:
+            token = _current_signed_session_token()
+            text = str(body)
+            is_shell_or_nav = "errorsweep-root-shell-marker" in text or "es-topnav" in text or "es-owner-strip" in text or "es-account-menu" in text
+            patched_body = _rewrite_protected_links(body, token) if token and "href=" in text else body
+            result = original_markdown(patched_body, *args, **kwargs)
+            if token and is_shell_or_nav:
+                try:
+                    import streamlit.components.v1 as components
+                    components.html(_protected_page_session_script(token), height=0, scrolling=False)
+                except Exception:
+                    pass
+            return result
+
+        setattr(markdown_with_authenticated_reload, "_errorsweep_authenticated_reload_bridge", True)
+        st.markdown = markdown_with_authenticated_reload
+    except Exception:
+        pass
+
+
 def _install_login_new_tab_bridge() -> None:
     """Keep the login page open while launching the authenticated app tab."""
     if st is None:
@@ -141,12 +279,10 @@ def _install_login_new_tab_bridge() -> None:
                     value = str(current_route.get(key) or "").strip()
                     if value:
                         params[key] = value
-
             for key in ("es_page", "es_editor", "job_id", "review_id", "task_id"):
                 value = _query_value(key).strip()
                 if value:
                     params[key] = value
-
             public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
             if not params.get("es_page") or public_page in {"login", "landing", "signup", "register", "registration"}:
                 params["es_page"] = "Dashboard"
@@ -169,7 +305,7 @@ def _install_login_new_tab_bridge() -> None:
         def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
             try:
                 if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
-                    session_token = str(st.session_state.get("_pending_session_cookie") or st.session_state.get("_post_login_session_token") or "")
+                    session_token = _current_signed_session_token()
                     if session_token:
                         st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)
                         st.session_state["_post_login_session_token"] = session_token
@@ -192,6 +328,7 @@ def _install_login_new_tab_bridge() -> None:
 
 
 _install_signup_scroll_fix()
+_install_authenticated_reload_bridge()
 _install_login_new_tab_bridge()
 
 from openai import OpenAI
