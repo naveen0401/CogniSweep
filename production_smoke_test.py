@@ -9,6 +9,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,7 +33,12 @@ PLACEHOLDER_MARKERS = (
     "your-project",
     "example.com",
     "placeholder",
+    "changeme",
+    "change-me",
+    "errorsweep.local",
+    "demo workspace",
 )
+PBKDF2_RE = re.compile(r"^pbkdf2_sha256\$(\d+)\$([^$]{16,})\$([A-Za-z0-9_-]{32,})$")
 
 
 def _safe_text(value: Any) -> str:
@@ -61,12 +67,19 @@ def _is_placeholder(value: str) -> bool:
     lowered = _safe_text(value).lower()
     if not lowered:
         return False
+    if lowered == DEFAULT_SESSION_SECRET:
+        return True
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
 def _https_url(value: str) -> bool:
     parsed = urlparse(value)
-    return parsed.scheme == "https" and bool(parsed.netloc)
+    return parsed.scheme == "https" and bool(parsed.netloc) and not _is_placeholder(value)
+
+
+def _pbkdf2_hash_ready(value: str) -> bool:
+    match = PBKDF2_RE.match(_safe_text(value))
+    return bool(match) and int(match.group(1)) >= 260_000
 
 
 def _status_rank(status: str) -> int:
@@ -137,7 +150,13 @@ def deployment_pack_status() -> Dict[str, Any]:
         "deploy/.env.production.example",
         "deploy/README_DEPLOYMENT.md",
         "deploy/LAUNCH_RUNBOOK.md",
+        "deploy/ai_fallback_check.py",
+        "deploy/auth_session_check.py",
+        "deploy/async_worker_check.py",
         "deploy/launch_env_check.py",
+        "deploy/mt_endpoint_check.py",
+        "deploy/object_storage_check.py",
+        "deploy/supabase_schema_check.py",
         "deploy/release_check.py",
     ]
     required_services = [
@@ -177,6 +196,11 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
     env_mode = _env("ERRORSWEEP_ENV", _env("ENVIRONMENT", _env("APP_ENV"))).lower()
     public_url = _env("ERRORSWEEP_PUBLIC_BASE_URL")
     session_secret = _env("ERRORSWEEP_SESSION_SECRET")
+    owner_email = _env("ERRORSWEEP_OWNER_USERNAME")
+    owner_hash = _env("ERRORSWEEP_OWNER_PASSWORD_HASH")
+    workspace_email = _env("ERRORSWEEP_USER_USERNAME")
+    workspace_hash = _env("ERRORSWEEP_USER_PASSWORD_HASH")
+    workspace_name = _env("ERRORSWEEP_ORG_NAME")
 
     add_result(
         results,
@@ -190,8 +214,8 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         results,
         "Core",
         "Session secret",
-        "Pass" if session_secret and session_secret != DEFAULT_SESSION_SECRET else "Blocker",
-        "custom configured" if session_secret and session_secret != DEFAULT_SESSION_SECRET else "missing/default",
+        "Pass" if session_secret and not _is_placeholder(session_secret) and len(session_secret) >= 32 else "Blocker",
+        "custom configured" if session_secret and not _is_placeholder(session_secret) and len(session_secret) >= 32 else "missing/default/placeholder",
         "Set ERRORSWEEP_SESSION_SECRET to a long random value.",
     )
     add_result(
@@ -202,6 +226,39 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         public_url or "missing",
         "Set ERRORSWEEP_PUBLIC_BASE_URL to the deployed HTTPS app URL.",
     )
+    owner_ready = bool(owner_email) and not _is_placeholder(owner_email) and _pbkdf2_hash_ready(owner_hash)
+    workspace_ready = (
+        bool(workspace_email)
+        and not _is_placeholder(workspace_email)
+        and _pbkdf2_hash_ready(workspace_hash)
+        and bool(workspace_name)
+        and not _is_placeholder(workspace_name)
+    )
+    add_result(
+        results,
+        "Auth",
+        "Owner bootstrap credentials",
+        "Pass" if owner_ready else "Blocker",
+        "email + PBKDF2 hash configured" if owner_ready else "missing/default/placeholder",
+        "Set ERRORSWEEP_OWNER_USERNAME and ERRORSWEEP_OWNER_PASSWORD_HASH for production owner access.",
+    )
+    add_result(
+        results,
+        "Auth",
+        "Workspace bootstrap credentials",
+        "Pass" if workspace_ready else "Blocker",
+        "email + PBKDF2 hash + workspace configured" if workspace_ready else "missing/default/placeholder",
+        "Set ERRORSWEEP_USER_USERNAME, ERRORSWEEP_USER_PASSWORD_HASH, and ERRORSWEEP_ORG_NAME for initial workspace access.",
+    )
+    active_plaintext_passwords = [key for key in ("ERRORSWEEP_OWNER_PASSWORD", "ERRORSWEEP_USER_PASSWORD") if _env(key)]
+    add_result(
+        results,
+        "Auth",
+        "Plaintext bootstrap passwords",
+        "Pass" if not active_plaintext_passwords else "Blocker",
+        "not set" if not active_plaintext_passwords else ", ".join(active_plaintext_passwords),
+        "Remove plaintext bootstrap password env vars; production login only accepts *_PASSWORD_HASH.",
+    )
     deployment_status = deployment_pack_status()
     add_result(
         results,
@@ -209,7 +266,7 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         "Deployment pack files",
         "Pass" if deployment_status["files_ready"] else "Warn",
         f"{len(deployment_status['present_files'])}/{len(deployment_status['required_files'])} present",
-        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, deploy/LAUNCH_RUNBOOK.md, deploy/launch_env_check.py, and deploy/release_check.py with the release branch.",
+        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, deploy/LAUNCH_RUNBOOK.md, deploy/ai_fallback_check.py, deploy/auth_session_check.py, deploy/async_worker_check.py, deploy/launch_env_check.py, deploy/mt_endpoint_check.py, deploy/object_storage_check.py, deploy/supabase_schema_check.py, and deploy/release_check.py with the release branch.",
     )
     add_result(
         results,

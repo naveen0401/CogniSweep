@@ -20,10 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
 
-SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|KEY|CLIENT_SECRET|SERVICE_ROLE)", re.IGNORECASE)
+SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|HASH|KEY|CLIENT_SECRET|SERVICE_ROLE|USERNAME|WORKSPACE|ORG)", re.IGNORECASE)
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PBKDF2_RE = re.compile(r"^pbkdf2_sha256\$(\d+)\$([^$]{16,})\$([A-Za-z0-9_-]{32,})$")
 PLACEHOLDER_MARKERS = (
     "replace-with",
     "your-domain.com",
+    "yourdomain.com",
     "your-project",
     "example.com",
     "customer.com",
@@ -31,6 +34,8 @@ PLACEHOLDER_MARKERS = (
     "change-me",
     "todo",
     "placeholder",
+    "errorsweep.local",
+    "demo workspace",
 )
 
 
@@ -102,6 +107,16 @@ def is_placeholder(value: str) -> bool:
 def configured(env: Dict[str, str], names: Sequence[str], min_length: int = 1) -> bool:
     value = value_for(env, names)
     return bool(value) and not is_placeholder(value) and len(value) >= min_length
+
+
+def pbkdf2_hash_ready(value: str) -> bool:
+    match = PBKDF2_RE.match(safe_text(value))
+    return bool(match) and int(match.group(1)) >= 260_000
+
+
+def email_ready(value: str) -> bool:
+    text = safe_text(value)
+    return bool(text) and not is_placeholder(text) and bool(EMAIL_RE.match(text))
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
@@ -193,6 +208,74 @@ def check_core(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
     add(results, "Core", "Production mode", "Pass" if mode == "production" else "Blocker", mode or "missing", "Set ERRORSWEEP_ENV=production.")
     require_https(results, env, "Core", "Public app URL", "ERRORSWEEP_PUBLIC_BASE_URL", "Set ERRORSWEEP_PUBLIC_BASE_URL to the live HTTPS app URL.")
     require_value(results, env, "Core", "Session secret", ["ERRORSWEEP_SESSION_SECRET"], "Use a long random session secret.", min_length=32)
+
+
+def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
+    owner_email = value_for(env, ["ERRORSWEEP_OWNER_USERNAME"])
+    owner_hash = value_for(env, ["ERRORSWEEP_OWNER_PASSWORD_HASH"])
+    user_email = value_for(env, ["ERRORSWEEP_USER_USERNAME"])
+    user_hash = value_for(env, ["ERRORSWEEP_USER_PASSWORD_HASH"])
+    workspace = value_for(env, ["ERRORSWEEP_ORG_NAME"])
+
+    add(
+        results,
+        "Auth",
+        "Owner bootstrap email",
+        "Pass" if email_ready(owner_email) else "Blocker",
+        nonsecret_evidence("ERRORSWEEP_OWNER_USERNAME", owner_email),
+        "Set ERRORSWEEP_OWNER_USERNAME to the production platform owner email.",
+    )
+    add(
+        results,
+        "Auth",
+        "Owner bootstrap password hash",
+        "Pass" if pbkdf2_hash_ready(owner_hash) else "Blocker",
+        "configured" if pbkdf2_hash_ready(owner_hash) else nonsecret_evidence("ERRORSWEEP_OWNER_PASSWORD_HASH", owner_hash),
+        "Set ERRORSWEEP_OWNER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash.",
+    )
+    add(
+        results,
+        "Auth",
+        "Workspace bootstrap email",
+        "Pass" if email_ready(user_email) else "Blocker",
+        nonsecret_evidence("ERRORSWEEP_USER_USERNAME", user_email),
+        "Set ERRORSWEEP_USER_USERNAME to the initial production workspace user email.",
+    )
+    add(
+        results,
+        "Auth",
+        "Workspace bootstrap password hash",
+        "Pass" if pbkdf2_hash_ready(user_hash) else "Blocker",
+        "configured" if pbkdf2_hash_ready(user_hash) else nonsecret_evidence("ERRORSWEEP_USER_PASSWORD_HASH", user_hash),
+        "Set ERRORSWEEP_USER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash.",
+    )
+    add(
+        results,
+        "Auth",
+        "Workspace bootstrap name",
+        "Pass" if configured(env, ["ERRORSWEEP_ORG_NAME"]) else "Blocker",
+        nonsecret_evidence("ERRORSWEEP_ORG_NAME", workspace),
+        "Set ERRORSWEEP_ORG_NAME to the initial production workspace name.",
+    )
+    role = value_for(env, ["ERRORSWEEP_DEFAULT_USER_ROLE"]) or "Workspace Owner"
+    allowed_roles = {"Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"}
+    add(
+        results,
+        "Auth",
+        "Workspace bootstrap role",
+        "Pass" if role in allowed_roles else "Warn",
+        role or "missing",
+        "Use a known workspace role, usually Workspace Owner, for the initial workspace user.",
+    )
+    plaintext_passwords = [key for key in ("ERRORSWEEP_OWNER_PASSWORD", "ERRORSWEEP_USER_PASSWORD") if safe_text(env.get(key))]
+    add(
+        results,
+        "Auth",
+        "Plaintext bootstrap passwords",
+        "Pass" if not plaintext_passwords else "Blocker",
+        "not set" if not plaintext_passwords else ", ".join(plaintext_passwords),
+        "Remove plaintext bootstrap password env vars; production login accepts only *_PASSWORD_HASH.",
+    )
 
 
 def check_persistence(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
@@ -384,6 +467,7 @@ def collect_results(env: Dict[str, str], duplicates: Sequence[str], env_path: Pa
         "Use --include-os-env if your host injects secrets outside deploy/.env.production.",
     )
     check_core(results, env)
+    check_auth(results, env)
     check_persistence(results, env)
     check_storage(results, env)
     check_async(results, env)

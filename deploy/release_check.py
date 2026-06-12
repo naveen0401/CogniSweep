@@ -26,7 +26,13 @@ REQUIRED_DEPLOYMENT_FILES = [
     "deploy/.env.production.example",
     "deploy/README_DEPLOYMENT.md",
     "deploy/LAUNCH_RUNBOOK.md",
+    "deploy/ai_fallback_check.py",
+    "deploy/auth_session_check.py",
+    "deploy/async_worker_check.py",
     "deploy/launch_env_check.py",
+    "deploy/mt_endpoint_check.py",
+    "deploy/object_storage_check.py",
+    "deploy/supabase_schema_check.py",
     "deploy/release_check.py",
 ]
 
@@ -89,6 +95,12 @@ REQUIRED_ENV_KEYS = [
     "ERRORSWEEP_ENV",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
+    "ERRORSWEEP_OWNER_USERNAME",
+    "ERRORSWEEP_OWNER_PASSWORD_HASH",
+    "ERRORSWEEP_USER_USERNAME",
+    "ERRORSWEEP_USER_PASSWORD_HASH",
+    "ERRORSWEEP_ORG_NAME",
+    "ERRORSWEEP_DEFAULT_USER_ROLE",
     "SUPABASE_URL",
     "SUPABASE_ANON_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
@@ -119,6 +131,12 @@ REQUIRED_STREAMLIT_SECRET_KEYS = [
     "ERRORSWEEP_ENV",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
+    "ERRORSWEEP_OWNER_USERNAME",
+    "ERRORSWEEP_OWNER_PASSWORD_HASH",
+    "ERRORSWEEP_USER_USERNAME",
+    "ERRORSWEEP_USER_PASSWORD_HASH",
+    "ERRORSWEEP_ORG_NAME",
+    "ERRORSWEEP_DEFAULT_USER_ROLE",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "SUPABASE_URL",
@@ -141,7 +159,13 @@ REQUIRED_STREAMLIT_SECRET_KEYS = [
 
 PYTHON_ENTRYPOINTS = [
     "app.py",
+    "deploy/ai_fallback_check.py",
+    "deploy/auth_session_check.py",
+    "deploy/async_worker_check.py",
     "deploy/launch_env_check.py",
+    "deploy/mt_endpoint_check.py",
+    "deploy/object_storage_check.py",
+    "deploy/supabase_schema_check.py",
     "production_smoke_test.py",
     "async_task_worker.py",
     "async_workflow_processor.py",
@@ -263,6 +287,180 @@ def check_supabase_schema(results: List[Dict[str, str]]) -> None:
     )
 
 
+def check_supabase_schema_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/supabase_schema_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Persistence", "Supabase schema drift check", "Warn", safe_text(exc)[:220], "Run deploy/supabase_schema_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Persistence",
+        "Supabase schema drift check",
+        status,
+        evidence,
+        "Keep supabase_v42_release_schema.sql aligned with production_persistence.py before running the schema in Supabase.",
+    )
+
+
+def check_object_storage_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/object_storage_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Storage", "Object storage launch check", "Warn", safe_text(exc)[:220], "Run deploy/object_storage_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Storage",
+        "Object storage launch check",
+        status,
+        evidence,
+        "Keep cloud_object_storage.py, provider dependencies, and storage env templates ready before configuring production buckets.",
+    )
+
+
+def check_async_worker_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/async_worker_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Async", "Async worker launch check", "Warn", safe_text(exc)[:220], "Run deploy/async_worker_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Async",
+        "Async worker launch check",
+        status,
+        evidence,
+        "Keep async queue, receiver, processor, supervisor, compose wiring, and worker templates deploy-ready.",
+    )
+
+
+def check_ai_fallback_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/ai_fallback_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "AI", "AI fallback launch check", "Warn", safe_text(exc)[:220], "Run deploy/ai_fallback_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "AI",
+        "AI fallback launch check",
+        status,
+        evidence,
+        "Keep managed_ai_router.py, AI env templates, URL safety, and platform fallback wiring deploy-ready.",
+    )
+
+
+def check_auth_session_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/auth_session_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Auth", "Auth/session launch check", "Warn", safe_text(exc)[:220], "Run deploy/auth_session_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Auth",
+        "Auth/session launch check",
+        status,
+        evidence,
+        "Keep production session secret, public URL, owner/workspace bootstrap hashes, and auth-token persistence deploy-ready.",
+    )
+
+
+def check_mt_endpoint_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/mt_endpoint_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "MT", "MT endpoint launch check", "Warn", safe_text(exc)[:220], "Run deploy/mt_endpoint_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "MT",
+        "MT endpoint launch check",
+        status,
+        evidence,
+        "Keep OPUS-MT, IndicTrans2, and MADLAD endpoint contracts, requirements, docs, and launch templates ready.",
+    )
+
+
 def check_required_files(results: List[Dict[str, str]]) -> None:
     missing = [path for path in REQUIRED_DEPLOYMENT_FILES if not (ROOT / path).exists()]
     add(
@@ -271,7 +469,7 @@ def check_required_files(results: List[Dict[str, str]]) -> None:
         "Deployment pack files",
         "Pass" if not missing else "Blocker",
         "all present" if not missing else ", ".join(missing),
-        "Keep Dockerfile, compose, Supabase schema, env example, deployment README, launch runbook, launch env check, and release_check.py in the release branch.",
+        "Keep Dockerfile, compose, Supabase schema, env example, deployment README, launch runbook, AI fallback check, auth/session check, async worker check, launch env check, MT endpoint check, object storage check, Supabase schema check, and release_check.py in the release branch.",
     )
 
 
@@ -448,7 +646,13 @@ def collect_results(run_smoke: bool = False) -> List[Dict[str, str]]:
     check_required_files(results)
     check_secret_ignore_rules(results)
     check_requirements(results)
+    check_ai_fallback_contract(results)
+    check_auth_session_contract(results)
+    check_async_worker_contract(results)
+    check_mt_endpoint_contract(results)
     check_supabase_schema(results)
+    check_supabase_schema_contract(results)
+    check_object_storage_contract(results)
     check_dockerfile(results)
     check_compose(results)
     check_env_template(results)

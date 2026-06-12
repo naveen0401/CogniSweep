@@ -30,6 +30,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from cloud_object_storage import build_object_key, object_storage_provider, put_file, signed_url_for_key
+from pro_reconstruction import build_export_source_asset_from_bytes, sentence_segment_rows_for_pro
 from production_persistence import (
     fetch_saas_records,
     log_persistent_usage_event,
@@ -660,6 +661,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     domain = safe_text(params.get("domain") or "General")
     update_task(task_id, payload, status="running", progress=12)
     rows, rules, primary = load_task_inputs(payload)
+    rows = sentence_segment_rows_for_pro(rows)
     if not rows:
         raise ValueError("No translatable rows were detected in the queued input file.")
     source_texts = [safe_text(row.get("source") or row.get("target")) for row in rows]
@@ -712,6 +714,16 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "route": safe_text(usage.get("engine") or usage.get("provider") or "self_hosted_mt"),
         "route_error": route_error,
     }
+    export_source: Dict[str, Any] = {}
+    try:
+        export_source = build_export_source_asset_from_bytes(
+            manifest_bytes(primary),
+            manifest_file_name(primary),
+            safe_text(primary.get("mime_type")),
+        )
+    except Exception as exc:
+        LOGGER.warning("Unable to attach original source asset for Pro reconstruction export: %s", exc)
+
     review_job_id = save_persistent_editor_job(
         "cat",
         review_rows,
@@ -723,6 +735,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "source": "ErrorSweep Async Pro",
             "status": "needs_review" if missing else "draft",
             "task_id": task_id,
+            "export_source": export_source,
         },
         user={"email": user_email, "workspace": workspace},
     )

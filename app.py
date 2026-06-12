@@ -76,9 +76,14 @@ except Exception as exc:
     transcribe_media_to_rows = None
     speech_engine_label = None
 
+from pro_reconstruction import (
+    build_export_source_asset_from_bytes,
+    sentence_segment_rows_for_pro,
+)
 
 
-from openpyxl import load_workbook, Workbook, Workbook
+
+from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -5242,7 +5247,16 @@ def render_navigation() -> None:
             for page in owner_pages
         )
         owner_strip = f'<div class="es-owner-strip" aria-label="Owner only pages">{owner_links}</div>'
-    topnav = f"""
+    account_links: List[str] = []
+    if "Jobs" in pages:
+        account_links.append(f'<a href="{escape(page_link("Jobs"))}" target="_self">Jobs <span>{open_count}</span></a>')
+    if "Account" in pages:
+        account_links.append(f'<a href="{escape(page_link("Account"))}" target="_self">Account <span>Profile</span></a>')
+    if settings_page and settings_page in pages and settings_page not in {"Jobs", "Account"}:
+        account_links.append(f'<a href="{escape(page_link(settings_page))}" target="_self">{escape(settings_page)} <span>Settings</span></a>')
+    account_links.append('<a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>')
+    account_menu = "".join(account_links)
+    topnav = dedent(f"""
     <nav class="es-topnav">
       <div class="es-topnav-row">
         <div class="es-topnav-brand">
@@ -5270,34 +5284,19 @@ def render_navigation() -> None:
               <span class="es-account-caret">v</span>
             </div>
             <div class="es-account-menu">
-              <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
-              <a href="{page_link('Account')}" target="_self">Account <span>Profile</span></a>
-              <a href="{page_link(settings_page)}" target="_self">{escape(settings_page)} <span>Settings</span></a>
-              <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
+              {account_menu}
             </div>
           </div>
         </div>
       </div>
       {owner_strip}
     </nav>
-    """
+    """).strip()
+    # Keep the fragment out of Markdown block/code parsing, especially when
+    # role-specific optional sections such as the owner badge are empty.
+    topnav = "".join(line.strip() for line in topnav.splitlines() if line.strip())
     st.markdown(topnav, unsafe_allow_html=True)
     return
-    if workspace_pages:
-        nav_cols = st.columns(len(workspace_pages), gap="small")
-        for col, page in zip(nav_cols, workspace_pages):
-            active = st.session_state.get("page") == page
-            label = ("● " if active else "") + label_map.get(page, page)
-            if col.button(label, key=f"topnav_{page}", use_container_width=True):
-                navigate(page)
-    if owner_pages:
-        st.caption("Owner only")
-        owner_cols = st.columns(len(owner_pages), gap="small")
-        for col, page in zip(owner_cols, owner_pages):
-            active = st.session_state.get("page") == page
-            label = ("● " if active else "") + page
-            if col.button(label, key=f"owner_nav_{page}", use_container_width=True):
-                navigate(page)
 
 
 # ==========================================================
@@ -10530,6 +10529,20 @@ def secret_is_configured(name: str) -> bool:
     return bool(safe_text(secret(name, "")).strip())
 
 
+def launch_secret_is_ready(name: str, min_length: int = 1) -> bool:
+    value = safe_text(secret(name, "")).strip()
+    if len(value) < min_length or value == DEFAULT_SESSION_SECRET:
+        return False
+    lowered = value.lower()
+    placeholders = ("replace-with", "your-domain.com", "your-project", "placeholder", "change-me", "changeme", "errorsweep.local", "demo workspace")
+    return not any(marker in lowered for marker in placeholders)
+
+
+def password_hash_secret_is_ready(name: str) -> bool:
+    value = safe_text(secret(name, "")).strip()
+    return launch_secret_is_ready(name) and value.startswith("pbkdf2_sha256$")
+
+
 def any_secret_configured(names: List[str]) -> bool:
     return any(secret_is_configured(name) for name in names)
 
@@ -10540,6 +10553,14 @@ def deployment_pack_status() -> Dict[str, Any]:
         "docker-compose.production.yml",
         "deploy/.env.production.example",
         "deploy/README_DEPLOYMENT.md",
+        "deploy/LAUNCH_RUNBOOK.md",
+        "deploy/ai_fallback_check.py",
+        "deploy/auth_session_check.py",
+        "deploy/async_worker_check.py",
+        "deploy/launch_env_check.py",
+        "deploy/mt_endpoint_check.py",
+        "deploy/object_storage_check.py",
+        "deploy/supabase_schema_check.py",
         "deploy/release_check.py",
     ]
     required_services = [
@@ -10587,8 +10608,13 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
         })
 
     add("Core", "ERRORSWEEP_ENV=production", is_production_mode(), "Public launch", "Enables production safety checks.")
-    add("Core", "ERRORSWEEP_SESSION_SECRET", secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET, "Public launch", "Use a long random value. Never use the dev default.")
-    add("Core", "ERRORSWEEP_PUBLIC_BASE_URL", secret_is_configured("ERRORSWEEP_PUBLIC_BASE_URL"), "Public links", "Used in verification/reset and outbound links.")
+    add("Core", "ERRORSWEEP_SESSION_SECRET", launch_secret_is_ready("ERRORSWEEP_SESSION_SECRET", min_length=32), "Public launch", "Use a long random value. Never use the dev default.")
+    add("Core", "ERRORSWEEP_PUBLIC_BASE_URL", launch_secret_is_ready("ERRORSWEEP_PUBLIC_BASE_URL") and safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")).startswith("https://"), "Public links", "Used in verification/reset and outbound links.")
+    add("Auth", "ERRORSWEEP_OWNER_USERNAME", launch_secret_is_ready("ERRORSWEEP_OWNER_USERNAME"), "Public launch", "Production platform owner bootstrap email.")
+    add("Auth", "ERRORSWEEP_OWNER_PASSWORD_HASH", password_hash_secret_is_ready("ERRORSWEEP_OWNER_PASSWORD_HASH"), "Public launch", "PBKDF2 hash for platform owner bootstrap login; plaintext owner passwords are blocked in production.")
+    add("Auth", "ERRORSWEEP_USER_USERNAME", launch_secret_is_ready("ERRORSWEEP_USER_USERNAME"), "Workspace bootstrap", "Production workspace owner/admin bootstrap email.")
+    add("Auth", "ERRORSWEEP_USER_PASSWORD_HASH", password_hash_secret_is_ready("ERRORSWEEP_USER_PASSWORD_HASH"), "Workspace bootstrap", "PBKDF2 hash for workspace bootstrap login; plaintext user passwords are blocked in production.")
+    add("Auth", "ERRORSWEEP_ORG_NAME", launch_secret_is_ready("ERRORSWEEP_ORG_NAME"), "Workspace bootstrap", "Initial production workspace name used by the configured workspace user.")
     add("Persistence", "SUPABASE_URL", bool(health.get("supabase_configured")) or secret_is_configured("SUPABASE_URL"), "Public launch", "Production database endpoint.")
     add("Persistence", "SUPABASE_ANON_KEY", secret_is_configured("SUPABASE_ANON_KEY"), "Public launch", "Client-safe Supabase anon key for Streamlit/deployment secret parity.")
     add("Persistence", "SUPABASE_SERVICE_ROLE_KEY", secret_is_configured("SUPABASE_SERVICE_ROLE_KEY"), "Public launch", "Server-side key for SaaS records and storage.")
@@ -10656,6 +10682,15 @@ def production_env_template() -> str:
         ERRORSWEEP_ENV=production
         ERRORSWEEP_PUBLIC_BASE_URL=https://app.your-domain.com
         ERRORSWEEP_SESSION_SECRET=replace-with-a-long-random-secret
+
+        # Auth bootstrap credentials
+        # Generate hashes with: python deploy/auth_session_check.py --generate-password-hash
+        ERRORSWEEP_OWNER_USERNAME=owner@your-domain.com
+        ERRORSWEEP_OWNER_PASSWORD_HASH=replace-with-owner-pbkdf2-hash
+        ERRORSWEEP_USER_USERNAME=workspace-owner@your-domain.com
+        ERRORSWEEP_USER_PASSWORD_HASH=replace-with-workspace-pbkdf2-hash
+        ERRORSWEEP_ORG_NAME=replace-with-initial-workspace-name
+        ERRORSWEEP_DEFAULT_USER_ROLE=Workspace Owner
 
         # Supabase persistence
         SUPABASE_URL=https://your-project.supabase.co
@@ -10833,15 +10868,33 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
     )
     add(
         "Session secret",
-        "Pass" if secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET else "Blocker",
-        "Custom secret configured" if secret_is_configured("ERRORSWEEP_SESSION_SECRET") and session_secret() != DEFAULT_SESSION_SECRET else "Default or missing session secret",
+        "Pass" if launch_secret_is_ready("ERRORSWEEP_SESSION_SECRET", min_length=32) else "Blocker",
+        "Custom secret configured" if launch_secret_is_ready("ERRORSWEEP_SESSION_SECRET", min_length=32) else "Default, placeholder, or missing session secret",
         "Configure ERRORSWEEP_SESSION_SECRET with a long random value.",
     )
     add(
         "Public base URL",
-        "Pass" if public_url.startswith("https://") else "Warn" if public_url else "Blocker",
+        "Pass" if public_url.startswith("https://") and launch_secret_is_ready("ERRORSWEEP_PUBLIC_BASE_URL") else "Warn" if public_url else "Blocker",
         "HTTPS public URL configured" if public_url.startswith("https://") else "Public URL missing or not HTTPS",
         "Set ERRORSWEEP_PUBLIC_BASE_URL to the deployed HTTPS app URL.",
+    )
+    owner_bootstrap_ready = launch_secret_is_ready("ERRORSWEEP_OWNER_USERNAME") and password_hash_secret_is_ready("ERRORSWEEP_OWNER_PASSWORD_HASH")
+    workspace_bootstrap_ready = (
+        launch_secret_is_ready("ERRORSWEEP_USER_USERNAME")
+        and password_hash_secret_is_ready("ERRORSWEEP_USER_PASSWORD_HASH")
+        and launch_secret_is_ready("ERRORSWEEP_ORG_NAME")
+    )
+    add(
+        "Owner bootstrap credentials",
+        "Pass" if owner_bootstrap_ready else "Blocker",
+        "owner email + PBKDF2 hash configured" if owner_bootstrap_ready else "owner bootstrap email/hash missing or placeholder",
+        "Set ERRORSWEEP_OWNER_USERNAME and ERRORSWEEP_OWNER_PASSWORD_HASH before public launch.",
+    )
+    add(
+        "Workspace bootstrap credentials",
+        "Pass" if workspace_bootstrap_ready else "Blocker",
+        "workspace email + PBKDF2 hash + workspace configured" if workspace_bootstrap_ready else "workspace bootstrap email/hash/name missing or placeholder",
+        "Set ERRORSWEEP_USER_USERNAME, ERRORSWEEP_USER_PASSWORD_HASH, and ERRORSWEEP_ORG_NAME before public launch.",
     )
     add(
         "Deployment pack",
@@ -11154,12 +11207,6 @@ def parse_uploaded_text(uploaded_file) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-PRO_EXPORT_SUPPORTED_EXTENSIONS = {
-    ".csv", ".docx", ".html", ".htm", ".json", ".pptx", ".srt", ".txt",
-    ".vtt", ".xlsx", ".xlf", ".xliff", ".xml",
-}
-
-
 def build_pro_export_source_asset(uploaded_file: Any) -> Dict[str, Any]:
     """Capture original upload metadata for same-format Pro editor export."""
     if uploaded_file is None:
@@ -11170,15 +11217,7 @@ def build_pro_export_source_asset(uploaded_file: Any) -> Dict[str, Any]:
         LOGGER.warning("Unable to read Pro source file for export metadata: %s", exc)
         return {}
     name = safe_text(getattr(uploaded_file, "name", "translated_file")) or "translated_file"
-    suffix = Path(name).suffix.lower()
-    return {
-        "file_name": name,
-        "suffix": suffix,
-        "mime_type": safe_text(getattr(uploaded_file, "type", "")) or "application/octet-stream",
-        "size_bytes": len(data),
-        "bytes_b64": base64.b64encode(data).decode("ascii"),
-        "supported": suffix in PRO_EXPORT_SUPPORTED_EXTENSIONS,
-    }
+    return build_export_source_asset_from_bytes(data, name, safe_text(getattr(uploaded_file, "type", "")))
 
 
 def recover_pro_export_source_for_file(file_name: str = "") -> Dict[str, Any]:
@@ -12037,6 +12076,44 @@ def _docx_table_rows(data: bytes) -> List[List[Tuple[str, ...]]]:
     return tables
 
 
+def _docx_body_paragraph_export_rows(data: bytes) -> List[Dict[str, Any]]:
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            document_xml = archive.read("word/document.xml")
+        if b"<!DOCTYPE" in document_xml.upper() or b"<!ENTITY" in document_xml.upper():
+            raise ValueError("DOCX XML contains prohibited DTD/entity declarations.")
+        if "defusedxml" in getattr(ET, "__name__", ""):
+            root = ET.fromstring(document_xml, forbid_dtd=True, forbid_entities=True)
+        else:
+            root = ET.fromstring(document_xml)
+    except Exception as exc:
+        LOGGER.warning("Unable to parse DOCX XML paragraphs: %s", exc)
+        return []
+
+    all_paragraphs = list(root.findall(".//w:p", ns))
+    body_paragraphs = list(root.findall("./w:body/w:p", ns))
+    rows: List[Dict[str, Any]] = []
+    for paragraph in body_paragraphs:
+        text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
+        if not text:
+            continue
+        try:
+            paragraph_index = all_paragraphs.index(paragraph)
+        except ValueError:
+            paragraph_index = len(rows)
+        rows.append({
+            "id": len(rows) + 1,
+            "source": text,
+            "target": "",
+            "status": "Untranslated",
+            "match": "",
+            "location": f"Paragraph {len(rows) + 1}",
+            "export_ref": {"kind": "docx_paragraph", "paragraph_index": paragraph_index},
+        })
+    return rows
+
+
 def _xml_text_items(data: bytes) -> List[str]:
     if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
         return []
@@ -12205,12 +12282,9 @@ def extract_rows_from_upload(uploaded_file, mode: str = "review") -> List[Dict[s
                 for item in extracted:
                     item["id"] = len(rows) + 1
                     rows.append(item)
-            if not rows:
-                doc = Document(io.BytesIO(data))
-                for p in doc.paragraphs:
-                    txt = safe_text(p.text)
-                    if txt:
-                        rows.append({"id": len(rows)+1, "source": txt, "target": "", "status": "Untranslated", "match": ""})
+            for item in _docx_body_paragraph_export_rows(data):
+                item["id"] = len(rows) + 1
+                rows.append(item)
         elif name.endswith(".pptx"):
             rows.extend(pptx_export_rows(uploaded_file.getvalue()))
         elif name.endswith(".json"):
@@ -12945,6 +13019,8 @@ def prepare_human_review_session(
             "start": row.get("start", ""),
             "end": row.get("end", ""),
             "export_ref": row.get("export_ref", {}),
+            "reconstruction_map": row.get("reconstruction_map", {}) if isinstance(row.get("reconstruction_map", {}), dict) else {},
+            "original_id": row.get("original_id", ""),
         })
     # Store in more than one session key. Some Streamlit reruns can make a hidden
     # route render before the editor reads review_segments; these backup keys let
@@ -13212,6 +13288,8 @@ def render_reference_cat_editor_shell(
                 "start": safe_text(row.get("start", "")),
                 "end": safe_text(row.get("end", "")),
                 "export_ref": row.get("export_ref", {}) if isinstance(row.get("export_ref", {}), dict) else {},
+                "reconstruction_map": row.get("reconstruction_map", {}) if isinstance(row.get("reconstruction_map", {}), dict) else {},
+                "original_id": safe_text(row.get("original_id", "")),
             }
         )
 
@@ -13423,8 +13501,9 @@ def render_external_media_editor(job_id: str) -> None:
 
     media_source, media_type, media_name = read_media_preview_bytes(metadata)
     file_name = safe_text(metadata.get("file_name") or media_name or "media_job")
-    render_reference_media_editor_shell(job_id, rows, metadata, media_source, media_type, media_name or file_name)
-    return
+    if st.session_state.get("_render_reference_media_editor", True):
+        render_reference_media_editor_shell(job_id, rows, metadata, media_source, media_type, media_name or file_name)
+        return
 
     workflow = metadata.get("workflow") or metadata.get("title", "Media Editor")
     file_name = metadata.get("file_name", "media_job")
@@ -16828,7 +16907,7 @@ def page_pro() -> None:
         )
         update_task_record(task["id"], status="running", progress=5)
         pro_export_source = build_pro_export_source_asset(uploaded)
-        rows = extract_rows_from_upload(uploaded)
+        rows = sentence_segment_rows_for_pro(extract_rows_from_upload(uploaded))
         uploaded_context = parse_context_upload(context_upload) if context_upload is not None else {}
         if uploaded_context.get("error"):
             st.warning(uploaded_context["error"])
@@ -17037,7 +17116,11 @@ def page_pro() -> None:
             else:
                 st.error("Review job was not created. Please rerun Pro translation.")
         with cta2:
-            st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
+            uploaded_suffix = Path(getattr(uploaded, "name", "")).suffix.lower()
+            if uploaded_suffix == ".csv":
+                st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
+            else:
+                st.info("Same-format export is available from Human Review after every segment is confirmed.")
         st.info("Human Review now opens in a separate full-window CAT editor. Target editing happens directly in the main grid; the right panel is only for TM, glossary, DNT, QA, issues, and history.")
 
 
@@ -18595,6 +18678,8 @@ def page_admin() -> None:
     if current_role() not in ("Platform Owner", "Workspace Owner", "Workspace Admin"):
         st.error("Admin access is restricted.")
         return
+    if st.session_state.pop("_admin_workspace_data_cleared", False):
+        st.success("Demo workspace data cleared.")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Workspace summary")
@@ -18615,7 +18700,8 @@ def page_admin() -> None:
             for key in ["projects", "jobs", "tm", "review_segments", "subtitle_segments", "last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"]:
                 st.session_state[key] = []
             st.session_state["pro_post_editing_ready"] = False
-            st.success("Demo workspace data cleared.")
+            st.session_state["_admin_workspace_data_cleared"] = True
+            st.rerun()
     render_workspace_privacy_export(key_prefix="admin")
     render_privacy_request_tracker(key_prefix="admin")
     st.markdown("### Workspace support queue")

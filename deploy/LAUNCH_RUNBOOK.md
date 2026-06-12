@@ -4,6 +4,7 @@ Use this runbook to move ErrorSweep from a production-ready code branch to a pub
 
 ```powershell
 python deploy/release_check.py --strict
+python deploy/auth_session_check.py --env-file deploy/.env.production --strict
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 python production_smoke_test.py --markdown --strict --probe-endpoints
 ```
@@ -28,11 +29,17 @@ Run the offline packaging check before touching production secrets.
 
 ```powershell
 python deploy/release_check.py --strict
+python deploy/ai_fallback_check.py --strict
+python deploy/auth_session_check.py --strict
+python deploy/async_worker_check.py --strict
+python deploy/mt_endpoint_check.py --strict
+python deploy/object_storage_check.py --strict
+python deploy/supabase_schema_check.py --strict
 ```
 
 Expected result: no blockers.
 
-This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, and Python syntax for production entry points.
+This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, AI fallback readiness, auth/session readiness, async worker readiness, built-in MT endpoint contracts, object-storage adapter readiness, Supabase schema drift, and Python syntax for production entry points.
 
 ## Phase 1: Production Environment File
 
@@ -49,22 +56,41 @@ Minimum required production identity values:
 - `ERRORSWEEP_ENV=production`
 - `ERRORSWEEP_PUBLIC_BASE_URL=https://<app-domain>`
 - `ERRORSWEEP_SESSION_SECRET=<long-random-secret>`
+- `ERRORSWEEP_OWNER_USERNAME=<platform-owner-email>`
+- `ERRORSWEEP_OWNER_PASSWORD_HASH=<pbkdf2-hash>`
+- `ERRORSWEEP_USER_USERNAME=<workspace-owner-email>`
+- `ERRORSWEEP_USER_PASSWORD_HASH=<pbkdf2-hash>`
+- `ERRORSWEEP_ORG_NAME=<initial-workspace-name>`
+
+Generate compatible bootstrap password hashes without importing the Streamlit app:
+
+```powershell
+python deploy/auth_session_check.py --generate-password-hash
+```
 
 Validate the file after each setup pass:
 
 ```powershell
 python deploy/launch_env_check.py --env-file deploy/.env.production
+python deploy/auth_session_check.py --env-file deploy/.env.production
 ```
 
 Use strict mode before deployment:
 
 ```powershell
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+python deploy/auth_session_check.py --env-file deploy/.env.production --strict
 ```
 
 ## Phase 2: Supabase Persistence
 
 Create or select the production Supabase project, then run the release schema.
+
+Before running SQL in Supabase, verify the release schema still matches the app persistence contract:
+
+```powershell
+python deploy/supabase_schema_check.py --strict
+```
 
 Required env keys:
 
@@ -75,10 +101,11 @@ Required env keys:
 Required validation:
 
 ```powershell
+python deploy/supabase_schema_check.py --env-file deploy/.env.production --probe-rest --strict
 python production_smoke_test.py --markdown
 ```
 
-The `Supabase SaaS tables` check must pass before launch.
+The `Supabase SaaS tables` smoke check and the Supabase REST table probe must pass before launch.
 
 ## Phase 3: Object Storage
 
@@ -90,6 +117,24 @@ Required env keys for Supabase Storage:
 - `SUPABASE_STORAGE_BUCKET`
 
 Alternative providers can use the S3 or GCS keys already listed in `deploy/.env.production.example`.
+
+Offline guard:
+
+```powershell
+python deploy/object_storage_check.py --strict
+```
+
+Production/staging config validation:
+
+```powershell
+python deploy/object_storage_check.py --env-file deploy/.env.production --strict
+```
+
+After the bucket and credentials are live, run a tiny write/sign/cleanup probe:
+
+```powershell
+python deploy/object_storage_check.py --env-file deploy/.env.production --probe-write --strict
+```
 
 The smoke test must not report local storage fallback as the production path.
 
@@ -108,6 +153,10 @@ Required env keys:
 Useful checks:
 
 ```powershell
+python deploy/async_worker_check.py --strict
+python deploy/async_worker_check.py --env-file deploy/.env.production --strict
+python deploy/async_worker_check.py --run-smoke --strict
+python deploy/async_worker_check.py --env-file deploy/.env.production --probe-health --strict
 python async_workflow_processor.py --smoke
 python worker_supervisor.py --status
 python production_smoke_test.py --markdown --probe-endpoints
@@ -141,6 +190,15 @@ Recommended after GPU capacity approval:
 Useful checks:
 
 ```powershell
+python deploy/ai_fallback_check.py --strict
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --strict
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-models --strict
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-chat --strict
+python deploy/mt_endpoint_check.py --strict
+python deploy/mt_endpoint_check.py --env-file deploy/.env.production --strict
+python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-health --strict
+python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-translate --strict
+python deploy/mt_endpoint_check.py --run-router-smoke --strict
 python test_builtin_mt_engines.py
 python deploy/launch_env_check.py --env-file deploy/.env.production
 ```
@@ -258,6 +316,7 @@ Run strict smoke tests from the deployed environment.
 
 ```powershell
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+python deploy/auth_session_check.py --env-file deploy/.env.production --probe-public-url --strict
 docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-app python production_smoke_test.py --markdown --strict --probe-endpoints
 docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-worker-supervisor python worker_supervisor.py --status
 ```
@@ -278,6 +337,8 @@ Then manually verify:
 | Production mode | Set `ERRORSWEEP_ENV=production`. |
 | Public HTTPS URL | Set `ERRORSWEEP_PUBLIC_BASE_URL` to the live HTTPS app URL. |
 | Session secret | Set a long unique `ERRORSWEEP_SESSION_SECRET`. |
+| Owner bootstrap credentials | Set `ERRORSWEEP_OWNER_USERNAME` and PBKDF2 `ERRORSWEEP_OWNER_PASSWORD_HASH`. |
+| Workspace bootstrap credentials | Set `ERRORSWEEP_USER_USERNAME`, PBKDF2 `ERRORSWEEP_USER_PASSWORD_HASH`, and `ERRORSWEEP_ORG_NAME`. |
 | Supabase SaaS tables | Run the release schema and configure Supabase env keys. |
 | Object storage local fallback | Configure Supabase Storage, S3, or GCS for production. |
 | Async receiver or processor | Deploy the receiver/processor services and set worker env keys. |

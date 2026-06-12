@@ -1007,6 +1007,29 @@ TELUGU_COMMON_CORRECTIONS = {
 }
 
 
+TELUGU_VIRAMA = "\u0c4d"
+TELUGU_LETTER_RE = re.compile(r"[\u0c05-\u0c39\u0c58-\u0c5a\u0c60-\u0c61]")
+TELUGU_DEPENDENT_SIGN_RANGES = (
+    (0x0C3C, 0x0C3C),
+    (0x0C3E, 0x0C44),
+    (0x0C46, 0x0C48),
+    (0x0C4A, 0x0C4D),
+    (0x0C55, 0x0C56),
+    (0x0C62, 0x0C63),
+)
+
+
+def _is_telugu_dependent_sign(ch: str) -> bool:
+    if not ch:
+        return False
+    codepoint = ord(ch)
+    return any(start <= codepoint <= end for start, end in TELUGU_DEPENDENT_SIGN_RANGES)
+
+
+def _is_telugu_letter(ch: str) -> bool:
+    return bool(TELUGU_LETTER_RE.fullmatch(ch or ""))
+
+
 @registry.register("telugu.common_dictionary", "Spelling")
 def rule_telugu_common_dictionary(segment, rules, target_language, domain):
     source, target = _seg_texts(segment)
@@ -1072,7 +1095,65 @@ def rule_telugu_zwnj(segment, rules, target_language, domain):
 
 @registry.register("telugu.unicode.malformed_cluster_hint", "Unicode Hygiene")
 def rule_telugu_malformed_cluster_hint(segment, rules, target_language, domain):
-    return []
+    source, target = _seg_texts(segment)
+    if infer_language_module(target_language, source, target) != "telugu" or not target:
+        return []
+
+    findings: List[QAFinding] = []
+
+    repeated_virama = re.search(f"{TELUGU_VIRAMA}{{2,}}", target)
+    if repeated_virama:
+        findings.append(QAFinding(
+            "telugu.unicode.malformed_cluster_hint.repeated_virama",
+            "Unicode Hygiene",
+            "Major",
+            "High",
+            visible_invisibles(repeated_virama.group(0)),
+            target.replace(repeated_virama.group(0), TELUGU_VIRAMA, 1),
+            "Repeated Telugu virama signs can create a malformed consonant cluster.",
+            rule_source="Built-in Telugu Unicode rules",
+            autofix_possible=True,
+            priority=22,
+        ))
+
+    dangling_virama = re.search(rf"{TELUGU_VIRAMA}(?:$|[\s\.,;:!?])", target)
+    if dangling_virama:
+        matched = dangling_virama.group(0)
+        suffix = "" if matched.endswith(TELUGU_VIRAMA) else matched[-1]
+        suggestion = target[:dangling_virama.start()] + suffix + target[dangling_virama.end():]
+        findings.append(QAFinding(
+            "telugu.unicode.malformed_cluster_hint.dangling_virama",
+            "Unicode Hygiene",
+            "Major",
+            "High",
+            visible_invisibles(matched),
+            suggestion,
+            "Telugu virama appears at a word or punctuation boundary. Verify the consonant cluster is complete.",
+            rule_source="Built-in Telugu Unicode rules",
+            autofix_possible=True,
+            priority=23,
+        ))
+
+    for idx, ch in enumerate(target):
+        if ch == TELUGU_VIRAMA or not _is_telugu_dependent_sign(ch):
+            continue
+        previous = target[idx - 1] if idx else ""
+        if not _is_telugu_letter(previous):
+            snippet = target[max(0, idx - 1): idx + 2]
+            findings.append(QAFinding(
+                "telugu.unicode.malformed_cluster_hint.orphan_dependent_sign",
+                "Unicode Hygiene",
+                "Review",
+                "Medium",
+                visible_invisibles(snippet or ch),
+                target,
+                "A Telugu dependent vowel/sign appears without a preceding Telugu letter. Review the Unicode cluster.",
+                rule_source="Built-in Telugu Unicode rules",
+                priority=35,
+            ))
+            break
+
+    return findings
 
 
 @registry.register("telugu.ui_imperative.consistency_hint", "Style")

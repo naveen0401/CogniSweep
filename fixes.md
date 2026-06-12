@@ -9,9 +9,14 @@ Based on a review of the ErrorSweep build (v46), these are the currently tracked
 2. Server RAM Exhaustion from Media Uploads (OOM Risk)
 3. Insufficient Media Preview Cleanup Trigger
 4. SSRF (Server-Side Request Forgery) Vulnerability via BYO Base URL
+5. Dead Code in Media Editor (`app.py`)
+6. Dead Code in Navigation (`app.py`)
+7. Duplicate Imports (`app.py`)
+8. Unimplemented QA Rule (`qa_engine_global_v15.py`)
+9. Missing UI Refresh in Admin Data Clear (`app.py`)
 
 **Unresolved & New Issues:**
-* No unresolved issues currently listed.
+None currently tracked.
 
 **Corrected Issues:**
 1. Landing Page Legal Links
@@ -62,9 +67,29 @@ Based on a review of the ErrorSweep build (v46), these are the currently tracked
 *   **The Issue:** BYO AI base URLs could point to localhost, loopback, private networks, or cloud metadata addresses.
 *   **The Fix:** `managed_ai_router.py` now validates custom OpenAI-compatible base URLs and blocks localhost, local/internal hostnames, private/link-local/reserved IPs, and metadata endpoints such as `169.254.169.254`. *(Verified fixed)*.
 
+### 5. Dead Code in Media Editor (`app.py`)
+*   **The Issue:** In `render_external_media_editor`, an unconditional `return` after `render_reference_media_editor_shell` left the Streamlit fallback editor unreachable.
+*   **The Fix:** The reference media editor is now gated behind an explicit session fallback flag, so the legacy Streamlit fallback can still be reached when needed instead of being hidden behind unconditional dead code. *(Verified fixed)*.
+
+### 6. Dead Code in Navigation (`app.py`)
+*   **The Issue:** In `render_navigation`, an unconditional `return` after rendering the HTML topnav prevented the legacy Streamlit column navigation from ever executing.
+*   **The Fix:** The legacy navigation is now reachable through an explicit fallback flag while the HTML topnav remains the normal default. *(Verified fixed)*.
+
+### 7. Duplicate Imports (`app.py`)
+*   **The Issue:** `Workbook` was imported twice on the same line.
+*   **The Fix:** The duplicate `Workbook` import was removed. *(Verified fixed)*.
+
+### 8. Unimplemented QA Rule (`qa_engine_global_v15.py`)
+*   **The Issue:** `rule_telugu_malformed_cluster_hint` was registered but only returned an empty list.
+*   **The Fix:** The rule now flags high-confidence Telugu Unicode cluster issues including repeated virama, dangling virama, and orphan dependent vowel/sign marks, with regression coverage. *(Verified fixed)*.
+
+### 9. Missing UI Refresh in Admin Data Clear (`app.py`)
+*   **The Issue:** Clicking "Clear all demo workspace data" cleared session state but did not rerun the page immediately.
+*   **The Fix:** The clear-all action now sets a success flag and calls `st.rerun()`, so the refreshed admin UI immediately reflects the cleared data. *(Verified fixed)*.
+
 ## Unresolved & New Issues
 
-No unresolved issues currently listed.
+None currently tracked after this pass.
 
 ---
 

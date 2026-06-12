@@ -1427,9 +1427,61 @@
       return String(row?.target || '').trim() || String(row?.source || '');
     }
 
+    function reconstructionMap(row) {
+      const map = row?.reconstruction_map || row?.reconstructionMap || {};
+      return map && typeof map === 'object' ? map : {};
+    }
+
     function rowExportRef(row) {
       const ref = row?.export_ref || row?.exportRef || {};
       return ref && typeof ref === 'object' ? ref : {};
+    }
+
+    function rowSegmentGroupId(row) {
+      const map = reconstructionMap(row);
+      const ref = rowExportRef(row);
+      return String(ref.segment_group_id || map.segment_group_id || '').trim();
+    }
+
+    function rowSentenceCount(row) {
+      const map = reconstructionMap(row);
+      const ref = rowExportRef(row);
+      const count = Number(ref.sentence_count ?? map.sentence_count ?? 0);
+      return Number.isInteger(count) ? count : 0;
+    }
+
+    function rowSentenceIndex(row) {
+      const map = reconstructionMap(row);
+      const ref = rowExportRef(row);
+      const index = Number(ref.sentence_index ?? map.sentence_index ?? 0);
+      return Number.isInteger(index) ? index : 0;
+    }
+
+    function rowsInReconstructionGroup(row) {
+      const groupId = rowSegmentGroupId(row);
+      if (!groupId || rowSentenceCount(row) <= 1) return [row];
+      const groupRows = rows
+        .filter(candidate => rowSegmentGroupId(candidate) === groupId)
+        .sort((a, b) => rowSentenceIndex(a) - rowSentenceIndex(b));
+      return groupRows.length ? groupRows : [row];
+    }
+
+    function originalSourceForExport(row) {
+      const map = reconstructionMap(row);
+      const ref = rowExportRef(row);
+      return String(map.original_source || ref.original_container_source || row?.source || '');
+    }
+
+    function finalTargetForExport(row) {
+      const groupRows = rowsInReconstructionGroup(row);
+      if (groupRows.length <= 1) return finalTarget(row);
+      return groupRows.map((groupRow, index) => {
+        const map = reconstructionMap(groupRow);
+        const joiner = index < groupRows.length - 1
+          ? String(Object.prototype.hasOwnProperty.call(map, 'joiner_after') ? map.joiner_after : ' ')
+          : '';
+        return `${finalTarget(groupRow)}${joiner}`;
+      }).join('');
     }
 
     function exportRowsByKind(kind) {
@@ -1444,8 +1496,16 @@
     }
 
     function exportSourcePairs() {
+      const seen = new Set();
       return rows
-        .map(row => ({ source: String(row.source || ''), target: finalTarget(row) }))
+        .map((row, index) => {
+          const groupId = rowSegmentGroupId(row);
+          const key = groupId || `row:${index}`;
+          if (seen.has(key)) return null;
+          seen.add(key);
+          return { source: originalSourceForExport(row), target: finalTargetForExport(row) };
+        })
+        .filter(Boolean)
         .filter(pair => pair.source && pair.target && pair.source !== pair.target)
         .sort((a, b) => b.source.length - a.source.length);
     }
@@ -1637,7 +1697,7 @@
       const original = originalAssetText();
       const delimiter = csvDelimiterFromRefs(original);
       const table = parseCsvTable(original, delimiter);
-      if (!table.length) return rows.map(row => finalTarget(row)).join('\r\n');
+      if (!table.length) return exportSourcePairs().map(pair => pair.target).join('\r\n');
       const headers = table[0];
       const refs = exportRowsByKind('csv_row');
       if (refs.length) {
@@ -1649,7 +1709,7 @@
           if (!tableRow) return;
           while (headers.length <= targetCol) headers.push(headers.length === targetCol ? 'Translation' : '');
           while (tableRow.length <= targetCol) tableRow.push('');
-          tableRow[targetCol] = finalTarget(row);
+          tableRow[targetCol] = finalTargetForExport(row);
         });
         return writeCsvTable(table, delimiter);
       }
@@ -1662,7 +1722,7 @@
         const tableRow = table[index + 1];
         if (!tableRow) return;
         while (tableRow.length <= targetCol) tableRow.push('');
-        tableRow[targetCol] = finalTarget(editorRow);
+        tableRow[targetCol] = finalTargetForExport(editorRow);
       });
       return writeCsvTable(table, delimiter);
     }
@@ -1695,7 +1755,7 @@
       const cues = rows.map((row, index) => {
         const start = parseSeconds(row.start, index * 4);
         const end = parseSeconds(row.end, start + 3);
-        return `${vtt ? '' : `${index + 1}\n`}${cueTime(start, vtt)} --> ${cueTime(end, vtt)}\n${finalTarget(row)}\n`;
+        return `${vtt ? '' : `${index + 1}\n`}${cueTime(start, vtt)} --> ${cueTime(end, vtt)}\n${finalTargetForExport(row)}\n`;
       });
       return vtt ? `WEBVTT\n\n${cues.join('\n')}` : cues.join('\n');
     }
@@ -1719,7 +1779,7 @@
         const originalLine = lines[lineIndex];
         const prefix = (originalLine.match(/^\s*/) || [''])[0];
         const suffix = (originalLine.match(/\s*$/) || [''])[0];
-        lines[lineIndex] = `${prefix}${finalTarget(row)}${suffix}`;
+        lines[lineIndex] = `${prefix}${finalTargetForExport(row)}${suffix}`;
       });
       return lines.join(newline);
     }
@@ -1746,7 +1806,7 @@
         const payload = JSON.parse(original);
         let changed = 0;
         refs.forEach(({ row, ref }) => {
-          if (setJsonValueAtPath(payload, ref.path, finalTarget(row))) changed += 1;
+          if (setJsonValueAtPath(payload, ref.path, finalTargetForExport(row))) changed += 1;
         });
         const spacing = original.includes('\n') ? 2 : 0;
         return changed ? JSON.stringify(payload, null, spacing) : replaceJsonContent(original);
@@ -1825,7 +1885,7 @@
         const segment = unitIndex === null ? null : segments[unitIndex];
         if (!segment) return;
         const target = segment.target || createXliffTargetElement(documentXml, segment.source);
-        setXmlElementPlainText(target, finalTarget(row));
+        setXmlElementPlainText(target, finalTargetForExport(row));
         changed += 1;
       });
       return changed ? serializeXmlDocument(documentXml, original) : replaceXmlContent(original);
@@ -1849,7 +1909,7 @@
         const textIndex = numericRefValue(ref.text_index);
         const node = textIndex === null ? null : slots[textIndex];
         if (!node) return;
-        setTextNodeWithOriginalSpacing(node, finalTarget(row));
+        setTextNodeWithOriginalSpacing(node, finalTargetForExport(row));
         changed += 1;
       });
       return changed ? serializeXmlDocument(documentXml, original) : replaceXmlContent(original);
@@ -1894,7 +1954,7 @@
         const textIndex = numericRefValue(ref.text_index);
         const node = textIndex === null ? null : slots[textIndex];
         if (!node) return;
-        setTextNodeWithOriginalSpacing(node, finalTarget(row));
+        setTextNodeWithOriginalSpacing(node, finalTargetForExport(row));
         changed += 1;
       });
       return changed ? serialize() : replaceHtmlContent(original);
@@ -1924,7 +1984,7 @@
         const item = byBlock.get(blockIndex) || byCue.get(cueCursor);
         cueCursor += 1;
         if (!item) return block;
-        const targetLines = finalTarget(item.row).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+        const targetLines = finalTargetForExport(item.row).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
         return [...lines.slice(0, timingIndex + 1), ...targetLines].join('\n');
       });
       const content = updated.join('\n\n');
@@ -2009,6 +2069,14 @@
         ));
     }
 
+    function docxParagraphExportRows() {
+      return exportRowsByKind('docx_paragraph')
+        .filter(item => (
+          item.ref.paragraph_index !== null && item.ref.paragraph_index !== undefined
+          && Number.isInteger(Number(item.ref.paragraph_index))
+        ));
+    }
+
     function setOfficeTextNodes(
       container,
       value,
@@ -2032,8 +2100,9 @@
     }
 
     function fillDocxTableTargets(xml) {
-      const refs = docxTableExportRows();
-      if (!refs.length || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
+      const tableRefs = docxTableExportRows();
+      const paragraphRefs = docxParagraphExportRows();
+      if ((!tableRefs.length && !paragraphRefs.length) || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
         return replaceOfficeXmlContent(xml, 'word/document.xml', '.docx');
       }
       const parser = new DOMParser();
@@ -2042,8 +2111,9 @@
         return replaceOfficeXmlContent(xml, 'word/document.xml', '.docx');
       }
       const tables = xmlElementsByLocalName(documentXml, 'tbl');
+      const paragraphs = xmlElementsByLocalName(documentXml, 'p');
       let changed = 0;
-      refs.forEach(({ row, ref }) => {
+      tableRefs.forEach(({ row, ref }) => {
         const table = tables[Number(ref.table_index)];
         if (!table) return;
         const tableRows = Array.from(table.children).filter(node => node.localName === 'tr');
@@ -2052,7 +2122,13 @@
         const cells = Array.from(tableRow.children).filter(node => node.localName === 'tc');
         const targetCell = cells[Number(ref.target_col)];
         if (!targetCell) return;
-        setOfficeTextNodes(targetCell, finalTarget(row));
+        setOfficeTextNodes(targetCell, finalTargetForExport(row));
+        changed += 1;
+      });
+      paragraphRefs.forEach(({ row, ref }) => {
+        const paragraph = paragraphs[Number(ref.paragraph_index)];
+        if (!paragraph) return;
+        setOfficeTextNodes(paragraph, finalTargetForExport(row));
         changed += 1;
       });
       if (!changed) {
@@ -2087,7 +2163,7 @@
         if (!paragraph) return;
         setOfficeTextNodes(
           paragraph,
-          finalTarget(row),
+          finalTargetForExport(row),
           'http://schemas.openxmlformats.org/drawingml/2006/main',
           'a:r',
           'a:t',
@@ -2163,7 +2239,7 @@
         const targetCol = numericRefValue(ref.target_col);
         if (rowIndex === null || targetCol === null) return;
         const cellRef = `${excelColumnName(targetCol + 1)}${rowIndex + 1}`;
-        if (setXlsxInlineStringCell(documentXml, cellRef, finalTarget(row))) changed += 1;
+        if (setXlsxInlineStringCell(documentXml, cellRef, finalTargetForExport(row))) changed += 1;
       });
       return changed ? new XMLSerializer().serializeToString(documentXml) : xml;
     }
@@ -2173,7 +2249,7 @@
       const entries = await readZipEntries(bytes);
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
-      const hasDocxRefs = exportRowsByKind('docx_table').length > 0;
+      const hasDocxRefs = exportRowsByKind('docx_table').length > 0 || exportRowsByKind('docx_paragraph').length > 0;
       const hasPptxRefs = exportRowsByKind('pptx_paragraph').length > 0;
       const hasXlsxRefs = exportRowsByKind('xlsx_cell').length > 0;
       let replaced = 0;

@@ -21,12 +21,22 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
 5. Validate the env file without printing secret values:
    ```powershell
    python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+   python deploy/ai_fallback_check.py --strict
+   python deploy/auth_session_check.py --strict
+   python deploy/async_worker_check.py --strict
+   python deploy/mt_endpoint_check.py --strict
+   python deploy/object_storage_check.py --strict
+   python deploy/supabase_schema_check.py --strict
    ```
-6. Point public HTTPS routes at:
+6. Generate owner/workspace bootstrap password hashes with:
+   ```powershell
+   python deploy/auth_session_check.py --generate-password-hash
+   ```
+7. Point public HTTPS routes at:
    - app: `http://errorsweep-app:8501`
    - async receiver: `http://errorsweep-async-receiver:8300`
    - billing webhook receiver: `http://errorsweep-billing-webhook:8301`
-7. Configure `ERRORSWEEP_PUBLIC_BASE_URL` and `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
+8. Configure `ERRORSWEEP_PUBLIC_BASE_URL` and `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
 
 ## Run
 
@@ -39,6 +49,12 @@ docker compose --env-file deploy/.env.production -f docker-compose.production.ym
 
 ```powershell
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-models --strict
+python deploy/auth_session_check.py --env-file deploy/.env.production --probe-public-url --strict
+python deploy/async_worker_check.py --env-file deploy/.env.production --run-smoke --probe-health --strict
+python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-health --probe-translate --strict
+python deploy/object_storage_check.py --env-file deploy/.env.production --probe-write --strict
+python deploy/supabase_schema_check.py --env-file deploy/.env.production --probe-rest --strict
 python deploy/release_check.py --run-smoke
 docker compose -f docker-compose.production.yml ps
 docker compose -f docker-compose.production.yml exec errorsweep-app python production_smoke_test.py --markdown --strict --probe-endpoints
@@ -46,7 +62,7 @@ docker compose -f docker-compose.production.yml exec errorsweep-worker-superviso
 ```
 
 The strict smoke test should be clean only after production secrets, Supabase, object storage, email, billing, legal, WAF, and backups are configured. The template intentionally contains placeholder values.
-The release check is an offline packaging guard. It can run before Docker is available and should pass before every deployment branch is cut.
+The release check is an offline packaging guard. It can run before Docker is available and should pass before every deployment branch is cut. The AI fallback check validates managed_ai_router.py, platform OpenAI/managed endpoint settings, URL safety, and optional `/models` or chat probes. The auth/session check validates production session/public URL settings, owner/workspace bootstrap hashes, auth-token persistence, and the optional public app probe. The async worker check validates receiver/processor/supervisor readiness and can run local smoke plus receiver health probes. The MT endpoint check validates router/client/worker contracts and can probe hosted `/health` and `/translate` routes. The object storage check validates provider coverage and can probe the real bucket; the Supabase schema check catches table/column drift before SQL is run against production.
 
 ## Notes
 
