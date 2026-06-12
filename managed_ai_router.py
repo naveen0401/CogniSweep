@@ -22,9 +22,8 @@ import socket
 import sys
 import uuid
 from dataclasses import dataclass
-from html import escape as _html_escape
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
@@ -37,7 +36,22 @@ _PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"
 _SESSION_COOKIE_NAME = "errorsweep_session"
 _SESSION_STORAGE_KEY = "errorsweep_session"
 _SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
-_JOB_EDITOR_DETAILS_PATCHED = False
+
+_MAIN_PLATFORM_OWNER_EMAIL = "adapalanaveen401@gmail.com"
+_UNLIMITED_WORKSPACES = {"platform", "naveen unlimited workspace"}
+_UNLIMITED_SEATS = 1_000_000
+_UNLIMITED_SEGMENTS = 1_000_000_000
+_UNLIMITED_CHARACTERS = 1_000_000_000_000
+_OWNER_PATCHED = False
+
+
+def _safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value)
+    except Exception:
+        return ""
 
 
 def _install_signup_scroll_fix() -> None:
@@ -152,11 +166,262 @@ def _rewrite_protected_links(markup: Any, token: str) -> Any:
         return markup
 
     def replace_href(match: re.Match[str]) -> str:
-        quote_char = match.group(1)
+        quote = match.group(1)
         href = match.group(2)
-        return f"href={quote_char}{_append_session_to_href(href, token)}{quote_char}"
+        return f"href={quote}{_append_session_to_href(href, token)}{quote}"
 
     return re.sub(r'href\s*=\s*([\"\'])(.*?)\1', replace_href, text, flags=re.I)
+
+
+def _current_user() -> Dict[str, Any]:
+    if st is None:
+        return {}
+    try:
+        user = st.session_state.get("user") or {}
+        return user if isinstance(user, dict) else {}
+    except Exception:
+        return {}
+
+
+def _is_main_owner_user(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if isinstance(user, dict) else _current_user()
+    email = _safe_text(candidate.get("email")).strip().lower()
+    return email == _MAIN_PLATFORM_OWNER_EMAIL
+
+
+def _unlimited_subscription(workspace: str = "Platform") -> Dict[str, Any]:
+    workspace_name = _safe_text(workspace).strip() or "Platform"
+    return {
+        "workspace": workspace_name,
+        "user_email": _MAIN_PLATFORM_OWNER_EMAIL,
+        "plan": "Unlimited",
+        "status": "Active",
+        "billing_cycle": "internal",
+        "currency": "INR",
+        "base_amount": 0,
+        "included_segments": _UNLIMITED_SEGMENTS,
+        "included_characters": _UNLIMITED_CHARACTERS,
+        "included_seats": _UNLIMITED_SEATS,
+        "provider": "internal",
+        "provider_customer_id": "",
+        "provider_subscription_id": "",
+    }
+
+
+def _unlimited_plan() -> Dict[str, Any]:
+    return {
+        "name": "Unlimited",
+        "monthly": 0,
+        "annual": 0,
+        "currency": "INR",
+        "seats": _UNLIMITED_SEATS,
+        "segments": _UNLIMITED_SEGMENTS,
+        "characters": _UNLIMITED_CHARACTERS,
+        "label": "Unlimited internal access",
+        "description": "Unlimited platform-owner access.",
+    }
+
+
+def _ensure_owner_entitlements() -> None:
+    if st is None:
+        return
+    try:
+        user = st.session_state.get("user")
+        if not isinstance(user, dict) or not _is_main_owner_user(user):
+            return
+        user.update({
+            "email": _MAIN_PLATFORM_OWNER_EMAIL,
+            "role": "Platform Owner",
+            "account_type": "owner",
+            "plan": "Unlimited",
+            "status": "Active",
+            "email_verified": True,
+        })
+        if not _safe_text(user.get("workspace")):
+            user["workspace"] = "Platform"
+        st.session_state["user"] = user
+        st.session_state["authenticated"] = True
+
+        users = st.session_state.setdefault("users", [])
+        owner_record = {
+            "email": _MAIN_PLATFORM_OWNER_EMAIL,
+            "workspace": _safe_text(user.get("workspace") or "Platform"),
+            "role": "Platform Owner",
+            "account_type": "owner",
+            "plan": "Unlimited",
+            "status": "Active",
+            "email_verified": True,
+        }
+        for idx, item in enumerate(list(users)):
+            if isinstance(item, dict) and _safe_text(item.get("email")).strip().lower() == _MAIN_PLATFORM_OWNER_EMAIL:
+                users[idx] = {**item, **owner_record}
+                break
+        else:
+            users.insert(0, owner_record)
+
+        workspaces = st.session_state.setdefault("workspaces", [])
+        subscriptions = st.session_state.setdefault("subscriptions", [])
+        for workspace_name in {"Platform", "Naveen Unlimited Workspace", _safe_text(user.get("workspace") or "Platform")}:
+            if not workspace_name:
+                continue
+            workspace_record = {
+                "workspace": workspace_name,
+                "owner": _MAIN_PLATFORM_OWNER_EMAIL,
+                "plan": "Unlimited",
+                "status": "Active",
+                "users": 1,
+                "jobs": 0,
+            }
+            for idx, item in enumerate(list(workspaces)):
+                if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
+                    workspaces[idx] = {**item, **workspace_record}
+                    break
+            else:
+                workspaces.insert(0, workspace_record)
+
+            subscription_record = _unlimited_subscription(workspace_name)
+            for idx, item in enumerate(list(subscriptions)):
+                if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
+                    subscriptions[idx] = {**item, **subscription_record}
+                    break
+            else:
+                subscriptions.insert(0, subscription_record)
+    except Exception:
+        pass
+
+
+def _owner_unlimited_context(workspace: str = "") -> bool:
+    _ensure_owner_entitlements()
+    workspace_key = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "")).strip().lower()
+    return _is_main_owner_user() or workspace_key in _UNLIMITED_WORKSPACES
+
+
+def _patch_owner_unlimited_functions() -> None:
+    global _OWNER_PATCHED
+    if _OWNER_PATCHED:
+        _ensure_owner_entitlements()
+        return
+    module = sys.modules.get("__main__")
+    if module is None:
+        return
+    required = [
+        "workspace_subscription",
+        "workspace_usage_allowance",
+        "workspace_seat_state",
+        "check_workspace_usage_allowance",
+        "check_workspace_seat_allowance",
+        "current_role",
+        "is_owner",
+    ]
+    if not all(callable(getattr(module, name, None)) for name in required):
+        _ensure_owner_entitlements()
+        return
+
+    original_workspace_subscription = getattr(module, "workspace_subscription")
+    original_workspace_usage_allowance = getattr(module, "workspace_usage_allowance")
+    original_workspace_seat_state = getattr(module, "workspace_seat_state")
+    original_check_workspace_usage_allowance = getattr(module, "check_workspace_usage_allowance")
+    original_check_workspace_seat_allowance = getattr(module, "check_workspace_seat_allowance")
+    original_current_role = getattr(module, "current_role")
+    original_is_owner = getattr(module, "is_owner")
+
+    @functools.wraps(original_current_role)
+    def current_role_with_main_owner() -> str:
+        _ensure_owner_entitlements()
+        if _is_main_owner_user():
+            return "Platform Owner"
+        return original_current_role()
+
+    @functools.wraps(original_is_owner)
+    def is_owner_with_main_owner() -> bool:
+        _ensure_owner_entitlements()
+        return _is_main_owner_user() or bool(original_is_owner())
+
+    @functools.wraps(original_workspace_subscription)
+    def workspace_subscription_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
+        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return _unlimited_subscription(workspace_name)
+        return original_workspace_subscription(workspace)
+
+    @functools.wraps(original_workspace_usage_allowance)
+    def workspace_usage_allowance_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
+        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return {
+                "subscription": _unlimited_subscription(workspace_name),
+                "plan": _unlimited_plan(),
+                "segments": _UNLIMITED_SEGMENTS,
+                "characters": _UNLIMITED_CHARACTERS,
+                "seats": _UNLIMITED_SEATS,
+            }
+        return original_workspace_usage_allowance(workspace)
+
+    @functools.wraps(original_workspace_seat_state)
+    def workspace_seat_state_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
+        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return {
+                "workspace": workspace_name,
+                "subscription": _unlimited_subscription(workspace_name),
+                "plan": _unlimited_plan(),
+                "used": 1,
+                "limit": _UNLIMITED_SEATS,
+                "available": _UNLIMITED_SEATS - 1,
+            }
+        return original_workspace_seat_state(workspace)
+
+    @functools.wraps(original_check_workspace_usage_allowance)
+    def check_workspace_usage_allowance_with_main_owner(rows: List[Dict[str, Any]], purpose: str, workspace: str = "") -> Tuple[bool, str, Dict[str, Any]]:
+        _ensure_owner_entitlements()
+        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
+        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            requested_segments = len(rows or [])
+            requested_characters = 0
+            for row in rows or []:
+                if isinstance(row, dict):
+                    requested_characters += len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", "")))
+            return True, "", {
+                "workspace": workspace_name,
+                "plan": "Unlimited",
+                "status": "active",
+                "used_segments": 0,
+                "used_characters": 0,
+                "requested_segments": requested_segments,
+                "requested_characters": requested_characters,
+                "projected_segments": requested_segments,
+                "projected_characters": requested_characters,
+                "segment_limit": _UNLIMITED_SEGMENTS,
+                "character_limit": _UNLIMITED_CHARACTERS,
+                "unlimited": True,
+            }
+        return original_check_workspace_usage_allowance(rows, purpose, workspace)
+
+    @functools.wraps(original_check_workspace_seat_allowance)
+    def check_workspace_seat_allowance_with_main_owner(workspace: str, email: str, status: str = "Active") -> Tuple[bool, str, Dict[str, Any]]:
+        _ensure_owner_entitlements()
+        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
+        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return True, "", workspace_seat_state_with_main_owner(workspace_name)
+        return original_check_workspace_seat_allowance(workspace, email, status)
+
+    setattr(module, "current_role", current_role_with_main_owner)
+    setattr(module, "is_owner", is_owner_with_main_owner)
+    setattr(module, "workspace_subscription", workspace_subscription_with_main_owner)
+    setattr(module, "workspace_usage_allowance", workspace_usage_allowance_with_main_owner)
+    setattr(module, "workspace_seat_state", workspace_seat_state_with_main_owner)
+    setattr(module, "check_workspace_usage_allowance", check_workspace_usage_allowance_with_main_owner)
+    setattr(module, "check_workspace_seat_allowance", check_workspace_seat_allowance_with_main_owner)
+    _OWNER_PATCHED = True
+    _ensure_owner_entitlements()
 
 
 def _current_signed_session_token() -> str:
@@ -215,188 +480,6 @@ def _protected_page_session_script(token: str) -> str:
     """
 
 
-def _json_dict(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    return {}
-
-
-def _text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).replace("\u00A0", " ").strip()
-
-
-def _main_module() -> Any:
-    return sys.modules.get("__main__")
-
-
-def _format_time(value: Any) -> str:
-    module = _main_module()
-    formatter = getattr(module, "format_local_time", None)
-    if callable(formatter):
-        try:
-            return _text(formatter(value))
-        except Exception:
-            pass
-    return _text(value)
-
-
-def _task_review_id(task: Dict[str, Any]) -> str:
-    module = _main_module()
-    task_review_job_id = getattr(module, "task_review_job_id", None)
-    if callable(task_review_job_id):
-        try:
-            value = _text(task_review_job_id(task))
-            if value:
-                return value
-        except Exception:
-            pass
-    metadata = _json_dict(task.get("metadata_json"))
-    pro_summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
-    return _text(
-        metadata.get("review_job_id")
-        or pro_summary.get("review_job_id")
-        or task.get("review_job_id")
-        or task.get("active_review_session_id")
-        or ""
-    )
-
-
-def _task_editor_target(task: Dict[str, Any]) -> Tuple[str, str]:
-    module = _main_module()
-    review_id = _task_review_id(task)
-    if review_id:
-        human_review_editor_link = getattr(module, "human_review_editor_link", None)
-        if callable(human_review_editor_link):
-            try:
-                return _text(human_review_editor_link(review_id)), "Open this job in Human Review Editor"
-            except Exception:
-                pass
-        return "?" + urlencode({"es_page": "Human Review Editor", "review_id": review_id}), "Open this job in Human Review Editor"
-
-    metadata = _json_dict(task.get("metadata_json"))
-    job_id = _text(
-        metadata.get("editor_job_id")
-        or metadata.get("cat_job_id")
-        or metadata.get("media_job_id")
-        or metadata.get("job_id")
-        or task.get("editor_job_id")
-        or task.get("job_id")
-        or ""
-    )
-    task_type = _text(task.get("task_type") or metadata.get("task_type") or metadata.get("job_type")).lower()
-    if job_id:
-        editor_type = _text(metadata.get("editor_type") or metadata.get("job_type") or ("media" if any(part in task_type for part in ("subtitle", "transcription", "media")) else "cat")) or "cat"
-        external_editor_url = getattr(module, "external_editor_url", None)
-        if callable(external_editor_url):
-            try:
-                return _text(external_editor_url(editor_type, job_id)), "Open this job in Editor"
-            except Exception:
-                pass
-        return "?" + urlencode({"es_editor": editor_type, "job_id": job_id}), "Open this job in Editor"
-    return "", ""
-
-
-def _task_detail_pairs(task: Dict[str, Any]) -> List[Tuple[str, str]]:
-    metadata = _json_dict(task.get("metadata_json"))
-    label = _text(task.get("label") or task.get("type") or task.get("task_type") or "Job")
-    workflow = _text(task.get("task_type") or metadata.get("workflow") or metadata.get("source") or "workflow")
-    status = _text(task.get("status") or metadata.get("status") or "created")
-    progress = _text(task.get("progress"))
-    processed = _text(task.get("processed_units"))
-    total = _text(task.get("total_units") or metadata.get("segments") or metadata.get("row_count"))
-    file_name = _text(metadata.get("file_name") or task.get("file_name"))
-    language = _text(metadata.get("target_language") or task.get("language") or metadata.get("language"))
-    created = _format_time(task.get("created_at") or task.get("created") or metadata.get("created"))
-    updated = _format_time(task.get("updated_at") or metadata.get("updated_at"))
-    review_id = _task_review_id(task)
-    pairs = [
-        ("Job", label),
-        ("Workflow", workflow),
-        ("Status", status),
-    ]
-    if progress:
-        pairs.append(("Progress", f"{progress}%" if progress.isdigit() else progress))
-    if processed or total:
-        pairs.append(("Units", f"{processed or 0}/{total or 0}"))
-    if file_name:
-        pairs.append(("File", file_name))
-    if language:
-        pairs.append(("Language", language))
-    if created:
-        pairs.append(("Created", created))
-    if updated:
-        pairs.append(("Updated", updated))
-    task_id = _text(task.get("id"))
-    if task_id:
-        pairs.append(("Task ID", task_id[:12]))
-    if review_id:
-        pairs.append(("Editor ID", review_id[:12]))
-    return pairs
-
-
-def _render_job_editor_details(task: Dict[str, Any], key_prefix: str = "job") -> None:
-    if st is None or not isinstance(task, dict):
-        return
-    try:
-        url, action_label = _task_editor_target(task)
-        detail_html = "".join(
-            f'<span style="display:inline-flex;flex-direction:column;gap:2px;min-width:120px;padding:8px 10px;border:1px solid rgba(84,105,180,.22);border-radius:10px;background:rgba(9,14,28,.54);"><b style="color:#75f7c4;font-size:10px;text-transform:uppercase;letter-spacing:.08em;">{_html_escape(label)}</b><span style="color:#dce8ff;font-size:12px;line-height:1.35;">{_html_escape(value)}</span></span>'
-            for label, value in _task_detail_pairs(task)
-            if value
-        )
-        if not detail_html:
-            return
-        if url:
-            safe_url = _html_escape(_append_session_to_href(url, _current_signed_session_token()))
-            action_html = f'<a class="es-task-action-link primary" href="{safe_url}" target="_blank" rel="noopener" style="width:100%;min-height:42px;margin-top:10px;">{_html_escape(action_label)} ↗</a>'
-        else:
-            action_html = '<div class="es-small" style="margin-top:10px;color:#9fb0db;">Editor opens here automatically after this job creates a Human Review or editor session.</div>'
-        st.markdown(
-            f'''
-            <div class="es-row-card" style="margin-top:10px;border-color:rgba(52,189,246,.28);">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
-                <div>
-                  <div class="es-code-chip">JOB DETAILS</div>
-                  <div style="font-weight:900;color:#f8fbff;margin-top:6px;">Editor-ready job handoff</div>
-                </div>
-              </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;">{detail_html}</div>
-              {action_html}
-            </div>
-            ''',
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        pass
-
-
-def _install_job_editor_details_patch() -> None:
-    global _JOB_EDITOR_DETAILS_PATCHED
-    if _JOB_EDITOR_DETAILS_PATCHED:
-        return
-    module = _main_module()
-    original = getattr(module, "render_task_result_actions", None)
-    if not callable(original) or getattr(original, "_errorsweep_job_editor_details_patch", False):
-        return
-
-    @functools.wraps(original)
-    def render_task_result_actions_with_editor(task: Dict[str, Any], key_prefix: str) -> None:
-        original(task, key_prefix)
-        _render_job_editor_details(task, key_prefix)
-
-    setattr(render_task_result_actions_with_editor, "_errorsweep_job_editor_details_patch", True)
-    setattr(module, "render_task_result_actions", render_task_result_actions_with_editor)
-    _JOB_EDITOR_DETAILS_PATCHED = True
-
-
 def _install_authenticated_reload_bridge() -> None:
     """Keep session token on protected links/current URL so reloads do not blank."""
     if st is None:
@@ -408,7 +491,7 @@ def _install_authenticated_reload_bridge() -> None:
 
         @functools.wraps(original_markdown)
         def markdown_with_authenticated_reload(body: Any, *args: Any, **kwargs: Any) -> Any:
-            _install_job_editor_details_patch()
+            _patch_owner_unlimited_functions()
             token = _current_signed_session_token()
             text = str(body)
             is_shell_or_nav = "errorsweep-root-shell-marker" in text or "es-topnav" in text or "es-owner-strip" in text or "es-account-menu" in text
@@ -490,6 +573,7 @@ def _install_login_new_tab_bridge() -> None:
         def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
             try:
                 if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
+                    _patch_owner_unlimited_functions()
                     session_token = _current_signed_session_token()
                     if session_token:
                         st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)
