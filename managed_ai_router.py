@@ -22,8 +22,9 @@ import socket
 import sys
 import uuid
 from dataclasses import dataclass
+from html import escape as _html_escape
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
@@ -36,6 +37,7 @@ _PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"
 _SESSION_COOKIE_NAME = "errorsweep_session"
 _SESSION_STORAGE_KEY = "errorsweep_session"
 _SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
+_JOB_EDITOR_DETAILS_PATCHED = False
 
 
 def _install_signup_scroll_fix() -> None:
@@ -150,9 +152,9 @@ def _rewrite_protected_links(markup: Any, token: str) -> Any:
         return markup
 
     def replace_href(match: re.Match[str]) -> str:
-        quote = match.group(1)
+        quote_char = match.group(1)
         href = match.group(2)
-        return f"href={quote}{_append_session_to_href(href, token)}{quote}"
+        return f"href={quote_char}{_append_session_to_href(href, token)}{quote_char}"
 
     return re.sub(r'href\s*=\s*([\"\'])(.*?)\1', replace_href, text, flags=re.I)
 
@@ -213,6 +215,188 @@ def _protected_page_session_script(token: str) -> str:
     """
 
 
+def _json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\u00A0", " ").strip()
+
+
+def _main_module() -> Any:
+    return sys.modules.get("__main__")
+
+
+def _format_time(value: Any) -> str:
+    module = _main_module()
+    formatter = getattr(module, "format_local_time", None)
+    if callable(formatter):
+        try:
+            return _text(formatter(value))
+        except Exception:
+            pass
+    return _text(value)
+
+
+def _task_review_id(task: Dict[str, Any]) -> str:
+    module = _main_module()
+    task_review_job_id = getattr(module, "task_review_job_id", None)
+    if callable(task_review_job_id):
+        try:
+            value = _text(task_review_job_id(task))
+            if value:
+                return value
+        except Exception:
+            pass
+    metadata = _json_dict(task.get("metadata_json"))
+    pro_summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
+    return _text(
+        metadata.get("review_job_id")
+        or pro_summary.get("review_job_id")
+        or task.get("review_job_id")
+        or task.get("active_review_session_id")
+        or ""
+    )
+
+
+def _task_editor_target(task: Dict[str, Any]) -> Tuple[str, str]:
+    module = _main_module()
+    review_id = _task_review_id(task)
+    if review_id:
+        human_review_editor_link = getattr(module, "human_review_editor_link", None)
+        if callable(human_review_editor_link):
+            try:
+                return _text(human_review_editor_link(review_id)), "Open this job in Human Review Editor"
+            except Exception:
+                pass
+        return "?" + urlencode({"es_page": "Human Review Editor", "review_id": review_id}), "Open this job in Human Review Editor"
+
+    metadata = _json_dict(task.get("metadata_json"))
+    job_id = _text(
+        metadata.get("editor_job_id")
+        or metadata.get("cat_job_id")
+        or metadata.get("media_job_id")
+        or metadata.get("job_id")
+        or task.get("editor_job_id")
+        or task.get("job_id")
+        or ""
+    )
+    task_type = _text(task.get("task_type") or metadata.get("task_type") or metadata.get("job_type")).lower()
+    if job_id:
+        editor_type = _text(metadata.get("editor_type") or metadata.get("job_type") or ("media" if any(part in task_type for part in ("subtitle", "transcription", "media")) else "cat")) or "cat"
+        external_editor_url = getattr(module, "external_editor_url", None)
+        if callable(external_editor_url):
+            try:
+                return _text(external_editor_url(editor_type, job_id)), "Open this job in Editor"
+            except Exception:
+                pass
+        return "?" + urlencode({"es_editor": editor_type, "job_id": job_id}), "Open this job in Editor"
+    return "", ""
+
+
+def _task_detail_pairs(task: Dict[str, Any]) -> List[Tuple[str, str]]:
+    metadata = _json_dict(task.get("metadata_json"))
+    label = _text(task.get("label") or task.get("type") or task.get("task_type") or "Job")
+    workflow = _text(task.get("task_type") or metadata.get("workflow") or metadata.get("source") or "workflow")
+    status = _text(task.get("status") or metadata.get("status") or "created")
+    progress = _text(task.get("progress"))
+    processed = _text(task.get("processed_units"))
+    total = _text(task.get("total_units") or metadata.get("segments") or metadata.get("row_count"))
+    file_name = _text(metadata.get("file_name") or task.get("file_name"))
+    language = _text(metadata.get("target_language") or task.get("language") or metadata.get("language"))
+    created = _format_time(task.get("created_at") or task.get("created") or metadata.get("created"))
+    updated = _format_time(task.get("updated_at") or metadata.get("updated_at"))
+    review_id = _task_review_id(task)
+    pairs = [
+        ("Job", label),
+        ("Workflow", workflow),
+        ("Status", status),
+    ]
+    if progress:
+        pairs.append(("Progress", f"{progress}%" if progress.isdigit() else progress))
+    if processed or total:
+        pairs.append(("Units", f"{processed or 0}/{total or 0}"))
+    if file_name:
+        pairs.append(("File", file_name))
+    if language:
+        pairs.append(("Language", language))
+    if created:
+        pairs.append(("Created", created))
+    if updated:
+        pairs.append(("Updated", updated))
+    task_id = _text(task.get("id"))
+    if task_id:
+        pairs.append(("Task ID", task_id[:12]))
+    if review_id:
+        pairs.append(("Editor ID", review_id[:12]))
+    return pairs
+
+
+def _render_job_editor_details(task: Dict[str, Any], key_prefix: str = "job") -> None:
+    if st is None or not isinstance(task, dict):
+        return
+    try:
+        url, action_label = _task_editor_target(task)
+        detail_html = "".join(
+            f'<span style="display:inline-flex;flex-direction:column;gap:2px;min-width:120px;padding:8px 10px;border:1px solid rgba(84,105,180,.22);border-radius:10px;background:rgba(9,14,28,.54);"><b style="color:#75f7c4;font-size:10px;text-transform:uppercase;letter-spacing:.08em;">{_html_escape(label)}</b><span style="color:#dce8ff;font-size:12px;line-height:1.35;">{_html_escape(value)}</span></span>'
+            for label, value in _task_detail_pairs(task)
+            if value
+        )
+        if not detail_html:
+            return
+        if url:
+            safe_url = _html_escape(_append_session_to_href(url, _current_signed_session_token()))
+            action_html = f'<a class="es-task-action-link primary" href="{safe_url}" target="_blank" rel="noopener" style="width:100%;min-height:42px;margin-top:10px;">{_html_escape(action_label)} ↗</a>'
+        else:
+            action_html = '<div class="es-small" style="margin-top:10px;color:#9fb0db;">Editor opens here automatically after this job creates a Human Review or editor session.</div>'
+        st.markdown(
+            f'''
+            <div class="es-row-card" style="margin-top:10px;border-color:rgba(52,189,246,.28);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+                <div>
+                  <div class="es-code-chip">JOB DETAILS</div>
+                  <div style="font-weight:900;color:#f8fbff;margin-top:6px;">Editor-ready job handoff</div>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">{detail_html}</div>
+              {action_html}
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+def _install_job_editor_details_patch() -> None:
+    global _JOB_EDITOR_DETAILS_PATCHED
+    if _JOB_EDITOR_DETAILS_PATCHED:
+        return
+    module = _main_module()
+    original = getattr(module, "render_task_result_actions", None)
+    if not callable(original) or getattr(original, "_errorsweep_job_editor_details_patch", False):
+        return
+
+    @functools.wraps(original)
+    def render_task_result_actions_with_editor(task: Dict[str, Any], key_prefix: str) -> None:
+        original(task, key_prefix)
+        _render_job_editor_details(task, key_prefix)
+
+    setattr(render_task_result_actions_with_editor, "_errorsweep_job_editor_details_patch", True)
+    setattr(module, "render_task_result_actions", render_task_result_actions_with_editor)
+    _JOB_EDITOR_DETAILS_PATCHED = True
+
+
 def _install_authenticated_reload_bridge() -> None:
     """Keep session token on protected links/current URL so reloads do not blank."""
     if st is None:
@@ -224,6 +408,7 @@ def _install_authenticated_reload_bridge() -> None:
 
         @functools.wraps(original_markdown)
         def markdown_with_authenticated_reload(body: Any, *args: Any, **kwargs: Any) -> Any:
+            _install_job_editor_details_patch()
             token = _current_signed_session_token()
             text = str(body)
             is_shell_or_nav = "errorsweep-root-shell-marker" in text or "es-topnav" in text or "es-owner-strip" in text or "es-account-menu" in text
