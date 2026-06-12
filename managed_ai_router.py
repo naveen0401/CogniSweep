@@ -8,7 +8,7 @@ What this file does:
 
 This module also installs small runtime compatibility helpers for Streamlit Cloud:
 - normalize malformed editor query keys like ;review_id -> review_id before app.py reads them
-- keep protected links reload-safe by carrying the current session token
+- keep protected pages reload-safe without rewriting visible HTML markup
 - keep the signup page scrollable
 - keep the login page open while launching the authenticated tool tab
 - ensure the main platform owner keeps Unlimited access
@@ -99,14 +99,7 @@ def _canonical_query_key(raw_key: Any) -> str:
 
 
 def _normalize_query_params() -> None:
-    """Repair malformed route params before app.py calls query_get().
-
-    The Human Review URL has been observed as:
-        ?es_page=Human+Review+Editor&%3Breview_id=<id>
-    Streamlit exposes that as a key like ';review_id', while app.py reads
-    query_get('review_id'). This function copies malformed keys to canonical
-    names and removes the malformed key.
-    """
+    """Repair malformed route params before app.py calls query_get()."""
     if st is None:
         return
     try:
@@ -126,8 +119,6 @@ def _normalize_query_params() -> None:
             except Exception:
                 pass
 
-        # Defensive cleanup for cases where a delimiter was embedded into the
-        # page value instead of parsed as a separate query parameter.
         es_page = _query_value(params, "es_page")
         for key in ("review_id", "job_id", "es_editor", "task_id"):
             match = re.search(rf"(?:^|[;&]){re.escape(key)}=([^&;]+)", es_page)
@@ -240,33 +231,6 @@ def _href_needs_session(href: str) -> bool:
         return False
 
 
-def _append_session_to_href(href: str, token: str) -> str:
-    if not token or not _href_needs_session(href):
-        return href
-    try:
-        split = urlsplit(href)
-        query = {_canonical_query_key(k): v for k, v in parse_qsl(split.query, keep_blank_values=True)}
-        query["es_session"] = token
-        return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
-    except Exception:
-        return href
-
-
-def _rewrite_protected_links(markup: Any, token: str) -> Any:
-    if not token:
-        return markup
-    text = str(markup)
-    if "href=" not in text:
-        return markup
-
-    def replace_href(match: re.Match[str]) -> str:
-        quote = match.group(1)
-        href = match.group(2)
-        return f"href={quote}{_append_session_to_href(href, token)}{quote}"
-
-    return re.sub(r'href\s*=\s*([\"\'])(.*?)\1', replace_href, text, flags=re.I)
-
-
 def _current_user() -> Dict[str, Any]:
     if st is None:
         return {}
@@ -305,6 +269,7 @@ def _protected_page_session_script(token: str) -> str:
     cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
     public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
+    protected_keys_json = json.dumps(sorted(_PROTECTED_LINK_KEYS))
     return f"""
     <script>
     (() => {{
@@ -315,25 +280,57 @@ def _protected_page_session_script(token: str) -> str:
         const cookieName = {cookie_name_json};
         const storageKey = {storage_key_json};
         const publicPages = {public_pages_json};
+        const protectedKeys = {protected_keys_json};
         const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
         try {{
           doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
         }} catch (err) {{}}
         try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
-        const url = new URL(parentWindow.location.href);
-        const repair = (bad, good) => {{
-          if (url.searchParams.has(bad) && !url.searchParams.has(good)) {{
-            url.searchParams.set(good, url.searchParams.get(bad) || "");
-            url.searchParams.delete(bad);
-          }}
+
+        const normalizePage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+        const repairParams = (url) => {{
+          const repairs = [
+            [";review_id", "review_id"], ["amp;review_id", "review_id"], ["%3Breview_id", "review_id"],
+            [";job_id", "job_id"], ["amp;job_id", "job_id"], ["%3Bjob_id", "job_id"],
+            [";es_editor", "es_editor"], ["amp;es_editor", "es_editor"], ["%3Bes_editor", "es_editor"],
+            [";task_id", "task_id"], ["amp;task_id", "task_id"], ["%3Btask_id", "task_id"]
+          ];
+          repairs.forEach(([bad, good]) => {{
+            if (url.searchParams.has(bad) && !url.searchParams.has(good)) {{
+              url.searchParams.set(good, url.searchParams.get(bad) || "");
+              url.searchParams.delete(bad);
+            }}
+          }});
+          return url;
         }};
-        [";review_id", "amp;review_id", "%3Breview_id"].forEach((bad) => repair(bad, "review_id"));
-        [";job_id", "amp;job_id", "%3Bjob_id"].forEach((bad) => repair(bad, "job_id"));
-        [";es_editor", "amp;es_editor", "%3Bes_editor"].forEach((bad) => repair(bad, "es_editor"));
-        const page = String(url.searchParams.get("es_page") || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-        const protectedTarget = Boolean(url.searchParams.get("es_editor") || url.searchParams.get("job_id") || url.searchParams.get("review_id") || url.searchParams.get("task_id") || (page && !publicPages.includes(page)));
-        if (protectedTarget && url.searchParams.get("es_session") !== token) url.searchParams.set("es_session", token);
-        if (url.toString() !== parentWindow.location.href) parentWindow.history.replaceState(null, "", url.toString());
+        const isProtected = (url) => {{
+          const page = normalizePage(url.searchParams.get("es_page"));
+          if (page && publicPages.includes(page)) return false;
+          return protectedKeys.some((key) => Boolean(url.searchParams.get(key))) || Boolean(page && !publicPages.includes(page));
+        }};
+        const patchUrl = () => {{
+          try {{
+            const current = repairParams(new URL(parentWindow.location.href));
+            if (isProtected(current) && current.searchParams.get("es_session") !== token) current.searchParams.set("es_session", token);
+            if (current.toString() !== parentWindow.location.href) parentWindow.history.replaceState(null, "", current.toString());
+          }} catch (err) {{}}
+        }};
+        const patchLinks = () => {{
+          try {{
+            doc.querySelectorAll('a[href]').forEach((anchor) => {{
+              const raw = String(anchor.getAttribute('href') || '');
+              if (!raw || raw === '#' || raw.includes('es_logout=1') || /^(mailto:|tel:|javascript:)/i.test(raw)) return;
+              const url = repairParams(new URL(raw, parentWindow.location.href));
+              if (url.origin !== parentWindow.location.origin) return;
+              if (!isProtected(url)) return;
+              url.searchParams.set('es_session', token);
+              anchor.setAttribute('href', url.pathname + url.search + url.hash);
+            }});
+          }} catch (err) {{}}
+        }};
+        patchUrl();
+        patchLinks();
+        try {{ new MutationObserver(patchLinks).observe(doc.body, {{ childList: true, subtree: true }}); }} catch (err) {{}}
       }} catch (err) {{}}
     }})();
     </script>
@@ -565,8 +562,11 @@ def _install_authenticated_reload_bridge() -> None:
             token = _current_signed_session_token()
             text = str(body)
             is_shell_or_nav = "errorsweep-root-shell-marker" in text or "es-topnav" in text or "es-owner-strip" in text or "es-account-menu" in text
-            patched_body = _rewrite_protected_links(body, token) if token and "href=" in text else body
-            result = original_markdown(patched_body, *args, **kwargs)
+
+            # Do not rewrite HTML before passing it to Streamlit. Rewriting the
+            # large top navigation string can make Streamlit display raw markup.
+            result = original_markdown(body, *args, **kwargs)
+
             if token and is_shell_or_nav:
                 try:
                     import streamlit.components.v1 as components
