@@ -6,8 +6,12 @@ What this file does:
 2. If Managed AI/vLLM is explicitly enabled and reachable, use it.
 3. If Managed AI fails or is not configured, fall back to the platform OpenAI key when available.
 
-This prevents the app from showing 59/59 untranslated rows when a placeholder or dead
-Managed AI endpoint is configured.
+This module also installs small runtime compatibility helpers for Streamlit Cloud:
+- normalize malformed editor query keys like ;review_id -> review_id before app.py reads them
+- keep protected links reload-safe by carrying the current session token
+- keep the signup page scrollable
+- keep the login page open while launching the authenticated tool tab
+- ensure the main platform owner keeps Unlimited access
 """
 
 from __future__ import annotations
@@ -23,16 +27,27 @@ import sys
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
 except Exception:
     st = None
 
+# -----------------------------------------------------------------------------
+# Runtime compatibility constants
+# -----------------------------------------------------------------------------
 
-_PUBLIC_ES_PAGES = {"landing", "login", "signup", "verify", "reset", "terms", "privacy", "security", "cookies", "dpa", "sso handoff", "billing success", "billing cancel"}
+_PUBLIC_ES_PAGES = {
+    "landing", "login", "signup", "verify", "reset", "terms", "privacy",
+    "security", "cookies", "dpa", "sso handoff", "billing success",
+    "billing cancel", "billing_success", "billing_cancel", "sso_handoff",
+}
 _PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"}
+_ROUTE_KEYS = {
+    "es_page", "es_editor", "job_id", "review_id", "task_id", "es_session",
+    "es_restore", "tool_tab", "return_to", "route", "public", "es_restore_miss",
+}
 _SESSION_COOKIE_NAME = "errorsweep_session"
 _SESSION_STORAGE_KEY = "errorsweep_session"
 _SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
@@ -49,13 +64,90 @@ def _safe_text(value: Any) -> str:
     if value is None:
         return ""
     try:
-        return str(value)
+        return str(value).replace("\u00A0", " ").strip()
     except Exception:
         return ""
 
 
+def _main_module() -> Any:
+    return sys.modules.get("__main__")
+
+
+def _query_value(params: Any, key: str) -> str:
+    try:
+        value = params.get(key, "")
+        if isinstance(value, list):
+            return _safe_text(value[0] if value else "")
+        return _safe_text(value)
+    except Exception:
+        return ""
+
+
+def _canonical_query_key(raw_key: Any) -> str:
+    key = _safe_text(raw_key)
+    key = unquote(key)
+    key = key.replace("%3B", ";").replace("%3b", ";")
+    while key.startswith((";", "&", "?")):
+        key = key[1:]
+    if key.startswith("amp;"):
+        key = key[4:]
+    if ";" in key:
+        tail = key.split(";")[-1]
+        if tail in _ROUTE_KEYS:
+            key = tail
+    return key
+
+
+def _normalize_query_params() -> None:
+    """Repair malformed route params before app.py calls query_get().
+
+    The Human Review URL has been observed as:
+        ?es_page=Human+Review+Editor&%3Breview_id=<id>
+    Streamlit exposes that as a key like ';review_id', while app.py reads
+    query_get('review_id'). This function copies malformed keys to canonical
+    names and removes the malformed key.
+    """
+    if st is None:
+        return
+    try:
+        params = st.query_params
+    except Exception:
+        return
+    try:
+        for raw_key in list(params.keys()):
+            clean_key = _canonical_query_key(raw_key)
+            if clean_key == raw_key or clean_key not in _ROUTE_KEYS:
+                continue
+            value = _query_value(params, raw_key)
+            if value and not _query_value(params, clean_key):
+                params[clean_key] = value
+            try:
+                del params[raw_key]
+            except Exception:
+                pass
+
+        # Defensive cleanup for cases where a delimiter was embedded into the
+        # page value instead of parsed as a separate query parameter.
+        es_page = _query_value(params, "es_page")
+        for key in ("review_id", "job_id", "es_editor", "task_id"):
+            match = re.search(rf"(?:^|[;&]){re.escape(key)}=([^&;]+)", es_page)
+            if match and not _query_value(params, key):
+                params[key] = match.group(1)
+                params["es_page"] = re.split(rf"[;&]{re.escape(key)}=", es_page, 1)[0].strip() or params.get("es_page", "")
+    except Exception:
+        pass
+
+
+# Run immediately after Streamlit import. app.py imports this module before its
+# route helpers are called, so this is early enough for query_get('review_id').
+_normalize_query_params()
+
+
+# -----------------------------------------------------------------------------
+# Signup scroll helper
+# -----------------------------------------------------------------------------
+
 def _install_signup_scroll_fix() -> None:
-    """Enable vertical scrolling only on the public signup page."""
     if st is None:
         return
     try:
@@ -88,13 +180,9 @@ def _install_signup_scroll_fix() -> None:
           padding-bottom: 56px !important;
         }
         body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
-        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar {
-          width: 11px;
-        }
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar { width: 11px; }
         body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-track,
-        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-track {
-          background: rgba(5, 7, 19, .82);
-        }
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-track { background: rgba(5, 7, 19, .82); }
         body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-thumb,
         body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-thumb {
           background: linear-gradient(180deg, #11f5b5, #4aa8ff);
@@ -106,8 +194,8 @@ def _install_signup_scroll_fix() -> None:
 
         def _current_route_is_signup() -> bool:
             try:
-                page = str(st.query_params.get("es_page", "") or "").strip().lower()
-                public = str(st.query_params.get("public", "") or st.query_params.get("route", "") or "").strip().lower()
+                page = _safe_text(st.query_params.get("es_page", "")).lower()
+                public = _safe_text(st.query_params.get("public", "") or st.query_params.get("route", "")).lower()
                 compact_page = re.sub(r"[^a-z0-9]+", "", page)
                 compact_public = re.sub(r"[^a-z0-9]+", "", public)
                 return compact_page in {"signup", "register", "registration"} or compact_public in {"signup", "register", "registration"}
@@ -128,8 +216,12 @@ def _install_signup_scroll_fix() -> None:
         pass
 
 
+# -----------------------------------------------------------------------------
+# Protected-link/session helpers
+# -----------------------------------------------------------------------------
+
 def _compact_page(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").replace("+", " ").replace("_", " ").replace("-", " ").strip().lower())
+    return re.sub(r"\s+", " ", _safe_text(value).replace("+", " ").replace("_", " ").replace("-", " ").lower()).strip()
 
 
 def _href_needs_session(href: str) -> bool:
@@ -137,11 +229,13 @@ def _href_needs_session(href: str) -> bool:
         return False
     try:
         split = urlsplit(href)
-        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        query = {_canonical_query_key(k): v for k, v in parse_qsl(split.query, keep_blank_values=True)}
         page = _compact_page(query.get("es_page", ""))
         if page and page in _PUBLIC_ES_PAGES:
             return False
-        return any(query.get(key) for key in _PROTECTED_LINK_KEYS) and bool(page or query.get("es_editor") or query.get("job_id") or query.get("review_id") or query.get("task_id"))
+        return any(query.get(key) for key in _PROTECTED_LINK_KEYS) and bool(
+            page or query.get("es_editor") or query.get("job_id") or query.get("review_id") or query.get("task_id")
+        )
     except Exception:
         return False
 
@@ -151,7 +245,7 @@ def _append_session_to_href(href: str, token: str) -> str:
         return href
     try:
         split = urlsplit(href)
-        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        query = {_canonical_query_key(k): v for k, v in parse_qsl(split.query, keep_blank_values=True)}
         query["es_session"] = token
         return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
     except Exception:
@@ -183,14 +277,80 @@ def _current_user() -> Dict[str, Any]:
         return {}
 
 
+def _current_signed_session_token() -> str:
+    if st is None:
+        return ""
+    try:
+        for key in ("_pending_session_cookie", "_post_login_session_token"):
+            value = _safe_text(st.session_state.get(key, ""))
+            if value:
+                return value
+        user = _current_user()
+        if not user:
+            return ""
+        signer = getattr(_main_module(), "signed_session_token_for_user", None)
+        if callable(signer):
+            token = _safe_text(signer(user))
+            if token:
+                st.session_state["_pending_session_cookie"] = token
+                st.session_state["_post_login_session_token"] = token
+                return token
+    except Exception:
+        return ""
+    return ""
+
+
+def _protected_page_session_script(token: str) -> str:
+    token_json = json.dumps(token)
+    cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
+    public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
+    return f"""
+    <script>
+    (() => {{
+      try {{
+        const parentWindow = window.parent || window;
+        const doc = parentWindow.document;
+        const token = {token_json};
+        const cookieName = {cookie_name_json};
+        const storageKey = {storage_key_json};
+        const publicPages = {public_pages_json};
+        const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
+        try {{
+          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+        }} catch (err) {{}}
+        try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
+        const url = new URL(parentWindow.location.href);
+        const repair = (bad, good) => {{
+          if (url.searchParams.has(bad) && !url.searchParams.has(good)) {{
+            url.searchParams.set(good, url.searchParams.get(bad) || "");
+            url.searchParams.delete(bad);
+          }}
+        }};
+        [";review_id", "amp;review_id", "%3Breview_id"].forEach((bad) => repair(bad, "review_id"));
+        [";job_id", "amp;job_id", "%3Bjob_id"].forEach((bad) => repair(bad, "job_id"));
+        [";es_editor", "amp;es_editor", "%3Bes_editor"].forEach((bad) => repair(bad, "es_editor"));
+        const page = String(url.searchParams.get("es_page") || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+        const protectedTarget = Boolean(url.searchParams.get("es_editor") || url.searchParams.get("job_id") || url.searchParams.get("review_id") || url.searchParams.get("task_id") || (page && !publicPages.includes(page)));
+        if (protectedTarget && url.searchParams.get("es_session") !== token) url.searchParams.set("es_session", token);
+        if (url.toString() !== parentWindow.location.href) parentWindow.history.replaceState(null, "", url.toString());
+      }} catch (err) {{}}
+    }})();
+    </script>
+    """
+
+
+# -----------------------------------------------------------------------------
+# Owner unlimited access helpers
+# -----------------------------------------------------------------------------
+
 def _is_main_owner_user(user: Optional[Dict[str, Any]] = None) -> bool:
     candidate = user if isinstance(user, dict) else _current_user()
-    email = _safe_text(candidate.get("email")).strip().lower()
-    return email == _MAIN_PLATFORM_OWNER_EMAIL
+    return _safe_text(candidate.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL
 
 
 def _unlimited_subscription(workspace: str = "Platform") -> Dict[str, Any]:
-    workspace_name = _safe_text(workspace).strip() or "Platform"
+    workspace_name = _safe_text(workspace) or "Platform"
     return {
         "workspace": workspace_name,
         "user_email": _MAIN_PLATFORM_OWNER_EMAIL,
@@ -233,27 +393,18 @@ def _ensure_owner_entitlements() -> None:
             "email": _MAIN_PLATFORM_OWNER_EMAIL,
             "role": "Platform Owner",
             "account_type": "owner",
+            "workspace": _safe_text(user.get("workspace") or "Platform"),
             "plan": "Unlimited",
             "status": "Active",
             "email_verified": True,
         })
-        if not _safe_text(user.get("workspace")):
-            user["workspace"] = "Platform"
         st.session_state["user"] = user
         st.session_state["authenticated"] = True
 
         users = st.session_state.setdefault("users", [])
-        owner_record = {
-            "email": _MAIN_PLATFORM_OWNER_EMAIL,
-            "workspace": _safe_text(user.get("workspace") or "Platform"),
-            "role": "Platform Owner",
-            "account_type": "owner",
-            "plan": "Unlimited",
-            "status": "Active",
-            "email_verified": True,
-        }
+        owner_record = {k: user.get(k) for k in ("email", "workspace", "role", "account_type", "plan", "status", "email_verified")}
         for idx, item in enumerate(list(users)):
-            if isinstance(item, dict) and _safe_text(item.get("email")).strip().lower() == _MAIN_PLATFORM_OWNER_EMAIL:
+            if isinstance(item, dict) and _safe_text(item.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL:
                 users[idx] = {**item, **owner_record}
                 break
         else:
@@ -264,14 +415,7 @@ def _ensure_owner_entitlements() -> None:
         for workspace_name in {"Platform", "Naveen Unlimited Workspace", _safe_text(user.get("workspace") or "Platform")}:
             if not workspace_name:
                 continue
-            workspace_record = {
-                "workspace": workspace_name,
-                "owner": _MAIN_PLATFORM_OWNER_EMAIL,
-                "plan": "Unlimited",
-                "status": "Active",
-                "users": 1,
-                "jobs": 0,
-            }
+            workspace_record = {"workspace": workspace_name, "owner": _MAIN_PLATFORM_OWNER_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
             for idx, item in enumerate(list(workspaces)):
                 if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
                     workspaces[idx] = {**item, **workspace_record}
@@ -292,7 +436,7 @@ def _ensure_owner_entitlements() -> None:
 
 def _owner_unlimited_context(workspace: str = "") -> bool:
     _ensure_owner_entitlements()
-    workspace_key = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "")).strip().lower()
+    workspace_key = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "")).lower()
     return _is_main_owner_user() or workspace_key in _UNLIMITED_WORKSPACES
 
 
@@ -301,17 +445,12 @@ def _patch_owner_unlimited_functions() -> None:
     if _OWNER_PATCHED:
         _ensure_owner_entitlements()
         return
-    module = sys.modules.get("__main__")
+    module = _main_module()
     if module is None:
         return
     required = [
-        "workspace_subscription",
-        "workspace_usage_allowance",
-        "workspace_seat_state",
-        "check_workspace_usage_allowance",
-        "check_workspace_seat_allowance",
-        "current_role",
-        "is_owner",
+        "workspace_subscription", "workspace_usage_allowance", "workspace_seat_state",
+        "check_workspace_usage_allowance", "check_workspace_seat_allowance", "current_role", "is_owner",
     ]
     if not all(callable(getattr(module, name, None)) for name in required):
         _ensure_owner_entitlements()
@@ -340,8 +479,7 @@ def _patch_owner_unlimited_functions() -> None:
     @functools.wraps(original_workspace_subscription)
     def workspace_subscription_with_main_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
-        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
-        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
         if _owner_unlimited_context(workspace_name):
             return _unlimited_subscription(workspace_name)
         return original_workspace_subscription(workspace)
@@ -349,45 +487,30 @@ def _patch_owner_unlimited_functions() -> None:
     @functools.wraps(original_workspace_usage_allowance)
     def workspace_usage_allowance_with_main_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
-        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
-        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
         if _owner_unlimited_context(workspace_name):
-            return {
-                "subscription": _unlimited_subscription(workspace_name),
-                "plan": _unlimited_plan(),
-                "segments": _UNLIMITED_SEGMENTS,
-                "characters": _UNLIMITED_CHARACTERS,
-                "seats": _UNLIMITED_SEATS,
-            }
+            return {"subscription": _unlimited_subscription(workspace_name), "plan": _unlimited_plan(), "segments": _UNLIMITED_SEGMENTS, "characters": _UNLIMITED_CHARACTERS, "seats": _UNLIMITED_SEATS}
         return original_workspace_usage_allowance(workspace)
 
     @functools.wraps(original_workspace_seat_state)
     def workspace_seat_state_with_main_owner(workspace: str = "") -> Dict[str, Any]:
         _ensure_owner_entitlements()
-        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
-        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
         if _owner_unlimited_context(workspace_name):
-            return {
-                "workspace": workspace_name,
-                "subscription": _unlimited_subscription(workspace_name),
-                "plan": _unlimited_plan(),
-                "used": 1,
-                "limit": _UNLIMITED_SEATS,
-                "available": _UNLIMITED_SEATS - 1,
-            }
+            return {"workspace": workspace_name, "subscription": _unlimited_subscription(workspace_name), "plan": _unlimited_plan(), "used": 1, "limit": _UNLIMITED_SEATS, "available": _UNLIMITED_SEATS - 1}
         return original_workspace_seat_state(workspace)
 
     @functools.wraps(original_check_workspace_usage_allowance)
     def check_workspace_usage_allowance_with_main_owner(rows: List[Dict[str, Any]], purpose: str, workspace: str = "") -> Tuple[bool, str, Dict[str, Any]]:
         _ensure_owner_entitlements()
-        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
-        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
         if _owner_unlimited_context(workspace_name):
             requested_segments = len(rows or [])
-            requested_characters = 0
-            for row in rows or []:
-                if isinstance(row, dict):
-                    requested_characters += len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", "")))
+            requested_characters = sum(
+                len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", "")))
+                for row in (rows or [])
+                if isinstance(row, dict)
+            )
             return True, "", {
                 "workspace": workspace_name,
                 "plan": "Unlimited",
@@ -407,8 +530,7 @@ def _patch_owner_unlimited_functions() -> None:
     @functools.wraps(original_check_workspace_seat_allowance)
     def check_workspace_seat_allowance_with_main_owner(workspace: str, email: str, status: str = "Active") -> Tuple[bool, str, Dict[str, Any]]:
         _ensure_owner_entitlements()
-        user_workspace = _safe_text((_current_user() or {}).get("workspace") or "Platform")
-        workspace_name = _safe_text(workspace or user_workspace or "Platform")
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
         if _owner_unlimited_context(workspace_name):
             return True, "", workspace_seat_state_with_main_owner(workspace_name)
         return original_check_workspace_seat_allowance(workspace, email, status)
@@ -424,64 +546,11 @@ def _patch_owner_unlimited_functions() -> None:
     _ensure_owner_entitlements()
 
 
-def _current_signed_session_token() -> str:
-    if st is None:
-        return ""
-    try:
-        for key in ("_pending_session_cookie", "_post_login_session_token"):
-            value = str(st.session_state.get(key, "") or "")
-            if value:
-                return value
-        user = st.session_state.get("user") or {}
-        if not user:
-            return ""
-        signer = getattr(sys.modules.get("__main__"), "signed_session_token_for_user", None)
-        if callable(signer):
-            token = str(signer(user) or "")
-            if token:
-                st.session_state["_pending_session_cookie"] = token
-                st.session_state["_post_login_session_token"] = token
-                return token
-    except Exception:
-        return ""
-    return ""
-
-
-def _protected_page_session_script(token: str) -> str:
-    token_json = json.dumps(token)
-    cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
-    storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
-    public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
-    return f"""
-    <script>
-    (() => {{
-      try {{
-        const parentWindow = window.parent || window;
-        const doc = parentWindow.document;
-        const token = {token_json};
-        const cookieName = {cookie_name_json};
-        const storageKey = {storage_key_json};
-        const publicPages = {public_pages_json};
-        const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
-        try {{
-          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
-        }} catch (err) {{}}
-        try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
-        const url = new URL(parentWindow.location.href);
-        const page = String(url.searchParams.get("es_page") || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-        const protectedTarget = Boolean(url.searchParams.get("es_editor") || url.searchParams.get("job_id") || url.searchParams.get("review_id") || url.searchParams.get("task_id") || (page && !publicPages.includes(page)));
-        if (protectedTarget && url.searchParams.get("es_session") !== token) {{
-          url.searchParams.set("es_session", token);
-          parentWindow.history.replaceState(null, "", url.toString());
-        }}
-      }} catch (err) {{}}
-    }})();
-    </script>
-    """
-
+# -----------------------------------------------------------------------------
+# Runtime installers
+# -----------------------------------------------------------------------------
 
 def _install_authenticated_reload_bridge() -> None:
-    """Keep session token on protected links/current URL so reloads do not blank."""
     if st is None:
         return
     try:
@@ -491,6 +560,7 @@ def _install_authenticated_reload_bridge() -> None:
 
         @functools.wraps(original_markdown)
         def markdown_with_authenticated_reload(body: Any, *args: Any, **kwargs: Any) -> Any:
+            _normalize_query_params()
             _patch_owner_unlimited_functions()
             token = _current_signed_session_token()
             text = str(body)
@@ -512,7 +582,6 @@ def _install_authenticated_reload_bridge() -> None:
 
 
 def _install_login_new_tab_bridge() -> None:
-    """Keep the login page open while launching the authenticated app tab."""
     if st is None:
         return
     try:
@@ -520,12 +589,12 @@ def _install_login_new_tab_bridge() -> None:
         if not callable(original_rerun) or getattr(original_rerun, "_errorsweep_login_new_tab_bridge", False):
             return
 
-        def _query_value(key: str) -> str:
+        def _query_value_for_launch(key: str) -> str:
             try:
                 value = st.query_params.get(key, "")
                 if isinstance(value, list):
-                    return str(value[0] if value else "")
-                return str(value or "")
+                    return _safe_text(value[0] if value else "")
+                return _safe_text(value)
             except Exception:
                 return ""
 
@@ -540,15 +609,15 @@ def _install_login_new_tab_bridge() -> None:
             params: Dict[str, str] = {}
             current_route = st.session_state.get("current_route")
             if isinstance(current_route, dict):
-                page = str(current_route.get("es_page") or current_route.get("page") or "").strip()
+                page = _safe_text(current_route.get("es_page") or current_route.get("page"))
                 if page:
                     params["es_page"] = page
                 for key in ("es_editor", "job_id", "review_id", "task_id"):
-                    value = str(current_route.get(key) or "").strip()
+                    value = _safe_text(current_route.get(key))
                     if value:
                         params[key] = value
             for key in ("es_page", "es_editor", "job_id", "review_id", "task_id"):
-                value = _query_value(key).strip()
+                value = _query_value_for_launch(key)
                 if value:
                     params[key] = value
             public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
@@ -572,6 +641,7 @@ def _install_login_new_tab_bridge() -> None:
         @functools.wraps(original_rerun)
         def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
             try:
+                _normalize_query_params()
                 if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
                     _patch_owner_unlimited_functions()
                     session_token = _current_signed_session_token()
@@ -581,8 +651,7 @@ def _install_login_new_tab_bridge() -> None:
                         st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
                         st.session_state["_login_window_stay_open"] = True
                         _leave_current_tab_on_login()
-                        main_module = sys.modules.get("__main__")
-                        render_bridge = getattr(main_module, "render_post_login_tool_launch_bridge", None)
+                        render_bridge = getattr(_main_module(), "render_post_login_tool_launch_bridge", None)
                         if callable(render_bridge):
                             render_bridge()
                             st.stop()
@@ -599,6 +668,10 @@ def _install_login_new_tab_bridge() -> None:
 _install_signup_scroll_fix()
 _install_authenticated_reload_bridge()
 _install_login_new_tab_bridge()
+
+# -----------------------------------------------------------------------------
+# Managed AI routing
+# -----------------------------------------------------------------------------
 
 from openai import OpenAI
 
@@ -735,14 +808,6 @@ def _user_provider_label() -> str:
 
 
 def select_ai_route(user_openai_key: str = "", purpose: str = "translate") -> AIRoute:
-    """Choose the first route to try.
-
-    Safe default:
-    - BYO user key always wins. It can point to OpenAI or any OpenAI-compatible chat-completions API.
-    - Managed AI/vLLM is used only when ERRORSWEEP_MANAGED_AI_ENABLED=true
-      and the URL is not a placeholder.
-    - Otherwise use platform OPENAI_API_KEY.
-    """
     user_key = (user_openai_key or _session_value("byo_openai_api_key", "")).strip()
     if user_key:
         base_url = _validate_base_url(_session_value("byo_ai_base_url", ""))
@@ -861,12 +926,6 @@ def ai_json_items(
     temperature: float = 0.0,
     max_tokens: int = 3000,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """One function for OpenAI BYO, Managed vLLM, and platform OpenAI fallback.
-
-    If Managed AI is selected but connection fails, this function automatically
-    tries OPENAI_API_KEY as a fallback. This keeps translations working while the
-    Managed AI server is not yet live.
-    """
     try:
         route = route or select_ai_route(user_openai_key=user_openai_key)
     except Exception as exc:
@@ -883,7 +942,6 @@ def ai_json_items(
 
     items, usage = _chat_json_items_once(route, system_prompt, user_prompt, temperature, max_tokens)
 
-    # Safe fallback: Managed AI/vLLM failed, but platform OpenAI key is available.
     if not items and not usage.get("success") and route.provider == "managed_vllm":
         fallback = platform_openai_route()
         if fallback:
