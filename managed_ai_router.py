@@ -12,30 +12,187 @@ Managed AI endpoint is configured.
 
 from __future__ import annotations
 
-import json
+import functools
+import inspect
 import ipaddress
+import json
 import os
 import re
 import socket
+import sys
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 try:
     import streamlit as st
 except Exception:
     st = None
 
-# Streamlit Cloud does not always auto-import repository-level sitecustomize.py
-# early enough. app.py imports this router during startup, so load the invisible
-# session compatibility patch here without changing the visible UI.
-try:
-    import sitecustomize as _errorsweep_sitecustomize
-    _patch_all = getattr(_errorsweep_sitecustomize, "_patch_all", None)
-    if callable(_patch_all):
-        _patch_all()
-except Exception:
-    pass
+
+def _install_signup_scroll_fix() -> None:
+    """Enable vertical scrolling only on the public signup page."""
+    if st is None:
+        return
+    try:
+        original_html = getattr(st, "html", None)
+        if not callable(original_html) or getattr(original_html, "_errorsweep_signup_scroll_fix", False):
+            return
+
+        signup_scroll_css = """
+        <div id="errorsweep-signup-scroll-marker" aria-hidden="true"></div>
+        <style data-errorsweep-signup-scroll="true">
+        #errorsweep-signup-scroll-marker { display: none !important; }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"],
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stAppViewContainer"] .main .block-container,
+        body:has(#errorsweep-signup-scroll-marker) .block-container {
+          height: 100dvh !important;
+          max-height: 100dvh !important;
+          min-height: 0 !important;
+          overflow-x: hidden !important;
+          overflow-y: auto !important;
+          overscroll-behavior: contain !important;
+          scrollbar-gutter: stable both-edges !important;
+          scroll-behavior: smooth !important;
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"] > div[data-testid="stVerticalBlock"],
+        body:has(#errorsweep-signup-scroll-marker) .block-container > div[data-testid="stVerticalBlock"] {
+          height: auto !important;
+          max-height: none !important;
+          min-height: 100dvh !important;
+          overflow: visible !important;
+          padding-bottom: 56px !important;
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar {
+          width: 11px;
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-track,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-track {
+          background: rgba(5, 7, 19, .82);
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-thumb,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #11f5b5, #4aa8ff);
+          border: 2px solid rgba(5, 7, 19, .82);
+          border-radius: 999px;
+        }
+        </style>
+        """
+
+        def _current_route_is_signup() -> bool:
+            try:
+                page = str(st.query_params.get("es_page", "") or "").strip().lower()
+                public = str(st.query_params.get("public", "") or st.query_params.get("route", "") or "").strip().lower()
+                compact_page = re.sub(r"[^a-z0-9]+", "", page)
+                compact_public = re.sub(r"[^a-z0-9]+", "", public)
+                return compact_page in {"signup", "register", "registration"} or compact_public in {"signup", "register", "registration"}
+            except Exception:
+                return False
+
+        @functools.wraps(original_html)
+        def html_with_signup_scroll(body: Any, *args: Any, **kwargs: Any) -> Any:
+            if _current_route_is_signup():
+                text = str(body)
+                if "errorsweep-signup-scroll-marker" not in text:
+                    body = signup_scroll_css + text
+            return original_html(body, *args, **kwargs)
+
+        setattr(html_with_signup_scroll, "_errorsweep_signup_scroll_fix", True)
+        st.html = html_with_signup_scroll
+    except Exception:
+        pass
+
+
+def _install_login_new_tab_bridge() -> None:
+    """Keep the login page open while launching the authenticated app tab."""
+    if st is None:
+        return
+    try:
+        original_rerun = getattr(st, "rerun", None)
+        if not callable(original_rerun) or getattr(original_rerun, "_errorsweep_login_new_tab_bridge", False):
+            return
+
+        def _query_value(key: str) -> str:
+            try:
+                value = st.query_params.get(key, "")
+                if isinstance(value, list):
+                    return str(value[0] if value else "")
+                return str(value or "")
+            except Exception:
+                return ""
+
+        def _called_from_login_flow() -> bool:
+            try:
+                names = {frame.function for frame in inspect.stack(context=0)[:18]}
+                return bool(names & {"render_login", "render_sso_handoff"})
+            except Exception:
+                return False
+
+        def _build_launch_url(session_token: str) -> str:
+            params: Dict[str, str] = {}
+            current_route = st.session_state.get("current_route")
+            if isinstance(current_route, dict):
+                page = str(current_route.get("es_page") or current_route.get("page") or "").strip()
+                if page:
+                    params["es_page"] = page
+                for key in ("es_editor", "job_id", "review_id", "task_id"):
+                    value = str(current_route.get(key) or "").strip()
+                    if value:
+                        params[key] = value
+
+            for key in ("es_page", "es_editor", "job_id", "review_id", "task_id"):
+                value = _query_value(key).strip()
+                if value:
+                    params[key] = value
+
+            public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
+            if not params.get("es_page") or public_page in {"login", "landing", "signup", "register", "registration"}:
+                params["es_page"] = "Dashboard"
+            params["es_session"] = session_token
+            params["tool_tab"] = "1"
+            return "?" + urlencode(params)
+
+        def _leave_current_tab_on_login() -> None:
+            try:
+                for key in list(st.query_params.keys()):
+                    try:
+                        del st.query_params[key]
+                    except Exception:
+                        pass
+                st.query_params["es_page"] = "Login"
+            except Exception:
+                pass
+
+        @functools.wraps(original_rerun)
+        def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
+            try:
+                if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
+                    session_token = str(st.session_state.get("_pending_session_cookie") or st.session_state.get("_post_login_session_token") or "")
+                    if session_token:
+                        st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)
+                        st.session_state["_post_login_session_token"] = session_token
+                        st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
+                        st.session_state["_login_window_stay_open"] = True
+                        _leave_current_tab_on_login()
+                        main_module = sys.modules.get("__main__")
+                        render_bridge = getattr(main_module, "render_post_login_tool_launch_bridge", None)
+                        if callable(render_bridge):
+                            render_bridge()
+                            st.stop()
+            except Exception:
+                pass
+            return original_rerun(*args, **kwargs)
+
+        setattr(rerun_with_login_new_tab, "_errorsweep_login_new_tab_bridge", True)
+        st.rerun = rerun_with_login_new_tab
+    except Exception:
+        pass
+
+
+_install_signup_scroll_fix()
+_install_login_new_tab_bridge()
 
 from openai import OpenAI
 
