@@ -6,235 +6,674 @@ What this file does:
 2. If Managed AI/vLLM is explicitly enabled and reachable, use it.
 3. If Managed AI fails or is not configured, fall back to the platform OpenAI key when available.
 
-This prevents the app from showing 59/59 untranslated rows when a placeholder or dead
-Managed AI endpoint is configured.
+This module also installs small runtime compatibility helpers for Streamlit Cloud:
+- normalize malformed editor query keys like ;review_id -> review_id before app.py reads them
+- keep protected pages reload-safe without rewriting visible HTML markup
+- keep the signup page scrollable
+- keep the login page open while launching the authenticated tool tab
+- ensure the main platform owner keeps Unlimited access
 """
 
 from __future__ import annotations
 
 import functools
+import inspect
 import ipaddress
 import json
 import os
 import re
 import socket
 import sys
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
 except Exception:
     st = None
 
-from openai import OpenAI
+# -----------------------------------------------------------------------------
+# Runtime compatibility constants
+# -----------------------------------------------------------------------------
+
+_PUBLIC_ES_PAGES = {
+    "landing", "login", "signup", "verify", "reset", "terms", "privacy",
+    "security", "cookies", "dpa", "sso handoff", "billing success",
+    "billing cancel", "billing_success", "billing_cancel", "sso_handoff",
+}
+_PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"}
+_ROUTE_KEYS = {
+    "es_page", "es_editor", "job_id", "review_id", "task_id", "es_session",
+    "es_restore", "tool_tab", "return_to", "route", "public", "es_restore_miss",
+}
+_SESSION_COOKIE_NAME = "errorsweep_session"
+_SESSION_STORAGE_KEY = "errorsweep_session"
+_SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
+
+_MAIN_PLATFORM_OWNER_EMAIL = "adapalanaveen401@gmail.com"
+_UNLIMITED_WORKSPACES = {"platform", "naveen unlimited workspace"}
+_UNLIMITED_SEATS = 1_000_000
+_UNLIMITED_SEGMENTS = 1_000_000_000
+_UNLIMITED_CHARACTERS = 1_000_000_000_000
+_OWNER_PATCHED = False
 
 
-def _install_navigation_click_bridge() -> None:
-    """Keep the upgraded HTML nav and route its clicks through Streamlit state.
+def _safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value).replace("\u00A0", " ").strip()
+    except Exception:
+        return ""
 
-    The product shell uses custom HTML anchors for the top navigation. On
-    Streamlit Cloud those anchors can perform a full browser reload, which can
-    lose the current Streamlit session before protected pages render. This patch
-    leaves the visible navigation untouched and adds off-screen Streamlit buttons
-    that perform the existing ``navigate(page)`` action. A tiny click listener
-    redirects top-nav clicks to those buttons, so navigation happens in-session.
-    """
+
+def _main_module() -> Any:
+    return sys.modules.get("__main__")
+
+
+def _query_value(params: Any, key: str) -> str:
+    try:
+        value = params.get(key, "")
+        if isinstance(value, list):
+            return _safe_text(value[0] if value else "")
+        return _safe_text(value)
+    except Exception:
+        return ""
+
+
+def _canonical_query_key(raw_key: Any) -> str:
+    key = _safe_text(raw_key)
+    key = unquote(key)
+    key = key.replace("%3B", ";").replace("%3b", ";")
+    while key.startswith((";", "&", "?")):
+        key = key[1:]
+    if key.startswith("amp;"):
+        key = key[4:]
+    if ";" in key:
+        tail = key.split(";")[-1]
+        if tail in _ROUTE_KEYS:
+            key = tail
+    return key
+
+
+def _normalize_query_params() -> None:
+    """Repair malformed route params before app.py calls query_get()."""
     if st is None:
         return
     try:
-        original_markdown = getattr(st, "markdown", None)
-        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_nav_click_bridge", False):
-            return
-        import streamlit.components.v1 as components
-
-        def safe_key(value: str) -> str:
-            slug = re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
-            return slug or "page"
-
-        def main_module() -> Any:
-            return sys.modules.get("__main__")
-
-        def normalize_page(page: str) -> str:
-            module = main_module()
-            normalizer = getattr(module, "normalize_es_page", None)
-            if callable(normalizer):
-                try:
-                    return str(normalizer(page))
-                except Exception:
-                    pass
-            return str(page or "Dashboard").strip() or "Dashboard"
-
-        def current_allowed_pages() -> List[str]:
-            module = main_module()
-            allowed = getattr(module, "allowed_pages", None)
-            if callable(allowed):
-                try:
-                    pages = allowed()
-                    if pages:
-                        return [str(page) for page in pages]
-                except Exception:
-                    pass
-            return [
-                "Dashboard",
-                "Projects",
-                "Jobs",
-                "ErrorSweep QA",
-                "ErrorSweep Pro",
-                "Subtitle / Transcription Editor",
-                "Scorecards",
-                "Memory & Rules",
-                "Team & Roles",
-                "Billing",
-                "Account",
-                "Admin",
-            ]
-
-        def navigation_targets() -> List[str]:
-            module = main_module()
-            allowed = current_allowed_pages()
-            allowed_set = set(allowed)
-            workspace_order = list(getattr(module, "WORKSPACE_PAGES", []) or [
-                "Dashboard",
-                "Projects",
-                "Jobs",
-                "ErrorSweep QA",
-                "ErrorSweep Pro",
-                "Subtitle / Transcription Editor",
-                "Scorecards",
-                "Memory & Rules",
-                "Team & Roles",
-                "Billing",
-                "Account",
-                "Admin",
-            ])
-            owner_order = list(getattr(module, "OWNER_PAGES", []) or [])
-            is_owner = getattr(module, "is_owner", None)
-            owner_enabled = False
-            if callable(is_owner):
-                try:
-                    owner_enabled = bool(is_owner())
-                except Exception:
-                    owner_enabled = False
-            targets: List[str] = []
-            for page in workspace_order:
-                normalized = normalize_page(page)
-                if normalized in allowed_set and normalized not in targets:
-                    targets.append(normalized)
-            if owner_enabled:
-                for page in owner_order:
-                    normalized = normalize_page(page)
-                    if normalized in allowed_set and normalized not in targets:
-                        targets.append(normalized)
-            settings_page = "Platform Settings" if owner_enabled else ("Admin" if "Admin" in allowed_set else "Account")
-            for page in ("Jobs", "Account", settings_page):
-                normalized = normalize_page(page)
-                if normalized in allowed_set and normalized not in targets:
-                    targets.append(normalized)
-            return targets
-
-        def render_click_bridge() -> None:
-            module = main_module()
-            navigate = getattr(module, "navigate", None)
-            if not callable(navigate):
-                return
-            targets = navigation_targets()
-            if not targets:
-                return
-            key_map = {page: f"errorsweep_nav_click_{safe_key(page)}" for page in targets}
-            css = """
-            <div id="errorsweep-nav-click-bridge-marker" aria-hidden="true"></div>
-            <style>
-            #errorsweep-nav-click-bridge-marker { display: none !important; }
-            body:has(#errorsweep-nav-click-bridge-marker) .st-key-errorsweep_nav_click_bridge {
-              position: fixed !important;
-              left: -10000px !important;
-              top: auto !important;
-              width: 1px !important;
-              height: 1px !important;
-              min-height: 1px !important;
-              overflow: hidden !important;
-              opacity: 0 !important;
-              z-index: -1 !important;
-            }
-            body:has(#errorsweep-nav-click-bridge-marker) .st-key-errorsweep_nav_click_bridge * {
-              pointer-events: none !important;
-            }
-            </style>
-            """
-            original_markdown(css, unsafe_allow_html=True)
-            with st.container(key="errorsweep_nav_click_bridge"):
-                for page, key in key_map.items():
-                    if st.button(f"Open {page}", key=key):
-                        navigate(page)
-            key_map_json = json.dumps(key_map)
-            components.html(
-                f"""
-                <script>
-                (() => {{
-                  try {{
-                    const parentWindow = window.parent || window;
-                    const parentDoc = parentWindow.document;
-                    if (!parentDoc || parentDoc.__errorsweepNavClickBridge) return;
-                    parentDoc.__errorsweepNavClickBridge = true;
-                    const keyMap = {key_map_json};
-                    const findActionButton = (page) => {{
-                      const key = keyMap[String(page || "")];
-                      if (!key) return null;
-                      return parentDoc.querySelector(".st-key-" + key + " button");
-                    }};
-                    const pageFromHref = (href) => {{
-                      try {{
-                        const loc = parentWindow.location || window.location;
-                        const url = new URL(href, loc.href);
-                        return url.searchParams.get("es_page") || "";
-                      }} catch (err) {{
-                        return "";
-                      }}
-                    }};
-                    parentDoc.addEventListener("click", (event) => {{
-                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                      const target = event.target;
-                      if (!target || !target.closest) return;
-                      const anchor = target.closest("a[href]");
-                      if (!anchor) return;
-                      if (!anchor.closest(".es-topnav") && !anchor.closest(".es-owner-strip") && !anchor.closest(".es-account-menu")) return;
-                      const href = String(anchor.getAttribute("href") || "");
-                      if (!href || href === "#" || href.includes("es_logout=1")) return;
-                      const page = pageFromHref(href);
-                      const button = findActionButton(page);
-                      if (!button) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      button.click();
-                    }}, true);
-                  }} catch (err) {{}}
-                }})();
-                </script>
-                """,
-                height=0,
-                scrolling=False,
-            )
-
-        @functools.wraps(original_markdown)
-        def markdown_with_nav_click_bridge(body: Any, *args: Any, **kwargs: Any) -> Any:
-            result = original_markdown(body, *args, **kwargs)
+        params = st.query_params
+    except Exception:
+        return
+    try:
+        for raw_key in list(params.keys()):
+            clean_key = _canonical_query_key(raw_key)
+            if clean_key == raw_key or clean_key not in _ROUTE_KEYS:
+                continue
+            value = _query_value(params, raw_key)
+            if value and not _query_value(params, clean_key):
+                params[clean_key] = value
             try:
-                html = str(body)
-                if '<nav class="es-topnav"' in html or "<nav class='es-topnav'" in html:
-                    render_click_bridge()
+                del params[raw_key]
             except Exception:
                 pass
-            return result
 
-        setattr(markdown_with_nav_click_bridge, "_errorsweep_nav_click_bridge", True)
-        st.markdown = markdown_with_nav_click_bridge
+        es_page = _query_value(params, "es_page")
+        for key in ("review_id", "job_id", "es_editor", "task_id"):
+            match = re.search(rf"(?:^|[;&]){re.escape(key)}=([^&;]+)", es_page)
+            if match and not _query_value(params, key):
+                params[key] = match.group(1)
+                params["es_page"] = re.split(rf"[;&]{re.escape(key)}=", es_page, 1)[0].strip() or params.get("es_page", "")
     except Exception:
         pass
 
 
-_install_navigation_click_bridge()
+# Run immediately after Streamlit import. app.py imports this module before its
+# route helpers are called, so this is early enough for query_get('review_id').
+_normalize_query_params()
+
+
+# -----------------------------------------------------------------------------
+# Signup scroll helper
+# -----------------------------------------------------------------------------
+
+def _install_signup_scroll_fix() -> None:
+    if st is None:
+        return
+    try:
+        original_html = getattr(st, "html", None)
+        if not callable(original_html) or getattr(original_html, "_errorsweep_signup_scroll_fix", False):
+            return
+
+        signup_scroll_css = """
+        <div id="errorsweep-signup-scroll-marker" aria-hidden="true"></div>
+        <style data-errorsweep-signup-scroll="true">
+        #errorsweep-signup-scroll-marker { display: none !important; }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"],
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stAppViewContainer"] .main .block-container,
+        body:has(#errorsweep-signup-scroll-marker) .block-container {
+          height: 100dvh !important;
+          max-height: 100dvh !important;
+          min-height: 0 !important;
+          overflow-x: hidden !important;
+          overflow-y: auto !important;
+          overscroll-behavior: contain !important;
+          scrollbar-gutter: stable both-edges !important;
+          scroll-behavior: smooth !important;
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"] > div[data-testid="stVerticalBlock"],
+        body:has(#errorsweep-signup-scroll-marker) .block-container > div[data-testid="stVerticalBlock"] {
+          height: auto !important;
+          max-height: none !important;
+          min-height: 100dvh !important;
+          overflow: visible !important;
+          padding-bottom: 56px !important;
+        }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar { width: 11px; }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-track,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-track { background: rgba(5, 7, 19, .82); }
+        body:has(#errorsweep-signup-scroll-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar-thumb,
+        body:has(#errorsweep-signup-scroll-marker) .block-container::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #11f5b5, #4aa8ff);
+          border: 2px solid rgba(5, 7, 19, .82);
+          border-radius: 999px;
+        }
+        </style>
+        """
+
+        def _current_route_is_signup() -> bool:
+            try:
+                page = _safe_text(st.query_params.get("es_page", "")).lower()
+                public = _safe_text(st.query_params.get("public", "") or st.query_params.get("route", "")).lower()
+                compact_page = re.sub(r"[^a-z0-9]+", "", page)
+                compact_public = re.sub(r"[^a-z0-9]+", "", public)
+                return compact_page in {"signup", "register", "registration"} or compact_public in {"signup", "register", "registration"}
+            except Exception:
+                return False
+
+        @functools.wraps(original_html)
+        def html_with_signup_scroll(body: Any, *args: Any, **kwargs: Any) -> Any:
+            if _current_route_is_signup():
+                text = str(body)
+                if "errorsweep-signup-scroll-marker" not in text:
+                    body = signup_scroll_css + text
+            return original_html(body, *args, **kwargs)
+
+        setattr(html_with_signup_scroll, "_errorsweep_signup_scroll_fix", True)
+        st.html = html_with_signup_scroll
+    except Exception:
+        pass
+
+
+# -----------------------------------------------------------------------------
+# Protected-link/session helpers
+# -----------------------------------------------------------------------------
+
+def _compact_page(value: str) -> str:
+    return re.sub(r"\s+", " ", _safe_text(value).replace("+", " ").replace("_", " ").replace("-", " ").lower()).strip()
+
+
+def _href_needs_session(href: str) -> bool:
+    if not href or href.startswith("#") or href.lower().startswith(("mailto:", "tel:", "javascript:")):
+        return False
+    try:
+        split = urlsplit(href)
+        query = {_canonical_query_key(k): v for k, v in parse_qsl(split.query, keep_blank_values=True)}
+        page = _compact_page(query.get("es_page", ""))
+        if page and page in _PUBLIC_ES_PAGES:
+            return False
+        return any(query.get(key) for key in _PROTECTED_LINK_KEYS) and bool(
+            page or query.get("es_editor") or query.get("job_id") or query.get("review_id") or query.get("task_id")
+        )
+    except Exception:
+        return False
+
+
+def _current_user() -> Dict[str, Any]:
+    if st is None:
+        return {}
+    try:
+        user = st.session_state.get("user") or {}
+        return user if isinstance(user, dict) else {}
+    except Exception:
+        return {}
+
+
+def _current_signed_session_token() -> str:
+    if st is None:
+        return ""
+    try:
+        for key in ("_pending_session_cookie", "_post_login_session_token"):
+            value = _safe_text(st.session_state.get(key, ""))
+            if value:
+                return value
+        user = _current_user()
+        if not user:
+            return ""
+        signer = getattr(_main_module(), "signed_session_token_for_user", None)
+        if callable(signer):
+            token = _safe_text(signer(user))
+            if token:
+                st.session_state["_pending_session_cookie"] = token
+                st.session_state["_post_login_session_token"] = token
+                return token
+    except Exception:
+        return ""
+    return ""
+
+
+def _protected_page_session_script(token: str) -> str:
+    token_json = json.dumps(token)
+    cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
+    public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
+    protected_keys_json = json.dumps(sorted(_PROTECTED_LINK_KEYS))
+    return f"""
+    <script>
+    (() => {{
+      try {{
+        const parentWindow = window.parent || window;
+        const doc = parentWindow.document;
+        const token = {token_json};
+        const cookieName = {cookie_name_json};
+        const storageKey = {storage_key_json};
+        const publicPages = {public_pages_json};
+        const protectedKeys = {protected_keys_json};
+        const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
+        try {{
+          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+        }} catch (err) {{}}
+        try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
+
+        const normalizePage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+        const repairParams = (url) => {{
+          const repairs = [
+            [";review_id", "review_id"], ["amp;review_id", "review_id"], ["%3Breview_id", "review_id"],
+            [";job_id", "job_id"], ["amp;job_id", "job_id"], ["%3Bjob_id", "job_id"],
+            [";es_editor", "es_editor"], ["amp;es_editor", "es_editor"], ["%3Bes_editor", "es_editor"],
+            [";task_id", "task_id"], ["amp;task_id", "task_id"], ["%3Btask_id", "task_id"]
+          ];
+          repairs.forEach(([bad, good]) => {{
+            if (url.searchParams.has(bad) && !url.searchParams.has(good)) {{
+              url.searchParams.set(good, url.searchParams.get(bad) || "");
+              url.searchParams.delete(bad);
+            }}
+          }});
+          return url;
+        }};
+        const isProtected = (url) => {{
+          const page = normalizePage(url.searchParams.get("es_page"));
+          if (page && publicPages.includes(page)) return false;
+          return protectedKeys.some((key) => Boolean(url.searchParams.get(key))) || Boolean(page && !publicPages.includes(page));
+        }};
+        const patchUrl = () => {{
+          try {{
+            const current = repairParams(new URL(parentWindow.location.href));
+            if (isProtected(current) && current.searchParams.get("es_session") !== token) current.searchParams.set("es_session", token);
+            if (current.toString() !== parentWindow.location.href) parentWindow.history.replaceState(null, "", current.toString());
+          }} catch (err) {{}}
+        }};
+        const patchLinks = () => {{
+          try {{
+            doc.querySelectorAll('a[href]').forEach((anchor) => {{
+              const raw = String(anchor.getAttribute('href') || '');
+              if (!raw || raw === '#' || raw.includes('es_logout=1') || /^(mailto:|tel:|javascript:)/i.test(raw)) return;
+              const url = repairParams(new URL(raw, parentWindow.location.href));
+              if (url.origin !== parentWindow.location.origin) return;
+              if (!isProtected(url)) return;
+              url.searchParams.set('es_session', token);
+              anchor.setAttribute('href', url.pathname + url.search + url.hash);
+            }});
+          }} catch (err) {{}}
+        }};
+        patchUrl();
+        patchLinks();
+        try {{ new MutationObserver(patchLinks).observe(doc.body, {{ childList: true, subtree: true }}); }} catch (err) {{}}
+      }} catch (err) {{}}
+    }})();
+    </script>
+    """
+
+
+# -----------------------------------------------------------------------------
+# Owner unlimited access helpers
+# -----------------------------------------------------------------------------
+
+def _is_main_owner_user(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if isinstance(user, dict) else _current_user()
+    return _safe_text(candidate.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL
+
+
+def _unlimited_subscription(workspace: str = "Platform") -> Dict[str, Any]:
+    workspace_name = _safe_text(workspace) or "Platform"
+    return {
+        "workspace": workspace_name,
+        "user_email": _MAIN_PLATFORM_OWNER_EMAIL,
+        "plan": "Unlimited",
+        "status": "Active",
+        "billing_cycle": "internal",
+        "currency": "INR",
+        "base_amount": 0,
+        "included_segments": _UNLIMITED_SEGMENTS,
+        "included_characters": _UNLIMITED_CHARACTERS,
+        "included_seats": _UNLIMITED_SEATS,
+        "provider": "internal",
+        "provider_customer_id": "",
+        "provider_subscription_id": "",
+    }
+
+
+def _unlimited_plan() -> Dict[str, Any]:
+    return {
+        "name": "Unlimited",
+        "monthly": 0,
+        "annual": 0,
+        "currency": "INR",
+        "seats": _UNLIMITED_SEATS,
+        "segments": _UNLIMITED_SEGMENTS,
+        "characters": _UNLIMITED_CHARACTERS,
+        "label": "Unlimited internal access",
+        "description": "Unlimited platform-owner access.",
+    }
+
+
+def _ensure_owner_entitlements() -> None:
+    if st is None:
+        return
+    try:
+        user = st.session_state.get("user")
+        if not isinstance(user, dict) or not _is_main_owner_user(user):
+            return
+        user.update({
+            "email": _MAIN_PLATFORM_OWNER_EMAIL,
+            "role": "Platform Owner",
+            "account_type": "owner",
+            "workspace": _safe_text(user.get("workspace") or "Platform"),
+            "plan": "Unlimited",
+            "status": "Active",
+            "email_verified": True,
+        })
+        st.session_state["user"] = user
+        st.session_state["authenticated"] = True
+
+        users = st.session_state.setdefault("users", [])
+        owner_record = {k: user.get(k) for k in ("email", "workspace", "role", "account_type", "plan", "status", "email_verified")}
+        for idx, item in enumerate(list(users)):
+            if isinstance(item, dict) and _safe_text(item.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL:
+                users[idx] = {**item, **owner_record}
+                break
+        else:
+            users.insert(0, owner_record)
+
+        workspaces = st.session_state.setdefault("workspaces", [])
+        subscriptions = st.session_state.setdefault("subscriptions", [])
+        for workspace_name in {"Platform", "Naveen Unlimited Workspace", _safe_text(user.get("workspace") or "Platform")}:
+            if not workspace_name:
+                continue
+            workspace_record = {"workspace": workspace_name, "owner": _MAIN_PLATFORM_OWNER_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
+            for idx, item in enumerate(list(workspaces)):
+                if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
+                    workspaces[idx] = {**item, **workspace_record}
+                    break
+            else:
+                workspaces.insert(0, workspace_record)
+
+            subscription_record = _unlimited_subscription(workspace_name)
+            for idx, item in enumerate(list(subscriptions)):
+                if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
+                    subscriptions[idx] = {**item, **subscription_record}
+                    break
+            else:
+                subscriptions.insert(0, subscription_record)
+    except Exception:
+        pass
+
+
+def _owner_unlimited_context(workspace: str = "") -> bool:
+    _ensure_owner_entitlements()
+    workspace_key = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "")).lower()
+    return _is_main_owner_user() or workspace_key in _UNLIMITED_WORKSPACES
+
+
+def _patch_owner_unlimited_functions() -> None:
+    global _OWNER_PATCHED
+    if _OWNER_PATCHED:
+        _ensure_owner_entitlements()
+        return
+    module = _main_module()
+    if module is None:
+        return
+    required = [
+        "workspace_subscription", "workspace_usage_allowance", "workspace_seat_state",
+        "check_workspace_usage_allowance", "check_workspace_seat_allowance", "current_role", "is_owner",
+    ]
+    if not all(callable(getattr(module, name, None)) for name in required):
+        _ensure_owner_entitlements()
+        return
+
+    original_workspace_subscription = getattr(module, "workspace_subscription")
+    original_workspace_usage_allowance = getattr(module, "workspace_usage_allowance")
+    original_workspace_seat_state = getattr(module, "workspace_seat_state")
+    original_check_workspace_usage_allowance = getattr(module, "check_workspace_usage_allowance")
+    original_check_workspace_seat_allowance = getattr(module, "check_workspace_seat_allowance")
+    original_current_role = getattr(module, "current_role")
+    original_is_owner = getattr(module, "is_owner")
+
+    @functools.wraps(original_current_role)
+    def current_role_with_main_owner() -> str:
+        _ensure_owner_entitlements()
+        if _is_main_owner_user():
+            return "Platform Owner"
+        return original_current_role()
+
+    @functools.wraps(original_is_owner)
+    def is_owner_with_main_owner() -> bool:
+        _ensure_owner_entitlements()
+        return _is_main_owner_user() or bool(original_is_owner())
+
+    @functools.wraps(original_workspace_subscription)
+    def workspace_subscription_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return _unlimited_subscription(workspace_name)
+        return original_workspace_subscription(workspace)
+
+    @functools.wraps(original_workspace_usage_allowance)
+    def workspace_usage_allowance_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return {"subscription": _unlimited_subscription(workspace_name), "plan": _unlimited_plan(), "segments": _UNLIMITED_SEGMENTS, "characters": _UNLIMITED_CHARACTERS, "seats": _UNLIMITED_SEATS}
+        return original_workspace_usage_allowance(workspace)
+
+    @functools.wraps(original_workspace_seat_state)
+    def workspace_seat_state_with_main_owner(workspace: str = "") -> Dict[str, Any]:
+        _ensure_owner_entitlements()
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return {"workspace": workspace_name, "subscription": _unlimited_subscription(workspace_name), "plan": _unlimited_plan(), "used": 1, "limit": _UNLIMITED_SEATS, "available": _UNLIMITED_SEATS - 1}
+        return original_workspace_seat_state(workspace)
+
+    @functools.wraps(original_check_workspace_usage_allowance)
+    def check_workspace_usage_allowance_with_main_owner(rows: List[Dict[str, Any]], purpose: str, workspace: str = "") -> Tuple[bool, str, Dict[str, Any]]:
+        _ensure_owner_entitlements()
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            requested_segments = len(rows or [])
+            requested_characters = sum(
+                len(_safe_text(row.get("source", ""))) + len(_safe_text(row.get("target", "")))
+                for row in (rows or [])
+                if isinstance(row, dict)
+            )
+            return True, "", {
+                "workspace": workspace_name,
+                "plan": "Unlimited",
+                "status": "active",
+                "used_segments": 0,
+                "used_characters": 0,
+                "requested_segments": requested_segments,
+                "requested_characters": requested_characters,
+                "projected_segments": requested_segments,
+                "projected_characters": requested_characters,
+                "segment_limit": _UNLIMITED_SEGMENTS,
+                "character_limit": _UNLIMITED_CHARACTERS,
+                "unlimited": True,
+            }
+        return original_check_workspace_usage_allowance(rows, purpose, workspace)
+
+    @functools.wraps(original_check_workspace_seat_allowance)
+    def check_workspace_seat_allowance_with_main_owner(workspace: str, email: str, status: str = "Active") -> Tuple[bool, str, Dict[str, Any]]:
+        _ensure_owner_entitlements()
+        workspace_name = _safe_text(workspace or (_current_user().get("workspace") if _current_user() else "") or "Platform")
+        if _owner_unlimited_context(workspace_name):
+            return True, "", workspace_seat_state_with_main_owner(workspace_name)
+        return original_check_workspace_seat_allowance(workspace, email, status)
+
+    setattr(module, "current_role", current_role_with_main_owner)
+    setattr(module, "is_owner", is_owner_with_main_owner)
+    setattr(module, "workspace_subscription", workspace_subscription_with_main_owner)
+    setattr(module, "workspace_usage_allowance", workspace_usage_allowance_with_main_owner)
+    setattr(module, "workspace_seat_state", workspace_seat_state_with_main_owner)
+    setattr(module, "check_workspace_usage_allowance", check_workspace_usage_allowance_with_main_owner)
+    setattr(module, "check_workspace_seat_allowance", check_workspace_seat_allowance_with_main_owner)
+    _OWNER_PATCHED = True
+    _ensure_owner_entitlements()
+
+
+# -----------------------------------------------------------------------------
+# Runtime installers
+# -----------------------------------------------------------------------------
+
+def _install_authenticated_reload_bridge() -> None:
+    if st is None:
+        return
+    try:
+        original_markdown = getattr(st, "markdown", None)
+        if not callable(original_markdown) or getattr(original_markdown, "_errorsweep_authenticated_reload_bridge", False):
+            return
+
+        @functools.wraps(original_markdown)
+        def markdown_with_authenticated_reload(body: Any, *args: Any, **kwargs: Any) -> Any:
+            _normalize_query_params()
+            _patch_owner_unlimited_functions()
+            token = _current_signed_session_token()
+            text = str(body)
+            is_shell_or_nav = "errorsweep-root-shell-marker" in text or "es-topnav" in text or "es-owner-strip" in text or "es-account-menu" in text
+
+            # Do not rewrite HTML before passing it to Streamlit. Rewriting the
+            # large top navigation string can make Streamlit display raw markup.
+            result = original_markdown(body, *args, **kwargs)
+
+            if token and is_shell_or_nav:
+                try:
+                    import streamlit.components.v1 as components
+                    components.html(_protected_page_session_script(token), height=0, scrolling=False)
+                except Exception:
+                    pass
+            return result
+
+        setattr(markdown_with_authenticated_reload, "_errorsweep_authenticated_reload_bridge", True)
+        st.markdown = markdown_with_authenticated_reload
+    except Exception:
+        pass
+
+
+def _install_login_new_tab_bridge() -> None:
+    if st is None:
+        return
+    try:
+        original_rerun = getattr(st, "rerun", None)
+        if not callable(original_rerun) or getattr(original_rerun, "_errorsweep_login_new_tab_bridge", False):
+            return
+
+        def _query_value_for_launch(key: str) -> str:
+            try:
+                value = st.query_params.get(key, "")
+                if isinstance(value, list):
+                    return _safe_text(value[0] if value else "")
+                return _safe_text(value)
+            except Exception:
+                return ""
+
+        def _called_from_login_flow() -> bool:
+            try:
+                names = {frame.function for frame in inspect.stack(context=0)[:18]}
+                return bool(names & {"render_login", "render_sso_handoff"})
+            except Exception:
+                return False
+
+        def _build_launch_url(session_token: str) -> str:
+            params: Dict[str, str] = {}
+            current_route = st.session_state.get("current_route")
+            if isinstance(current_route, dict):
+                page = _safe_text(current_route.get("es_page") or current_route.get("page"))
+                if page:
+                    params["es_page"] = page
+                for key in ("es_editor", "job_id", "review_id", "task_id"):
+                    value = _safe_text(current_route.get(key))
+                    if value:
+                        params[key] = value
+            for key in ("es_page", "es_editor", "job_id", "review_id", "task_id"):
+                value = _query_value_for_launch(key)
+                if value:
+                    params[key] = value
+            public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
+            if not params.get("es_page") or public_page in {"login", "landing", "signup", "register", "registration"}:
+                params["es_page"] = "Dashboard"
+            params["es_session"] = session_token
+            params["tool_tab"] = "1"
+            return "?" + urlencode(params)
+
+        def _leave_current_tab_on_login() -> None:
+            try:
+                for key in list(st.query_params.keys()):
+                    try:
+                        del st.query_params[key]
+                    except Exception:
+                        pass
+                st.query_params["es_page"] = "Login"
+            except Exception:
+                pass
+
+        @functools.wraps(original_rerun)
+        def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
+            try:
+                _normalize_query_params()
+                if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
+                    _patch_owner_unlimited_functions()
+                    session_token = _current_signed_session_token()
+                    if session_token:
+                        st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)
+                        st.session_state["_post_login_session_token"] = session_token
+                        st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
+                        st.session_state["_login_window_stay_open"] = True
+                        _leave_current_tab_on_login()
+                        render_bridge = getattr(_main_module(), "render_post_login_tool_launch_bridge", None)
+                        if callable(render_bridge):
+                            render_bridge()
+                            st.stop()
+            except Exception:
+                pass
+            return original_rerun(*args, **kwargs)
+
+        setattr(rerun_with_login_new_tab, "_errorsweep_login_new_tab_bridge", True)
+        st.rerun = rerun_with_login_new_tab
+    except Exception:
+        pass
+
+
+_install_signup_scroll_fix()
+_install_authenticated_reload_bridge()
+_install_login_new_tab_bridge()
+
+# -----------------------------------------------------------------------------
+# Managed AI routing
+# -----------------------------------------------------------------------------
+
+from openai import OpenAI
 
 
 @dataclass
@@ -369,14 +808,6 @@ def _user_provider_label() -> str:
 
 
 def select_ai_route(user_openai_key: str = "", purpose: str = "translate") -> AIRoute:
-    """Choose the first route to try.
-
-    Safe default:
-    - BYO user key always wins. It can point to OpenAI or any OpenAI-compatible chat-completions API.
-    - Managed AI/vLLM is used only when ERRORSWEEP_MANAGED_AI_ENABLED=true
-      and the URL is not a placeholder.
-    - Otherwise use platform OPENAI_API_KEY.
-    """
     user_key = (user_openai_key or _session_value("byo_openai_api_key", "")).strip()
     if user_key:
         base_url = _validate_base_url(_session_value("byo_ai_base_url", ""))
@@ -495,12 +926,6 @@ def ai_json_items(
     temperature: float = 0.0,
     max_tokens: int = 3000,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """One function for OpenAI BYO, Managed vLLM, and platform OpenAI fallback.
-
-    If Managed AI is selected but connection fails, this function automatically
-    tries OPENAI_API_KEY as a fallback. This keeps translations working while the
-    Managed AI server is not yet live.
-    """
     try:
         route = route or select_ai_route(user_openai_key=user_openai_key)
     except Exception as exc:
@@ -517,7 +942,6 @@ def ai_json_items(
 
     items, usage = _chat_json_items_once(route, system_prompt, user_prompt, temperature, max_tokens)
 
-    # Safe fallback: Managed AI/vLLM failed, but platform OpenAI key is available.
     if not items and not usage.get("success") and route.provider == "managed_vllm":
         fallback = platform_openai_route()
         if fallback:
