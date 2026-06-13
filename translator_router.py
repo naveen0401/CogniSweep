@@ -2,9 +2,9 @@
 ErrorSweep built-in translation router.
 
 Commercial-safe self-hosted MT route:
-- MADLAD-400 endpoint for broad global language coverage
 - IndicTrans2 endpoint for Indian languages
-- OPUS-MT endpoint for selected non-Indian/global pairs
+- OPUS-MT endpoint for selected lightweight global pairs
+- MADLAD-400 remains available only when explicitly enabled
 - NLLB removed
 - Azure removed
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import requests
 
@@ -48,6 +48,7 @@ INDIC_LANGS = {
 DEFAULT_OPUS_MT_ENDPOINT = "http://127.0.0.1:8100/translate"
 DEFAULT_MADLAD_ENDPOINT = "http://127.0.0.1:8200/translate"
 DEFAULT_INDICTRANS2_ENDPOINT = "http://127.0.0.1:8000/translate"
+DEFAULT_ACTIVE_MT_ENGINES = "indictrans2,opus"
 
 LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
     "english": {"iso": "en", "indic": "eng_Latn"}, "en": {"iso": "en", "indic": "eng_Latn"}, "eng_latn": {"iso": "en", "indic": "eng_Latn"},
@@ -139,6 +140,33 @@ def _is_production() -> bool:
     return env in {"prod", "production"}
 
 
+def _active_engine_names() -> Set[str]:
+    configured = _secret("SELF_HOSTED_MT_ACTIVE_ENGINES", DEFAULT_ACTIVE_MT_ENGINES).strip().lower()
+    if configured in {"*", "all"}:
+        return {"indictrans2", "opus", "madlad"}
+    aliases = {
+        "indic": "indictrans2",
+        "indictrans": "indictrans2",
+        "indictrans2": "indictrans2",
+        "opus": "opus",
+        "opus-mt": "opus",
+        "opus_mt": "opus",
+        "madlad": "madlad",
+        "madlad400": "madlad",
+        "madlad-400": "madlad",
+    }
+    active: Set[str] = set()
+    for raw_name in re.split(r"[,;\s]+", configured):
+        name = aliases.get(raw_name.strip())
+        if name:
+            active.add(name)
+    return active or {"indictrans2", "opus"}
+
+
+def _engine_enabled(engine: str, disable_env: str) -> bool:
+    return engine in _active_engine_names() and not _bool_secret(disable_env, False)
+
+
 def _indic_in_process_fallback_enabled() -> bool:
     return _bool_secret("INDICTRANS2_IN_PROCESS_FALLBACK", not _is_production())
 
@@ -167,12 +195,15 @@ def is_indic_language(language: str) -> bool:
 
 
 def current_builtin_engine_label() -> str:
-    if (
-        _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
-        or _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT)
-        or _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT)
-    ):
-        return "Included self-hosted MT active"
+    enabled = []
+    if _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"):
+        enabled.append("IndicTrans2")
+    if _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"):
+        enabled.append("OPUS-MT")
+    if _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"):
+        enabled.append("MADLAD-400")
+    if enabled:
+        return "Included self-hosted MT active: " + " + ".join(enabled)
     return "Self-hosted MT not configured"
 
 
@@ -186,20 +217,20 @@ def builtin_engine_status(timeout: int = 3) -> List[Dict[str, Any]]:
         {
             "engine": "IndicTrans2",
             "endpoint": _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT),
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False),
+            "enabled": _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"),
             "priority": "Indian languages",
-        },
-        {
-            "engine": "MADLAD-400",
-            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False),
-            "priority": "Global fallback",
         },
         {
             "engine": "OPUS-MT",
             "endpoint": _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT),
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False),
-            "priority": "Lightweight fallback",
+            "enabled": _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"),
+            "priority": "Lightweight global fallback",
+        },
+        {
+            "engine": "MADLAD-400",
+            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
+            "enabled": _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"),
+            "priority": "Optional broad fallback",
         },
     ]
     rows: List[Dict[str, Any]] = []
@@ -248,16 +279,7 @@ def smoke_test_builtin_engines(timeout: int = 120) -> List[Dict[str, Any]]:
             "source_language": "eng_Latn",
             "target_language": "tel_Telu",
             "texts": ["Save changes"],
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False),
-        },
-        {
-            "engine": "MADLAD-400",
-            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
-            "api_key": _secret("MADLAD_API_KEY", ""),
-            "source_language": "English",
-            "target_language": "Spanish",
-            "texts": ["Save changes"],
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False),
+            "enabled": _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"),
         },
         {
             "engine": "OPUS-MT",
@@ -266,7 +288,16 @@ def smoke_test_builtin_engines(timeout: int = 120) -> List[Dict[str, Any]]:
             "source_language": "English",
             "target_language": "Spanish",
             "texts": ["Save changes"],
-            "enabled": not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False),
+            "enabled": _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"),
+        },
+        {
+            "engine": "MADLAD-400",
+            "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
+            "api_key": _secret("MADLAD_API_KEY", ""),
+            "source_language": "English",
+            "target_language": "Spanish",
+            "texts": ["Save changes"],
+            "enabled": _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"),
         },
     ]
     rows: List[Dict[str, Any]] = []
@@ -409,7 +440,7 @@ def translate_batch(
     route_errors: List[str] = []
 
     try:
-        if should_use_indic and not _bool_secret("SELF_HOSTED_MT_DISABLE_INDIC", False):
+        if should_use_indic and _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"):
             endpoint = _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT)
             if endpoint:
                 try:
@@ -440,25 +471,7 @@ def translate_batch(
                 except Exception as exc:
                     route_errors.append(f"IndicTrans2 in-process failed: {exc}")
 
-        if not _bool_secret("SELF_HOSTED_MT_DISABLE_MADLAD", False):
-            endpoint = _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
-            if endpoint:
-                try:
-                    translations, engine_usage = translate_with_madlad(
-                        endpoint=endpoint,
-                        api_key=_secret("MADLAD_API_KEY", ""),
-                        source_language=source_info.get("iso", "en"),
-                        target_language=target_info.get("iso") or target_language,
-                        texts=texts,
-                        protected_terms=protected_terms,
-                        timeout=int(_secret("MADLAD_TIMEOUT", _secret("SELF_HOSTED_MT_TIMEOUT", "300"))),
-                    )
-                    _apply_engine_usage(usage, "madlad400", engine_usage)
-                    return translations, usage
-                except Exception as exc:
-                    route_errors.append(f"MADLAD-400 failed: {exc}")
-
-        if not _bool_secret("SELF_HOSTED_MT_DISABLE_OPUS", False):
+        if _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"):
             endpoint = _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT)
             if not endpoint:
                 route_errors.append("OPUS-MT endpoint is not configured.")
@@ -478,9 +491,26 @@ def translate_batch(
                 except Exception as exc:
                     route_errors.append(f"OPUS-MT failed: {exc}")
 
-        raise TranslationRouteError("No self-hosted MT route succeeded. " + " | ".join(route_errors))
+        if _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"):
+            endpoint = _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
+            if endpoint:
+                try:
+                    translations, engine_usage = translate_with_madlad(
+                        endpoint=endpoint,
+                        api_key=_secret("MADLAD_API_KEY", ""),
+                        source_language=source_info.get("iso", "en"),
+                        target_language=target_info.get("iso") or target_language,
+                        texts=texts,
+                        protected_terms=protected_terms,
+                        timeout=int(_secret("MADLAD_TIMEOUT", _secret("SELF_HOSTED_MT_TIMEOUT", "300"))),
+                    )
+                    _apply_engine_usage(usage, "madlad400", engine_usage)
+                    return translations, usage
+                except Exception as exc:
+                    route_errors.append(f"MADLAD-400 failed: {exc}")
+
+        raise TranslationRouteError("No active MT route succeeded. " + " | ".join(route_errors))
     except Exception as exc:
         usage["success"] = False
         usage["error"] = str(exc)
         raise
-
