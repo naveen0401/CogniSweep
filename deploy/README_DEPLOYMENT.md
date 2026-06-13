@@ -32,7 +32,26 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
    ```powershell
    python deploy/auth_session_check.py --generate-password-hash
    ```
-7. Point public HTTPS routes at:
+   Or write the bootstrap fields directly into the ignored env file from shell environment variables:
+   ```powershell
+   $env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
+   $env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
+   python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@your-domain.com --workspace-email workspace-owner@your-domain.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+   ```
+7. Write Supabase persistence and Supabase Storage settings from shell environment variables:
+   ```powershell
+   $env:SUPABASE_ANON_KEY="<supabase-anon-key>"
+   $env:SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>"
+   python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket errorsweep-files
+   ```
+8. Write billing provider credentials and webhook settings from shell environment variables:
+   ```powershell
+   $env:RAZORPAY_KEY_ID="<razorpay-key-id>"
+   $env:RAZORPAY_KEY_SECRET="<razorpay-key-secret>"
+   $env:RAZORPAY_WEBHOOK_SECRET="<razorpay-webhook-secret>"
+   python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.your-domain.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
+   ```
+9. Point public HTTPS routes at:
    - app: `http://errorsweep-app:8501`
    - async receiver: `http://errorsweep-async-receiver:8300`
    - billing webhook receiver: `http://errorsweep-billing-webhook:8301`
@@ -62,7 +81,7 @@ docker compose -f docker-compose.production.yml exec errorsweep-worker-superviso
 ```
 
 The strict smoke test should be clean only after production secrets, Supabase, object storage, email, billing, legal, WAF, and backups are configured. The template intentionally contains placeholder values.
-The release check is an offline packaging guard. It can run before Docker is available and should pass before every deployment branch is cut. The AI fallback check validates managed_ai_router.py, platform OpenAI/managed endpoint settings, URL safety, and optional `/models` or chat probes. The auth/session check validates production session/public URL settings, owner/workspace bootstrap hashes, auth-token persistence, and the optional public app probe. The async worker check validates receiver/processor/supervisor readiness and can run local smoke plus receiver health probes. The MT endpoint check validates router/client/worker contracts and can probe hosted `/health` and `/translate` routes. The object storage check validates provider coverage and can probe the real bucket; the Supabase schema check catches table/column drift before SQL is run against production.
+The release check is an offline packaging guard. It can run before Docker is available and should pass before every deployment branch is cut. The AI fallback check validates managed_ai_router.py, platform OpenAI/managed endpoint settings, URL safety, optional `/models` or chat probes, and can write route settings with `--write-ai-env`. The auth/session check validates production session/public URL settings, owner/workspace bootstrap hashes, auth-token persistence, and the optional public app probe. The launch env check validates billing settings and can write Stripe/Razorpay credentials with `--write-billing-env`. The async worker check validates receiver/processor/supervisor readiness and can run local smoke plus receiver health probes. The MT endpoint check validates router/client/worker contracts and can probe hosted `/health` and `/translate` routes. The object storage check validates provider coverage and can probe the real bucket; the Supabase schema check catches table/column drift before SQL is run against production and can write Supabase env settings with `--write-supabase-env`.
 
 ## Notes
 

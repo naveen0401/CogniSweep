@@ -271,7 +271,14 @@ def test_cat_editor_reference_file_matches_attached_shell() -> None:
     assert '<main class="editor-layout"' in html
     assert '<section class="left-column"' in html
     assert '<aside class="right-column"' in html
-    assert 'grid-template-columns: minmax(0, 1fr) minmax(340px, 360px);' in html
+    assert 'html, body { height: 100%; margin: 0; overflow: hidden; }' in html
+    assert 'position: fixed;' in html
+    assert 'grid-template-columns: minmax(0, 1fr) 340px;' in html
+    assert 'width: 340px;' in html
+    assert 'min-width: 340px;' in html
+    assert 'max-width: 340px;' in html
+    assert '.right-column { display: none; }' not in html
+    assert '.right-column { display: flex; }' in html
     assert 'grid-template-rows: 42px minmax(92px, 130px) 42px 38px minmax(0, 1fr) 32px;' in html
     assert '<tbody id="segmentRows"></tbody>' in html
     assert '<h2>Additional Details</h2>' in html
@@ -449,7 +456,8 @@ def test_unlimited_access_account_bypasses_usage_allowance() -> None:
     assert '"role": "Platform Owner",' in source
     assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")' in source
     assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Workspace Owner", "workspace", UNLIMITED_ACCESS_WORKSPACE)' not in source
-    assert 'class="es-topnav-owner-tag">Owner only</div>' in source
+    assert 'class="es-topnav-owner-tag">Owner tools</div>' in source
+    assert "es-topnav-owner-row" in source
     assert "\"name\": \"Unlimited\"" in source
     assert "def ensure_unlimited_access_account()" in source
     assert "Unlimited platform owner sign-in" in source
@@ -500,7 +508,9 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "def render_root_app_shell(" in source
     assert "def render_shell_scroll_bridge()" in source
     assert "MutationObserver(applyShellScroll)" in source
-    assert "scrollTarget.style.overflowY = \"scroll\"" in source
+    assert "const editorMode = !!editorMarker;" in source
+    assert 'scrollTarget.style.overflowY = editorMode ? "hidden" : "scroll"' in source
+    assert 'scrollTarget.style.overscrollBehavior = editorMode ? "none" : "contain"' in source
     assert "--es-shell-frame-padding: 0 18px 0;" in source
     assert "--es-shell-content-width: min(1760px, calc(100vw - 56px));" in source
     assert "body:has(#errorsweep-root-shell-marker) [data-testid=\"stAppViewContainer\"] .main .block-container" in source
@@ -511,7 +521,7 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True)" in source
     assert "page_frame=True" in source
     assert "show_navigation=False" in source
-    assert "const shellFrameWidth = \"min(1760px, calc(100vw - 56px))\";" in source
+    assert 'const shellFrameWidth = editorMode ? "100%" : "min(1760px, calc(100vw - 56px))";' in source
     assert "const fullBleedEditor = !!(" not in source
     assert "node.style.width = \"100%\"" in source
     assert "node.style.maxWidth = shellFrameWidth" in source

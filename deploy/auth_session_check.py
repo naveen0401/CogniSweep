@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,6 +105,7 @@ PLACEHOLDER_MARKERS = (
     "your-project",
     "example.com",
     "placeholder",
+    "todo",
     "changeme",
     "change-me",
     "demo workspace",
@@ -238,6 +240,42 @@ def make_password_hash(password: str, iterations: int = PASSWORD_HASH_ITERATIONS
     salt = b64url(os.urandom(16))
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
     return f"pbkdf2_sha256${iterations}${salt}${b64url(digest)}"
+
+
+def generate_temporary_password() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def env_assignment_re(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^(\s*(?:export\s+)?{re.escape(key)}\s*=\s*)(.*?)(\s*)$")
+
+
+def format_env_value(value: str) -> str:
+    text = safe_text(value)
+    if not text or re.search(r"\s|#|'|\"", text):
+        return json.dumps(text)
+    return text
+
+
+def write_env_updates(path: Path, updates: Dict[str, str]) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    remaining = dict(updates)
+    new_lines: List[str] = []
+    for line in lines:
+        replacement = line
+        for key in list(remaining):
+            match = env_assignment_re(key).match(line)
+            if match:
+                replacement = f"{match.group(1)}{format_env_value(remaining.pop(key))}{match.group(3)}"
+                break
+        new_lines.append(replacement)
+    if remaining:
+        new_lines.extend(["", "# Added by deploy/auth_session_check.py bootstrap helper"])
+        for key, value in remaining.items():
+            new_lines.append(f"{key}={format_env_value(value)}")
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
 def pbkdf2_hash_detail(value: str) -> Tuple[bool, str]:
@@ -397,7 +435,7 @@ def validate_password_hash(results: List[Dict[str, str]], env: Dict[str, str], k
         label,
         "Pass" if ready else "Blocker",
         detail,
-        f"Set {key} to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash.",
+        f"Set {key} to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash or --password-env.",
     )
 
 
@@ -454,7 +492,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
     )
 
     default_role = safe_text(env.get("ERRORSWEEP_DEFAULT_USER_ROLE") or "Workspace Owner")
-    allowed_roles = {"Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"}
+    allowed_roles = {"Workspace Owner", "Company Admin", "Workspace Admin", "Project Manager", "Team Lead", "Translator", "Reviewer", "Freelancer", "Client", "Client Viewer", "Billing Admin", "Talent Manager", "Individual Owner", "Individual User", "User"}
     add(
         results,
         "Auth Config",
@@ -587,12 +625,135 @@ def generate_password_hash() -> int:
     return 0
 
 
+def generate_password_hash_from_env(env_var: str, *, as_json: bool = False) -> int:
+    name = safe_text(env_var)
+    if not name:
+        print("--password-env requires an environment variable name.", file=sys.stderr)
+        return 1
+    password = os.environ.get(name, "")
+    if not password:
+        print(f"{name} is not set or is empty.", file=sys.stderr)
+        return 1
+    password_hash = make_password_hash(password)
+    if as_json:
+        print(json.dumps({"password_env": name, "password_hash": password_hash}, indent=2))
+    else:
+        print(password_hash)
+    return 0
+
+
+def bootstrap_password(password_env: str, *, generate_temporary: bool, label: str) -> Tuple[str, str, bool]:
+    env_name = safe_text(password_env)
+    if env_name:
+        password = os.environ.get(env_name, "")
+        if not password:
+            raise ValueError(f"{env_name} is not set or is empty.")
+        return password, make_password_hash(password), False
+    if generate_temporary:
+        password = generate_temporary_password()
+        return password, make_password_hash(password), True
+    raise ValueError(f"Set --{label}-password-env or pass --generate-temporary-passwords.")
+
+
+def write_bootstrap_env(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file) if args.env_file else DEFAULT_ENV_PATH
+    owner_email = safe_text(args.owner_email)
+    workspace_email = safe_text(args.workspace_email)
+    workspace_name = safe_text(args.workspace_name)
+    missing = [
+        name
+        for name, value in (
+            ("--owner-email", owner_email),
+            ("--workspace-email", workspace_email),
+            ("--workspace-name", workspace_name),
+        )
+        if not value
+    ]
+    if missing:
+        print(f"Missing required bootstrap value(s): {', '.join(missing)}", file=sys.stderr)
+        return 1
+    if not EMAIL_RE.match(owner_email):
+        print("--owner-email must be a valid email address.", file=sys.stderr)
+        return 1
+    if not EMAIL_RE.match(workspace_email):
+        print("--workspace-email must be a valid email address.", file=sys.stderr)
+        return 1
+
+    try:
+        owner_password, owner_hash, owner_generated = bootstrap_password(
+            args.owner_password_env,
+            generate_temporary=args.generate_temporary_passwords,
+            label="owner",
+        )
+        workspace_password, workspace_hash, workspace_generated = bootstrap_password(
+            args.workspace_password_env,
+            generate_temporary=args.generate_temporary_passwords,
+            label="workspace",
+        )
+        write_env_updates(
+            env_path,
+            {
+                "ERRORSWEEP_OWNER_USERNAME": owner_email,
+                "ERRORSWEEP_OWNER_PASSWORD_HASH": owner_hash,
+                "ERRORSWEEP_USER_USERNAME": workspace_email,
+                "ERRORSWEEP_USER_PASSWORD_HASH": workspace_hash,
+                "ERRORSWEEP_ORG_NAME": workspace_name,
+            },
+        )
+    except Exception as exc:
+        print(safe_text(exc), file=sys.stderr)
+        return 1
+
+    generated_passwords: Dict[str, str] = {}
+    if owner_generated:
+        generated_passwords["owner_password"] = owner_password
+    if workspace_generated:
+        generated_passwords["workspace_password"] = workspace_password
+
+    payload = {
+        "env_file": str(env_path),
+        "updated": [
+            "ERRORSWEEP_OWNER_USERNAME",
+            "ERRORSWEEP_OWNER_PASSWORD_HASH",
+            "ERRORSWEEP_USER_USERNAME",
+            "ERRORSWEEP_USER_PASSWORD_HASH",
+            "ERRORSWEEP_ORG_NAME",
+        ],
+        "owner_email": owner_email,
+        "workspace_email": workspace_email,
+        "workspace_name": workspace_name,
+        "generated_passwords": generated_passwords,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Updated {env_path}")
+        print(f"Owner bootstrap email: {owner_email}")
+        print(f"Workspace bootstrap email: {workspace_email}")
+        print(f"Initial workspace: {workspace_name}")
+        if generated_passwords:
+            print("Generated temporary passwords. Store these securely; they are not written to the env file.")
+            for key, value in generated_passwords.items():
+                print(f"{key}: {value}")
+        else:
+            print("Password hashes written from environment variables; plaintext passwords were not printed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate ErrorSweep production auth/session launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
     parser.add_argument("--probe-public-url", action="store_true", help="Probe ERRORSWEEP_PUBLIC_BASE_URL.")
     parser.add_argument("--timeout", type=int, default=15, help="Endpoint probe timeout in seconds.")
     parser.add_argument("--generate-password-hash", action="store_true", help="Interactively generate a PBKDF2 hash for bootstrap credentials.")
+    parser.add_argument("--password-env", default="", help="Read one password from this environment variable and print its PBKDF2 hash.")
+    parser.add_argument("--write-bootstrap-env", action="store_true", help="Write owner/workspace bootstrap emails, workspace name, and PBKDF2 hashes into the env file.")
+    parser.add_argument("--owner-email", default="", help="Platform owner bootstrap email used with --write-bootstrap-env.")
+    parser.add_argument("--workspace-email", default="", help="Initial workspace owner bootstrap email used with --write-bootstrap-env.")
+    parser.add_argument("--workspace-name", default="", help="Initial workspace name used with --write-bootstrap-env.")
+    parser.add_argument("--owner-password-env", default="", help="Environment variable containing the owner bootstrap password.")
+    parser.add_argument("--workspace-password-env", default="", help="Environment variable containing the workspace bootstrap password.")
+    parser.add_argument("--generate-temporary-passwords", action="store_true", help="Generate one-time temporary owner/workspace passwords when password env vars are omitted.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")
     parser.add_argument("--fail-on-warn", action="store_true", help="Exit non-zero on warnings as well as blockers.")
@@ -600,6 +761,10 @@ def main() -> int:
 
     if args.generate_password_hash:
         return generate_password_hash()
+    if args.password_env:
+        return generate_password_hash_from_env(args.password_env, as_json=args.json)
+    if args.write_bootstrap_env:
+        return write_bootstrap_env(args)
 
     env_path = Path(args.env_file) if args.env_file else None
     results = sorted(

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -65,6 +66,7 @@ PLACEHOLDER_MARKERS = (
     "your-project",
     "example.com",
     "placeholder",
+    "todo",
     "changeme",
     "change-me",
 )
@@ -116,6 +118,38 @@ def https_url(value: str) -> bool:
         return False
     parsed = urlparse(value)
     return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def env_assignment_re(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^(\s*(?:export\s+)?{re.escape(key)}\s*=\s*)(.*?)(\s*)$")
+
+
+def format_env_value(value: str) -> str:
+    text = safe_text(value)
+    if re.search(r"\s|#|'|\"", text):
+        return json.dumps(text)
+    return text
+
+
+def write_env_updates(path: Path, updates: Dict[str, str]) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    remaining = dict(updates)
+    new_lines: List[str] = []
+    for line in lines:
+        replacement = line
+        for key in list(remaining):
+            match = env_assignment_re(key).match(line)
+            if match:
+                replacement = f"{match.group(1)}{format_env_value(remaining.pop(key))}{match.group(3)}"
+                break
+        new_lines.append(replacement)
+    if remaining:
+        new_lines.extend(["", "# Added by deploy/supabase_schema_check.py setup helper"])
+        for key, value in remaining.items():
+            new_lines.append(f"{key}={format_env_value(value)}")
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
 def nonsecret_evidence(key: str, value: str) -> str:
@@ -334,7 +368,7 @@ def collect_results(
             "REST URL",
             "Pass" if url_ready else "Blocker",
             nonsecret_evidence("SUPABASE_URL", supabase_url),
-            "Set SUPABASE_URL to the production HTTPS Supabase project URL.",
+            "Set SUPABASE_URL to the production HTTPS Supabase project URL; use --write-supabase-env for repeatable setup.",
         )
         add(
             results,
@@ -342,7 +376,7 @@ def collect_results(
             "Service role key",
             "Pass" if key_ready else "Blocker",
             nonsecret_evidence("SUPABASE_SERVICE_ROLE_KEY", service_key),
-            "Set SUPABASE_SERVICE_ROLE_KEY in the private production secret store.",
+            "Set SUPABASE_SERVICE_ROLE_KEY in the private production secret store; use --write-supabase-env for repeatable setup.",
         )
         if url_ready and key_ready:
             statuses = probe_supabase_tables(supabase_url, service_key, expected_tables, probe_timeout)
@@ -390,16 +424,85 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
     return "\n".join(lines)
 
 
+def read_required_secret_env(name: str, label: str) -> str:
+    env_name = safe_text(name)
+    if not env_name:
+        raise ValueError(f"Set --{label}.")
+    value = safe_text(os.environ.get(env_name, ""))
+    if not value:
+        raise ValueError(f"{env_name} is not set or is empty.")
+    return value
+
+
+def write_supabase_env(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file) if args.env_file else DEFAULT_ENV_PATH
+    supabase_url = safe_text(args.supabase_url).rstrip("/")
+    storage_bucket = safe_text(args.storage_bucket) or "errorsweep-files"
+    provider = safe_text(args.object_storage_provider).lower() or "supabase"
+    try:
+        if not https_url(supabase_url):
+            raise ValueError("--supabase-url must be a production HTTPS Supabase project URL.")
+        anon_key = read_required_secret_env(args.anon_key_env, "anon-key-env")
+        service_role_key = read_required_secret_env(args.service_role_key_env, "service-role-key-env")
+        if is_placeholder(anon_key) or len(anon_key) < 24:
+            raise ValueError("Supabase anon key must be at least 24 non-placeholder characters.")
+        if is_placeholder(service_role_key) or len(service_role_key) < 24:
+            raise ValueError("Supabase service role key must be at least 24 non-placeholder characters.")
+        if provider not in {"supabase", "s3", "gcs"}:
+            raise ValueError("--object-storage-provider must be supabase, s3, or gcs.")
+        if provider == "supabase" and (not storage_bucket or is_placeholder(storage_bucket)):
+            raise ValueError("--storage-bucket must be a non-placeholder Supabase Storage bucket name.")
+        updates = {
+            "SUPABASE_URL": supabase_url,
+            "SUPABASE_ANON_KEY": anon_key,
+            "SUPABASE_SERVICE_ROLE_KEY": service_role_key,
+            "ERRORSWEEP_OBJECT_STORAGE_PROVIDER": provider,
+        }
+        if provider == "supabase":
+            updates["SUPABASE_STORAGE_BUCKET"] = storage_bucket
+        write_env_updates(env_path, updates)
+    except Exception as exc:
+        print(safe_text(exc), file=sys.stderr)
+        return 1
+
+    payload = {
+        "env_file": str(env_path),
+        "supabase_url": supabase_url,
+        "object_storage_provider": provider,
+        "storage_bucket": storage_bucket if provider == "supabase" else "",
+        "updated": sorted(updates.keys()),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Updated {env_path}")
+        print(f"Supabase URL: {supabase_url}")
+        print(f"Object storage provider: {provider}")
+        if provider == "supabase":
+            print(f"Supabase Storage bucket: {storage_bucket}")
+        print("Supabase keys were read from environment variables and were not printed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate ErrorSweep Supabase release schema coverage.")
     parser.add_argument("--schema", default=str(DEFAULT_SCHEMA_PATH), help="Path to supabase_v42_release_schema.sql.")
     parser.add_argument("--persistence", default=str(DEFAULT_PERSISTENCE_PATH), help="Path to production_persistence.py.")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_PATH), help="Production env file used only with --probe-rest.")
+    parser.add_argument("--write-supabase-env", action="store_true", help="Write Supabase persistence and Supabase Storage env settings from environment variables.")
+    parser.add_argument("--supabase-url", default="", help="Production HTTPS Supabase project URL.")
+    parser.add_argument("--anon-key-env", default="", help="Environment variable containing SUPABASE_ANON_KEY.")
+    parser.add_argument("--service-role-key-env", default="", help="Environment variable containing SUPABASE_SERVICE_ROLE_KEY.")
+    parser.add_argument("--storage-bucket", default="errorsweep-files", help="Supabase Storage bucket name when object storage provider is supabase.")
+    parser.add_argument("--object-storage-provider", default="supabase", help="Object storage provider to write: supabase, s3, or gcs.")
     parser.add_argument("--probe-rest", action="store_true", help="Probe configured Supabase REST tables with service-role credentials.")
     parser.add_argument("--probe-timeout", type=int, default=15, help="Per-table REST probe timeout in seconds.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")
     args = parser.parse_args()
+
+    if args.write_supabase_env:
+        return write_supabase_env(args)
 
     results = sorted(
         collect_results(

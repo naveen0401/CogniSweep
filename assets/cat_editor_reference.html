@@ -49,13 +49,16 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      padding-top: 56px;
       background: var(--bg);
     }
 
     /* Frozen app header: keep this independent from the two-column editor below. */
     .app-header {
-      position: sticky;
+      position: fixed;
       top: 0;
+      left: 0;
+      right: 0;
       z-index: 50;
       height: 56px;
       min-height: 56px;
@@ -153,7 +156,7 @@
       min-width: 0;
       flex: 1 1 auto;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(340px, 360px);
+      grid-template-columns: minmax(0, 1fr) 340px;
       overflow: hidden;
       background: #0b1020;
     }
@@ -169,9 +172,9 @@
     }
 
     .right-column {
-      width: 100%;
-      min-width: 0;
-      max-width: 100%;
+      width: 340px;
+      min-width: 340px;
+      max-width: 340px;
       min-height: 0;
       display: flex;
       flex-direction: column;
@@ -570,8 +573,8 @@
     .details-actions { display: flex; gap: 8px; margin-top: 10px; }
 
     @media (max-width: 1100px) {
-      .editor-layout { grid-template-columns: minmax(0, 1fr); }
-      .right-column { display: none; }
+      .editor-layout { grid-template-columns: minmax(0, 1fr) 340px; }
+      .right-column { display: flex; }
       .context-panel { grid-template-columns: 1fr; }
       .mode-actions { display: none; }
     }

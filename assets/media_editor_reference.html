@@ -476,6 +476,62 @@
       min-width: 0;
     }
     .timing-card b { display: block; color: #f8fafc; font-size: 18px; }
+    .timing-actions {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 14px 16px;
+      align-items: end;
+    }
+    .timing-field {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .timing-field input {
+      width: 100%;
+      height: 32px;
+      min-width: 0;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 0 8px;
+      font-weight: 800;
+    }
+    .timing-action-btn {
+      height: 32px;
+      min-width: 0;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      background: #1f2937;
+      color: #dbeafe;
+      padding: 0 7px;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .timing-action-btn:hover { border-color: var(--cyan); color: #f8fafc; }
+    .timing-action-btn:disabled {
+      cursor: not-allowed;
+      opacity: .48;
+      border-color: #334155;
+      color: #94a3b8;
+      background: #111827;
+    }
+    .timing-action-btn.primary {
+      border-color: rgba(8,214,155,.45);
+      background: rgba(8,214,155,.14);
+      color: #bfffe8;
+    }
     .right-column {
       min-width: 0;
       min-height: 0;
@@ -562,6 +618,7 @@
       .toolbar-left, .toolbar-right { width: 100%; flex-wrap: wrap; }
       .search { width: 100%; }
       .timing-grid { grid-template-columns: 1fr 1fr; }
+      .timing-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -638,7 +695,23 @@
             <div class="timing-card">Total rows <b id="metricRows">0</b></div>
             <div class="timing-card">Confirmed <b id="metricConfirmed">0</b></div>
             <div class="timing-card">Active CPS <b id="metricCps">0</b></div>
+            <div class="timing-card">Duration <b id="metricDuration">0.0s</b></div>
+            <div class="timing-card">Prev gap <b id="metricPrevGap">-</b></div>
+            <div class="timing-card">Next gap <b id="metricNextGap">-</b></div>
             <div class="timing-card">Overlaps <b id="metricOverlaps">0</b></div>
+          </div>
+          <div class="timing-actions">
+            <label class="timing-field">Step<input id="timingStepInput" type="number" min="0.1" max="10" step="0.1" value="0.5" /></label>
+            <button class="timing-action-btn" id="timingMoveBackBtn" type="button">Move -</button>
+            <button class="timing-action-btn" id="timingMoveForwardBtn" type="button">Move +</button>
+            <button class="timing-action-btn" id="timingStartBackBtn" type="button">Start -</button>
+            <button class="timing-action-btn" id="timingStartForwardBtn" type="button">Start +</button>
+            <button class="timing-action-btn" id="timingEndBackBtn" type="button">End -</button>
+            <button class="timing-action-btn" id="timingEndForwardBtn" type="button">End +</button>
+            <button class="timing-action-btn" id="timingSnapPrevBtn" type="button">Snap prev</button>
+            <button class="timing-action-btn" id="timingSnapNextBtn" type="button">Snap next</button>
+            <label class="timing-field">Duration<input id="timingDurationInput" type="number" min="0.1" max="600" step="0.1" value="3.5" /></label>
+            <button class="timing-action-btn primary" id="timingApplyDurationBtn" type="button">Apply duration</button>
           </div>
         </details>
       </section>
@@ -670,6 +743,7 @@
   <script>
     const payload = __MEDIA_EDITOR_PAYLOAD__;
     const statusOptions = ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated", "Existing", "Transcribed Source"];
+    const MIN_MEDIA_SEGMENT_DURATION = 0.1;
     function safe(value) { return value == null ? "" : String(value); }
     const workflowValue = safe((payload.metadata || {}).workflow || (payload.metadata || {}).title).toLowerCase();
     const editorMode = workflowValue.includes("transcription") ? "transcription" : "subtitling";
@@ -725,6 +799,67 @@
       const s = Math.floor(value % 60);
       const ms = Math.floor((value % 1) * 1000);
       return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    }
+
+    function secondsInputValue(id, fallback) {
+      const control = el(id);
+      const value = control ? Number(control.value) : fallback;
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    function activeTimingStats() {
+      const row = rows[activeIndex] || {};
+      let start = Math.max(0, parseTimecode(row.start));
+      let end = parseTimecode(row.end);
+      if (!Number.isFinite(end) || end <= start) end = start + MIN_MEDIA_SEGMENT_DURATION;
+      const duration = Math.max(MIN_MEDIA_SEGMENT_DURATION, end - start);
+      const previousGap = activeIndex > 0 ? start - parseTimecode(rows[activeIndex - 1].end) : null;
+      const nextGap = activeIndex + 1 < rows.length ? parseTimecode(rows[activeIndex + 1].start) - end : null;
+      return { start, end, duration, previousGap, nextGap };
+    }
+
+    function gapLabel(value) {
+      if (value == null || !Number.isFinite(value)) return "-";
+      return value < 0 ? `${Math.abs(value).toFixed(1)}s overlap` : `${value.toFixed(1)}s`;
+    }
+
+    function setActiveTiming(start, end, message) {
+      const row = rows[activeIndex];
+      if (!row) return;
+      const nextStart = Math.max(0, Number(start) || 0);
+      const nextEnd = Math.max(Number(end) || 0, nextStart + MIN_MEDIA_SEGMENT_DURATION);
+      row.start = formatTime(nextStart);
+      row.end = formatTime(nextEnd);
+      syncCaptionPreview();
+      scheduleAutoSave();
+      renderRows();
+      selectRow(activeIndex, false);
+      showToast(message || "Timing updated");
+    }
+
+    function adjustActiveTiming(action, amount = 0) {
+      const row = rows[activeIndex];
+      if (!row) return;
+      let { start, end } = activeTimingStats();
+      const step = Number(amount) || 0;
+      if (action === "move") {
+        const nextStart = Math.max(0, start + step);
+        const actualDelta = nextStart - start;
+        start = nextStart;
+        end += actualDelta;
+      } else if (action === "trim_start") {
+        start = Math.max(0, Math.min(start + step, end - MIN_MEDIA_SEGMENT_DURATION));
+      } else if (action === "trim_end") {
+        end = Math.max(start + MIN_MEDIA_SEGMENT_DURATION, end + step);
+      } else if (action === "set_duration") {
+        end = start + Math.max(MIN_MEDIA_SEGMENT_DURATION, step);
+      } else if (action === "snap_start_previous" && activeIndex > 0) {
+        start = Math.max(0, parseTimecode(rows[activeIndex - 1].end));
+        if (end <= start) end = start + MIN_MEDIA_SEGMENT_DURATION;
+      } else if (action === "snap_end_next" && activeIndex + 1 < rows.length) {
+        end = Math.max(start + MIN_MEDIA_SEGMENT_DURATION, parseTimecode(rows[activeIndex + 1].start));
+      }
+      setActiveTiming(start, end, "Timing updated");
     }
 
     function htmlEscape(value) {
@@ -1160,7 +1295,8 @@
 
     function updateSummary() {
       const row = rows[activeIndex] || {};
-      const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
+      const timing = activeTimingStats();
+      const duration = timing.duration;
       const textLength = safe(row.target || row.source).length;
       const cps = Math.round(textLength / duration);
       const overlaps = countOverlaps();
@@ -1169,6 +1305,13 @@
       el("metricRows").textContent = rows.length;
       el("metricConfirmed").textContent = confirmed;
       el("metricCps").textContent = cps;
+      el("metricDuration").textContent = `${duration.toFixed(1)}s`;
+      el("metricPrevGap").textContent = gapLabel(timing.previousGap);
+      el("metricNextGap").textContent = gapLabel(timing.nextGap);
+      const durationInput = el("timingDurationInput");
+      if (durationInput && document.activeElement !== durationInput) {
+        durationInput.value = duration.toFixed(1);
+      }
       el("metricOverlaps").textContent = overlaps;
       updateConfirmAllState();
       updateSubmitState();
@@ -1191,6 +1334,10 @@
         button.classList.toggle("btn-mint", allConfirmed);
         button.title = allConfirmed ? "Submit completed media editor task" : `Tick ${pending} more segment${pending === 1 ? "" : "s"} before submitting`;
       }
+      const snapPrev = el("timingSnapPrevBtn");
+      const snapNext = el("timingSnapNextBtn");
+      if (snapPrev) snapPrev.disabled = activeIndex === 0;
+      if (snapNext) snapNext.disabled = activeIndex >= rows.length - 1;
       updateExportButtonState();
     }
 
@@ -1638,6 +1785,15 @@
       el("splitBtn").addEventListener("click", splitRow);
       el("mergeBtn").addEventListener("click", mergeRow);
       el("insertBtn").addEventListener("click", insertRow);
+      el("timingMoveBackBtn").addEventListener("click", () => adjustActiveTiming("move", -secondsInputValue("timingStepInput", 0.5)));
+      el("timingMoveForwardBtn").addEventListener("click", () => adjustActiveTiming("move", secondsInputValue("timingStepInput", 0.5)));
+      el("timingStartBackBtn").addEventListener("click", () => adjustActiveTiming("trim_start", -secondsInputValue("timingStepInput", 0.5)));
+      el("timingStartForwardBtn").addEventListener("click", () => adjustActiveTiming("trim_start", secondsInputValue("timingStepInput", 0.5)));
+      el("timingEndBackBtn").addEventListener("click", () => adjustActiveTiming("trim_end", -secondsInputValue("timingStepInput", 0.5)));
+      el("timingEndForwardBtn").addEventListener("click", () => adjustActiveTiming("trim_end", secondsInputValue("timingStepInput", 0.5)));
+      el("timingSnapPrevBtn").addEventListener("click", () => adjustActiveTiming("snap_start_previous"));
+      el("timingSnapNextBtn").addEventListener("click", () => adjustActiveTiming("snap_end_next"));
+      el("timingApplyDurationBtn").addEventListener("click", () => adjustActiveTiming("set_duration", secondsInputValue("timingDurationInput", 3.5)));
       el("confirmAllCheck").addEventListener("change", (event) => setAllSegmentsConfirmed(event.target.checked));
       el("pipBtn").addEventListener("click", (event) => {
         event.preventDefault();

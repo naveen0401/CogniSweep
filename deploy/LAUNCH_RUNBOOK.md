@@ -68,6 +68,16 @@ Generate compatible bootstrap password hashes without importing the Streamlit ap
 python deploy/auth_session_check.py --generate-password-hash
 ```
 
+For repeatable setup, keep plaintext passwords in your shell environment and let the checker write the ignored production env file:
+
+```powershell
+$env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
+$env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
+python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@your-domain.com --workspace-email workspace-owner@your-domain.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+```
+
+For a temporary launch credential pair, add `--generate-temporary-passwords` instead of the two `--*-password-env` options and store the printed passwords securely before closing the terminal.
+
 Validate the file after each setup pass:
 
 ```powershell
@@ -97,6 +107,14 @@ Required env keys:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+
+Write these settings into the ignored env file without putting keys on the command line:
+
+```powershell
+$env:SUPABASE_ANON_KEY="<supabase-anon-key>"
+$env:SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>"
+python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket errorsweep-files
+```
 
 Required validation:
 
@@ -178,6 +196,20 @@ Optional platform AI values:
 - `ERRORSWEEP_MANAGED_AI_API_KEY`
 - `ERRORSWEEP_MANAGED_AI_MODEL`
 
+Write the OpenAI fallback route into the ignored env file without putting the key on the command line:
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route openai --openai-key-env OPENAI_API_KEY --model gpt-4o-mini
+```
+
+Or write a managed OpenAI-compatible endpoint route:
+
+```powershell
+$env:ERRORSWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.your-domain.com/v1 --managed-api-key-env ERRORSWEEP_MANAGED_AI_TOKEN --managed-model your-model
+```
+
 Required no-key MT values:
 
 - `OPUS_MT_ENDPOINT`
@@ -217,6 +249,23 @@ Provider-specific required values:
 
 - Razorpay: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, plan IDs, mandate links.
 - Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, price IDs, mandate links.
+
+Write Razorpay settings into the ignored env file without putting keys on the command line:
+
+```powershell
+$env:RAZORPAY_KEY_ID="<razorpay-key-id>"
+$env:RAZORPAY_KEY_SECRET="<razorpay-key-secret>"
+$env:RAZORPAY_WEBHOOK_SECRET="<razorpay-webhook-secret>"
+python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.your-domain.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
+```
+
+Or write Stripe settings:
+
+```powershell
+$env:STRIPE_SECRET_KEY="<stripe-secret-key>"
+$env:STRIPE_WEBHOOK_SECRET="<stripe-webhook-secret>"
+python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider stripe --billing-webhook-url https://billing.your-domain.com/webhooks/billing/stripe --stripe-secret-key-env STRIPE_SECRET_KEY --stripe-webhook-secret-env STRIPE_WEBHOOK_SECRET --pro-plan-id price_pro --agency-plan-id price_agency
+```
 
 Keep `ERRORSWEEP_WEBHOOK_APPLY_UPDATES=false` until provider test webhooks validate signature checks and event mapping. Turn it on only after successful staging verification.
 

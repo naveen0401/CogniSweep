@@ -81,6 +81,8 @@ from pro_reconstruction import (
     sentence_segment_rows_for_pro,
 )
 
+from media_timing_tools import adjust_media_segment_timing, media_timing_summary
+
 
 
 from openpyxl import load_workbook, Workbook
@@ -366,6 +368,62 @@ LANGUAGE_CATALOG = [
     "Lao",
     "Mongolian",
     "Vietnamese",
+]
+TALENT_PROFILE_TYPES = [
+    "Freelancer",
+    "Professional",
+    "Agency",
+    "Company employee",
+    "Client / Hiring manager",
+]
+TALENT_PRIMARY_ROLES = [
+    "Translator",
+    "Reviewer",
+    "LQA Specialist",
+    "Subtitler",
+    "Transcriptionist",
+    "Project Manager",
+    "Localization Engineer",
+    "Client / Hiring Manager",
+    "Other",
+]
+TALENT_SERVICES = [
+    "Translation",
+    "Editing",
+    "Proofreading",
+    "LQA",
+    "Terminology",
+    "Subtitling",
+    "Transcription",
+    "MTPE",
+    "Project Management",
+    "Localization Engineering",
+]
+TALENT_DOMAINS = [
+    "Software / UI",
+    "Marketing",
+    "Legal",
+    "Medical",
+    "Finance",
+    "Gaming",
+    "E-learning",
+    "Media / Entertainment",
+    "Technical",
+    "General Business",
+]
+TALENT_AVAILABILITY = ["Available now", "Available this week", "Part-time", "Booked", "Not currently available"]
+TALENT_WORK_PREFERENCES = ["Remote", "Hybrid", "On-site", "Contract", "Full-time", "Part-time"]
+UI_LANGUAGE_OPTIONS = [
+    ("EN", "English"),
+    ("HI", "Hindi"),
+    ("TE", "Telugu"),
+    ("TA", "Tamil"),
+    ("KN", "Kannada"),
+    ("ML", "Malayalam"),
+    ("FR", "French"),
+    ("ES", "Spanish"),
+    ("DE", "German"),
+    ("JA", "Japanese"),
 ]
 PLAN_CATALOG = [
     {
@@ -2189,7 +2247,7 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   justify-content: center;
   flex-wrap: nowrap;
   gap: 2px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .es-topnav-link {
@@ -2205,6 +2263,56 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   font-weight: 950;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.es-topnav-owner-row {
+  position: relative;
+  z-index: 3;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 10px;
+  border-top: 1px solid rgba(84,105,180,.22);
+  background: rgba(6,10,22,.18);
+}
+
+.es-topnav-owner-row .es-topnav-owner-tag {
+  margin-left: 52px;
+  flex: 0 0 auto;
+}
+
+.es-topnav-owner-links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.es-topnav-owner-link {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(84,105,180,.24);
+  border-radius: 8px;
+  background: rgba(255,255,255,.035);
+  color: #dce8ff !important;
+  text-decoration: none !important;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.es-topnav-owner-link:hover,
+.es-topnav-owner-link.active {
+  border-color: rgba(0,217,133,.36);
+  color: #75f7c4 !important;
+  background: rgba(0,217,133,.08);
 }
 
 .es-topnav-link:hover {
@@ -2246,6 +2354,12 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   font-weight: 900;
   text-decoration: none !important;
   position: relative;
+}
+
+.es-topnav-tool:hover,
+.es-topnav-tool.active {
+  color: #75f7c4 !important;
+  background: rgba(52,189,246,.10);
 }
 
 .es-topnav-badge {
@@ -2349,6 +2463,141 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   border-top: 1px solid rgba(84,105,180,.22);
   margin-top: 4px;
   padding-top: 11px;
+}
+
+.es-topnav-panel {
+  position: fixed;
+  z-index: 1800;
+  top: 74px;
+  right: 18px;
+  width: min(420px, calc(100vw - 28px));
+  max-height: min(760px, calc(100vh - 94px));
+  overflow: auto;
+  border: 1px solid rgba(84,105,180,.38);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(15,21,42,.99), rgba(8,12,25,.98));
+  box-shadow: 0 30px 86px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.06);
+  padding: 14px;
+}
+
+.es-topnav-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.es-topnav-panel-title {
+  color: #f7fbff;
+  font-size: 14px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.es-topnav-panel-close {
+  color: #8ea1dc !important;
+  text-decoration: none !important;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.es-note-list {
+  display: grid;
+  gap: 10px;
+}
+
+.es-note-item {
+  border: 1px solid rgba(84,105,180,.24);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+  padding: 12px;
+}
+
+.es-note-item.unread {
+  border-color: rgba(0,217,133,.34);
+  background: rgba(0,217,133,.055);
+}
+
+.es-note-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.es-note-type {
+  border: 1px solid rgba(52,189,246,.28);
+  border-radius: 999px;
+  color: #75f7c4;
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 3px 7px;
+  text-transform: uppercase;
+}
+
+.es-note-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--es-green);
+  box-shadow: 0 0 16px rgba(0,217,133,.58);
+}
+
+.es-note-item b {
+  color: #f7fbff;
+}
+
+.es-note-message {
+  margin-top: 5px;
+  color: #c8d4f2;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.es-note-meta {
+  margin-top: 8px;
+  color: #8ea1dc;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.es-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.es-note-action {
+  border: 1px solid rgba(84,105,180,.30);
+  border-radius: 8px;
+  color: #dce8ff !important;
+  background: rgba(255,255,255,.04);
+  text-decoration: none !important;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 9px;
+}
+
+.es-note-action.primary {
+  border-color: rgba(0,217,133,.35);
+  color: #06141d !important;
+  background: linear-gradient(135deg, var(--es-green), var(--es-cyan));
+}
+
+.es-note-action.danger {
+  color: #ffd18a !important;
+}
+
+.es-note-empty {
+  border: 1px dashed rgba(84,105,180,.34);
+  border-radius: 10px;
+  padding: 18px;
+  color: #a8b0d6;
+  text-align: center;
 }
 
 .es-owner-strip {
@@ -3061,11 +3310,13 @@ input.es-grid-overlay-escaped {
   .es-landing-links { display: none; }
   .es-topnav-row { align-items: flex-start; flex-direction: column; padding: 12px; }
   .es-topnav-brand { min-width: 0; }
-  .es-topnav-links { justify-content: flex-start; }
+  .es-topnav-links { justify-content: flex-start; flex-wrap: wrap; }
   .es-topnav-link { min-height: 42px; padding: 0 10px; border-radius: 6px; }
   .es-topnav-link.active::after { display: none; }
   .es-topnav-tools { min-height: 52px; align-self: stretch; border-left: 0; border-top: 1px solid rgba(84,105,180,.24); }
   .es-topnav-user { min-width: 0; margin-left: auto; }
+  .es-topnav-owner-row { align-items: flex-start; flex-direction: column; padding: 10px 12px 12px; }
+  .es-topnav-owner-row .es-topnav-owner-tag { margin-left: 0; }
   .es-account-menu { right: 0; }
 }
 </style>
@@ -3388,6 +3639,152 @@ def load_saas_records(collection: str, workspace: str = "", include_all_workspac
     except Exception as exc:
         LOGGER.warning("Unable to load SaaS records %s: %s", collection, exc)
         return []
+
+
+def all_user_records(limit: int = 1000) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for source_rows in (
+        load_saas_records("users", include_all_workspaces=True, limit=limit),
+        st.session_state.get("users", []),
+    ):
+        for row in source_rows or []:
+            if not isinstance(row, dict):
+                continue
+            key = safe_text(row.get("email")).lower() or safe_text(row.get("id")).lower()
+            if not key or key in seen:
+                continue
+            records.append(dict(row))
+            seen.add(key)
+    return records
+
+
+def workspace_user_records(workspace: str, limit: int = 1000) -> List[Dict[str, Any]]:
+    workspace_key = safe_text(workspace).strip()
+    if not workspace_key or workspace_key.lower() == "platform":
+        return []
+    records: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for source_rows in (
+        load_saas_records("users", workspace=workspace_key, limit=limit),
+        st.session_state.get("users", []),
+    ):
+        for row in source_rows or []:
+            if not isinstance(row, dict):
+                continue
+            if safe_text(row.get("workspace")).strip() != workspace_key:
+                continue
+            key = safe_text(row.get("id")).lower() or f"{safe_text(row.get('email')).lower()}::{workspace_key.lower()}"
+            if not key or key in seen:
+                continue
+            records.append(dict(row))
+            seen.add(key)
+    return records
+
+
+def team_workspace_options(user: Optional[Dict[str, Any]] = None) -> List[str]:
+    candidate = user if user is not None else (current_user() or {})
+    current_workspace = safe_text(candidate.get("workspace") or "Demo Workspace").strip()
+    options: List[str] = []
+
+    if has_permission("platform.workspaces", candidate) or has_permission("platform.users", candidate):
+        for item in st.session_state.get("workspaces", []):
+            name = safe_text(item.get("workspace")).strip()
+            if name and name.lower() != "platform":
+                options.append(name)
+        for item in all_user_records(limit=2000):
+            name = safe_text(item.get("workspace")).strip()
+            if name and name.lower() != "platform":
+                options.append(name)
+    elif current_workspace and current_workspace.lower() != "platform":
+        options.append(current_workspace)
+
+    return list(dict.fromkeys(options))
+
+
+def default_team_account_type(workspace: str, user: Optional[Dict[str, Any]] = None) -> str:
+    for item in workspace_user_records(workspace):
+        account_type = account_type_for_user(item)
+        if account_type in ACCOUNT_TYPE_LABELS:
+            return account_type
+    current_account_type = account_type_for_user(user)
+    return current_account_type if current_account_type in ACCOUNT_TYPE_LABELS else "company"
+
+
+def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    email_key = safe_text(email).strip().lower()
+    if not email_key:
+        return None
+    for row in all_user_records():
+        if safe_text(row.get("email")).strip().lower() == email_key:
+            return dict(row)
+    return None
+
+
+def safe_user_session_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    excluded = {"password_hash"}
+    return {key: value for key, value in (record or {}).items() if key not in excluded}
+
+
+def signup_role_for_profile(primary_role: str, profile_type: str) -> str:
+    role = safe_text(primary_role)
+    profile = safe_text(profile_type).lower()
+    if "client" in profile:
+        return "Workspace Owner"
+    if role in {"Translator", "Subtitler", "Transcriptionist", "Localization Engineer"}:
+        return "Translator"
+    if role in {"Reviewer", "LQA Specialist"}:
+        return "Reviewer"
+    if role == "Project Manager":
+        return "Project Manager"
+    return "User"
+
+
+def talent_search_text(record: Dict[str, Any]) -> str:
+    fields = [
+        "full_name",
+        "email",
+        "phone",
+        "city",
+        "country",
+        "profile_type",
+        "primary_role",
+        "services",
+        "languages",
+        "domains",
+        "tools",
+        "certifications",
+        "availability",
+        "work_preference",
+        "bio",
+        "workspace",
+    ]
+    return " ".join(safe_text(record.get(field)) for field in fields if safe_text(record.get(field))).strip()
+
+
+def talent_display_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "Name": safe_text(record.get("full_name") or record.get("email")),
+        "Email": safe_text(record.get("email")),
+        "Phone": safe_text(record.get("phone")),
+        "Profile": safe_text(record.get("profile_type")),
+        "Primary role": safe_text(record.get("primary_role") or record.get("role")),
+        "Services": safe_text(record.get("services")),
+        "Languages": safe_text(record.get("languages")),
+        "Domains": safe_text(record.get("domains")),
+        "Availability": safe_text(record.get("availability")),
+        "Capacity": safe_text(record.get("weekly_capacity")),
+        "Rates": " / ".join(
+            part for part in [
+                f"{safe_text(record.get('rate_currency') or 'INR')} {safe_text(record.get('hourly_rate'))}/hr" if safe_text(record.get("hourly_rate")) else "",
+                f"{safe_text(record.get('rate_currency') or 'INR')} {safe_text(record.get('per_word_rate'))}/word" if safe_text(record.get("per_word_rate")) else "",
+            ] if part
+        ),
+        "Location": ", ".join(part for part in [safe_text(record.get("city")), safe_text(record.get("country"))] if part),
+        "Workspace": safe_text(record.get("workspace")),
+        "Status": safe_text(record.get("talent_status") or record.get("status")),
+        "Updated": record.get("updated_at", ""),
+    }
 
 
 def remove_saas_record(collection: str, record_id: str) -> bool:
@@ -3814,13 +4211,90 @@ def update_stored_user(email: str, changes: Dict[str, Any]) -> Optional[Dict[str
     return persisted
 
 
+def update_workspace_user(email: str, workspace: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    email_key = safe_text(email).lower()
+    workspace_key = safe_text(workspace).strip()
+    if not email_key or not workspace_key or workspace_key.lower() == "platform":
+        return None
+    matched = None
+    for item in workspace_user_records(workspace_key):
+        if safe_text(item.get("email")).lower() == email_key:
+            matched = dict(item)
+            break
+    if matched is None:
+        return None
+    matched.update(changes)
+    matched["workspace"] = workspace_key
+    matched["updated_at"] = now_stamp()
+    persisted = persist_saas_record("users", matched)
+    upsert_session_record("users", persisted)
+    return persisted
+
+
+def normalized_profile_completion_status(user: Dict[str, Any]) -> str:
+    return safe_text(user.get("profile_completion_status") or "pending").lower()
+
+
+def profile_completion_prompt_due(user: Dict[str, Any]) -> bool:
+    if not user or is_platform_owner_identity(user):
+        return False
+    return normalized_profile_completion_status(user) not in {"completed", "skipped"}
+
+
+def stored_metadata_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def csv_choices(value: Any, allowed: List[str]) -> List[str]:
+    selected = [safe_text(item) for item in safe_text(value).split(",") if safe_text(item)]
+    return [item for item in selected if item in allowed]
+
+
+def catalog_index(options: List[str], value: Any, default: int = 0) -> int:
+    label = safe_text(value)
+    return options.index(label) if label in options else default
+
+
+def merge_current_user_record(record: Dict[str, Any]) -> None:
+    current = dict(current_user() or {})
+    account_type = current.get("account_type", "workspace")
+    login_at = current.get("login_at", datetime.now(timezone.utc).isoformat())
+    current.update(safe_user_session_record(record))
+    current["account_type"] = account_type
+    current["login_at"] = login_at
+    st.session_state["user"] = current
+    st.session_state["_pending_session_cookie"] = signed_session_token_for_user(current)
+
+
+def save_current_user_profile(changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    user = current_user() or {}
+    email = safe_text(user.get("email")).strip()
+    if not email:
+        return None
+    persisted = update_stored_user(email, changes)
+    if persisted:
+        merge_current_user_record(persisted)
+        return persisted
+    fallback = {**user, **changes, "updated_at": now_stamp()}
+    merge_current_user_record(fallback)
+    return fallback
+
+
 def queue_verification_email(email: str, workspace: str, name: str = "") -> str:
     token, _ = create_auth_token(email, "email_verification", workspace, metadata={"name": name})
     link = public_auth_link("verify", token)
     queue_email_notification(
         email,
         "Verify your ErrorSweep email",
-        f"Verify your ErrorSweep workspace email for '{workspace}' using this link: {link}",
+        f"Verify your ErrorSweep workspace email for '{workspace}'.",
         "auth.email_verification",
         metadata={"workspace": workspace, "verify_url": link},
         workspace=workspace,
@@ -3834,7 +4308,7 @@ def queue_password_reset_email(email: str, workspace: str = "") -> str:
     queue_email_notification(
         email,
         "Reset your ErrorSweep password",
-        f"Reset your ErrorSweep password using this link: {link}",
+        "Reset your ErrorSweep password from the secure action.",
         "auth.password_reset",
         metadata={"reset_url": link},
         workspace=workspace or "Demo Workspace",
@@ -3960,13 +4434,13 @@ def restore_user_from_signed_session(token: str) -> bool:
     data = verify_payload(token)
     if not data:
         return False
-    st.session_state["user"] = {
-        "email": data.get("email", ""),
-        "role": data.get("role", "User"),
-        "account_type": data.get("account_type", "user"),
-        "workspace": data.get("workspace", "Demo Workspace"),
-        "login_at": data.get("login_at", ""),
-    }
+    user = safe_user_session_record({key: value for key, value in data.items() if key not in {"iat", "persistent"}})
+    user.setdefault("email", "")
+    user.setdefault("role", "User")
+    user.setdefault("account_type", "user")
+    user.setdefault("workspace", "Demo Workspace")
+    user.setdefault("login_at", "")
+    st.session_state["user"] = user
     st.session_state["authenticated"] = True
     return True
 
@@ -4328,13 +4802,18 @@ def render_post_login_tool_launch_bridge() -> None:
 
 
 def login_user(email: str, role: str, account_type: str, workspace: str = "Demo Workspace") -> None:
+    stored_user = find_user_by_email(email) or {}
+    resolved_account_type = "owner" if safe_text(account_type).lower() == "owner" else safe_text(stored_user.get("account_type") or account_type or "workspace")
     user = {
         "email": email,
-        "role": role,
-        "account_type": account_type,
-        "workspace": workspace,
+        "role": safe_text(stored_user.get("role") or role or "User"),
+        "account_type": resolved_account_type,
+        "workspace": safe_text(stored_user.get("workspace") or workspace or "Demo Workspace"),
         "login_at": datetime.now(timezone.utc).isoformat(),
     }
+    user.update(safe_user_session_record(stored_user))
+    user["account_type"] = resolved_account_type
+    user["login_at"] = datetime.now(timezone.utc).isoformat()
     return_to = query_get("return_to") or safe_text(st.session_state.get("auth_return_to", ""))
     target_page = "Dashboard"
     if return_to:
@@ -4435,10 +4914,10 @@ def init_state() -> None:
             {"workspace": UNLIMITED_ACCESS_WORKSPACE, "owner": UNLIMITED_ACCESS_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
         ],
         "users": [
-            {"email": "owner@errorsweep.local", "workspace": "Platform", "role": "Platform Owner", "plan": "Owner", "status": "Active"},
-            {"email": "demo@errorsweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "plan": "Trial", "status": "Active"},
-            {"email": "reviewer@errorsweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "plan": "Trial", "status": "Active"},
-            {"email": UNLIMITED_ACCESS_EMAIL, "workspace": "Platform", "role": "Platform Owner", "plan": "Unlimited", "status": "Active", "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH, "email_verified": True},
+            {"email": "owner@errorsweep.local", "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Owner", "status": "Active"},
+            {"email": "demo@errorsweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "account_type": "company", "plan": "Trial", "status": "Active"},
+            {"email": "reviewer@errorsweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "account_type": "company", "plan": "Trial", "status": "Active"},
+            {"email": UNLIMITED_ACCESS_EMAIL, "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Unlimited", "status": "Active", "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH, "email_verified": True},
         ],
         "audit_logs": [],
         "ai_usage_events": [],
@@ -4495,6 +4974,7 @@ def ensure_unlimited_access_account() -> None:
         "email": UNLIMITED_ACCESS_EMAIL,
         "workspace": "Platform",
         "role": "Platform Owner",
+        "account_type": "platform",
         "plan": "Unlimited",
         "status": "Active",
         "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH,
@@ -4548,6 +5028,7 @@ trim_session_collections()
 OWNER_PAGES = [
     "Owner Console",
     "Payments Received",
+    "Talent Database",
     "User Access Matrix",
     "All Workspaces",
     "Platform Settings",
@@ -4569,6 +5050,8 @@ WORKSPACE_PAGES = [
     "Admin",
 ]
 
+ALL_APP_PAGES = OWNER_PAGES + WORKSPACE_PAGES
+
 # Hidden route pages. They are not shown as navigation buttons,
 # but they let editors open as dedicated professional workspaces.
 HIDDEN_EDITOR_PAGES = [
@@ -4578,16 +5061,127 @@ HIDDEN_EDITOR_PAGES = [
     "Transcription Workspace",
 ]
 
-ROLE_PAGE_ACCESS = {
-    "Platform Owner": OWNER_PAGES + WORKSPACE_PAGES,
-    "Workspace Owner": WORKSPACE_PAGES,
-    "Workspace Admin": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Team & Roles", "Account", "Admin"],
-    "Project Manager": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
-    "Translator": ["Dashboard", "Jobs", "Subtitle / Transcription Editor", "Account"],
-    "Reviewer": ["Dashboard", "Jobs", "ErrorSweep QA", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
-    "Client Viewer": ["Dashboard", "Jobs", "Account"],
-    "Billing Admin": ["Dashboard", "Billing", "Account"],
-    "User": ["Dashboard", "Projects", "Jobs", "ErrorSweep QA", "ErrorSweep Pro", "Subtitle / Transcription Editor", "Scorecards", "Memory & Rules", "Account"],
+PAGE_PERMISSIONS = {
+    "Owner Console": "platform.owner",
+    "Payments Received": "platform.payments",
+    "Talent Database": "talent.search",
+    "User Access Matrix": "platform.users",
+    "All Workspaces": "platform.workspaces",
+    "Platform Settings": "platform.settings",
+    "Platform Audit Logs": "platform.audit",
+    "Dashboard": "page.dashboard",
+    "Projects": "page.projects",
+    "Jobs": "page.jobs",
+    "ErrorSweep QA": "page.qa",
+    "ErrorSweep Pro": "page.pro",
+    "Subtitle / Transcription Editor": "page.media",
+    "Scorecards": "page.scorecards",
+    "Memory & Rules": "page.memory",
+    "Team & Roles": "team.manage",
+    "Billing": "billing.access",
+    "Account": "page.account",
+    "Admin": "admin.workspace",
+}
+
+COMMON_SELF_SERVICE_PERMISSIONS = {
+    "notes.view",
+    "language.select",
+    "page.dashboard",
+    "page.account",
+}
+WORKFLOW_PERMISSIONS = {
+    "page.projects",
+    "page.jobs",
+    "page.qa",
+    "page.pro",
+    "page.media",
+    "page.scorecards",
+    "page.memory",
+}
+COMPANY_MANAGEMENT_PERMISSIONS = {
+    "team.manage",
+    "billing.access",
+    "billing.company",
+    "billing.invoice",
+    "admin.workspace",
+}
+PERSONAL_WORKSPACE_OWNER_PERMISSIONS = {
+    "team.manage",
+    "billing.access",
+    "billing.personal",
+    "billing.invoice",
+    "admin.workspace",
+}
+PLATFORM_PERMISSIONS = {
+    "platform.owner",
+    "platform.payments",
+    "platform.users",
+    "platform.workspaces",
+    "platform.settings",
+    "platform.audit",
+    "talent.search",
+}
+ACCOUNT_TYPE_BASE_PERMISSIONS = {
+    "platform": COMMON_SELF_SERVICE_PERMISSIONS | WORKFLOW_PERMISSIONS | COMPANY_MANAGEMENT_PERMISSIONS | PLATFORM_PERMISSIONS,
+    "company": COMMON_SELF_SERVICE_PERMISSIONS,
+    "individual": COMMON_SELF_SERVICE_PERMISSIONS | WORKFLOW_PERMISSIONS | {"billing.access", "billing.personal"},
+}
+ROLE_PERMISSION_MATRIX = {
+    "platform": {
+        "Platform Owner": ACCOUNT_TYPE_BASE_PERMISSIONS["platform"],
+    },
+    "company": {
+        "Workspace Owner": WORKFLOW_PERMISSIONS | COMPANY_MANAGEMENT_PERMISSIONS,
+        "Company Admin": WORKFLOW_PERMISSIONS | COMPANY_MANAGEMENT_PERMISSIONS,
+        "Workspace Admin": WORKFLOW_PERMISSIONS | COMPANY_MANAGEMENT_PERMISSIONS,
+        "Billing Admin": {"billing.access", "billing.company", "billing.invoice"},
+        "Talent Manager": {"page.jobs", "talent.search"},
+        "Project Manager": WORKFLOW_PERMISSIONS,
+        "Team Lead": WORKFLOW_PERMISSIONS,
+        "Reviewer": {"page.jobs", "page.qa", "page.media", "page.scorecards", "page.memory"},
+        "Translator": {"page.jobs", "page.media"},
+        "Freelancer": {"page.jobs", "page.qa", "page.pro", "page.media", "page.scorecards", "page.memory"},
+        "Client": {"page.jobs"},
+        "Client Viewer": {"page.jobs"},
+        "Individual User": WORKFLOW_PERMISSIONS,
+        "User": WORKFLOW_PERMISSIONS,
+    },
+    "individual": {
+        "Individual Owner": WORKFLOW_PERMISSIONS | PERSONAL_WORKSPACE_OWNER_PERMISSIONS,
+        "Individual User": WORKFLOW_PERMISSIONS | {"billing.access", "billing.personal"},
+        "Freelancer": WORKFLOW_PERMISSIONS | {"billing.access", "billing.personal"},
+        "Translator": {"page.jobs", "page.media", "billing.access", "billing.personal"},
+        "Reviewer": {"page.jobs", "page.qa", "page.media", "page.scorecards", "page.memory", "billing.access", "billing.personal"},
+        "Client": {"page.jobs", "billing.access", "billing.personal"},
+        "User": WORKFLOW_PERMISSIONS | {"billing.access", "billing.personal"},
+    },
+}
+VALID_USER_ROLES = sorted({role for matrix in ROLE_PERMISSION_MATRIX.values() for role in matrix})
+ACCOUNT_TYPE_LABELS = {
+    "company": "Enterprise / Company",
+    "individual": "Individual Contractor",
+}
+PERMISSION_FLAG_LABELS = {
+    "team.manage": "Team management",
+    "billing.access": "Billing access",
+    "billing.company": "Company billing",
+    "billing.invoice": "Invoice generation",
+    "admin.workspace": "Workspace admin",
+    "talent.search": "Talent database",
+}
+PERMISSION_FLAG_ALIASES = {
+    "manage_team": "team.manage",
+    "can_manage_team": "team.manage",
+    "team": "team.manage",
+    "billing": "billing.access",
+    "company_billing": "billing.company",
+    "can_manage_billing": "billing.company",
+    "invoice": "billing.invoice",
+    "admin": "admin.workspace",
+    "workspace_admin": "admin.workspace",
+    "can_manage_workspace": "admin.workspace",
+    "talent": "talent.search",
+    "talent_database": "talent.search",
 }
 
 ROUTE_PAGE_ALIASES = {
@@ -4608,6 +5202,8 @@ ROUTE_PAGE_ALIASES = {
     "rules": "Memory & Rules",
     "billing": "Billing",
     "account": "Account",
+    "talent": "Talent Database",
+    "talent-database": "Talent Database",
 }
 PAGE_ROUTE_SLUGS = {page: slug for slug, page in ROUTE_PAGE_ALIASES.items() if page}
 PUBLIC_ROUTES = {
@@ -4727,6 +5323,8 @@ def normalize_es_page(raw_page: Any) -> str:
         "team roles": "Team & Roles",
         "billing": "Billing",
         "account": "Account",
+        "talent": "Talent Database",
+        "talent database": "Talent Database",
         "admin": "Admin",
         "scorecards": "Scorecards",
         "subtitle transcription editor": "Subtitle / Transcription Editor",
@@ -4739,13 +5337,142 @@ def normalize_es_page(raw_page: Any) -> str:
 def known_protected_es_pages() -> Set[str]:
     pages = set(HIDDEN_EDITOR_PAGES)
     pages.update(PAGE_ROUTE_SLUGS.keys())
-    for role_pages in ROLE_PAGE_ACCESS.values():
-        pages.update(role_pages)
+    pages.update(PAGE_PERMISSIONS.keys())
     return pages
 
 
 def current_user() -> Optional[Dict[str, Any]]:
     return st.session_state.get("user")
+
+
+def normalize_account_type(value: Any) -> str:
+    key = re.sub(r"[^a-z0-9]+", "_", safe_text(value).strip().lower()).strip("_")
+    if key in {"owner", "platform", "platform_owner"}:
+        return "platform"
+    if key in {"company", "enterprise", "workspace", "business", "organization", "organisation", "team", "company_workspace", "enterprise_company"}:
+        return "company"
+    if key in {"contractor", "individual", "freelancer", "personal", "solo", "solo_owner", "user", "individual_contractor", "individual_freelancer"}:
+        return "individual"
+    return ""
+
+
+def account_type_for_user(user: Optional[Dict[str, Any]] = None) -> str:
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return "platform"
+    explicit = normalize_account_type(candidate.get("account_type"))
+    if explicit:
+        return explicit
+    role = safe_text(candidate.get("role"))
+    profile_type = safe_text(candidate.get("profile_type")).lower()
+    if role in {"Freelancer", "Individual Owner", "Individual User"} or "freelancer" in profile_type:
+        return "individual"
+    return "company"
+
+
+def normalize_permission_flag(value: Any) -> str:
+    flag = safe_text(value).strip()
+    if not flag:
+        return ""
+    key = flag.lower().replace("-", "_").replace(" ", "_")
+    if flag in PERMISSION_FLAG_LABELS or flag in PAGE_PERMISSIONS.values() or flag in PLATFORM_PERMISSIONS:
+        return flag
+    return PERMISSION_FLAG_ALIASES.get(key, flag if "." in flag else "")
+
+
+def parse_permission_flags(value: Any) -> Set[str]:
+    if value is None:
+        return set()
+    raw_items: List[Any] = []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return set()
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, list):
+                raw_items = decoded
+            elif isinstance(decoded, dict):
+                raw_items = [key for key, enabled in decoded.items() if enabled]
+            else:
+                raw_items = re.split(r"[,;\n|]+", text)
+        except Exception:
+            raw_items = re.split(r"[,;\n|]+", text)
+    elif isinstance(value, dict):
+        raw_items = [key for key, enabled in value.items() if enabled]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    flags = {normalize_permission_flag(item) for item in raw_items}
+    return {flag for flag in flags if flag}
+
+
+def granted_permission_flags(user: Dict[str, Any]) -> Set[str]:
+    metadata = stored_metadata_dict(user.get("metadata_json"))
+    flags = set()
+    flags.update(parse_permission_flags(user.get("permission_flags")))
+    flags.update(parse_permission_flags(metadata.get("permission_flags")))
+    flags.update(parse_permission_flags(metadata.get("permissions")))
+    for key, flag in PERMISSION_FLAG_ALIASES.items():
+        if bool(user.get(key)) or bool(metadata.get(key)):
+            flags.add(flag)
+    return flags
+
+
+def effective_permissions(user: Optional[Dict[str, Any]] = None) -> Set[str]:
+    candidate = user if user is not None else (current_user() or {})
+    account_type = account_type_for_user(candidate)
+    role = "Platform Owner" if account_type == "platform" else safe_text(candidate.get("role") or "Individual User")
+    permissions = set(ACCOUNT_TYPE_BASE_PERMISSIONS.get(account_type, COMMON_SELF_SERVICE_PERMISSIONS))
+    permissions.update(ROLE_PERMISSION_MATRIX.get(account_type, {}).get(role, set()))
+    permissions.update(granted_permission_flags(candidate))
+    if account_type == "individual":
+        explicit = granted_permission_flags(candidate)
+        can_manage_personal_workspace = role == "Individual Owner"
+        for company_permission in {"team.manage", "admin.workspace", "billing.company"}:
+            if can_manage_personal_workspace and company_permission in {"team.manage", "admin.workspace"}:
+                continue
+            if company_permission not in explicit:
+                permissions.discard(company_permission)
+    return permissions
+
+
+def has_permission(permission: str, user: Optional[Dict[str, Any]] = None) -> bool:
+    return safe_text(permission) in effective_permissions(user)
+
+
+PREMIUM_TALENT_PLANS = {"premium", "pro", "agency", "enterprise", "unlimited"}
+INACTIVE_SUBSCRIPTION_STATUSES = {"cancelled", "canceled", "expired", "past_due", "unpaid", "inactive", "failed"}
+
+
+def active_plan_is_premium(plan_name: Any, status: Any = "Active") -> bool:
+    plan = safe_text(plan_name).lower()
+    state = safe_text(status or "Active").lower()
+    return plan in PREMIUM_TALENT_PLANS and state not in INACTIVE_SUBSCRIPTION_STATUSES
+
+
+def user_workspace_for_entitlement(user: Optional[Dict[str, Any]] = None) -> str:
+    candidate = user if user is not None else (current_user() or {})
+    workspace = safe_text(candidate.get("workspace"))
+    if is_platform_owner_identity(candidate) and safe_text(candidate.get("plan")).lower() == "unlimited":
+        return UNLIMITED_ACCESS_WORKSPACE
+    return workspace or "Demo Workspace"
+
+
+def has_active_premium_entitlement(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if user is not None else (current_user() or {})
+    workspace = user_workspace_for_entitlement(candidate)
+    try:
+        subscription = workspace_subscription(workspace)
+    except Exception:
+        subscription = {}
+    if active_plan_is_premium(subscription.get("plan"), subscription.get("status")):
+        return True
+    return active_plan_is_premium(candidate.get("plan"), candidate.get("status"))
+
+
+def can_access_talent_database(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if user is not None else (current_user() or {})
+    return has_permission("talent.search", candidate) and has_active_premium_entitlement(candidate)
 
 
 def platform_owner_emails() -> set:
@@ -4758,7 +5485,7 @@ def is_platform_owner_identity(user: Optional[Dict[str, Any]] = None) -> bool:
     email = safe_text(candidate.get("email")).strip().lower()
     role = safe_text(candidate.get("role"))
     account_type = safe_text(candidate.get("account_type")).strip().lower()
-    return role == "Platform Owner" or account_type == "owner" or email in platform_owner_emails()
+    return role == "Platform Owner" or account_type in {"owner", "platform"} or email in platform_owner_emails()
 
 
 def current_role() -> str:
@@ -4769,7 +5496,10 @@ def current_role() -> str:
 
 
 def allowed_pages() -> List[str]:
-    pages = list(ROLE_PAGE_ACCESS.get(current_role(), ROLE_PAGE_ACCESS["User"]))
+    permissions = effective_permissions()
+    pages = [page for page in ALL_APP_PAGES if PAGE_PERMISSIONS.get(page, "") in permissions]
+    if "Talent Database" in pages and not can_access_talent_database():
+        pages.remove("Talent Database")
     # Add hidden editor pages without showing them in the left navigation.
     for page in HIDDEN_EDITOR_PAGES:
         if page not in pages:
@@ -5205,8 +5935,318 @@ def nav_button(page: str, key_prefix: str = "nav") -> None:
     )
 
 
+def topnav_page_order(pages: List[str]) -> List[str]:
+    hidden_pages = set(HIDDEN_EDITOR_PAGES)
+    ordered: List[str] = []
+    for page in WORKSPACE_PAGES + OWNER_PAGES:
+        if page in pages and page not in hidden_pages and page not in ordered:
+            ordered.append(page)
+    for page in pages:
+        if page not in hidden_pages and page not in ordered:
+            ordered.append(page)
+    return ordered
+
+
+def topnav_panel_link(page: str, panel: str) -> str:
+    return "?" + urlencode({"es_page": normalize_es_page(page), "es_panel": safe_text(panel)})
+
+
+def current_ui_language(user: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+    candidate = user if user is not None else (current_user() or {})
+    metadata = stored_metadata_dict(candidate.get("metadata_json"))
+    code = safe_text(st.session_state.get("ui_language") or metadata.get("ui_language") or "EN").upper()
+    labels = dict(UI_LANGUAGE_OPTIONS)
+    if code not in labels:
+        code = "EN"
+    return code, labels.get(code, "English")
+
+
+def notification_time_value(record: Dict[str, Any]) -> str:
+    return safe_text(record.get("created") or record.get("created_at") or record.get("updated_at"))
+
+
+def notification_meta(record: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = record.get("metadata_json")
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if isinstance(metadata, str) and metadata.strip():
+        try:
+            decoded = json.loads(metadata)
+            return decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def notification_read_at(record: Dict[str, Any]) -> str:
+    metadata = notification_meta(record)
+    return safe_text(record.get("read_at") or metadata.get("read_at"))
+
+
+def notification_dismissed_at(record: Dict[str, Any]) -> str:
+    metadata = notification_meta(record)
+    return safe_text(record.get("dismissed_at") or metadata.get("dismissed_at"))
+
+
+def notification_dedupe_key(record: Dict[str, Any]) -> str:
+    event_type = safe_text(record.get("event_type"))
+    recipient = safe_text(record.get("recipient")).lower()
+    metadata = notification_meta(record)
+    action_target = safe_text(metadata.get("verify_url") or metadata.get("reset_url") or metadata.get("cta_url"))
+    if event_type in {"auth.email_verification", "auth.password_reset", "signup.welcome"}:
+        return f"{event_type}:{recipient}"
+    return f"{event_type}:{recipient}:{safe_text(record.get('subject')).lower()}:{action_target}"
+
+
+def sanitize_notification_message(value: Any) -> str:
+    text = safe_text(value)
+    text = re.sub(r"\?public=(verify|reset)&token=[^\s)]+", "use the action below", text)
+    text = re.sub(r"https?://[^\s)]+", "use the action below", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def notification_kind_label(event_type: str) -> str:
+    if event_type.startswith("auth."):
+        return "Account"
+    if event_type.startswith("signup"):
+        return "Onboarding"
+    if event_type.startswith("billing"):
+        return "Billing"
+    if "invite" in event_type:
+        return "Team"
+    if "support" in event_type:
+        return "Support"
+    if "status" in event_type:
+        return "Status"
+    return "Notice"
+
+
+def note_action_link(active_page: str, action: str, note_id: str = "", panel: str = "notes", page: str = "") -> str:
+    params = {"es_page": normalize_es_page(page or active_page), "es_panel": panel, "es_note_action": safe_text(action)}
+    if safe_text(note_id):
+        params["note_id"] = safe_text(note_id)
+    return "?" + urlencode(params)
+
+
+def update_notification_record(note_id: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    note_id = safe_text(note_id)
+    if not note_id:
+        return None
+    for idx, item in enumerate(st.session_state.get("notifications", [])):
+        if safe_text(item.get("id")) != note_id:
+            continue
+        updated = dict(item)
+        metadata = notification_meta(updated)
+        for key, value in changes.items():
+            if key in {"read_at", "dismissed_at"}:
+                updated[key] = value
+                metadata[key] = value
+            else:
+                updated[key] = value
+        updated["metadata_json"] = metadata
+        updated["updated_at"] = now_stamp()
+        persisted = persist_saas_record("notifications", updated)
+        st.session_state.notifications[idx] = persisted
+        return persisted
+    return None
+
+
+def handle_topnav_note_action() -> None:
+    action = safe_text(query_get("es_note_action")).lower()
+    note_id = safe_text(query_get("note_id"))
+    if not action:
+        return
+    if action == "read":
+        update_notification_record(note_id, {"read_at": now_stamp()})
+        query_clear("es_note_action")
+        query_clear("note_id")
+        st.rerun()
+    if action == "dismiss":
+        update_notification_record(note_id, {"dismissed_at": now_stamp(), "read_at": now_stamp()})
+        query_clear("es_note_action")
+        query_clear("note_id")
+        st.rerun()
+    if action == "complete_profile":
+        open_account_professional_profile_editor()
+        update_notification_record(note_id, {"read_at": now_stamp()})
+        query_clear("es_panel")
+        query_clear("es_note_action")
+        query_clear("note_id")
+        st.rerun()
+
+
+def user_visible_notifications(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    email = safe_text(user.get("email")).lower()
+    workspace = safe_text(user.get("workspace")).lower()
+    if is_owner():
+        rows = list(st.session_state.get("notifications", []))
+    else:
+        rows = []
+        for item in st.session_state.get("notifications", []):
+            recipient = safe_text(item.get("recipient")).lower()
+            item_workspace = safe_text(item.get("workspace")).lower()
+            if recipient == email or (not recipient and item_workspace == workspace):
+                rows.append(item)
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for item in sorted(rows, key=notification_time_value, reverse=True):
+        if notification_dismissed_at(item):
+            continue
+        key = notification_dedupe_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def normalized_notification_note(record: Dict[str, Any], user: Dict[str, Any], active_page: str) -> Dict[str, Any]:
+    metadata = notification_meta(record)
+    event_type = safe_text(record.get("event_type") or "notice")
+    title = safe_text(record.get("subject") or metadata.get("title") or event_type.replace(".", " ").title())
+    message = sanitize_notification_message(record.get("body") or metadata.get("message") or title)
+    note_id = safe_text(record.get("id"))
+    is_read = bool(notification_read_at(record))
+    actions: List[Dict[str, str]] = []
+    action_required = False
+
+    if event_type == "auth.email_verification" and not bool(user.get("email_verified")):
+        verify_url = safe_text(metadata.get("verify_url"))
+        title = "Verify your email"
+        message = "Secure your ErrorSweep account by verifying your email address."
+        action_required = True
+        if verify_url:
+            actions.append({"label": "Verify email", "href": verify_url, "kind": "primary"})
+    elif event_type == "auth.password_reset":
+        reset_url = safe_text(metadata.get("reset_url"))
+        title = "Password reset requested"
+        message = "Use the password reset action if you requested this change."
+        if reset_url:
+            actions.append({"label": "Reset password", "href": reset_url, "kind": "primary"})
+    elif event_type == "signup.welcome":
+        title = "Welcome to ErrorSweep"
+        message = "Your account is ready. Complete your profile to help employers and managers match you with suitable work."
+        if normalized_profile_completion_status(user) != "completed":
+            action_required = True
+            actions.append({"label": "Complete profile", "href": note_action_link(active_page, "complete_profile", note_id, page="Dashboard"), "kind": "primary"})
+    elif event_type.startswith("billing"):
+        actions.append({"label": "Open Billing", "href": page_link("Billing"), "kind": "primary"})
+    elif "invite" in event_type:
+        actions.append({"label": "Open Jobs", "href": page_link("Jobs"), "kind": "primary"})
+
+    if not is_read:
+        actions.append({"label": "Mark as read", "href": note_action_link(active_page, "read", note_id), "kind": ""})
+    actions.append({"label": "Dismiss", "href": note_action_link(active_page, "dismiss", note_id), "kind": "danger"})
+
+    return {
+        "id": note_id,
+        "type": notification_kind_label(event_type),
+        "title": title,
+        "message": message,
+        "created": notification_time_value(record),
+        "is_read": is_read,
+        "action_required": action_required,
+        "actions": actions,
+    }
+
+
+def normalized_notification_notes(records: List[Dict[str, Any]], user: Dict[str, Any], active_page: str) -> List[Dict[str, Any]]:
+    notes = [normalized_notification_note(record, user, active_page) for record in records]
+    return sorted(notes, key=lambda note: safe_text(note.get("created")), reverse=True)
+
+
+def notification_badge_count(notes: List[Dict[str, Any]]) -> int:
+    return sum(1 for note in notes if not note.get("is_read") or note.get("action_required"))
+
+
+def render_topnav_notes_panel(active_page: str, notifications: List[Dict[str, Any]], user: Dict[str, Any]) -> None:
+    notes = normalized_notification_notes(notifications, user, active_page)
+    unread_count = notification_badge_count(notes)
+    close_href = page_link(active_page)
+    rows = []
+    for note in notes[:12]:
+        action_html = "".join(
+            f'<a class="es-note-action {escape(action.get("kind", ""))}" href="{escape(action.get("href", "#"))}" target="_self">{escape(action.get("label", ""))}</a>'
+            for action in note.get("actions", [])
+        )
+        unread_cls = " unread" if (not note.get("is_read") or note.get("action_required")) else ""
+        dot_html = '<span class="es-note-dot"></span>' if unread_cls else ''
+        rows.append(
+            f'<article class="es-note-item{unread_cls}">'
+            '<div class="es-note-topline">'
+            f'<span class="es-note-type">{escape(safe_text(note.get("type")))}</span>{dot_html}'
+            '</div>'
+            f'<b>{escape(safe_text(note.get("title")))}</b>'
+            f'<div class="es-note-message">{escape(safe_text(note.get("message")))}</div>'
+            f'<div class="es-note-meta">{escape(format_local_time(note.get("created")) or safe_text(note.get("created")))}'
+            f' - {"Unread" if not note.get("is_read") else "Read"}</div>'
+            f'<div class="es-note-actions">{action_html}</div>'
+            '</article>'
+        )
+    notes_html = "".join(rows) if rows else '<div class="es-note-empty"><b>No unread notifications</b><br>Important account, billing, team, and workflow notes will appear here.</div>'
+    st.markdown(
+        dedent(f"""
+        <section class="es-topnav-panel" aria-label="Notification drawer">
+          <div class="es-topnav-panel-head">
+            <div>
+              <div class="es-topnav-panel-title">Notifications</div>
+              <div class="es-note-meta">{unread_count} unread or action-required</div>
+            </div>
+            <a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>
+          </div>
+          <div class="es-note-list">{notes_html}</div>
+        </section>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+
+def render_topnav_language_panel(active_page: str, user: Dict[str, Any]) -> None:
+    close_href = page_link(active_page)
+    current_code, _ = current_ui_language(user)
+    option_labels = [f"{code} - {label}" for code, label in UI_LANGUAGE_OPTIONS]
+    default_index = next((idx for idx, (code, _) in enumerate(UI_LANGUAGE_OPTIONS) if code == current_code), 0)
+    st.markdown(
+        dedent(f"""
+        <section class="es-topnav-panel" aria-label="UI language selector">
+          <div class="es-topnav-panel-head">
+            <div class="es-topnav-panel-title">UI language</div>
+            <a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>
+          </div>
+        </section>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+    with st.container(key="topnav_language_selector"):
+        selected = st.selectbox("Interface language", option_labels, index=default_index, key="topnav_ui_language_select")
+        if st.button("Apply language", use_container_width=False, key="topnav_apply_language"):
+            code = selected.split(" - ", 1)[0]
+            label = dict(UI_LANGUAGE_OPTIONS).get(code, "English")
+            st.session_state["ui_language"] = code
+            metadata = stored_metadata_dict(user.get("metadata_json"))
+            save_current_user_profile({
+                "metadata_json": {
+                    **metadata,
+                    "ui_language": code,
+                    "ui_language_label": label,
+                },
+            })
+            query_clear("es_panel")
+            st.rerun()
+
+
+def render_topnav_panel(active_page: str, user: Dict[str, Any], notifications: List[Dict[str, Any]]) -> None:
+    panel = safe_text(query_get("es_panel")).lower()
+    permissions = effective_permissions(user)
+    if panel == "notes" and "notes.view" in permissions:
+        render_topnav_notes_panel(active_page, notifications, user)
+    elif panel in {"language", "lang"} and "language.select" in permissions:
+        render_topnav_language_panel(active_page, user)
+
+
 def render_navigation() -> None:
     user = current_user() or {}
+    permissions = effective_permissions(user)
     pages = allowed_pages()
     label_map = {
         "Dashboard": "Dashboard",
@@ -5221,39 +6261,52 @@ def render_navigation() -> None:
         "Billing": "Billing",
         "Account": "Account",
         "Admin": "Admin",
+        "Talent Database": "Talent",
     }
-    workspace_pages = [page for page in WORKSPACE_PAGES if page in pages]
-    owner_pages = OWNER_PAGES if is_owner() else []
+    nav_pages = topnav_page_order(pages)
+    primary_nav_pages = [page for page in nav_pages if page in WORKSPACE_PAGES]
+    owner_nav_pages = [page for page in OWNER_PAGES if page in pages] if is_owner() else []
+    active_page = safe_text(st.session_state.get("page", "Dashboard"))
+    handle_topnav_note_action()
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
         if safe_text(job.get("status")).lower() in {"draft", "needs human review", "needs_review", "running"}
     )
-    notification_count = len(st.session_state.get("notifications", []))
-    user_email = safe_text(user.get("email", "user@errorsweep.local"))
-    user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
+    visible_notifications = user_visible_notifications(user)
+    notification_count = notification_badge_count(normalized_notification_notes(visible_notifications, user, active_page))
+    user_name = display_name_from_user(user)
     role = current_role()
-    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
-    active_page = safe_text(st.session_state.get("page", "Dashboard"))
-    owner_badge = '<div class="es-topnav-owner-tag">Owner only</div>' if is_owner() else ""
+    active_panel = safe_text(query_get("es_panel")).lower()
+    language_code, _ = current_ui_language(user)
+    notes_href = topnav_panel_link(active_page, "notes")
+    language_href = topnav_panel_link(active_page, "language")
     nav_links = "".join(
         f'<a class="es-topnav-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
-        for page in workspace_pages
+        for page in primary_nav_pages
     )
-    owner_strip = ""
-    if owner_pages:
-        owner_links = "".join(
-            f'<a class="es-owner-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
-            for page in owner_pages
-        )
-        owner_strip = f'<div class="es-owner-strip" aria-label="Owner only pages">{owner_links}</div>'
+    owner_nav_links = "".join(
+        f'<a class="es-topnav-owner-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+        for page in owner_nav_pages
+    )
+    jobs_tool = (
+        f'<a class="es-topnav-tool" href="{escape(page_link("Jobs"))}" target="_self" title="Jobs">JOBS<span class="es-topnav-badge">{open_count}</span></a>'
+        if "Jobs" in pages else ""
+    )
+    notes_tool = (
+        f'<a class="es-topnav-tool {"active" if active_panel == "notes" else ""}" href="{escape(notes_href)}" target="_self" title="Notifications">NOTES<span class="es-topnav-badge">{notification_count}</span></a>'
+        if "notes.view" in permissions else ""
+    )
+    language_tool = (
+        f'<a class="es-topnav-tool {"active" if active_panel in {"language", "lang"} else ""}" href="{escape(language_href)}" target="_self" title="Language">{escape(language_code)}</a>'
+        if "language.select" in permissions else ""
+    )
     account_links: List[str] = []
-    if "Jobs" in pages:
-        account_links.append(f'<a href="{escape(page_link("Jobs"))}" target="_self">Jobs <span>{open_count}</span></a>')
-    if "Account" in pages:
-        account_links.append(f'<a href="{escape(page_link("Account"))}" target="_self">Account <span>Profile</span></a>')
-    if settings_page and settings_page in pages and settings_page not in {"Jobs", "Account"}:
-        account_links.append(f'<a href="{escape(page_link(settings_page))}" target="_self">{escape(settings_page)} <span>Settings</span></a>')
+    account_menu_pages = ["Jobs", "Team & Roles", "Billing", "Admin", "Talent Database", "Platform Settings", "Owner Console", "Account"]
+    for page in account_menu_pages:
+        if page in pages:
+            badge = str(open_count) if page == "Jobs" else ("Profile" if page == "Account" else "Open")
+            account_links.append(f'<a href="{escape(page_link(page))}" target="_self">{escape(label_map.get(page, page))} <span>{escape(badge)}</span></a>')
     account_links.append('<a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>')
     account_menu = "".join(account_links)
     topnav = dedent(f"""
@@ -5264,16 +6317,15 @@ def render_navigation() -> None:
           <div class="es-topnav-brand-copy">
             <div class="es-topnav-name">error<span>sweep</span></div>
             <div class="es-topnav-sub">by Nawin Corp</div>
-            {owner_badge}
           </div>
         </div>
         <div class="es-topnav-links">
           {nav_links}
         </div>
         <div class="es-topnav-tools">
-          <div class="es-topnav-tool" title="Jobs">JOBS<span class="es-topnav-badge">{open_count}</span></div>
-          <div class="es-topnav-tool" title="Notifications">NOTES<span class="es-topnav-badge">{notification_count}</span></div>
-          <div class="es-topnav-tool" title="Language">EN</div>
+          {jobs_tool}
+          {notes_tool}
+          {language_tool}
           <div class="es-topnav-user-wrap">
             <div class="es-topnav-user" tabindex="0" title="Account menu">
               <div>
@@ -5289,13 +6341,19 @@ def render_navigation() -> None:
           </div>
         </div>
       </div>
-      {owner_strip}
+      <div class="es-topnav-owner-row" style="display: {"flex" if owner_nav_links else "none"};">
+        <div class="es-topnav-owner-tag">Owner tools</div>
+        <div class="es-topnav-owner-links">
+          {owner_nav_links}
+        </div>
+      </div>
     </nav>
     """).strip()
     # Keep the fragment out of Markdown block/code parsing, especially when
     # role-specific optional sections such as the owner badge are empty.
     topnav = "".join(line.strip() for line in topnav.splitlines() if line.strip())
     st.markdown(topnav, unsafe_allow_html=True)
+    render_topnav_panel(active_page, user, visible_notifications)
     return
 
 
@@ -6407,7 +7465,7 @@ def safe_sso_role(payload: Dict[str, Any], connection: Dict[str, str]) -> str:
         if allow_owner and safe_text(connection.get("workspace")) == "Platform":
             return "Platform Owner"
         return "User"
-    return requested if requested in ROLE_PAGE_ACCESS else "User"
+    return requested if requested in VALID_USER_ROLES else "User"
 
 
 def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -6457,6 +7515,8 @@ def ensure_sso_user(payload: Dict[str, Any], connection: Dict[str, str]) -> Tupl
         "email": email,
         "workspace": workspace,
         "role": role,
+        "account_type": "company" if workspace != "Platform" else "platform",
+        "permission_flags": "",
         "plan": safe_text(workspace_record.get("plan") or "Enterprise"),
         "status": "Active",
         "password_hash": "",
@@ -7190,7 +8250,7 @@ def render_privacy_request_tracker(workspace_options: Optional[List[str]] = None
             created = create_privacy_request(selected_workspace, request_type, requester_email, subject, notes, due_at=due_at)
             st.success(f"Privacy request created: {created['id'][:10]}")
 
-    show_all_requests = current_role() == "Platform Owner" and selected_workspace == "Platform"
+    show_all_requests = has_permission("platform.settings") and selected_workspace == "Platform"
     rows = [
         item for item in st.session_state.get("privacy_requests", [])
         if show_all_requests or safe_text(item.get("workspace")) == selected_workspace
@@ -7406,7 +8466,7 @@ def render_support_queue_panel(workspace_options: Optional[List[str]] = None, ke
     selected_workspace = current_workspace if current_workspace in options else options[0]
     if len(options) > 1:
         selected_workspace = st.selectbox("Support queue workspace", options, index=options.index(selected_workspace), key=f"{key_prefix}_queue_workspace")
-    show_all = current_role() == "Platform Owner" and selected_workspace == "Platform"
+    show_all = has_permission("platform.settings") and selected_workspace == "Platform"
     tickets = [
         item for item in st.session_state.get("support_tickets", [])
         if show_all or safe_text(item.get("workspace")) == selected_workspace
@@ -7555,7 +8615,7 @@ def status_incident_visible(record: Dict[str, Any], workspace: str) -> bool:
     if scope == "All Workspaces":
         return True
     if scope == "Platform":
-        return current_role() == "Platform Owner"
+        return has_permission("platform.owner")
     return scope == safe_text(workspace)
 
 
@@ -7982,6 +9042,8 @@ def queue_email_notification(
         "provider": provider,
         "status": "provider_pending" if provider in {"", "manual", "not_configured"} else "queued",
         "error": "",
+        "read_at": "",
+        "dismissed_at": "",
         "sent_at": "",
         "metadata_json": metadata_json,
     }
@@ -8652,12 +9714,20 @@ def radial_progress_svg(score: int, label: str = "TQI") -> str:
     """
 
 
-def first_name_from_user(user: Dict[str, Any]) -> str:
+def display_name_from_user(user: Dict[str, Any]) -> str:
+    full_name = safe_text(user.get("full_name"))
+    if full_name:
+        return full_name
     email = safe_text(user.get("email", ""))
     if not email:
         return "there"
     name = email.split("@", 1)[0].replace("_", " ").replace(".", " ").strip()
-    return name.split()[0].title() if name else "there"
+    return name.title() if name else "there"
+
+
+def first_name_from_user(user: Dict[str, Any]) -> str:
+    name = display_name_from_user(user)
+    return name.split()[0] if name and name != "there" else "there"
 
 
 def dashboard_attention_items() -> List[Dict[str, str]]:
@@ -9097,8 +10167,7 @@ def build_invoice_workbook(invoice: Dict[str, Any]) -> bytes:
 def render_invoice_panel(workspace: str, subscription: Dict[str, Any]) -> None:
     st.markdown("### Invoices and receipts")
     st.caption("Generate downloadable draft invoice/receipt records for subscription payments. Live statutory invoicing still needs your payment gateway and tax-advisor approved template.")
-    role = current_role()
-    can_generate = role in {"Platform Owner", "Workspace Owner", "Billing Admin"}
+    can_generate = has_permission("billing.invoice")
     plan = plan_record(subscription.get("plan", "Trial"))
     default_amount = float(subscription.get("base_amount") or plan.get("monthly") or 0)
     user = current_user() or {}
@@ -9806,9 +10875,7 @@ def workspace_user_count(workspace: str = "", include_pending: bool = True) -> i
         return 0
     active_statuses = {"active", "invited"} if include_pending else {"active"}
     emails = set()
-    for item in st.session_state.get("users", []):
-        if safe_text(item.get("workspace")) != workspace:
-            continue
+    for item in workspace_user_records(workspace):
         status = safe_text(item.get("status") or "Active").lower()
         if status not in active_statuses:
             continue
@@ -13354,7 +14421,9 @@ def render_reference_cat_editor_shell(
         """
         <div id="human-review-editor-page-marker" class="human-review-editor-page human_review_editor_page" aria-hidden="true"></div>
         <style>
+        html:has(#human-review-editor-page-marker),
         body:has(#human-review-editor-page-marker),
+        body:has(#human-review-editor-page-marker) .stApp,
         body:has(#human-review-editor-page-marker) [data-testid="stAppViewContainer"],
         body:has(#human-review-editor-page-marker) [data-testid="stMain"] {
             height:100dvh !important;
@@ -13369,26 +14438,37 @@ def render_reference_cat_editor_shell(
         }
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content {
             width:100% !important;
-            max-width:var(--es-shell-content-width) !important;
+            max-width:100% !important;
             min-width:0 !important;
-            padding:var(--es-shell-frame-padding) !important;
-            margin:0 auto !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            min-height:0 !important;
+            padding:0 !important;
+            margin:0 !important;
             overflow:hidden !important;
         }
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell,
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_page_frame,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_page_frame > div[data-testid="stVerticalBlock"],
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div,
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
-        body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
+        body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div,
+        body:has(#human-review-editor-page-marker) div[data-testid="stIFrame"],
+        body:has(#human-review-editor-page-marker) div[data-testid="stIFrame"] > div {
+            height:100% !important;
+            max-height:100% !important;
+            min-height:0 !important;
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
-            margin:0 auto !important;
+            margin:0 !important;
             padding:0 !important;
             left:auto !important;
             right:auto !important;
             transform:none !important;
+            overflow:hidden !important;
         }
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
@@ -13420,8 +14500,11 @@ def render_reference_cat_editor_shell(
             max-width:100% !important;
             min-width:0 !important;
             height:100% !important;
+            max-height:100% !important;
+            min-height:0 !important;
             display:block !important;
             border:0 !important;
+            overflow:hidden !important;
         }
         #human-review-editor-page-marker,
         .human-review-editor-page,
@@ -14324,6 +15407,79 @@ def render_interactive_media_timeline(rows: List[Dict[str, Any]], current_idx: i
         """,
         height=126,
     )
+
+
+def media_gap_label(value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    if value < 0:
+        return f"{abs(value):.1f}s overlap"
+    return f"{value:.1f}s"
+
+
+def clear_media_timing_widget_state(idx: int) -> None:
+    for prefix in ["focus_start", "focus_end"]:
+        st.session_state.pop(f"{prefix}_{idx}", None)
+
+
+def render_media_timing_adjuster(rows: List[Dict[str, Any]], idx: int, key_prefix: str) -> None:
+    if not rows or idx < 0 or idx >= len(rows):
+        return
+
+    stats = media_timing_summary(rows, idx)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Duration", f"{stats['duration']:.1f}s")
+    m2.metric("CPS", stats["cps"])
+    m3.metric("Prev gap", media_gap_label(stats.get("previous_gap")))
+    m4.metric("Next gap", media_gap_label(stats.get("next_gap")))
+
+    step = st.number_input(
+        "Timing step",
+        min_value=0.1,
+        max_value=10.0,
+        value=0.5,
+        step=0.1,
+        format="%.1f",
+        key=f"{key_prefix}_step",
+    )
+    duration_target = st.number_input(
+        "Set duration",
+        min_value=0.1,
+        max_value=600.0,
+        value=max(0.1, float(stats["duration"])),
+        step=0.1,
+        format="%.1f",
+        key=f"{key_prefix}_duration",
+    )
+
+    def apply_timing_action(action: str, amount: float = 0.0) -> None:
+        updated = adjust_media_segment_timing(rows, idx, action, amount)
+        rows[:] = updated
+        st.session_state.subtitle_segments = updated
+        clear_media_timing_widget_state(idx)
+        st.rerun()
+
+    move_a, move_b, start_a, start_b, end_a, end_b = st.columns(6)
+    if move_a.button("Move -", key=f"{key_prefix}_move_back", use_container_width=True):
+        apply_timing_action("move", -float(step))
+    if move_b.button("Move +", key=f"{key_prefix}_move_forward", use_container_width=True):
+        apply_timing_action("move", float(step))
+    if start_a.button("Start -", key=f"{key_prefix}_start_back", use_container_width=True):
+        apply_timing_action("trim_start", -float(step))
+    if start_b.button("Start +", key=f"{key_prefix}_start_forward", use_container_width=True):
+        apply_timing_action("trim_start", float(step))
+    if end_a.button("End -", key=f"{key_prefix}_end_back", use_container_width=True):
+        apply_timing_action("trim_end", -float(step))
+    if end_b.button("End +", key=f"{key_prefix}_end_forward", use_container_width=True):
+        apply_timing_action("trim_end", float(step))
+
+    snap_a, snap_b, duration_col = st.columns(3)
+    if snap_a.button("Snap prev", key=f"{key_prefix}_snap_prev", use_container_width=True, disabled=idx == 0):
+        apply_timing_action("snap_start_previous")
+    if snap_b.button("Snap next", key=f"{key_prefix}_snap_next", use_container_width=True, disabled=idx >= len(rows) - 1):
+        apply_timing_action("snap_end_next")
+    if duration_col.button("Apply duration", key=f"{key_prefix}_apply_duration", use_container_width=True):
+        apply_timing_action("set_duration", float(duration_target))
 
 
 def openai_client() -> Optional[OpenAI]:
@@ -15559,6 +16715,7 @@ def render_login() -> None:
         """).strip(),
     )
     st.markdown("## Login to ErrorSweep")
+    st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
     if is_authenticated():
         st.info("You are signed in. Opening your dashboard.")
@@ -15566,149 +16723,260 @@ def render_login() -> None:
         st.rerun()
         return
 
-    tabs = st.tabs(["Platform owner", "Workspace user", "Demo access"])
+    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@errorsweep.local")
+    owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+    bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@errorsweep.local")
+    bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
+    default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
 
-    with tabs[0]:
-        st.markdown("### Platform Owner Login")
-        owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@errorsweep.local")
-        owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
-        with st.form("owner_login"):
-            email = st.text_input("Owner email", value=owner_user if not owner_is_configured else "")
-            password = st.text_input("Owner password", type="password")
-            accepted = st.checkbox(compliance_ack_label(), key="owner_compliance_ack")
-            submitted = st.form_submit_button("Sign in as Platform Owner", use_container_width=True)
-        render_sso_login_controls("owner")
-        if submitted:
-            if not accepted:
-                st.error("Please accept the workspace compliance terms before signing in.")
-                return
-            else:
-                allowed_attempt, throttle_message = consume_abuse_attempt("owner_login", email.strip() or owner_user)
-                if not allowed_attempt:
-                    st.error(throttle_message)
-                    return
-            if owner_is_configured and hmac.compare_digest(email.strip(), owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
-                clear_abuse_attempts("owner_login", email.strip() or owner_user)
-                login_user(email, "Platform Owner", "owner", "Platform")
-                record_consent_acceptance(email, "Platform Owner", "owner", "Platform", "owner_login")
-                add_audit("Owner sign-in", email)
-                st.rerun()
-            elif safe_text(email).strip().lower() == UNLIMITED_ACCESS_EMAIL and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
-                clear_abuse_attempts("owner_login", email.strip() or UNLIMITED_ACCESS_EMAIL)
-                ensure_unlimited_access_account()
-                login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
-                record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "owner_login")
-                add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
-                st.rerun()
-            elif not owner_is_configured:
-                st.warning("Owner password hash is not configured. Use Demo access while building.")
-            else:
-                st.error("Invalid owner credentials.")
+    with st.form("unified_login", enter_to_submit=True):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        accepted = st.checkbox(compliance_ack_label(), key="unified_login_compliance_ack")
+        submitted = st.form_submit_button("Login", use_container_width=True)
 
-    with tabs[1]:
-        st.markdown("### Workspace User Login")
-        user_name = secret("ERRORSWEEP_USER_USERNAME", "user@errorsweep.local")
-        user_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
-        default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
-        with st.form("user_login"):
-            email = st.text_input("User email", value=user_name if not user_is_configured else "")
-            password = st.text_input("User password", type="password")
-            accepted = st.checkbox(compliance_ack_label(), key="user_compliance_ack")
-            submitted = st.form_submit_button("Sign in", use_container_width=True)
-        render_sso_login_controls("user")
-        if submitted:
-            if not accepted:
-                st.error("Please accept the workspace compliance terms before signing in.")
-                return
-            else:
-                allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", email.strip() or user_name)
-                if not allowed_attempt:
-                    st.error(throttle_message)
-                    return
-            if safe_text(email).strip().lower() == UNLIMITED_ACCESS_EMAIL and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
-                clear_abuse_attempts("workspace_login", email.strip())
-                ensure_unlimited_access_account()
-                login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
-                record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "workspace_login")
-                add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
-                st.rerun()
-            if user_is_configured and hmac.compare_digest(email.strip(), user_name.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
-                configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
-                clear_abuse_attempts("workspace_login", email.strip() or user_name)
-                login_user(email, default_role, "workspace", configured_workspace)
-                record_consent_acceptance(email, default_role, "workspace", configured_workspace, "workspace_login")
-                add_audit("Workspace user sign-in", email)
-                st.rerun()
-            else:
-                stored_users = load_saas_records("users", include_all_workspaces=True, limit=1000)
-                matched = next((u for u in stored_users if hmac.compare_digest(str(u.get("email", "")).strip().lower(), email.strip().lower())), None)
-                if matched and safe_text(matched.get("status", "Active")).lower() not in {"active", "invited"}:
-                    st.error("This workspace account is not active. Contact your workspace owner.")
-                elif matched and verify_password(password, str(matched.get("password_hash", ""))):
-                    if is_production_mode() and not bool(matched.get("email_verified")):
-                        verify_url = queue_verification_email(email.strip(), matched.get("workspace", "Demo Workspace"))
-                        st.warning("Please verify your email before signing in. A verification link was added to the notification outbox.")
-                        if not email_provider_label() or email_provider_label() == "not_configured":
-                            st.caption(f"Local verification link: {verify_url}")
-                        return
-                    matched_role = matched.get("role", default_role) or default_role
-                    matched_workspace = matched.get("workspace", "Demo Workspace") or "Demo Workspace"
-                    clear_abuse_attempts("workspace_login", email.strip())
-                    login_user(email.strip(), matched_role, "workspace", matched_workspace)
-                    record_consent_acceptance(email.strip(), matched_role, "workspace", matched_workspace, "workspace_login")
-                    add_audit("Workspace user sign-in", email.strip())
-                    st.rerun()
-                elif not user_is_configured and not matched:
-                    st.warning("No matching workspace account found. Create one from Sign up, or use Demo access while building.")
-                else:
-                    st.error("Invalid workspace credentials.")
-        with st.expander("Forgot password?", expanded=False):
-            reset_email = st.text_input("Account email", key="password_reset_email")
-            if st.button("Send password reset link", use_container_width=True, key="send_password_reset"):
-                allowed_attempt, throttle_message = consume_abuse_attempt("password_reset", reset_email.strip() or "anonymous")
-                if not allowed_attempt:
-                    st.error(throttle_message)
-                    return
-                matched = next(
-                    (
-                        u for u in load_saas_records("users", include_all_workspaces=True, limit=1000)
-                        if safe_text(u.get("email")).lower() == safe_text(reset_email).lower()
-                    ),
-                    None,
-                )
-                workspace = safe_text((matched or {}).get("workspace") or "Demo Workspace")
-                if safe_text(reset_email):
-                    reset_url = queue_password_reset_email(reset_email.strip(), workspace)
-                else:
-                    reset_url = ""
-                st.success("If that account exists, a password reset link has been added to the notification outbox.")
-                if reset_url and email_provider_label() == "not_configured":
-                    st.caption(f"Local reset link: {reset_url}")
-
-    with tabs[2]:
-        st.markdown("### Demo Access")
-        if is_production_mode() or not feature_flag("demo_access"):
-            st.warning("Demo access is disabled by environment or Platform Settings.")
+    if submitted:
+        clean_email = safe_text(email).strip()
+        if not clean_email or not password:
+            st.error("Please enter your email and password.")
             return
-        demo_role = st.selectbox(
-            "Preview as",
-            ["Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"],
+        if not accepted:
+            st.error("Please accept the workspace compliance terms before signing in.")
+            return
+        allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", clean_email)
+        if not allowed_attempt:
+            st.error(throttle_message)
+            return
+
+        email_key = clean_email.lower()
+        if email_key == UNLIMITED_ACCESS_EMAIL.lower() and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
+            clear_abuse_attempts("workspace_login", clean_email)
+            ensure_unlimited_access_account()
+            login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
+            record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "unified_login")
+            add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
+            st.rerun()
+
+        if owner_is_configured and hmac.compare_digest(clean_email, owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
+            clear_abuse_attempts("workspace_login", clean_email)
+            login_user(clean_email, "Platform Owner", "owner", "Platform")
+            record_consent_acceptance(clean_email, "Platform Owner", "owner", "Platform", "unified_login")
+            add_audit("Unified owner login", clean_email)
+            st.rerun()
+
+        if bootstrap_is_configured and hmac.compare_digest(clean_email, bootstrap_user.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
+            configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
+            clear_abuse_attempts("workspace_login", clean_email)
+            login_user(clean_email, default_role, "workspace", configured_workspace)
+            record_consent_acceptance(clean_email, default_role, "workspace", configured_workspace, "unified_login")
+            add_audit("Unified workspace login", clean_email)
+            st.rerun()
+
+        matched = find_user_by_email(clean_email)
+        if matched and safe_text(matched.get("status", "Active")).lower() not in {"active", "invited"}:
+            st.error("This account is not active. Contact your workspace owner or ErrorSweep management.")
+            return
+        if matched and verify_password(password, safe_text(matched.get("password_hash", ""))):
+            if is_production_mode() and not bool(matched.get("email_verified")):
+                verify_url = queue_verification_email(clean_email, matched.get("workspace", "Demo Workspace"))
+                st.warning("Please verify your email before signing in. A verification link was added to the notification outbox.")
+                if email_provider_label() == "not_configured":
+                    st.caption(f"Local verification link: {verify_url}")
+                return
+            matched_role = safe_text(matched.get("role") or default_role or "User")
+            matched_workspace = safe_text(matched.get("workspace") or "Demo Workspace")
+            account_type = safe_text(matched.get("account_type")) or ("owner" if matched_role == "Platform Owner" or matched_workspace == "Platform" else "workspace")
+            clear_abuse_attempts("workspace_login", clean_email)
+            login_user(clean_email, matched_role, account_type, matched_workspace)
+            record_consent_acceptance(clean_email, matched_role, account_type, matched_workspace, "unified_login")
+            add_audit("Unified login", clean_email)
+            st.rerun()
+
+        st.error("Invalid email or password.")
+
+    with st.expander("Forgot password?", expanded=False):
+        reset_email = st.text_input("Account email", key="password_reset_email")
+        if st.button("Send password reset link", use_container_width=True, key="send_password_reset"):
+            allowed_attempt, throttle_message = consume_abuse_attempt("password_reset", reset_email.strip() or "anonymous")
+            if not allowed_attempt:
+                st.error(throttle_message)
+                return
+            matched = find_user_by_email(reset_email)
+            workspace = safe_text((matched or {}).get("workspace") or "Demo Workspace")
+            reset_url = queue_password_reset_email(reset_email.strip(), workspace) if safe_text(reset_email) else ""
+            st.success("If that account exists, a password reset link has been added to the notification outbox.")
+            if reset_url and email_provider_label() == "not_configured":
+                st.caption(f"Local reset link: {reset_url}")
+
+
+def profile_language_defaults(metadata: Dict[str, Any], key: str) -> List[str]:
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return [safe_text(item) for item in value if safe_text(item) in LANGUAGE_CATALOG]
+    return csv_choices(value, LANGUAGE_CATALOG)
+
+
+def render_profile_completion_form(user: Dict[str, Any], form_key: str = "profile_completion_form") -> None:
+    metadata = stored_metadata_dict(user.get("metadata_json"))
+    current_primary_role = safe_text(user.get("primary_role"))
+    default_services = csv_choices(user.get("services"), TALENT_SERVICES)
+    default_domains = csv_choices(user.get("domains"), TALENT_DOMAINS)
+    default_sources = profile_language_defaults(metadata, "source_languages")
+    default_targets = profile_language_defaults(metadata, "target_languages")
+
+    try:
+        weekly_capacity_default = int(user.get("weekly_capacity") or 20)
+    except Exception:
+        weekly_capacity_default = 20
+    try:
+        hourly_rate_default = float(user.get("hourly_rate") or 0)
+    except Exception:
+        hourly_rate_default = 0.0
+    try:
+        per_word_rate_default = float(user.get("per_word_rate") or 0)
+    except Exception:
+        per_word_rate_default = 0.0
+
+    st.caption("Complete your profile to attract employers and help ErrorSweep management match you with suitable jobs.")
+    with st.form(form_key, enter_to_submit=False):
+        p1, p2 = st.columns(2)
+        phone = p1.text_input("Phone / WhatsApp", value=safe_text(user.get("phone")))
+        timezone_value = p2.text_input("Timezone", value=safe_text(user.get("timezone") or "Asia/Calcutta"))
+
+        c1, c2, c3 = st.columns(3)
+        profile_type = c1.selectbox("Profile type", TALENT_PROFILE_TYPES, index=catalog_index(TALENT_PROFILE_TYPES, user.get("profile_type")))
+        primary_role = c2.selectbox("Primary role", TALENT_PRIMARY_ROLES, index=catalog_index(TALENT_PRIMARY_ROLES, current_primary_role))
+        availability = c3.selectbox("Availability", TALENT_AVAILABILITY, index=catalog_index(TALENT_AVAILABILITY, user.get("availability")))
+
+        l1, l2 = st.columns(2)
+        city = l1.text_input("City", value=safe_text(user.get("city")))
+        country = l2.text_input("Country", value=safe_text(user.get("country")))
+
+        if not default_services and "Translator" in primary_role:
+            default_services = ["Translation"]
+        services = st.multiselect("Services offered", TALENT_SERVICES, default=default_services)
+        source_languages = st.multiselect("Source languages", LANGUAGE_CATALOG, default=default_sources or (["English"] if "English" in LANGUAGE_CATALOG else []))
+        target_languages = st.multiselect("Target languages", LANGUAGE_CATALOG, default=default_targets)
+        domains = st.multiselect("Specialized domains", TALENT_DOMAINS, default=default_domains)
+
+        d1, d2 = st.columns(2)
+        tools = d1.text_area("Tools / CAT platforms", value=safe_text(user.get("tools")), height=80, placeholder="Phrase, memoQ, Trados, Smartcat, Subtitle Edit...")
+        certifications = d2.text_area("Certifications / qualifications", value=safe_text(user.get("certifications")), height=80, placeholder="Degrees, language certificates, client qualifications...")
+
+        u1, u2 = st.columns(2)
+        portfolio_url = u1.text_input("Portfolio / website URL", value=safe_text(user.get("portfolio_url")))
+        linkedin_url = u2.text_input("LinkedIn URL", value=safe_text(user.get("linkedin_url")))
+
+        a1, a2 = st.columns(2)
+        weekly_capacity = a1.number_input("Weekly capacity (hours)", min_value=0, max_value=120, value=max(0, min(120, weekly_capacity_default)), step=1)
+        work_preference = a2.selectbox("Work preference", TALENT_WORK_PREFERENCES, index=catalog_index(TALENT_WORK_PREFERENCES, user.get("work_preference")))
+
+        r1, r2, r3 = st.columns(3)
+        rate_currency = r1.selectbox("Rate currency", ["INR", "USD", "EUR", "GBP"], index=catalog_index(["INR", "USD", "EUR", "GBP"], user.get("rate_currency"), 0))
+        hourly_rate = r2.number_input("Hourly rate", min_value=0.0, value=max(0.0, hourly_rate_default), step=100.0)
+        per_word_rate = r3.number_input("Per-word rate", min_value=0.0, value=max(0.0, per_word_rate_default), step=0.01, format="%.4f")
+        bio = st.text_area("Short professional summary", value=safe_text(user.get("bio")), height=110, placeholder="Describe your language pairs, strengths, domains, review style, and ideal assignments.")
+
+        submitted = st.form_submit_button("Save profile", use_container_width=True)
+
+    if submitted:
+        language_summary = "; ".join(
+            [
+                f"Source: {', '.join(source_languages) or 'Not specified'}",
+                f"Target: {', '.join(target_languages) or 'Not specified'}",
+            ]
         )
-        accepted = st.checkbox(compliance_ack_label(), key="demo_compliance_ack")
-        if st.button("Enter demo workspace", use_container_width=True):
-            if not accepted:
-                st.error("Please accept the workspace compliance terms before entering the demo workspace.")
-            else:
-                allowed_attempt, throttle_message = consume_abuse_attempt("demo_access", demo_role)
-                if not allowed_attempt:
-                    st.error(throttle_message)
-                    return
-                account_type = "owner" if demo_role == "Platform Owner" else "workspace"
-                demo_email = f"{demo_role.lower().replace(' ', '_')}@errorsweep.local"
-                login_user(demo_email, demo_role, account_type, "Demo Workspace")
-                record_consent_acceptance(demo_email, demo_role, account_type, "Demo Workspace", "demo_login")
-                add_audit("Demo login", demo_role)
-                st.rerun()
+        profile_metadata = {
+            **metadata,
+            "source_languages": source_languages,
+            "target_languages": target_languages,
+            "services": services,
+            "domains": domains,
+            "profile_completed_from": "post_signup_prompt",
+            "app_version": APP_VERSION,
+        }
+        changes = {
+            "phone": safe_text(phone),
+            "city": safe_text(city),
+            "country": safe_text(country),
+            "timezone": safe_text(timezone_value),
+            "profile_type": safe_text(profile_type),
+            "primary_role": safe_text(primary_role),
+            "services": ", ".join(services),
+            "languages": language_summary,
+            "domains": ", ".join(domains),
+            "tools": safe_text(tools),
+            "certifications": safe_text(certifications),
+            "portfolio_url": safe_text(portfolio_url),
+            "linkedin_url": safe_text(linkedin_url),
+            "availability": safe_text(availability),
+            "weekly_capacity": int(weekly_capacity),
+            "rate_currency": safe_text(rate_currency),
+            "hourly_rate": float(hourly_rate or 0),
+            "per_word_rate": float(per_word_rate or 0),
+            "work_preference": safe_text(work_preference),
+            "bio": safe_text(bio),
+            "profile_completion_status": "completed",
+            "profile_completed_at": now_stamp(),
+            "profile_prompt_dismissed_at": None,
+            "talent_status": "Profile completed",
+            "metadata_json": profile_metadata,
+        }
+        changes["talent_search_text"] = talent_search_text({**user, **changes})
+        save_current_user_profile(changes)
+        st.session_state.pop("_profile_completion_mode", None)
+        st.session_state.pop("_profile_completion_force", None)
+        st.session_state.pop("account_profile_edit_mode", None)
+        add_audit("Profile completed", safe_text(user.get("email")))
+        st.success("Profile saved. Management can now find your talent profile for matching.")
+        st.rerun()
+
+
+def open_account_professional_profile_editor() -> None:
+    st.session_state["account_active_section"] = "Professional Profile"
+    st.session_state["account_profile_edit_mode"] = True
+    st.session_state.pop("_profile_completion_mode", None)
+    st.session_state.pop("_profile_completion_force", None)
+    set_route_query({"es_page": "Account"})
+
+
+def render_profile_completion_choice(user: Dict[str, Any]) -> None:
+    st.write("Complete your profile to attract employers and help ErrorSweep management match you with suitable job opportunities.")
+    st.caption("This is optional. You can skip now and complete it later from Account.")
+    c1, c2 = st.columns(2)
+    if c1.button("Complete profile now", use_container_width=True, key="profile_completion_start"):
+        open_account_professional_profile_editor()
+        st.rerun()
+    if c2.button("Skip for now", use_container_width=True, key="profile_completion_skip"):
+        save_current_user_profile({
+            "profile_completion_status": "skipped",
+            "profile_prompt_dismissed_at": now_stamp(),
+        })
+        st.session_state.pop("_profile_completion_mode", None)
+        st.session_state.pop("_profile_completion_force", None)
+        add_audit("Profile completion skipped", safe_text(user.get("email")))
+        st.rerun()
+
+
+def render_profile_completion_prompt() -> None:
+    user = current_user() or {}
+    if not profile_completion_prompt_due(user):
+        return
+
+    def render_prompt_body() -> None:
+        render_profile_completion_choice(user)
+
+    if hasattr(st, "dialog"):
+        @st.dialog("Complete your profile")
+        def profile_completion_dialog() -> None:
+            render_prompt_body()
+
+        profile_completion_dialog()
+    else:
+        with st.container(border=True):
+            st.markdown("### Complete your profile")
+            render_prompt_body()
+        st.stop()
 
 
 def render_signup() -> None:
@@ -15750,79 +17018,109 @@ def render_signup() -> None:
         </div>
         """).strip(),
     )
-    st.markdown("## Create your ErrorSweep workspace")
-    st.caption("This creates a trial workspace in the current app session.")
+    st.markdown("## Create your ErrorSweep account")
+    st.caption("Start with basic account details. You can complete your professional profile after signup.")
 
-    with st.form("signup_form"):
-        name = st.text_input("Full name")
-        email = st.text_input("Work email")
-        workspace = st.text_input("Company / workspace", value="Demo Workspace")
-        password = st.text_input("Password", type="password")
+    with st.form("signup_form", enter_to_submit=False):
+        c1, c2 = st.columns(2)
+        name = c1.text_input("Full name")
+        email = c2.text_input("Email")
+        password = c1.text_input("Password", type="password")
+        account_type_label = c2.radio(
+            "Account type",
+            [ACCOUNT_TYPE_LABELS["individual"], ACCOUNT_TYPE_LABELS["company"]],
+            horizontal=True,
+            help="Choose Enterprise / Company for an organization workspace, or Individual Contractor for a personal workspace.",
+        )
+        selected_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_label), "individual")
+        workspace_name = c2.text_input(
+            "Workspace name",
+            help="Required for Enterprise / Company. Optional for Individual Contractor; when blank, ErrorSweep creates a personal workspace from your name.",
+        )
         accepted = st.checkbox(compliance_ack_label(), key="signup_compliance_ack")
-        submitted = st.form_submit_button("Create workspace", use_container_width=True)
+        submitted = st.form_submit_button("Create account", use_container_width=True)
 
     if submitted:
-        if not name.strip() or not email.strip() or not workspace.strip() or not password:
-            st.error("Please enter your name, email, workspace, and password.")
+        clean_name = safe_text(name)
+        clean_email = safe_text(email).strip()
+        requested_workspace = safe_text(workspace_name)
+        account_type = selected_account_type
+        workspace = requested_workspace or f"{clean_name} Personal"
+        role = "Workspace Owner" if account_type == "company" else "Individual Owner"
+        if not clean_name or not clean_email or not password:
+            st.error("Please enter your full name, email, and password.")
+            return
+        if account_type == "company" and not requested_workspace:
+            st.error("Please enter your company or workspace name for an Enterprise / Company account.")
+            return
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_email):
+            st.error("Please enter a valid email address.")
             return
         if not accepted:
-            st.error("Please accept the workspace compliance terms before creating a workspace.")
+            st.error("Please accept the workspace compliance terms before creating an account.")
             return
-        allowed_attempt, throttle_message = consume_abuse_attempt("signup", email.strip() or workspace.strip() or "anonymous")
+        allowed_attempt, throttle_message = consume_abuse_attempt("signup", clean_email or workspace or "anonymous")
         if not allowed_attempt:
             st.error(throttle_message)
             return
-        existing_user = next(
-            (
-                u for u in load_saas_records("users", include_all_workspaces=True, limit=1000)
-                if safe_text(u.get("email")).lower() == email.strip().lower()
-            ),
-            None,
-        )
+        existing_user = find_user_by_email(clean_email)
         if existing_user:
             st.error("An account with this email already exists. Use login or password reset.")
             return
-        user_record = persist_saas_record("users", {
-            "email": email.strip(),
-            "workspace": workspace.strip(),
-            "role": "Workspace Owner",
+
+        user_payload = {
+            "email": clean_email,
+            "workspace": workspace,
+            "role": role,
+            "account_type": account_type,
+            "permission_flags": "",
             "plan": "Trial",
             "status": "Active",
             "password_hash": hash_password(password),
             "email_verified": False,
             "verified_at": None,
-        })
-        st.session_state.users.append(user_record)
-        trim_session_list("users")
-        if not any(w.get("workspace") == workspace.strip() for w in st.session_state.workspaces):
+            "full_name": clean_name,
+            "profile_completion_status": "pending",
+            "profile_completed_at": None,
+            "profile_prompt_dismissed_at": None,
+            "talent_status": "New signup",
+            "metadata_json": {
+                "signup_source": "basic_signup",
+                "app_version": APP_VERSION,
+            },
+        }
+        user_payload["talent_search_text"] = talent_search_text(user_payload)
+        user_record = persist_saas_record("users", user_payload)
+        upsert_session_record("users", user_record)
+        if not any(safe_text(w.get("workspace")) == workspace for w in st.session_state.workspaces):
             workspace_record = persist_saas_record("workspaces", {
-                "workspace": workspace.strip(),
-                "owner": email.strip(),
+                "workspace": workspace,
+                "owner": clean_email,
                 "plan": "Trial",
                 "status": "Active",
                 "users": 1,
                 "jobs": 0,
             })
-            st.session_state.workspaces.append(workspace_record)
-            trim_session_list("workspaces")
-        add_audit("Trial workspace signup", email.strip())
-        verify_url = queue_verification_email(email.strip(), workspace.strip(), name.strip())
+            upsert_session_record("workspaces", workspace_record)
+        add_audit("Basic signup", clean_email)
+        verify_url = queue_verification_email(clean_email, workspace, clean_name)
         queue_email_notification(
-            email.strip(),
+            clean_email,
             "Welcome to ErrorSweep",
-            f"Your trial workspace '{workspace.strip()}' is ready. Verify your email to secure the account: {verify_url}",
+            f"Your ErrorSweep account for '{workspace}' is ready.",
             "signup.welcome",
-            metadata={"workspace": workspace.strip(), "name": name.strip(), "verify_url": verify_url},
-            workspace=workspace.strip(),
+            metadata={"workspace": workspace, "name": clean_name, "verify_url": verify_url, "role": role},
+            workspace=workspace,
         )
         if is_production_mode():
-            record_consent_acceptance(email.strip(), "Workspace Owner", "workspace", workspace.strip(), "signup_pending_verification")
-            st.success("Workspace created. Please verify your email before signing in.")
+            record_consent_acceptance(clean_email, role, account_type, workspace, "signup_pending_verification")
+            st.success("Account created. Please verify your email before signing in.")
             if email_provider_label() == "not_configured":
                 st.caption(f"Local verification link: {verify_url}")
             return
-        login_user(email.strip(), "Workspace Owner", "workspace", workspace.strip())
-        record_consent_acceptance(email.strip(), "Workspace Owner", "workspace", workspace.strip(), "signup")
+        login_user(clean_email, role, account_type, workspace)
+        st.session_state["_profile_completion_mode"] = "choice"
+        record_consent_acceptance(clean_email, role, account_type, workspace, "signup")
         st.rerun()
 
 
@@ -16162,6 +17460,7 @@ def _legacy_page_dashboard_unused() -> None:
 def page_dashboard() -> None:
     st.markdown('<div id="errorsweep-dashboard-page-marker" class="errorsweep_dashboard_page" aria-hidden="true"></div>', unsafe_allow_html=True)
     user = current_user() or {}
+    render_profile_completion_prompt()
     pending_review = sum(1 for r in st.session_state.review_segments if r.get("status") not in ("Approved", "Rejected"))
     total_jobs = len(st.session_state.jobs)
     total_projects = len(st.session_state.projects)
@@ -16185,7 +17484,7 @@ def page_dashboard() -> None:
               <div class="es-hero-row">
                 <div>
                   <div class="es-kicker">Workspace command center</div>
-                  <div class="es-welcome-title">Good {escape('morning' if datetime.now().hour < 12 else 'afternoon' if datetime.now().hour < 17 else 'evening')}, {escape(first_name_from_user(user))}</div>
+                  <div class="es-welcome-title">Good {escape('morning' if datetime.now().hour < 12 else 'afternoon' if datetime.now().hour < 17 else 'evening')}, {escape(display_name_from_user(user))}</div>
                   <div class="es-hero-summary">
                     You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
                   </div>
@@ -17407,6 +18706,8 @@ def render_focused_subtitle_workspace() -> None:
 
     with editor_col:
         st.markdown(f"#### {workflow} segment {idx+1} / {len(rows)}")
+        render_media_timing_adjuster(rows, idx, key_prefix=f"focus_timing_{idx}")
+        row = rows[idx]
         time_a, time_b = st.columns(2)
         start_val = time_a.number_input("Start", min_value=0.0, value=float(row.get("start", 0.0)), step=0.1, key=f"focus_start_{idx}")
         end_val = time_b.number_input("End", min_value=0.0, value=float(row.get("end", max(start_val + 2.0, 2.0))), step=0.1, key=f"focus_end_{idx}")
@@ -18058,8 +19359,379 @@ def page_scorecards() -> None:
             use_container_width=True,
         )
 
+
+def sectioned_page_layout(
+    page_key: str,
+    sections: List[Tuple[str, Any]],
+    nav_title: str = "Sections",
+    nav_caption: str = "Select one section to view its details.",
+    nav_context_html: str = "",
+) -> Tuple[str, Any]:
+    grouped_sections: List[Tuple[str, List[Tuple[str, str]]]] = []
+    if sections and isinstance(sections[0][1], list):
+        for group, items in sections:
+            grouped_sections.append((safe_text(group), [(safe_text(label), safe_text(description)) for label, description in items]))
+    else:
+        grouped_sections.append(("Sections", [(safe_text(label), safe_text(description)) for label, description in sections]))
+
+    flat_sections = [label for _, items in grouped_sections for label, _ in items if label]
+    default_section = flat_sections[0] if flat_sections else ""
+    selected = safe_text(st.session_state.get(f"{page_key}_active_section") or default_section)
+    if selected not in flat_sections:
+        selected = default_section
+    selected_slug = re.sub(r"[^a-z0-9_]+", "_", selected.lower()).strip("_")
+    marker_id = f"{page_key}-sectioned-page-marker"
+    nav_key = f"{page_key}_section_nav_panel"
+
+    st.markdown(
+        f"""
+        <div id="{marker_id}" aria-hidden="true"></div>
+        <style>
+        #{marker_id} {{ display: none !important; }}
+        body:has(#{marker_id}) .st-key-{nav_key} {{
+          position: sticky !important;
+          top: 84px !important;
+          align-self: start !important;
+          max-height: calc(100dvh - 150px) !important;
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
+          background: linear-gradient(180deg, rgba(14, 20, 38, .96), rgba(8, 12, 24, .92)) !important;
+          border: 1px solid rgba(99, 120, 190, .34) !important;
+          border-radius: 10px !important;
+          padding: 14px 12px 12px !important;
+          box-shadow: 0 18px 46px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.045) !important;
+        }}
+        body:has(#{marker_id}) .st-key-{nav_key} > div[data-testid="stVerticalBlock"] {{
+          gap: 4px !important;
+        }}
+        body:has(#{marker_id}) .es-settings-nav-title {{
+          color: #f8fbff;
+          font-weight: 900;
+          font-size: 18px;
+          margin: 0 0 2px;
+        }}
+        body:has(#{marker_id}) .es-settings-nav-subtitle {{
+          color: #9fb0db;
+          font-size: 12px;
+          line-height: 1.35;
+          margin: 0 0 14px;
+        }}
+        body:has(#{marker_id}) .es-settings-nav-group {{
+          color: #75f7c4;
+          font-family: "Space Mono", monospace;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          margin: 12px 2px 4px;
+        }}
+        body:has(#{marker_id}) .st-key-{nav_key} [data-testid="stButton"] > button,
+        body:has(#{marker_id}) .st-key-{nav_key} .stButton > button,
+        body:has(#{marker_id}) .st-key-{nav_key} button {{
+          min-height: 38px !important;
+          width: 100% !important;
+          justify-content: flex-start !important;
+          border-radius: 8px !important;
+          border: 1px solid rgba(99, 120, 190, .18) !important;
+          background: rgba(9, 14, 28, .74) !important;
+          background-color: rgba(9, 14, 28, .74) !important;
+          background-image: none !important;
+          color: #dce8ff !important;
+          box-shadow: none !important;
+          padding: 8px 10px !important;
+          font-weight: 800 !important;
+          text-align: left !important;
+        }}
+        body:has(#{marker_id}) .st-key-{nav_key} [data-testid="stButton"] > button *,
+        body:has(#{marker_id}) .st-key-{nav_key} .stButton > button *,
+        body:has(#{marker_id}) .st-key-{nav_key} button * {{
+          color: #dce8ff !important;
+          text-align: left !important;
+        }}
+        body:has(#{marker_id}) .st-key-{nav_key} [data-testid="stButton"] > button:hover,
+        body:has(#{marker_id}) .st-key-{nav_key} .stButton > button:hover,
+        body:has(#{marker_id}) .st-key-{nav_key} button:hover {{
+          border-color: rgba(52, 189, 246, .28) !important;
+          background: rgba(52, 189, 246, .09) !important;
+          background-color: rgba(52, 189, 246, .09) !important;
+          color: #f8fbff !important;
+        }}
+        body:has(#{marker_id}) .st-key-{page_key}_nav_{selected_slug} [data-testid="stButton"] > button,
+        body:has(#{marker_id}) .st-key-{page_key}_nav_{selected_slug} .stButton > button,
+        body:has(#{marker_id}) .st-key-{page_key}_nav_{selected_slug} button {{
+          border-color: rgba(0, 217, 133, .42) !important;
+          background: linear-gradient(90deg, rgba(0, 217, 133, .18), rgba(52, 189, 246, .10)) !important;
+          background-color: rgba(0, 217, 133, .14) !important;
+          color: #f8fbff !important;
+        }}
+        body:has(#{marker_id}) .st-key-{page_key}_nav_{selected_slug} button *,
+        body:has(#{marker_id}) .st-key-{page_key}_nav_{selected_slug} [data-testid="stButton"] > button * {{
+          color: #f8fbff !important;
+        }}
+        body:has(#{marker_id}) .es-settings-current {{
+          color: #9fb0db;
+          font-size: 13px;
+          margin-bottom: 14px;
+        }}
+        body:has(#{marker_id}) .es-settings-current b {{
+          color: #f8fbff;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-card {{
+          border: 1px solid rgba(84,105,180,.26);
+          border-radius: 10px;
+          background: rgba(255,255,255,.035);
+          padding: 12px;
+          margin: 10px 0 14px;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-top {{
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-avatar {{
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+          display: grid;
+          place-items: center;
+          color: #07121f;
+          background: linear-gradient(135deg, var(--es-green), var(--es-cyan));
+          font-weight: 950;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-name {{
+          color: #f7fbff;
+          font-size: 14px;
+          font-weight: 950;
+          line-height: 1.2;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-meta {{
+          color: #9fb0db;
+          font-size: 11px;
+          font-weight: 750;
+          line-height: 1.35;
+          margin-top: 2px;
+        }}
+        body:has(#{marker_id}) .es-account-sidebar-status {{
+          margin-top: 10px;
+          color: #75f7c4;
+          font-family: "Space Mono", monospace;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    nav_col, content_col = st.columns([0.27, 0.73], gap="large")
+    with nav_col:
+        with st.container(key=nav_key):
+            st.markdown(f'<div class="es-settings-nav-title">{escape(nav_title)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="es-settings-nav-subtitle">{escape(nav_caption)}</div>', unsafe_allow_html=True)
+            if nav_context_html:
+                st.markdown(nav_context_html, unsafe_allow_html=True)
+            for group, items in grouped_sections:
+                if group:
+                    st.markdown(f'<div class="es-settings-nav-group">{escape(group)}</div>', unsafe_allow_html=True)
+                for label, description in items:
+                    slug = re.sub(r"[^a-z0-9_]+", "_", label.lower()).strip("_")
+                    if st.button(label, key=f"{page_key}_nav_{slug}", help=description, use_container_width=True):
+                        st.session_state[f"{page_key}_active_section"] = label
+                        st.rerun()
+    with content_col:
+        st.markdown(f'<div class="es-settings-current">Current section: <b>{escape(selected)}</b></div>', unsafe_allow_html=True)
+    return selected, content_col
+
+
 def page_memory_rules() -> None:
     hero("Memory & Rules", "Reusable language assets", "Manage translation memory, glossary, DNT terms, and client instructions.")
+    selected_section, content_col = sectioned_page_layout(
+        "memory_rules",
+        [
+            ("Rules", [
+                ("Rules ZIP Analyzer", "Extract glossary, DNT, and instructions from client rule packs"),
+                ("Translation Memory", "Store approved source and target pairs"),
+            ]),
+            ("Terminology", [
+                ("Glossary", "Manage source and target terminology"),
+                ("DNT", "Maintain do-not-translate terms"),
+                ("Instructions", "Workspace style and client instructions"),
+            ]),
+        ],
+        "Rules sections",
+    )
+
+    with content_col:
+        if selected_section == "Rules ZIP Analyzer":
+            st.markdown("### Rules ZIP Analyzer")
+            rules_zip = st.file_uploader("Upload client rules ZIP", type=["zip"], key="memory_rules_zip")
+            render_rules_zip_warning(rules_zip)
+            if rules_zip is None:
+                st.info("Upload a client ZIP containing TXT, MD, CSV, TSV, DOCX, or XLSX rules. ErrorSweep will extract glossary, DNT, and instruction hints before QA or translation.")
+            else:
+                parsed_rules = enrich_rules_from_chunks(parse_rules_zip(rules_zip))
+                metrics([
+                    ("Files", len(parsed_rules.get("chunks", [])), "parsed"),
+                    ("Glossary", len(parsed_rules.get("glossary", [])), "pairs"),
+                    ("DNT", len(parsed_rules.get("dnt", [])), "locked terms"),
+                    ("Instructions", len(parsed_rules.get("instructions", [])), "hints"),
+                ])
+                summary = rules_summary_for_ai(parsed_rules)
+                if summary:
+                    st.markdown("### AI / QA rule brief")
+                    st.code(summary, language="text")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("### Extracted glossary")
+                    glossary_rows = [
+                        {"source": item.get("source_term", ""), "target": item.get("target_term", ""), "notes": f"Imported from {item.get('source', 'Rules ZIP')}"}
+                        for item in parsed_rules.get("glossary", [])
+                    ]
+                    if glossary_rows:
+                        st.dataframe(pd.DataFrame(glossary_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No glossary pairs detected.")
+                with c2:
+                    st.markdown("### Extracted DNT")
+                    dnt_rows = [{"term": item.get("term", ""), "source": item.get("source", "Rules ZIP")} for item in parsed_rules.get("dnt", [])]
+                    if dnt_rows:
+                        st.dataframe(pd.DataFrame(dnt_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No DNT terms detected.")
+
+                st.markdown("### Extracted instructions")
+                instruction_rows = [
+                    {"text": item.get("text", ""), "source": item.get("source", "Rules ZIP")}
+                    for item in parsed_rules.get("instructions", [])
+                ]
+                if instruction_rows:
+                    st.dataframe(pd.DataFrame(instruction_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No instruction hints detected.")
+
+                import_cols = st.columns(3)
+                if import_cols[0].button("Import glossary", use_container_width=True, disabled=not glossary_rows):
+                    existing = {(safe_text(g.get("source")).lower(), safe_text(g.get("target")).lower()) for g in st.session_state.glossary}
+                    added = 0
+                    for row in glossary_rows:
+                        key = (safe_text(row.get("source")).lower(), safe_text(row.get("target")).lower())
+                        if key[0] and key not in existing:
+                            st.session_state.glossary.append(row)
+                            existing.add(key)
+                            added += 1
+                    trim_session_list("glossary")
+                    add_audit("Rules glossary imported", f"{added} terms")
+                    st.success(f"Imported {added} glossary term(s).")
+                if import_cols[1].button("Import DNT", use_container_width=True, disabled=not dnt_rows):
+                    existing_terms = {safe_text(term).lower() for term in st.session_state.dnt}
+                    added = 0
+                    for row in dnt_rows:
+                        term = safe_text(row.get("term"))
+                        if term and term.lower() not in existing_terms:
+                            st.session_state.dnt.append(term)
+                            existing_terms.add(term.lower())
+                            added += 1
+                    trim_session_list("dnt")
+                    add_audit("Rules DNT imported", f"{added} terms")
+                    st.success(f"Imported {added} DNT term(s).")
+                if import_cols[2].button("Import instructions", use_container_width=True, disabled=not instruction_rows):
+                    existing_text = {safe_text(item.get("text")).lower() for item in st.session_state.rule_instructions}
+                    added = 0
+                    for row in instruction_rows:
+                        text = safe_text(row.get("text"))
+                        if text and text.lower() not in existing_text:
+                            st.session_state.rule_instructions.append({"text": text, "source": row.get("source", "Rules ZIP")})
+                            existing_text.add(text.lower())
+                            added += 1
+                    trim_session_list("rule_instructions")
+                    add_audit("Rules instructions imported", f"{added} instructions")
+                    st.success(f"Imported {added} instruction(s).")
+
+        elif selected_section == "Translation Memory":
+            st.markdown("### Translation Memory")
+            with st.form("add_tm"):
+                c1, c2 = st.columns(2)
+                src = c1.text_area("Source", height=90)
+                tgt = c2.text_area("Target", height=90)
+                lang = st.text_input("Target language")
+                submitted = st.form_submit_button("Add TM entry", use_container_width=True)
+            if submitted and src and tgt:
+                st.session_state.tm.append({"source": src, "target": tgt, "language": lang, "created": now_stamp(), "approved_by": (current_user() or {}).get("email","")})
+                trim_session_list("tm")
+                st.success("TM entry added.")
+            st.dataframe(pd.DataFrame(st.session_state.tm), use_container_width=True, hide_index=True)
+
+        elif selected_section == "Glossary":
+            st.markdown("### Glossary")
+            render_tag_cloud([f"{g.get('source', '')} -> {g.get('target', '')}" for g in st.session_state.glossary], "No glossary terms yet.")
+            with st.expander("Bulk import glossary pairs", expanded=False):
+                bulk_gloss = st.text_area("Paste one pair per line as source -> target", height=120, key="bulk_glossary_pairs")
+                if st.button("Import glossary pairs", use_container_width=True, disabled=not bulk_gloss.strip()):
+                    existing = {(safe_text(g.get("source")).lower(), safe_text(g.get("target")).lower()) for g in st.session_state.glossary}
+                    added = 0
+                    for line in bulk_gloss.splitlines():
+                        if "->" not in line and "=>" not in line:
+                            continue
+                        sep = "->" if "->" in line else "=>"
+                        src_term, tgt_term = [part.strip() for part in line.split(sep, 1)]
+                        key = (src_term.lower(), tgt_term.lower())
+                        if src_term and tgt_term and key not in existing:
+                            st.session_state.glossary.append({"source": src_term, "target": tgt_term, "notes": "Bulk import"})
+                            existing.add(key)
+                            added += 1
+                    trim_session_list("glossary")
+                    st.success(f"Imported {added} glossary pair(s).")
+            with st.form("add_gloss"):
+                c1, c2, c3 = st.columns(3)
+                src = c1.text_input("Source term")
+                tgt = c2.text_input("Target term")
+                notes = c3.text_input("Notes")
+                submitted = st.form_submit_button("Add glossary term", use_container_width=True)
+            if submitted and src:
+                st.session_state.glossary.append({"source": src, "target": tgt, "notes": notes})
+                trim_session_list("glossary")
+                st.success("Glossary term added.")
+            st.dataframe(pd.DataFrame(st.session_state.glossary), use_container_width=True, hide_index=True)
+
+        elif selected_section == "DNT":
+            st.markdown("### Do-not-translate terms")
+            render_tag_cloud(st.session_state.dnt, "No DNT terms yet.")
+            with st.expander("Bulk import DNT terms", expanded=False):
+                bulk_dnt = st.text_area("Paste DNT terms separated by new lines, commas, or semicolons", height=100, key="bulk_dnt_terms")
+                if st.button("Import DNT terms", use_container_width=True, disabled=not bulk_dnt.strip()):
+                    existing = {safe_text(term).lower() for term in st.session_state.dnt}
+                    added = 0
+                    for term in _split_rule_terms(bulk_dnt.replace("\n", ";")):
+                        if term and term.lower() not in existing:
+                            st.session_state.dnt.append(term)
+                            existing.add(term.lower())
+                            added += 1
+                    trim_session_list("dnt")
+                    st.success(f"Imported {added} DNT term(s).")
+            term = st.text_input("Add DNT term")
+            if st.button("Add DNT", use_container_width=True) and term:
+                st.session_state.dnt.append(term)
+                trim_session_list("dnt")
+                st.success("DNT term added.")
+            st.dataframe(pd.DataFrame({"DNT term": st.session_state.dnt}), use_container_width=True, hide_index=True)
+
+        elif selected_section == "Instructions":
+            st.markdown("### Client instructions")
+            with st.form("add_rule_instruction"):
+                instruction = st.text_area("Instruction", height=100, placeholder="Example: Keep product names in English and use formal tone for all UI strings.")
+                source = st.text_input("Source / note", value="Manual")
+                submitted = st.form_submit_button("Add instruction", use_container_width=True)
+            if submitted and instruction:
+                st.session_state.rule_instructions.append({"text": instruction, "source": source or "Manual"})
+                trim_session_list("rule_instructions")
+                st.success("Instruction added.")
+            st.dataframe(pd.DataFrame(st.session_state.rule_instructions), use_container_width=True, hide_index=True)
+            merged = workspace_rules()
+            st.markdown("### Current enforced rule brief")
+            st.code(rules_summary_for_ai(merged) or "No saved rules yet.", language="text")
+    return
+
     tab_intel, tab_tm, tab_gloss, tab_dnt, tab_inst = st.tabs(["Rules ZIP Analyzer", "Translation Memory", "Glossary", "DNT", "Instructions"])
 
     with tab_intel:
@@ -18234,11 +19906,179 @@ def page_memory_rules() -> None:
 
 def page_team_roles() -> None:
     hero("Team & Roles", "Workspace access control", "Manage workspace users and role-level access.")
-    if current_role() not in ("Platform Owner", "Workspace Owner", "Workspace Admin", "Project Manager"):
+    if not has_permission("team.manage"):
         st.error("You do not have permission to manage team roles.")
         return
-    workspace = safe_text((current_user() or {}).get("workspace") or "Demo Workspace")
-    seat_state = workspace_seat_state(workspace)
+    selected_section, content_col = sectioned_page_layout(
+        "team_roles",
+        [
+            ("Overview", [
+                ("Overview", "Workspace seats and current users"),
+            ]),
+            ("Access", [
+                ("Add User", "Invite or add a user to this workspace"),
+                ("Update Permissions", "Change role, account type, status, and grants"),
+            ]),
+        ],
+        "Team sections",
+    )
+    with content_col:
+        user = current_user() or {}
+        workspace_options = team_workspace_options(user)
+        if not workspace_options:
+            st.info("Team is workspace-scoped. Choose or create a company or personal workspace first, then return to Team.")
+            return
+        if len(workspace_options) > 1:
+            preferred_workspace = safe_text(st.session_state.get("team_roles_workspace") or user.get("workspace"))
+            workspace_index = workspace_options.index(preferred_workspace) if preferred_workspace in workspace_options else 0
+            workspace = st.selectbox("Workspace", workspace_options, index=workspace_index, key="team_roles_workspace")
+        else:
+            workspace = workspace_options[0]
+            st.caption(f"Workspace: {workspace}")
+
+        seat_state = workspace_seat_state(workspace)
+        visible_users = [{k: v for k, v in u.items() if k != "password_hash"} for u in workspace_user_records(workspace)]
+
+        if selected_section == "Overview":
+            metrics([
+                ("Plan", seat_state["plan"]["name"], safe_text(seat_state["subscription"].get("status", "Active"))),
+                ("Seats", f"{seat_state['used']:,}/{seat_state['limit']:,}", "active + invited"),
+                ("Available", seat_state["available"], "seats left"),
+            ])
+            if safe_text(workspace).lower() != "platform":
+                st.progress(min(1.0, seat_state["used"] / max(1, seat_state["limit"])), text="Seat usage")
+                if seat_state["used"] >= max(1, seat_state["limit"]):
+                    st.warning("This workspace is at the current plan seat limit. Upgrade from Billing or suspend an inactive user before adding another active user.")
+            cards = []
+            for user in visible_users:
+                email = safe_text(user.get("email", ""))
+                role = safe_text(user.get("role", "User"))
+                status = safe_text(user.get("status", "Active"))
+                cards.append(
+                    f'<div class="es-avatar-card"><div class="es-avatar">{escape(monogram(email or role))}</div>'
+                    f'<div><b>{escape(email or "Unknown user")}</b><br><span class="es-small">{escape(safe_text(user.get("workspace", "")))} - {escape(status)}</span><br>'
+                    f'<span class="es-role-badge">{escape(role)}</span></div></div>'
+                )
+            st.html(f'<div class="es-avatar-grid">{"".join(cards)}</div>')
+            st.dataframe(pd.DataFrame(display_records(visible_users)), use_container_width=True, hide_index=True)
+
+        elif selected_section == "Add User":
+            st.markdown("### Add user")
+            with st.form("add_user", enter_to_submit=False):
+                c1, c2, c3, c4 = st.columns(4)
+                email = c1.text_input("User email")
+                role = c2.selectbox("Role", VALID_USER_ROLES, index=VALID_USER_ROLES.index("User") if "User" in VALID_USER_ROLES else 0)
+                account_type_keys = list(ACCOUNT_TYPE_LABELS.keys())
+                current_account_type = default_team_account_type(workspace, user)
+                account_type_label = c3.selectbox(
+                    "Account type",
+                    list(ACCOUNT_TYPE_LABELS.values()),
+                    index=account_type_keys.index(current_account_type) if current_account_type in account_type_keys else 0,
+                )
+                status = c4.selectbox("Status", ["Active", "Suspended"])
+                grant_options = list(PERMISSION_FLAG_LABELS.keys())
+                permission_flags = st.multiselect(
+                    "Permission grants",
+                    grant_options,
+                    format_func=lambda flag: PERMISSION_FLAG_LABELS.get(flag, flag),
+                    help="Optional grants from management. Use these to give a lower role Team, Billing, Admin, or Talent access without changing the role.",
+                )
+                submitted = st.form_submit_button("Add user", use_container_width=True)
+            if submitted:
+                if not safe_text(email):
+                    st.error("Please enter a user email before adding a workspace user.")
+                    return
+                allowed, seat_message, latest_seat_state = check_workspace_seat_allowance(workspace, email, status)
+                if not allowed:
+                    st.error(seat_message)
+                    return
+                normalized_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_label), "company")
+                user_record = persist_saas_record("users", {
+                    "email": email,
+                    "workspace": workspace,
+                    "role": role,
+                    "account_type": normalized_account_type,
+                    "permission_flags": ", ".join(permission_flags),
+                    "plan": latest_seat_state["plan"]["name"],
+                    "status": status,
+                })
+                st.session_state.users.append(user_record)
+                trim_session_list("users")
+                for workspace_record in st.session_state.get("workspaces", []):
+                    if safe_text(workspace_record.get("workspace")) == workspace:
+                        workspace_record["users"] = workspace_user_count(workspace)
+                        break
+                add_audit("User added", email)
+                queue_email_notification(
+                    email,
+                    "You were invited to ErrorSweep",
+                    f"You have been added to the '{workspace}' workspace as {role}. Sign in to review assigned localization work.",
+                    "workspace.invite",
+                    metadata={"role": role, "status": status},
+                    workspace=workspace,
+                )
+                st.success("User added.")
+
+        elif selected_section == "Update Permissions":
+            st.markdown("### Update user permissions")
+            user_labels = [
+                f"{safe_text(item.get('email'))} - {safe_text(item.get('role', 'User'))}"
+                for item in visible_users
+                if safe_text(item.get("email"))
+            ]
+            if not user_labels:
+                st.info("No users are available for this workspace.")
+                return
+            with st.form("update_user_permissions", enter_to_submit=False):
+                selected_label = st.selectbox("User", user_labels)
+                selected_email = selected_label.split(" - ", 1)[0]
+                selected_user = next((item for item in visible_users if safe_text(item.get("email")) == selected_email), {})
+                current_role_value = safe_text(selected_user.get("role") or "User")
+                current_account_type = account_type_for_user(selected_user)
+                role_value = st.selectbox(
+                    "Role",
+                    VALID_USER_ROLES,
+                    index=VALID_USER_ROLES.index(current_role_value) if current_role_value in VALID_USER_ROLES else 0,
+                    key="update_user_role",
+                )
+                account_type_value = st.selectbox(
+                    "Account type",
+                    list(ACCOUNT_TYPE_LABELS.values()),
+                    index=list(ACCOUNT_TYPE_LABELS.keys()).index(current_account_type) if current_account_type in ACCOUNT_TYPE_LABELS else 0,
+                    key="update_user_account_type",
+                )
+                status_value = st.selectbox(
+                    "Status",
+                    ["Active", "Suspended"],
+                    index=0 if safe_text(selected_user.get("status", "Active")) != "Suspended" else 1,
+                    key="update_user_status",
+                )
+                updated_flags = st.multiselect(
+                    "Permission grants",
+                    list(PERMISSION_FLAG_LABELS.keys()),
+                    default=[flag for flag in sorted(granted_permission_flags(selected_user)) if flag in PERMISSION_FLAG_LABELS],
+                    format_func=lambda flag: PERMISSION_FLAG_LABELS.get(flag, flag),
+                    key="update_user_permission_flags",
+                )
+                update_submit = st.form_submit_button("Update permissions", use_container_width=True)
+            if update_submit:
+                normalized_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_value), current_account_type or "company")
+                updated = update_workspace_user(selected_email, workspace, {
+                    "role": role_value,
+                    "account_type": normalized_account_type,
+                    "permission_flags": ", ".join(updated_flags),
+                    "status": status_value,
+                })
+                if updated:
+                    if safe_text((current_user() or {}).get("email")).lower() == safe_text(selected_email).lower():
+                        merge_current_user_record(updated)
+                    add_audit("User permissions updated", selected_email)
+                    st.success("User permissions updated.")
+                    st.rerun()
+                else:
+                    st.error("Unable to update that user record.")
+    return
+
     metrics([
         ("Plan", seat_state["plan"]["name"], safe_text(seat_state["subscription"].get("status", "Active"))),
         ("Seats", f"{seat_state['used']:,}/{seat_state['limit']:,}", "active + invited"),
@@ -18248,7 +20088,7 @@ def page_team_roles() -> None:
         st.progress(min(1.0, seat_state["used"] / max(1, seat_state["limit"])), text="Seat usage")
         if seat_state["used"] >= max(1, seat_state["limit"]):
             st.warning("This workspace is at the current plan seat limit. Upgrade from Billing or suspend an inactive user before adding another active user.")
-    visible_users = [{k: v for k, v in u.items() if k != "password_hash"} for u in st.session_state.users]
+    visible_users = [{k: v for k, v in u.items() if k != "password_hash"} for u in workspace_user_records(workspace)]
     cards = []
     for user in visible_users:
         email = safe_text(user.get("email", ""))
@@ -18262,10 +20102,26 @@ def page_team_roles() -> None:
     st.html(f'<div class="es-avatar-grid">{"".join(cards)}</div>')
     st.dataframe(pd.DataFrame(display_records(visible_users)), use_container_width=True, hide_index=True)
     with st.form("add_user", enter_to_submit=False):
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         email = c1.text_input("User email")
-        role = c2.selectbox("Role", ["Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"])
-        status = c3.selectbox("Status", ["Active", "Suspended"])
+        role = c2.selectbox("Role", VALID_USER_ROLES, index=VALID_USER_ROLES.index("User") if "User" in VALID_USER_ROLES else 0)
+        account_type_keys = list(ACCOUNT_TYPE_LABELS.keys())
+        current_account_type = account_type_for_user(current_user())
+        if current_account_type == "platform":
+            current_account_type = "company"
+        account_type_label = c3.selectbox(
+            "Account type",
+            list(ACCOUNT_TYPE_LABELS.values()),
+            index=account_type_keys.index(current_account_type) if current_account_type in account_type_keys else 0,
+        )
+        status = c4.selectbox("Status", ["Active", "Suspended"])
+        grant_options = list(PERMISSION_FLAG_LABELS.keys())
+        permission_flags = st.multiselect(
+            "Permission grants",
+            grant_options,
+            format_func=lambda flag: PERMISSION_FLAG_LABELS.get(flag, flag),
+            help="Optional grants from management. Use these to give a lower role Team, Billing, Admin, or Talent access without changing the role.",
+        )
         submitted = st.form_submit_button("Add user", use_container_width=True)
     if submitted:
         if not safe_text(email):
@@ -18275,7 +20131,16 @@ def page_team_roles() -> None:
         if not allowed:
             st.error(seat_message)
             return
-        user_record = persist_saas_record("users", {"email": email, "workspace": workspace, "role": role, "plan": latest_seat_state["plan"]["name"], "status": status})
+        normalized_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_label), "company")
+        user_record = persist_saas_record("users", {
+            "email": email,
+            "workspace": workspace,
+            "role": role,
+            "account_type": normalized_account_type,
+            "permission_flags": ", ".join(permission_flags),
+            "plan": latest_seat_state["plan"]["name"],
+            "status": status,
+        })
         st.session_state.users.append(user_record)
         trim_session_list("users")
         for workspace_record in st.session_state.get("workspaces", []):
@@ -18293,16 +20158,405 @@ def page_team_roles() -> None:
         )
         st.success("User added.")
 
+    if visible_users:
+        st.markdown("### Update user permissions")
+        user_labels = [
+            f"{safe_text(item.get('email'))} - {safe_text(item.get('role', 'User'))}"
+            for item in visible_users
+            if safe_text(item.get("email"))
+        ]
+        if user_labels:
+            with st.form("update_user_permissions", enter_to_submit=False):
+                selected_label = st.selectbox("User", user_labels)
+                selected_email = selected_label.split(" - ", 1)[0]
+                selected_user = next((item for item in visible_users if safe_text(item.get("email")) == selected_email), {})
+                current_role_value = safe_text(selected_user.get("role") or "User")
+                current_account_type = account_type_for_user(selected_user)
+                role_value = st.selectbox(
+                    "Role",
+                    VALID_USER_ROLES,
+                    index=VALID_USER_ROLES.index(current_role_value) if current_role_value in VALID_USER_ROLES else 0,
+                    key="update_user_role",
+                )
+                account_type_value = st.selectbox(
+                    "Account type",
+                    list(ACCOUNT_TYPE_LABELS.values()),
+                    index=list(ACCOUNT_TYPE_LABELS.keys()).index(current_account_type) if current_account_type in ACCOUNT_TYPE_LABELS else 0,
+                    key="update_user_account_type",
+                )
+                status_value = st.selectbox(
+                    "Status",
+                    ["Active", "Suspended"],
+                    index=0 if safe_text(selected_user.get("status", "Active")) != "Suspended" else 1,
+                    key="update_user_status",
+                )
+                updated_flags = st.multiselect(
+                    "Permission grants",
+                    list(PERMISSION_FLAG_LABELS.keys()),
+                    default=[flag for flag in sorted(granted_permission_flags(selected_user)) if flag in PERMISSION_FLAG_LABELS],
+                    format_func=lambda flag: PERMISSION_FLAG_LABELS.get(flag, flag),
+                    key="update_user_permission_flags",
+                )
+                update_submit = st.form_submit_button("Update permissions", use_container_width=True)
+            if update_submit:
+                normalized_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_value), current_account_type or "company")
+                updated = update_workspace_user(selected_email, workspace, {
+                    "role": role_value,
+                    "account_type": normalized_account_type,
+                    "permission_flags": ", ".join(updated_flags),
+                    "status": status_value,
+                })
+                if updated:
+                    if safe_text((current_user() or {}).get("email")).lower() == safe_text(selected_email).lower():
+                        merge_current_user_record(updated)
+                    add_audit("User permissions updated", selected_email)
+                    st.success("User permissions updated.")
+                    st.rerun()
+                else:
+                    st.error("Unable to update that user record.")
+
 
 def page_billing() -> None:
     hero("Billing", "Plans and usage", "Workspace plan, credits, invoices, and payment gateway setup.")
+    if not has_permission("billing.access"):
+        st.error("Billing access is restricted for this account.")
+        return
     user = current_user() or {}
+    if account_type_for_user(user) == "individual":
+        if has_permission("team.manage", user) and has_permission("admin.workspace", user):
+            st.info("Personal Premium billing is scoped to your individual contractor workspace.")
+        else:
+            st.info("Personal Premium billing is available for this individual account. Team and Admin sections stay hidden unless those permissions are granted.")
     workspace = safe_text(user.get("workspace") or "Demo Workspace")
     subscription = workspace_subscription(workspace)
     allowance = workspace_usage_allowance(workspace)
     usage = workspace_usage_totals(workspace)
     seat_state = workspace_seat_state(workspace)
     billing_provider = billing_provider_label()
+    selected_section, content_col = sectioned_page_layout(
+        "billing",
+        [
+            ("Overview", [
+                ("Overview", "Plan, usage, and allowance summary"),
+                ("Plans & Checkout", "Choose a plan and create a mandate intent"),
+                ("Cancel Subscription", "Cancel trial, mandate, or active subscription"),
+            ]),
+            ("Records", [
+                ("Invoices", "Invoice and payment documents"),
+                ("Records", "Subscription and checkout records"),
+                ("Billing Events", "Payment and subscription event history"),
+            ]),
+            ("Owner", [
+                ("Webhooks", "Owner-only provider reconciliation"),
+            ]),
+        ],
+        "Billing sections",
+    )
+
+    with content_col:
+        if selected_section == "Overview":
+            metrics([
+                ("Plan", subscription.get("plan", "Trial"), safe_text(subscription.get("status", "Active"))),
+                ("Seats", f"{seat_state['used']:,}/{seat_state['limit']:,}", "active + invited"),
+                ("Segments", f"{usage['segments']:,}/{allowance['segments']:,}", "usage allowance"),
+                ("Gateway", billing_provider, "ready" if billing_provider_ready(billing_provider) else "needs setup"),
+            ])
+            st.progress(min(1.0, seat_state["used"] / max(1, seat_state["limit"])), text="Seat usage")
+            st.progress(min(1.0, usage["segments"] / max(1, allowance["segments"])), text="Segment usage")
+            st.progress(min(1.0, usage["characters"] / max(1, allowance["characters"])), text="Character usage")
+            st.caption(f"Plan allowance: {seat_state['used']:,}/{seat_state['limit']:,} seats, {usage['segments']:,}/{allowance['segments']:,} segments, and {usage['characters']:,}/{allowance['characters']:,} characters.")
+            if safe_text(workspace).lower() != "platform" and seat_state["used"] >= max(1, seat_state["limit"]):
+                st.warning("This workspace is at the current plan seat limit. Upgrade before inviting more active users.")
+            if max(usage["segments"] / max(1, allowance["segments"]), usage["characters"] / max(1, allowance["characters"])) >= 0.85:
+                st.warning("This workspace is above 85% of the current plan allowance. Upgrade before large QA or Pro runs.")
+
+        elif selected_section == "Plans & Checkout":
+            st.markdown("### Choose a plan")
+            render_pricing_graphic(subscription.get("plan", "Trial"), subscription.get("billing_cycle", "monthly"))
+            billing_collection_enabled = feature_flag("billing_collection")
+            if not billing_collection_enabled:
+                st.info("Billing checkout collection is currently disabled by Platform Settings. Plans and usage remain visible, but new mandate intents cannot be created.")
+
+            with st.form("billing_checkout_intent", enter_to_submit=False):
+                c1, c2 = st.columns(2)
+                plan_names = [plan["name"] for plan in PLAN_CATALOG]
+                current_index = plan_names.index(subscription.get("plan", "Trial")) if subscription.get("plan", "Trial") in plan_names else 0
+                selected_plan = c1.selectbox("Plan", plan_names, index=current_index)
+                paid_plan_names = [plan["name"] for plan in PLAN_CATALOG if plan["name"] != "Trial"]
+                post_trial_plan = ""
+                if selected_plan == "Trial":
+                    c2.text_input("Billing cycle after trial", value="monthly", disabled=True)
+                    billing_cycle = "monthly"
+                    post_trial_plan = st.selectbox("Subscription after trial", paid_plan_names, index=0)
+                    post_plan = plan_record(post_trial_plan)
+                    trial_days = configured_trial_days()
+                    if post_plan["name"] == "Enterprise":
+                        st.info(f"Trial requires a card/UPI mandate or custom payment authorization. Cancel anytime before the {trial_days}-day trial ends.")
+                    else:
+                        st.info(
+                            f"Trial requires card or UPI mandate. Nothing is charged today. "
+                            f"After {trial_days} days, {post_plan['name']} starts at {format_money(post_plan['monthly'], post_plan['currency'])}/month unless cancelled before the trial ends."
+                        )
+                    default_link = trial_mandate_link_for_plan(post_trial_plan, billing_cycle)
+                else:
+                    c2.text_input("Billing cycle", value="monthly", disabled=True)
+                    billing_cycle = "monthly"
+                    selected_paid_plan = plan_record(selected_plan)
+                    if selected_plan == "Enterprise":
+                        st.info("Enterprise uses a custom card/UPI monthly mandate or payment authorization. The agreed amount is deducted every month until cancelled.")
+                    else:
+                        st.info(
+                            f"{selected_plan} uses a card/UPI monthly mandate. "
+                            f"{format_money(selected_paid_plan['monthly'], selected_paid_plan['currency'])} will be deducted every month until cancelled."
+                        )
+                    default_link = monthly_mandate_link_for_plan(selected_plan, billing_cycle)
+                payment_link = st.text_input(
+                    "Card/UPI monthly mandate link",
+                    value="",
+                    placeholder=default_link or "https://checkout.stripe.com/... or https://rzp.io/...",
+                    help="Paste a hosted monthly mandate link, or configure ERRORSWEEP_MONTHLY_MANDATE_LINK_PRO / ERRORSWEEP_CARD_UPI_MANDATE_LINK_PRO style secrets.",
+                )
+                accept_trial_terms = True
+                if selected_plan == "Trial":
+                    accept_trial_terms = st.checkbox(
+                        f"I understand the trial can be cancelled anytime before day {configured_trial_days()}, and the selected subscription starts afterward.",
+                        value=False,
+                    )
+                create_checkout = st.form_submit_button(
+                    "Start trial with card/UPI mandate" if selected_plan == "Trial" else "Create card/UPI monthly mandate",
+                    use_container_width=True,
+                    disabled=not billing_collection_enabled,
+                )
+            if create_checkout:
+                if not billing_collection_enabled:
+                    st.error("Billing collection is disabled by Platform Settings.")
+                    return
+                allowed_attempt, throttle_message = consume_abuse_attempt("checkout_intent", f"{workspace}:{selected_plan}:{post_trial_plan or billing_cycle}")
+                if not allowed_attempt:
+                    st.error(throttle_message)
+                    return
+                if safe_text(payment_link) and not sanitize_payment_link(payment_link):
+                    st.error("Please enter a valid http(s) card/UPI monthly mandate link.")
+                    return
+                if selected_plan == "Trial":
+                    if post_trial_plan not in paid_plan_names:
+                        st.error("Please select the subscription that should start after the trial.")
+                        return
+                    if not accept_trial_terms:
+                        st.error("Please confirm the trial cancellation and post-trial subscription terms.")
+                        return
+                    if not (
+                        sanitize_payment_link(payment_link)
+                        or sanitize_payment_link(trial_mandate_link_for_plan(post_trial_plan, billing_cycle))
+                        or provider_checkout_configured(selected_plan, post_trial_plan)
+                    ):
+                        st.error("Trial requires a valid card/UPI mandate link or configured Stripe/Razorpay subscription checkout plan.")
+                        return
+                else:
+                    if not (
+                        sanitize_payment_link(payment_link)
+                        or sanitize_payment_link(monthly_mandate_link_for_plan(selected_plan, billing_cycle))
+                        or provider_checkout_configured(selected_plan)
+                    ):
+                        st.error("This subscription requires a valid card/UPI monthly mandate link or configured Stripe/Razorpay subscription checkout plan.")
+                        return
+                intent = create_checkout_intent(selected_plan, billing_cycle, payment_link=payment_link, post_trial_plan=post_trial_plan)
+                if safe_text(intent.get("checkout_url")):
+                    if selected_plan == "Trial":
+                        st.success("Trial mandate recorded. Open the link below to add card/UPI authorization. User can cancel anytime before the trial ends.")
+                        st.link_button("Open card / UPI mandate link", intent["checkout_url"], use_container_width=True)
+                    else:
+                        st.success("Monthly mandate recorded. Open it below to authorize recurring card/UPI deduction.")
+                        st.link_button("Open card / UPI monthly mandate link", intent["checkout_url"], use_container_width=True)
+                elif safe_text(intent.get("status")) == "provider_checkout_ready":
+                    st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let ErrorSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
+                elif safe_text(intent.get("status")) == "provider_checkout_error":
+                    st.error("Provider checkout creation was attempted but failed. Review the provider error in the checkout intent metadata.")
+                elif safe_text(intent.get("status")) == "manual_pending":
+                    st.info("Checkout intent recorded. Add a hosted mandate link above, or configure Stripe/Razorpay mandate-link secrets to show a live link.")
+                elif safe_text(intent.get("status")) == "trial_mandate_link_missing":
+                    st.warning("Trial intent recorded, but card/UPI mandate link is missing.")
+                elif safe_text(intent.get("status")) == "monthly_mandate_link_missing":
+                    st.warning("Mandate intent recorded, but card/UPI monthly mandate link is missing.")
+                else:
+                    st.warning("Checkout intent recorded, but provider credentials are incomplete.")
+
+        elif selected_section == "Cancel Subscription":
+            st.markdown("### Cancel trial or subscription")
+            pending_checkout = next(
+                (
+                    item for item in st.session_state.get("checkout_sessions", [])
+                    if safe_text(item.get("workspace")) == workspace
+                    and safe_text(item.get("status")).lower() not in {"cancelled", "canceled", "expired", "paid", "completed"}
+                ),
+                None,
+            )
+            subscription_status = safe_text(subscription.get("status")).lower()
+            has_persisted_subscription = bool(safe_text(subscription.get("id")))
+            can_cancel_billing = (
+                (has_persisted_subscription and subscription_status not in {"cancelled", "canceled", "expired"})
+                or pending_checkout is not None
+            )
+            if can_cancel_billing:
+                active_label = (
+                    f"{subscription.get('plan', 'subscription')} subscription"
+                    if has_persisted_subscription and subscription_status not in {"cancelled", "canceled", "expired"}
+                    else f"{pending_checkout.get('plan', 'Trial')} pending mandate"
+                )
+                st.caption(f"Cancel the current {active_label}. Trial users can cancel anytime before the trial end date to stop the post-trial monthly mandate.")
+                with st.form("cancel_billing_path", enter_to_submit=False):
+                    cancel_reason = st.text_area("Cancellation reason", value="No longer needed", height=80)
+                    confirm_cancel = st.checkbox("I understand this cancels the current trial/payment mandate or active subscription.", value=False)
+                    cancel_submit = st.form_submit_button("Cancel trial / subscription", use_container_width=True)
+                if cancel_submit:
+                    if not confirm_cancel:
+                        st.error("Please confirm cancellation before continuing.")
+                        return
+                    cancelled_kind, cancelled_record = cancel_current_billing(cancel_reason)
+                    if cancelled_record:
+                        st.success("Cancellation recorded. Billing status and notification outbox were updated.")
+                        st.rerun()
+                    else:
+                        st.info("No active subscription or pending mandate was found to cancel.")
+            else:
+                st.info("No active subscription or pending trial mandate is currently available to cancel.")
+
+        elif selected_section == "Invoices":
+            render_invoice_panel(workspace, subscription)
+
+        elif selected_section == "Records":
+            if is_owner():
+                with st.expander("Owner action: activate selected subscription locally", expanded=False):
+                    st.caption("Use this only after manual payment confirmation or while testing provider webhooks locally.")
+                    c1, c2 = st.columns(2)
+                    activate_plan = c1.selectbox("Activate plan", [plan["name"] for plan in PLAN_CATALOG], key="activate_subscription_plan")
+                    c2.text_input("Activate cycle", value="monthly", disabled=True, key="activate_subscription_cycle_display")
+                    activate_cycle = "monthly"
+                    if st.button("Mark subscription active", use_container_width=True):
+                        activate_subscription(activate_plan, activate_cycle, billing_provider)
+                        st.success("Subscription record activated.")
+                        st.rerun()
+
+            st.markdown("### Subscription records")
+            subscription_rows = [
+                item for item in st.session_state.get("subscriptions", [])
+                if safe_text(item.get("workspace")) == workspace or is_owner()
+            ]
+            if subscription_rows:
+                st.dataframe(pd.DataFrame(display_records(subscription_rows)), use_container_width=True, hide_index=True)
+            else:
+                st.info("No persisted subscription records yet. New public trials should complete card/UPI mandate authorization before activation.")
+
+            st.markdown("### Checkout intents")
+            checkout_rows = [
+                item for item in st.session_state.get("checkout_sessions", [])
+                if safe_text(item.get("workspace")) == workspace or is_owner()
+            ]
+            if checkout_rows:
+                st.dataframe(pd.DataFrame(display_records(checkout_rows)), use_container_width=True, hide_index=True)
+                with st.expander("Provider checkout payload / curl", expanded=False):
+                    labels = [
+                        f"{safe_text(item.get('plan'))} - {safe_text(item.get('status'))} - {safe_text(item.get('id'))[:8]}"
+                        for item in checkout_rows
+                    ]
+                    selected_label = st.selectbox("Checkout intent", labels, key="provider_checkout_payload_select")
+                    selected_idx = labels.index(selected_label) if selected_label in labels else 0
+                    selected_checkout = checkout_rows[selected_idx]
+                    metadata = selected_checkout.get("metadata_json")
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except Exception:
+                            metadata = {}
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    provider_request = metadata.get("provider_checkout_request") if isinstance(metadata.get("provider_checkout_request"), dict) else {}
+                    provider_curl = safe_text(metadata.get("provider_checkout_curl"))
+                    if provider_request:
+                        display_request = {
+                            key: value
+                            for key, value in provider_request.items()
+                            if key not in {"auth"}
+                        }
+                        display_request["auth"] = provider_request.get("auth", "")
+                        st.json(display_request)
+                        if provider_curl:
+                            st.code(provider_curl, language="bash")
+                        d1, d2 = st.columns(2)
+                        d1.download_button(
+                            "Download provider checkout JSON",
+                            json.dumps(display_request, indent=2),
+                            file_name="errorsweep_provider_checkout_request.json",
+                            mime="application/json",
+                            use_container_width=True,
+                        )
+                        d2.download_button(
+                            "Download provider checkout curl",
+                            provider_curl or "# No curl generated\n",
+                            file_name="errorsweep_provider_checkout_request.sh",
+                            mime="text/x-shellscript",
+                            use_container_width=True,
+                        )
+                        if safe_text(metadata.get("provider_checkout_error")):
+                            st.error(safe_text(metadata.get("provider_checkout_error")))
+                        elif metadata.get("provider_checkout_ready") and not billing_live_checkout_enabled():
+                            st.info("Payload is ready. Auto-creation is off until ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true is configured.")
+                    else:
+                        st.info("This checkout intent does not contain a provider checkout payload.")
+            else:
+                st.info("No checkout intents yet.")
+
+        elif selected_section == "Webhooks":
+            if not is_owner():
+                st.info("Provider webhook reconciliation is available to platform owners.")
+            else:
+                st.markdown("### Provider webhook reconciliation")
+                st.caption("Paste a Stripe/Razorpay webhook event here for local testing. A deployed webhook endpoint can reuse the same normalization logic later.")
+                with st.form("billing_webhook_reconcile", enter_to_submit=False):
+                    c1, c2 = st.columns(2)
+                    webhook_provider = c1.selectbox("Provider", ["auto", "razorpay", "stripe", "manual"], index=0)
+                    apply_updates = c2.checkbox("Apply subscription/payment updates", value=True)
+                    signature_header = st.text_input("Signature header (optional)", placeholder="Stripe-Signature or X-Razorpay-Signature value")
+                    webhook_secret = st.text_input("Webhook secret override (optional)", type="password", help="Leave blank to use STRIPE_WEBHOOK_SECRET, RAZORPAY_WEBHOOK_SECRET, or ERRORSWEEP_BILLING_WEBHOOK_SECRET.")
+                    raw_event = st.text_area("Webhook JSON", height=180, placeholder='{"event":"payment.captured","payload":{"payment":{"entity":{"amount":399900,"currency":"INR","notes":{"workspace":"Demo Workspace","plan":"Pro"}}}}}')
+                    webhook_submit = st.form_submit_button("Record webhook event", use_container_width=True)
+                if webhook_submit:
+                    if not raw_event.strip():
+                        st.error("Paste a webhook JSON payload first.")
+                        return
+                    try:
+                        event_record, messages = record_billing_webhook_event(
+                            webhook_provider,
+                            raw_event,
+                            signature_header=signature_header,
+                            webhook_secret=webhook_secret,
+                            apply_updates=apply_updates,
+                        )
+                        st.success(f"Billing event recorded: {event_record.get('provider')} / {event_record.get('event_type')} / {event_record.get('status')}")
+                        for message in messages:
+                            st.caption(message)
+                        st.rerun()
+                    except Exception as exc:
+                        LOGGER.warning("Billing webhook reconciliation failed: %s", exc)
+                        st.error(f"Unable to record webhook event: {exc}")
+
+        elif selected_section == "Billing Events":
+            st.markdown("### Billing events")
+            billing_event_rows = [
+                item for item in st.session_state.get("billing_events", [])
+                if safe_text(item.get("workspace")) == workspace or is_owner()
+            ]
+            if billing_event_rows:
+                preview_events = []
+                for item in billing_event_rows[:100]:
+                    row = dict(item)
+                    if isinstance(row.get("metadata_json"), (dict, list)):
+                        row["metadata_json"] = json.dumps(row["metadata_json"], ensure_ascii=False)[:260]
+                    preview_events.append(row)
+                st.dataframe(pd.DataFrame(display_records(preview_events)), use_container_width=True, hide_index=True)
+            else:
+                st.info("No billing webhook events recorded yet.")
+    return
+
     metrics([
         ("Plan", subscription.get("plan", "Trial"), safe_text(subscription.get("status", "Active"))),
         ("Seats", f"{seat_state['used']:,}/{seat_state['limit']:,}", "active + invited"),
@@ -18600,121 +20854,357 @@ def page_billing() -> None:
 def page_account() -> None:
     hero("Account", "Profile and workspace preferences", "Manage user profile, workspace settings, and notification preferences.")
     user = current_user() or {}
-    st.write("Email:", user.get("email"))
-    st.write("Role:", user.get("role"))
-    st.write("Workspace:", user.get("workspace"))
+    profile_status = normalized_profile_completion_status(user)
+    display_name = display_name_from_user(user)
+    account_context = dedent(f"""
+        <div class="es-account-sidebar-card">
+          <div class="es-account-sidebar-top">
+            <div class="es-account-sidebar-avatar">{escape(monogram(display_name))}</div>
+            <div>
+              <div class="es-account-sidebar-name">{escape(display_name)}</div>
+              <div class="es-account-sidebar-meta">{escape(safe_text(user.get("role") or "User"))}</div>
+            </div>
+          </div>
+          <div class="es-account-sidebar-meta">{escape(safe_text(user.get("workspace") or "Demo Workspace"))}</div>
+          <div class="es-account-sidebar-status">Profile {escape(profile_status or "pending")}</div>
+        </div>
+    """).strip()
+    selected_section, content_col = sectioned_page_layout(
+        "account",
+        [
+            ("Profile", [
+                ("Account Overview", "Identity, role, and workspace details"),
+                ("Professional Profile", "Talent profile used for job matching"),
+            ]),
+            ("Preferences", [
+                ("AI Access", "Bring your own AI provider for this session"),
+                ("Support", "Account help and support requests"),
+                ("Notifications", "Personal notification preferences and history"),
+            ]),
+        ],
+        "Account settings",
+        "Manage your identity, talent profile, AI access, and notifications.",
+        account_context,
+    )
 
-    st.markdown("### AI access")
-    st.caption("Use included AI, or add any OpenAI-compatible API key, model, and base URL available to you. Your key is kept only in this session for the MVP.")
-    current_mode = current_ai_route_label()
-    st.info(f"Current route: {current_mode}")
-    with st.form("byo_key_form"):
-        presets = {
-            "OpenAI": "",
-            "OpenAI-compatible / Custom": st.session_state.get("byo_ai_base_url", ""),
-            "OpenRouter": "https://openrouter.ai/api/v1",
-            "Groq": "https://api.groq.com/openai/v1",
-            "Together AI": "https://api.together.xyz/v1",
-            "Fireworks AI": "https://api.fireworks.ai/inference/v1",
-            "Google Gemini OpenAI-compatible": "https://generativelanguage.googleapis.com/v1beta/openai",
-            "Local vLLM / LM Studio": "http://127.0.0.1:8000/v1",
-        }
-        provider = st.selectbox("API provider", list(presets.keys()), index=list(presets.keys()).index(st.session_state.get("byo_ai_provider", "OpenAI-compatible / Custom")) if st.session_state.get("byo_ai_provider") in presets else 1)
-        default_base = presets.get(provider, "")
-        byo_base_url = st.text_input(
-            "Base URL (leave blank for OpenAI)",
-            value=st.session_state.get("byo_ai_base_url", default_base) or default_base,
-            help="Use any OpenAI-compatible chat/completions endpoint. Examples: Groq, OpenRouter, Together, Fireworks, Gemini OpenAI-compatible, vLLM, LM Studio.",
-        )
-        byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to use included/self-hosted routes if configured.")
-        byo_model = st.text_input("Model name", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
-        col_a, col_b = st.columns(2)
-        save_key = col_a.form_submit_button("Use this key", use_container_width=True)
-        clear_key = col_b.form_submit_button("Clear BYO key", use_container_width=True)
-    if save_key:
-        if byo_key.strip():
-            st.session_state["byo_openai_api_key"] = byo_key.strip()
-            st.session_state["byo_openai_model"] = byo_model.strip() or DEFAULT_MODEL
-            st.session_state["byo_ai_provider"] = provider
-            st.session_state["byo_ai_base_url"] = byo_base_url.strip()
-            st.success(f"BYO {provider} key activated for this session.")
-        else:
-            st.warning("No key entered. Included AI will be used if configured.")
-    if clear_key:
-        st.session_state.pop("byo_openai_api_key", None)
-        st.session_state.pop("byo_openai_model", None)
-        st.session_state.pop("byo_ai_provider", None)
-        st.session_state.pop("byo_ai_base_url", None)
-        st.success("BYO key cleared. Included AI will be used if configured.")
+    with content_col:
+        if selected_section == "Account Overview":
+            st.markdown("### Account overview")
+            st.write("Email:", user.get("email"))
+            st.write("Role:", user.get("role"))
+            st.write("Workspace:", user.get("workspace"))
+            st.write("Account type:", ACCOUNT_TYPE_LABELS.get(account_type_for_user(user), account_type_for_user(user)))
+            if not is_platform_owner_identity(user) and profile_status != "completed":
+                if st.button("Complete professional profile", use_container_width=False, key="account_overview_complete_profile"):
+                    open_account_professional_profile_editor()
+                    st.rerun()
 
-    render_account_support_panel()
+        elif selected_section == "Professional Profile":
+            st.markdown("### Professional profile")
+            profile_summary = {
+                "Full name": user.get("full_name", ""),
+                "Profile type": user.get("profile_type", ""),
+                "Primary role": user.get("primary_role", ""),
+                "Services": user.get("services", ""),
+                "Languages": user.get("languages", ""),
+                "Domains": user.get("domains", ""),
+                "Availability": user.get("availability", ""),
+                "Work preference": user.get("work_preference", ""),
+                "Portfolio": user.get("portfolio_url", ""),
+                "LinkedIn": user.get("linkedin_url", ""),
+            }
+            edit_mode = bool(st.session_state.get("account_profile_edit_mode"))
+            if edit_mode:
+                st.caption("Edit the searchable talent profile management can use for job matching.")
+                if st.button("Cancel edit", use_container_width=False, key="account_cancel_profile_edit"):
+                    st.session_state.pop("account_profile_edit_mode", None)
+                    st.rerun()
+                render_profile_completion_form(user, form_key="account_professional_profile_form")
+            else:
+                if any(safe_text(value) for value in profile_summary.values()):
+                    st.dataframe(pd.DataFrame([profile_summary]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No professional profile details have been saved yet.")
+                button_label = "Edit professional profile" if profile_status == "completed" else "Complete professional profile"
+                if st.button(button_label, use_container_width=False, key="account_edit_professional_profile"):
+                    st.session_state["account_profile_edit_mode"] = True
+                    st.session_state.pop("_profile_completion_mode", None)
+                    st.session_state.pop("_profile_completion_force", None)
+                    st.rerun()
 
-    st.checkbox("Email notifications", value=True)
-    st.checkbox("Show review hints", value=True)
-    my_email = safe_text(user.get("email", "")).lower()
-    my_notifications = [
-        item for item in st.session_state.get("notifications", [])
-        if safe_text(item.get("recipient", "")).lower() == my_email
-    ]
-    st.markdown("### Notification history")
-    if my_notifications:
-        rows = []
-        for item in my_notifications[:25]:
-            rows.append({
-                "created": item.get("created", ""),
-                "event_type": item.get("event_type", ""),
-                "subject": item.get("subject", ""),
-                "status": item.get("status", ""),
-                "provider": item.get("provider", ""),
-                "sent_at": item.get("sent_at", ""),
-            })
-        st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
-    else:
-        st.info("No notifications for this account yet.")
+        elif selected_section == "AI Access":
+            st.markdown("### AI access")
+            st.caption("Use included AI, or add any OpenAI-compatible API key, model, and base URL available to you. Your key is kept only in this session for the MVP.")
+            current_mode = current_ai_route_label()
+            st.info(f"Current route: {current_mode}")
+            with st.form("byo_key_form"):
+                presets = {
+                    "OpenAI": "",
+                    "OpenAI-compatible / Custom": st.session_state.get("byo_ai_base_url", ""),
+                    "OpenRouter": "https://openrouter.ai/api/v1",
+                    "Groq": "https://api.groq.com/openai/v1",
+                    "Together AI": "https://api.together.xyz/v1",
+                    "Fireworks AI": "https://api.fireworks.ai/inference/v1",
+                    "Google Gemini OpenAI-compatible": "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "Local vLLM / LM Studio": "http://127.0.0.1:8000/v1",
+                }
+                provider = st.selectbox("API provider", list(presets.keys()), index=list(presets.keys()).index(st.session_state.get("byo_ai_provider", "OpenAI-compatible / Custom")) if st.session_state.get("byo_ai_provider") in presets else 1)
+                default_base = presets.get(provider, "")
+                byo_base_url = st.text_input(
+                    "Base URL (leave blank for OpenAI)",
+                    value=st.session_state.get("byo_ai_base_url", default_base) or default_base,
+                    help="Use any OpenAI-compatible chat/completions endpoint. Examples: Groq, OpenRouter, Together, Fireworks, Gemini OpenAI-compatible, vLLM, LM Studio.",
+                )
+                byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to use included/self-hosted routes if configured.")
+                byo_model = st.text_input("Model name", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
+                col_a, col_b = st.columns(2)
+                save_key = col_a.form_submit_button("Use this key", use_container_width=True)
+                clear_key = col_b.form_submit_button("Clear BYO key", use_container_width=True)
+            if save_key:
+                if byo_key.strip():
+                    st.session_state["byo_openai_api_key"] = byo_key.strip()
+                    st.session_state["byo_openai_model"] = byo_model.strip() or DEFAULT_MODEL
+                    st.session_state["byo_ai_provider"] = provider
+                    st.session_state["byo_ai_base_url"] = byo_base_url.strip()
+                    st.success(f"BYO {provider} key activated for this session.")
+                else:
+                    st.warning("No key entered. Included AI will be used if configured.")
+            if clear_key:
+                st.session_state.pop("byo_openai_api_key", None)
+                st.session_state.pop("byo_openai_model", None)
+                st.session_state.pop("byo_ai_provider", None)
+                st.session_state.pop("byo_ai_base_url", None)
+                st.success("BYO key cleared. Included AI will be used if configured.")
+
+        elif selected_section == "Support":
+            render_account_support_panel()
+
+        elif selected_section == "Notifications":
+            st.checkbox("Email notifications", value=True)
+            st.checkbox("Show review hints", value=True)
+            my_email = safe_text(user.get("email", "")).lower()
+            my_notifications = [
+                item for item in st.session_state.get("notifications", [])
+                if safe_text(item.get("recipient", "")).lower() == my_email
+            ]
+            st.markdown("### Notification history")
+            if my_notifications:
+                rows = []
+                for item in my_notifications[:25]:
+                    rows.append({
+                        "created": item.get("created", ""),
+                        "event_type": item.get("event_type", ""),
+                        "subject": item.get("subject", ""),
+                        "status": item.get("status", ""),
+                        "provider": item.get("provider", ""),
+                        "sent_at": item.get("sent_at", ""),
+                    })
+                st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+            else:
+                st.info("No notifications for this account yet.")
 
 
 def page_admin() -> None:
     hero("Admin", "Workspace admin", "Workspace-level configuration and maintenance.")
-    if current_role() not in ("Platform Owner", "Workspace Owner", "Workspace Admin"):
+    if not has_permission("admin.workspace"):
         st.error("Admin access is restricted.")
         return
     if st.session_state.pop("_admin_workspace_data_cleared", False):
         st.success("Demo workspace data cleared.")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("### Workspace summary")
-        metrics([
-            ("Projects", len(st.session_state.projects), ""),
-            ("Jobs", len(st.session_state.jobs), ""),
-            ("Review rows", len(st.session_state.review_segments), ""),
-            ("TM", len(st.session_state.tm), ""),
-        ])
-    with c2:
-        st.markdown("### Maintenance")
-        if st.button("Clear demo jobs/review only", use_container_width=True):
-            st.session_state.jobs = []
-            st.session_state.review_segments = []
-            st.session_state.subtitle_segments = []
-            st.success("Demo jobs and review rows cleared.")
-        if st.button("Clear all demo workspace data", use_container_width=True):
-            for key in ["projects", "jobs", "tm", "review_segments", "subtitle_segments", "last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"]:
-                st.session_state[key] = []
-            st.session_state["pro_post_editing_ready"] = False
-            st.session_state["_admin_workspace_data_cleared"] = True
-            st.rerun()
-    render_workspace_privacy_export(key_prefix="admin")
-    render_privacy_request_tracker(key_prefix="admin")
-    st.markdown("### Workspace support queue")
-    render_support_queue_panel(key_prefix="admin")
+    selected_section, content_col = sectioned_page_layout(
+        "admin",
+        [
+            ("Workspace", [
+                ("Workspace Summary", "Workspace counts and operational snapshot"),
+                ("Maintenance", "Clear demo workspace records"),
+            ]),
+            ("Governance", [
+                ("Privacy Export", "Export workspace privacy records"),
+                ("Privacy Requests", "Track access, deletion, and correction requests"),
+                ("Support Queue", "Workspace support tickets"),
+            ]),
+        ],
+        "Admin sections",
+    )
+
+    with content_col:
+        if selected_section == "Workspace Summary":
+            st.markdown("### Workspace summary")
+            metrics([
+                ("Projects", len(st.session_state.projects), ""),
+                ("Jobs", len(st.session_state.jobs), ""),
+                ("Review rows", len(st.session_state.review_segments), ""),
+                ("TM", len(st.session_state.tm), ""),
+            ])
+        elif selected_section == "Maintenance":
+            st.markdown("### Maintenance")
+            if st.button("Clear demo jobs/review only", use_container_width=True):
+                st.session_state.jobs = []
+                st.session_state.review_segments = []
+                st.session_state.subtitle_segments = []
+                st.success("Demo jobs and review rows cleared.")
+            if st.button("Clear all demo workspace data", use_container_width=True):
+                for key in ["projects", "jobs", "tm", "review_segments", "subtitle_segments", "last_pro_review_segments", "latest_human_review_segments", "pro_review_rows"]:
+                    st.session_state[key] = []
+                st.session_state["pro_post_editing_ready"] = False
+                st.session_state["_admin_workspace_data_cleared"] = True
+                st.rerun()
+        elif selected_section == "Privacy Export":
+            render_workspace_privacy_export(key_prefix="admin")
+        elif selected_section == "Privacy Requests":
+            render_privacy_request_tracker(key_prefix="admin")
+        elif selected_section == "Support Queue":
+            st.markdown("### Workspace support queue")
+            render_support_queue_panel(key_prefix="admin")
 
 
 # Owner pages
 
 def page_owner_console() -> None:
     hero("Owner Console", "Private platform owner view", "Only your master account can see global payments, users, workspaces, usage, and platform controls.")
+    selected_section, content_col = sectioned_page_layout(
+        "owner_console",
+        [
+            ("Overview", [
+                ("Platform Overview", "Global workspace, user, payment, and audit counts"),
+                ("Release Persistence", "Storage and persistence diagnostics"),
+                ("Owner Actions", "Shortcuts to owner management areas"),
+            ]),
+            ("Operations", [
+                ("Current Task", "Current or recent task details from this session"),
+                ("Usage", "Translation and AI usage events"),
+                ("Recent Editor Jobs", "Persistent and session-created editor jobs"),
+            ]),
+        ],
+        "Owner Console",
+        "Platform-wide operational sections for the owner account.",
+    )
+
+    with content_col:
+        if selected_section == "Platform Overview":
+            metrics([
+                ("Workspaces", len(st.session_state.workspaces), "all customer/client spaces"),
+                ("Users", len(all_user_records()), "all access records"),
+                ("Payments", len(st.session_state.payments), "received or demo records"),
+                ("Audit Logs", len(st.session_state.audit_logs), "platform events"),
+            ])
+
+        elif selected_section == "Release Persistence":
+            st.markdown("### Release persistence")
+            if persistence_health is not None:
+                health = persistence_health()
+                render_topology_map(health)
+                h1, h2, h3, h4 = st.columns(4)
+                h1.metric("Storage", health.get("storage_mode", "unknown"))
+                h2.metric("Supabase", "Ready" if health.get("supabase_configured") else "Fallback")
+                h3.metric("Jobs table", health.get("editor_jobs_table", "unknown"))
+                h4.metric("Usage table", health.get("usage_events_table", "unknown"))
+                with st.expander("Persistence diagnostics", expanded=False):
+                    diagnostic_rows: List[Dict[str, str]] = []
+
+                    def collect_diagnostics(prefix: str, value: Any) -> None:
+                        if isinstance(value, dict):
+                            for child_key, child_value in value.items():
+                                collect_diagnostics(f"{prefix}.{child_key}" if prefix else safe_text(child_key), child_value)
+                        else:
+                            diagnostic_rows.append({"Check": prefix, "Value": safe_text(value)})
+
+                    collect_diagnostics("", health)
+                    st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
+            else:
+                st.warning("production_persistence.py is not available. Editor jobs are using session/local fallback only.")
+
+        elif selected_section == "Owner Actions":
+            st.markdown("### Owner actions")
+            c1, c2, c3 = st.columns(3)
+            c1.info("Review all workspace access from User Access Matrix.")
+            c2.info("Track received payments from Payments Received.")
+            c3.info("Control global feature flags from Platform Settings.")
+
+        elif selected_section == "Current Task":
+            st.markdown("### Current / recent task details")
+            active_job_id = st.session_state.get("active_review_session_id", "")
+            active_rows = st.session_state.get("review_segments") or st.session_state.get("last_pro_review_segments") or []
+            last_task = st.session_state.get("last_pro_task_details") or {}
+            session_jobs = st.session_state.get("owner_recent_editor_jobs", [])
+
+            if active_job_id or last_task or active_rows:
+                t1, t2, t3, t4 = st.columns(4)
+                t1.metric("Active job", str(active_job_id or last_task.get("id", ""))[:10] if (active_job_id or last_task.get("id")) else "-")
+                t2.metric("File", last_task.get("file_name", st.session_state.get("review_workspace_file_name", "-")) or "-")
+                t3.metric("Rows", len(active_rows) or int(last_task.get("row_count") or 0))
+                t4.metric("Target", last_task.get("target_language", st.session_state.get("review_workspace_language", "-")) or "-")
+                with st.expander("Current task row preview", expanded=False):
+                    preview_rows = []
+                    for i, row in enumerate(active_rows[:25], start=1):
+                        preview_rows.append({
+                            "No": i,
+                            "Source": safe_text(row.get("source", ""))[:180],
+                            "Target": safe_text(row.get("target", row.get("translation", "")))[:180],
+                            "Status": safe_text(row.get("status", "")),
+                            "Match": safe_text(row.get("match", "")),
+                            "Location": safe_text(row.get("location", "")),
+                        })
+                    if preview_rows:
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("The active task exists, but no row preview is available in session.")
+            else:
+                st.info("No active Pro review task is currently stored in this browser session.")
+            if session_jobs:
+                st.markdown("### Session-created editor jobs")
+                st.dataframe(pd.DataFrame(display_records(session_jobs)), use_container_width=True, hide_index=True)
+
+        elif selected_section == "Usage":
+            st.markdown("### Translation / AI usage")
+            persistent_usage = []
+            if fetch_persistent_usage_events is not None:
+                try:
+                    persistent_usage = fetch_persistent_usage_events(300)
+                except Exception as exc:
+                    LOGGER.error("Unable to fetch persistent usage events: %s", exc)
+                    persistent_usage = []
+            usage_rows = persistent_usage or st.session_state.get("ai_usage_events", [])
+            if usage_rows:
+                usage_df = pd.DataFrame(display_records(usage_rows))
+                usage_values = [int(row.get("characters", row.get("segments", 0)) or 0) for row in usage_rows[:24]]
+                st.html(
+                    f"""
+                    <div class="es-dashboard-panel">
+                      <div class="es-dashboard-title"><h3>Usage velocity</h3><span class="es-code-chip">AI / MT</span></div>
+                      {area_chart_svg(list(reversed(usage_values or [0])), "ownerUsage")}
+                    </div>
+                    """
+                )
+                st.dataframe(usage_df, use_container_width=True, hide_index=True)
+                if "characters" in usage_df.columns:
+                    st.caption(f"Total characters logged: {int(pd.to_numeric(usage_df['characters'], errors='coerce').fillna(0).sum())}")
+            else:
+                st.info("No usage logged yet.")
+            render_usage_task_links()
+
+        elif selected_section == "Recent Editor Jobs":
+            st.markdown("### Recent editor jobs")
+            editor_jobs = []
+            if fetch_persistent_editor_jobs is not None:
+                try:
+                    editor_jobs = fetch_persistent_editor_jobs(100)
+                except Exception as exc:
+                    LOGGER.error("Unable to fetch persistent editor jobs: %s", exc)
+                    editor_jobs = []
+            combined_jobs = list(editor_jobs or [])
+            for job in st.session_state.get("owner_recent_editor_jobs", []):
+                if not any(str(j.get("id")) == str(job.get("id")) for j in combined_jobs):
+                    combined_jobs.append(job)
+            if combined_jobs:
+                st.dataframe(pd.DataFrame(display_records(combined_jobs)), use_container_width=True, hide_index=True)
+            else:
+                st.info("No persisted editor jobs found yet. Run Pro, click Open Human Review Editor, then return here.")
+    return
+
     metrics([
         ("Workspaces", len(st.session_state.workspaces), "all customer/client spaces"),
-        ("Users", len(st.session_state.users), "all access records"),
+        ("Users", len(all_user_records()), "all access records"),
         ("Payments", len(st.session_state.payments), "received or demo records"),
         ("Audit Logs", len(st.session_state.audit_logs), "platform events"),
     ])
@@ -18837,44 +21327,224 @@ def page_owner_console() -> None:
 
 def page_payments_received() -> None:
     hero("Payments Received", "Revenue and payment records", "Owner-only list of payments, plans, access granted, and payment status.")
-    with st.form("add_payment"):
-        c1, c2, c3, c4 = st.columns(4)
-        workspace = c1.text_input("Workspace")
-        user = c2.text_input("User email")
-        plan = c3.selectbox("Plan", [p["name"] for p in PLAN_CATALOG])
-        amount = c4.number_input("Amount (INR)", min_value=0.0, value=0.0)
-        submitted = st.form_submit_button("Add payment record", use_container_width=True)
-    if submitted:
-        plan_currency = plan_record(plan).get("currency", "INR")
-        payment_record = persist_saas_record("payments", {"date": now_stamp(), "workspace": workspace, "user": user, "plan": plan, "amount": amount, "currency": plan_currency, "status": "Recorded"})
-        st.session_state.payments.insert(0, payment_record)
-        trim_session_list("payments")
-        add_audit("Payment record added", f"{workspace}: {amount}")
-        queue_email_notification(
-            user,
-            "ErrorSweep payment recorded",
-            f"Payment record added for workspace '{workspace}': {format_money(amount, plan_currency)} on plan {plan}.",
-            "billing.payment_recorded",
-            metadata={"workspace": workspace, "plan": plan, "amount": amount, "currency": plan_currency},
-            workspace=workspace,
-        )
-        st.success("Payment record added.")
-    st.dataframe(pd.DataFrame(display_records(st.session_state.payments)), use_container_width=True, hide_index=True)
+    selected_section, content_col = sectioned_page_layout(
+        "payments_received",
+        [
+            ("Payments", [
+                ("Record Payment", "Create a manual owner payment record"),
+                ("Payment Records", "Review received payment records"),
+            ]),
+        ],
+        "Payments",
+        "Owner revenue and payment tracking sections.",
+    )
+
+    with content_col:
+        if selected_section == "Record Payment":
+            with st.form("add_payment"):
+                c1, c2, c3, c4 = st.columns(4)
+                workspace = c1.text_input("Workspace")
+                user = c2.text_input("User email")
+                plan = c3.selectbox("Plan", [p["name"] for p in PLAN_CATALOG])
+                amount = c4.number_input("Amount (INR)", min_value=0.0, value=0.0)
+                submitted = st.form_submit_button("Add payment record", use_container_width=True)
+            if submitted:
+                plan_currency = plan_record(plan).get("currency", "INR")
+                payment_record = persist_saas_record("payments", {"date": now_stamp(), "workspace": workspace, "user": user, "plan": plan, "amount": amount, "currency": plan_currency, "status": "Recorded"})
+                st.session_state.payments.insert(0, payment_record)
+                trim_session_list("payments")
+                add_audit("Payment record added", f"{workspace}: {amount}")
+                queue_email_notification(
+                    user,
+                    "ErrorSweep payment recorded",
+                    f"Payment record added for workspace '{workspace}': {format_money(amount, plan_currency)} on plan {plan}.",
+                    "billing.payment_recorded",
+                    metadata={"workspace": workspace, "plan": plan, "amount": amount, "currency": plan_currency},
+                    workspace=workspace,
+                )
+                st.success("Payment record added.")
+        elif selected_section == "Payment Records":
+            payment_rows = display_records(st.session_state.payments)
+            metrics([
+                ("Payments", len(payment_rows), "records"),
+                ("Plans", len({safe_text(row.get("plan")) for row in st.session_state.payments if safe_text(row.get("plan"))}), "unique plans"),
+                ("Status", "Tracked", "owner ledger"),
+            ])
+            st.dataframe(pd.DataFrame(payment_rows), use_container_width=True, hide_index=True)
 
 
 def page_user_access_matrix() -> None:
     hero("User Access Matrix", "Who has what access", "Owner-only view of user roles, workspaces, plans, statuses, and allowed pages.")
-    rows = []
-    for u in st.session_state.users:
-        role = u.get("role", "User")
-        safe_user = {k: v for k, v in u.items() if k != "password_hash"}
-        rows.append({**safe_user, "allowed_pages": ", ".join(ROLE_PAGE_ACCESS.get(role, []))})
-    st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+    selected_section, content_col = sectioned_page_layout(
+        "user_access_matrix",
+        [
+            ("Access", [
+                ("Access Matrix", "Effective roles, grants, permissions, and allowed pages"),
+            ]),
+        ],
+        "Access Matrix",
+        "Owner permission visibility sections.",
+    )
+
+    with content_col:
+        if selected_section == "Access Matrix":
+            rows = []
+            for u in all_user_records():
+                safe_user = {k: v for k, v in u.items() if k != "password_hash"}
+                permissions = effective_permissions(safe_user)
+                allowed = [page for page in ALL_APP_PAGES if PAGE_PERMISSIONS.get(page, "") in permissions]
+                rows.append({
+                    **safe_user,
+                    "account_type": ACCOUNT_TYPE_LABELS.get(account_type_for_user(safe_user), account_type_for_user(safe_user)),
+                    "permission_flags": ", ".join(sorted(granted_permission_flags(safe_user))),
+                    "effective_permissions": ", ".join(sorted(permissions)),
+                    "allowed_pages": ", ".join(allowed),
+                })
+            st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+
+
+def render_talent_premium_required_page() -> None:
+    user = current_user() or {}
+    workspace = user_workspace_for_entitlement(user)
+    subscription = workspace_subscription(workspace)
+    plan_name = safe_text(subscription.get("plan") or user.get("plan") or "Trial")
+    status = safe_text(subscription.get("status") or user.get("status") or "Active")
+    hero("Premium Required", "Talent Database is a Premium feature", "Upgrade to an active Premium plan to search talent profiles and use job matching.")
+    st.warning("Talent Database is available only for active Premium workspaces and users with the Talent Database permission.")
+    metrics([
+        ("Current plan", plan_name or "Trial", status or "Active"),
+        ("Required", "Premium", "Pro, Agency, Enterprise, or Unlimited"),
+        ("Permission", "Talent database", "required after upgrade"),
+    ])
+    if has_permission("billing.access", user):
+        st.link_button("Open Billing to upgrade", page_link("Billing"), use_container_width=False)
+    else:
+        st.info("Ask your workspace owner or billing admin to upgrade this workspace and grant Talent Database access.")
+
+
+def page_talent_database() -> None:
+    if not has_active_premium_entitlement():
+        render_talent_premium_required_page()
+        return
+    hero("Talent Database", "Profile search and job matching", "Search registered freelancers, professionals, and workspace users for future assignments.")
+    if not has_permission("talent.search"):
+        st.error("Talent Database access is restricted to platform management.")
+        return
+
+    records = [safe_user_session_record(row) for row in all_user_records(limit=2000)]
+    for record in records:
+        if not safe_text(record.get("talent_search_text")):
+            record["talent_search_text"] = talent_search_text(record)
+
+    selected_section, content_col = sectioned_page_layout(
+        "talent_database",
+        [
+            ("Talent", [
+                ("Talent Search", "Search profiles for project matching"),
+                ("Management Status", "Update internal review status and notes"),
+            ]),
+        ],
+        "Talent",
+        "Profile search and management sections.",
+    )
+
+    with content_col:
+        if selected_section == "Talent Search":
+            total = len(records)
+            available = sum(1 for row in records if safe_text(row.get("availability")).lower() in {"available now", "available this week"})
+            freelancers = sum(1 for row in records if safe_text(row.get("profile_type")).lower() == "freelancer")
+            with_rates = sum(1 for row in records if safe_text(row.get("hourly_rate")) or safe_text(row.get("per_word_rate")))
+            metrics([
+                ("Profiles", total, "registered users"),
+                ("Available", available, "now / this week"),
+                ("Freelancers", freelancers, "profile type"),
+                ("Rates", with_rates, "with pricing"),
+            ])
+
+            f1, f2, f3, f4 = st.columns([1.6, 1, 1, 1])
+            query = f1.text_input("Search talent", placeholder="Language, domain, tool, role, city, name, email...")
+            profile_filter = f2.selectbox("Profile", ["All"] + TALENT_PROFILE_TYPES)
+            role_filter = f3.selectbox("Role", ["All"] + TALENT_PRIMARY_ROLES)
+            availability_filter = f4.selectbox("Availability", ["All"] + TALENT_AVAILABILITY)
+            service_filter = st.multiselect("Services", TALENT_SERVICES)
+
+            query_terms = [term for term in re.split(r"\s+", safe_text(query).lower()) if term]
+            filtered: List[Dict[str, Any]] = []
+            for record in records:
+                search_blob = safe_text(record.get("talent_search_text") or talent_search_text(record)).lower()
+                if query_terms and not all(term in search_blob for term in query_terms):
+                    continue
+                if profile_filter != "All" and safe_text(record.get("profile_type")) != profile_filter:
+                    continue
+                if role_filter != "All" and safe_text(record.get("primary_role")) != role_filter:
+                    continue
+                if availability_filter != "All" and safe_text(record.get("availability")) != availability_filter:
+                    continue
+                if service_filter:
+                    services_text = safe_text(record.get("services")).lower()
+                    if not all(service.lower() in services_text for service in service_filter):
+                        continue
+                filtered.append(record)
+
+            display_rows = [talent_display_record(row) for row in filtered]
+            st.markdown("### Matching profiles")
+            if display_rows:
+                st.dataframe(pd.DataFrame(display_records(display_rows)), use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download talent search CSV",
+                    rows_to_csv(display_rows),
+                    file_name="errorsweep_talent_database.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            else:
+                st.info("No profiles match the current filters.")
+
+        elif selected_section == "Management Status":
+            candidate_emails = [safe_text(row.get("email")) for row in records if safe_text(row.get("email"))]
+            candidate_email = st.selectbox("Profile", candidate_emails or [""])
+            new_status = st.selectbox("Talent status", ["New signup", "Reviewed", "Shortlisted", "Contacted", "Hired", "Not a fit"])
+            note = st.text_area("Internal note", height=80)
+            if st.button("Update talent profile", use_container_width=True, disabled=not safe_text(candidate_email)):
+                matched = find_user_by_email(candidate_email)
+                if not matched:
+                    st.error("Profile not found.")
+                    return
+                metadata = matched.get("metadata_json") if isinstance(matched.get("metadata_json"), dict) else {}
+                metadata = {
+                    **metadata,
+                    "talent_management_note": safe_text(note),
+                    "talent_status_updated_by": safe_text((current_user() or {}).get("email")),
+                    "talent_status_updated_at": now_stamp(),
+                }
+                updated = {
+                    **matched,
+                    "talent_status": new_status,
+                    "metadata_json": metadata,
+                    "talent_search_text": talent_search_text({**matched, "talent_status": new_status}),
+                }
+                persisted = persist_saas_record("users", updated)
+                upsert_session_record("users", persisted)
+                add_audit("Talent profile updated", f"{candidate_email}: {new_status}")
+                st.success("Talent profile updated.")
+                st.rerun()
 
 
 def page_all_workspaces() -> None:
     hero("All Workspaces", "Customer workspace overview", "Owner-only list of all organizations, plans, users, and job counts.")
-    st.dataframe(pd.DataFrame(display_records(st.session_state.workspaces)), use_container_width=True, hide_index=True)
+    selected_section, content_col = sectioned_page_layout(
+        "all_workspaces",
+        [
+            ("Workspaces", [
+                ("Workspace List", "All organizations, plans, users, and job counts"),
+            ]),
+        ],
+        "Workspaces",
+        "Owner workspace visibility sections.",
+    )
+    with content_col:
+        if selected_section == "Workspace List":
+            st.dataframe(pd.DataFrame(display_records(st.session_state.workspaces)), use_container_width=True, hide_index=True)
 
 
 def platform_settings_workspaces() -> List[str]:
@@ -19241,11 +21911,55 @@ def page_platform_settings() -> None:
         unsafe_allow_html=True,
     )
     hero("Platform Settings", "Global system configuration", "Manage legal documents, abuse throttles, subprocessors, operational backups, SSO, and feature flags.")
-    if current_role() != "Platform Owner":
+    if not has_permission("platform.settings"):
         st.error("Platform Settings is restricted to Platform Owners.")
         return
 
     health = persistence_health() if persistence_health is not None else {}
+
+    selected_section, content_col = sectioned_page_layout(
+        "platform_settings",
+        settings_sections,
+        "Settings",
+        "Platform controls, operations, security, and compliance sections.",
+    )
+    with content_col:
+        if selected_section == "System Health":
+            st.markdown("### System Health")
+            render_topology_map(health)
+        elif selected_section == "Launch Readiness":
+            render_platform_launch_readiness_section(health)
+        elif selected_section == "Production Config":
+            render_platform_launch_configuration_section(health)
+        elif selected_section == "Feature Flags":
+            render_platform_feature_flags_section()
+        elif selected_section == "Object Storage":
+            render_platform_object_storage_section()
+        elif selected_section == "File Manifest":
+            render_platform_file_manifest_section()
+        elif selected_section == "Async Task Queue":
+            render_platform_async_task_queue_section()
+        elif selected_section == "Retention Policy":
+            render_retention_policy_panel()
+        elif selected_section == "Operational Backups":
+            render_operational_backup_panel()
+        elif selected_section == "Abuse Protection":
+            render_abuse_protection_panel()
+        elif selected_section == "Tenant Isolation":
+            render_tenant_isolation_panel()
+        elif selected_section == "Enterprise SSO":
+            render_enterprise_sso_panel()
+        elif selected_section == "Transactional Email":
+            render_platform_email_delivery_section()
+        elif selected_section == "Email Outbox":
+            render_platform_email_outbox_section()
+        elif selected_section == "Legal Versions":
+            render_legal_version_panel()
+        elif selected_section == "Subprocessors":
+            render_subprocessor_register_panel()
+        elif selected_section == "Release Diagnostics":
+            render_platform_release_diagnostics_section(health)
+    return
 
     nav_col, content_col = st.columns([0.27, 0.73], gap="large")
     with nav_col:
@@ -19319,30 +22033,44 @@ def page_platform_settings() -> None:
 
 def page_platform_audit_logs() -> None:
     hero("Platform Audit Logs", "Tamper-evident system activity", "Review global events with cryptographic validation.")
-    if current_role() != "Platform Owner":
+    if not has_permission("platform.audit"):
         st.error("Audit Logs is restricted to Platform Owners.")
         return
-        
-    metrics([
-        ("Total events", len(st.session_state.audit_logs), "system actions"),
-        ("Storage", "Supabase" if persistence_health is not None and persistence_health().get("supabase_configured") else "Local JSON", "backend"),
-        ("Validation", "SHA-256", "cryptographic hash"),
-    ])
-    
-    with st.expander("Generate tamper-evident snapshot", expanded=False):
-        st.caption("Create a cryptographically verifiable JSON snapshot of current audit records.")
-        if st.button("Generate snapshot", use_container_width=True):
-            report = audit_snapshot_report(st.session_state.audit_logs)
-            st.success("Snapshot generated.")
-            st.download_button(
-                "Download verifiable JSON snapshot",
-                audit_snapshot_json(st.session_state.audit_logs),
-                file_name=f"errorsweep_audit_snapshot_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                use_container_width=True,
-            )
 
-    st.dataframe(pd.DataFrame(display_records(st.session_state.audit_logs)), use_container_width=True, hide_index=True)
+    selected_section, content_col = sectioned_page_layout(
+        "platform_audit_logs",
+        [
+            ("Audit", [
+                ("Audit Overview", "Event counts, storage mode, and validation model"),
+                ("Snapshot", "Generate tamper-evident audit snapshots"),
+                ("Audit Table", "Review global platform events"),
+            ]),
+        ],
+        "Audit Logs",
+        "Platform audit and verification sections.",
+    )
+
+    with content_col:
+        if selected_section == "Audit Overview":
+            metrics([
+                ("Total events", len(st.session_state.audit_logs), "system actions"),
+                ("Storage", "Supabase" if persistence_health is not None and persistence_health().get("supabase_configured") else "Local JSON", "backend"),
+                ("Validation", "SHA-256", "cryptographic hash"),
+            ])
+        elif selected_section == "Snapshot":
+            st.caption("Create a cryptographically verifiable JSON snapshot of current audit records.")
+            if st.button("Generate snapshot", use_container_width=True):
+                report = audit_snapshot_report(st.session_state.audit_logs)
+                st.success("Snapshot generated.")
+                st.download_button(
+                    "Download verifiable JSON snapshot",
+                    audit_snapshot_json(st.session_state.audit_logs),
+                    file_name=f"errorsweep_audit_snapshot_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+        elif selected_section == "Audit Table":
+            st.dataframe(pd.DataFrame(display_records(st.session_state.audit_logs)), use_container_width=True, hide_index=True)
 
 
 PAGE_RENDERERS = {
@@ -19363,6 +22091,7 @@ PAGE_RENDERERS = {
     "Admin": page_admin,
     "Owner Console": page_owner_console,
     "Payments Received": page_payments_received,
+    "Talent Database": page_talent_database,
     "User Access Matrix": page_user_access_matrix,
     "All Workspaces": page_all_workspaces,
     "Platform Settings": page_platform_settings,
@@ -19384,6 +22113,9 @@ def render_shell_scroll_bridge() -> None:
             const topMarker = parentDoc.getElementById("errorsweep-shell-top-row-marker");
             const contentMarker = parentDoc.getElementById("errorsweep-shell-content-row-marker");
             if (!rootMarker || !topMarker || !contentMarker) return;
+            const editorMarker = parentDoc.getElementById("human-review-editor-page-marker")
+              || parentDoc.getElementById("media-editor-page-marker");
+            const editorMode = !!editorMarker;
 
             const appShell = parentDoc.querySelector(".st-key-errorsweep_app_shell");
             if (!appShell) return;
@@ -19406,7 +22138,7 @@ def render_shell_scroll_bridge() -> None:
             const contentWrapper = directChildContaining(appGrid, contentMarker)
               || contentMarker.closest(".st-key-errorsweep_shell_content");
             const contentKey = contentMarker.closest(".st-key-errorsweep_shell_content");
-            const shellFrameWidth = "min(1760px, calc(100vw - 56px))";
+            const shellFrameWidth = editorMode ? "100%" : "min(1760px, calc(100vw - 56px))";
 
             const fullHeight = (node) => {
               if (!node) return;
@@ -19490,10 +22222,12 @@ def render_shell_scroll_bridge() -> None:
 
             if (topWrapper) {
               topWrapper.style.gridRow = "1";
+              topWrapper.style.height = editorMode ? "0" : "";
+              topWrapper.style.maxHeight = editorMode ? "0" : "";
               topWrapper.style.minHeight = "0";
               topWrapper.style.margin = "0";
               topWrapper.style.padding = "0";
-              topWrapper.style.overflow = "visible";
+              topWrapper.style.overflow = editorMode ? "hidden" : "visible";
               topWrapper.style.zIndex = "900";
             }
 
@@ -19505,9 +22239,9 @@ def render_shell_scroll_bridge() -> None:
               scrollTarget.style.minHeight = "0";
               scrollTarget.style.margin = "0";
               scrollTarget.style.overflowX = "hidden";
-              scrollTarget.style.overflowY = "scroll";
-              scrollTarget.style.overscrollBehavior = "contain";
-              scrollTarget.style.scrollbarGutter = "stable both-edges";
+              scrollTarget.style.overflowY = editorMode ? "hidden" : "scroll";
+              scrollTarget.style.overscrollBehavior = editorMode ? "none" : "contain";
+              scrollTarget.style.scrollbarGutter = editorMode ? "auto" : "stable both-edges";
             }
 
             const centerRail = (node) => {
@@ -19528,14 +22262,17 @@ def render_shell_scroll_bridge() -> None:
             parentDoc.querySelectorAll(".st-key-errorsweep_page_frame").forEach((node) => {
               centerRail(node);
               node.style.boxSizing = "border-box";
+              node.style.height = editorMode ? "100%" : "";
+              node.style.maxHeight = editorMode ? "100%" : "";
               node.style.minHeight = "0";
+              node.style.overflow = editorMode ? "hidden" : "";
             });
 
             if (contentKey && contentKey !== scrollTarget) {
-              contentKey.style.height = "auto";
-              contentKey.style.maxHeight = "none";
+              contentKey.style.height = editorMode ? "100%" : "auto";
+              contentKey.style.maxHeight = editorMode ? "100%" : "none";
               contentKey.style.minHeight = "0";
-              contentKey.style.overflow = "visible";
+              contentKey.style.overflow = editorMode ? "hidden" : "visible";
             }
           };
 
@@ -19597,6 +22334,11 @@ def render_app() -> None:
         return
 
     page = route.get("page")
+    if page == "Talent Database" and not has_active_premium_entitlement():
+        st.session_state.page = "Talent Database"
+        render_root_app_shell(render_talent_premium_required_page)
+        return
+
     if not page or page not in allowed_pages():
         def render_unauthorized_route() -> None:
             st.error("You do not have access to this page.")

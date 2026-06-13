@@ -51,6 +51,7 @@ PLACEHOLDER_MARKERS = (
     "your-project",
     "example.com",
     "placeholder",
+    "todo",
     "changeme",
     "change-me",
 )
@@ -266,16 +267,16 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
     )
 
     if provider == "supabase":
-        require_value(results, env, "Storage", "Supabase storage bucket", ["SUPABASE_STORAGE_BUCKET"], "Create and set the production Supabase Storage bucket.")
+        require_value(results, env, "Storage", "Supabase storage bucket", ["SUPABASE_STORAGE_BUCKET"], "Create and set the production Supabase Storage bucket; use deploy/supabase_schema_check.py --write-supabase-env for Supabase-backed storage.")
         add(
             results,
             "Storage",
             "Supabase project URL",
             "Pass" if https_url(safe_text(env.get("SUPABASE_URL"))) else "Blocker",
             nonsecret_evidence("SUPABASE_URL", safe_text(env.get("SUPABASE_URL"))),
-            "Set SUPABASE_URL to the production Supabase project URL.",
+            "Set SUPABASE_URL to the production Supabase project URL; use deploy/supabase_schema_check.py --write-supabase-env.",
         )
-        require_value(results, env, "Storage", "Supabase service role key", ["SUPABASE_SERVICE_ROLE_KEY"], "Set SUPABASE_SERVICE_ROLE_KEY for server-side storage writes.", min_length=24)
+        require_value(results, env, "Storage", "Supabase service role key", ["SUPABASE_SERVICE_ROLE_KEY"], "Set SUPABASE_SERVICE_ROLE_KEY for server-side storage writes; use deploy/supabase_schema_check.py --write-supabase-env.", min_length=24)
     elif provider == "s3":
         require_value(results, env, "Storage", "S3 bucket", ["S3_BUCKET"], "Set S3_BUCKET for production object storage.")
         require_value(results, env, "Storage", "AWS region", ["AWS_REGION", "AWS_DEFAULT_REGION"], "Set AWS_REGION/AWS_DEFAULT_REGION for S3.", status_when_missing="Warn")

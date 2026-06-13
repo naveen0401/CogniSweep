@@ -53,19 +53,84 @@ create table if not exists public.errorsweep_users (
     email text not null,
     workspace text,
     role text,
+    account_type text,
+    permission_flags text,
     plan text,
     status text,
     password_hash text,
     email_verified boolean not null default false,
     verified_at timestamptz,
     user_email text,
+    full_name text,
+    phone text,
+    city text,
+    country text,
+    timezone text,
+    profile_type text,
+    primary_role text,
+    services text,
+    languages text,
+    domains text,
+    tools text,
+    certifications text,
+    portfolio_url text,
+    linkedin_url text,
+    availability text,
+    weekly_capacity integer,
+    rate_currency text,
+    hourly_rate numeric,
+    per_word_rate numeric,
+    work_preference text,
+    bio text,
+    profile_completion_status text,
+    profile_completed_at timestamptz,
+    profile_prompt_dismissed_at timestamptz,
+    talent_status text,
+    talent_search_text text,
+    metadata_json jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
 
+alter table public.errorsweep_users add column if not exists full_name text;
+alter table public.errorsweep_users add column if not exists account_type text;
+alter table public.errorsweep_users add column if not exists permission_flags text;
+alter table public.errorsweep_users add column if not exists phone text;
+alter table public.errorsweep_users add column if not exists city text;
+alter table public.errorsweep_users add column if not exists country text;
+alter table public.errorsweep_users add column if not exists timezone text;
+alter table public.errorsweep_users add column if not exists profile_type text;
+alter table public.errorsweep_users add column if not exists primary_role text;
+alter table public.errorsweep_users add column if not exists services text;
+alter table public.errorsweep_users add column if not exists languages text;
+alter table public.errorsweep_users add column if not exists domains text;
+alter table public.errorsweep_users add column if not exists tools text;
+alter table public.errorsweep_users add column if not exists certifications text;
+alter table public.errorsweep_users add column if not exists portfolio_url text;
+alter table public.errorsweep_users add column if not exists linkedin_url text;
+alter table public.errorsweep_users add column if not exists availability text;
+alter table public.errorsweep_users add column if not exists weekly_capacity integer;
+alter table public.errorsweep_users add column if not exists rate_currency text;
+alter table public.errorsweep_users add column if not exists hourly_rate numeric;
+alter table public.errorsweep_users add column if not exists per_word_rate numeric;
+alter table public.errorsweep_users add column if not exists work_preference text;
+alter table public.errorsweep_users add column if not exists bio text;
+alter table public.errorsweep_users add column if not exists profile_completion_status text;
+alter table public.errorsweep_users add column if not exists profile_completed_at timestamptz;
+alter table public.errorsweep_users add column if not exists profile_prompt_dismissed_at timestamptz;
+alter table public.errorsweep_users add column if not exists talent_status text;
+alter table public.errorsweep_users add column if not exists talent_search_text text;
+alter table public.errorsweep_users add column if not exists metadata_json jsonb not null default '{}'::jsonb;
+
 create index if not exists idx_errorsweep_users_email on public.errorsweep_users(email);
 create index if not exists idx_errorsweep_users_workspace on public.errorsweep_users(workspace);
+create index if not exists idx_errorsweep_users_account_type on public.errorsweep_users(account_type);
 create index if not exists idx_errorsweep_users_updated_at on public.errorsweep_users(updated_at desc);
+create index if not exists idx_errorsweep_users_profile_type on public.errorsweep_users(profile_type);
+create index if not exists idx_errorsweep_users_primary_role on public.errorsweep_users(primary_role);
+create index if not exists idx_errorsweep_users_profile_completion on public.errorsweep_users(profile_completion_status);
+create index if not exists idx_errorsweep_users_talent_status on public.errorsweep_users(talent_status);
+create index if not exists idx_errorsweep_users_talent_search on public.errorsweep_users using gin (to_tsvector('simple', coalesce(talent_search_text, '')));
 
 create table if not exists public.errorsweep_workspaces (
     id text primary key,
@@ -337,6 +402,8 @@ create table if not exists public.errorsweep_notifications (
     provider text,
     body text,
     error text,
+    read_at timestamptz,
+    dismissed_at timestamptz,
     metadata_json jsonb,
     sent_at timestamptz,
     created_at timestamptz not null default now(),
@@ -344,10 +411,14 @@ create table if not exists public.errorsweep_notifications (
 );
 
 alter table public.errorsweep_notifications add column if not exists error text;
+alter table public.errorsweep_notifications add column if not exists read_at timestamptz;
+alter table public.errorsweep_notifications add column if not exists dismissed_at timestamptz;
 
 create index if not exists idx_errorsweep_notifications_workspace on public.errorsweep_notifications(workspace);
 create index if not exists idx_errorsweep_notifications_recipient on public.errorsweep_notifications(recipient);
 create index if not exists idx_errorsweep_notifications_status on public.errorsweep_notifications(status);
+create index if not exists idx_errorsweep_notifications_read_at on public.errorsweep_notifications(read_at);
+create index if not exists idx_errorsweep_notifications_dismissed_at on public.errorsweep_notifications(dismissed_at);
 create index if not exists idx_errorsweep_notifications_updated_at on public.errorsweep_notifications(updated_at desc);
 
 create table if not exists public.errorsweep_task_queue (

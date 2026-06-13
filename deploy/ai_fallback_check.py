@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from urllib.parse import urlparse
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
 STREAMLIT_TEMPLATE_PATH = ROOT / ".streamlit" / "secrets.toml.example"
 
@@ -59,6 +61,7 @@ PLACEHOLDER_MARKERS = (
     "your-project",
     "example.com",
     "placeholder",
+    "todo",
     "changeme",
     "change-me",
 )
@@ -164,6 +167,38 @@ def normalize_openai_base_url(value: str) -> str:
     if not url:
         return ""
     return url if url.endswith("/v1") else f"{url}/v1"
+
+
+def env_assignment_re(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^(\s*(?:export\s+)?{re.escape(key)}\s*=\s*)(.*?)(\s*)$")
+
+
+def format_env_value(value: str) -> str:
+    text = safe_text(value)
+    if re.search(r"\s|#|'|\"", text):
+        return json.dumps(text)
+    return text
+
+
+def write_env_updates(path: Path, updates: Dict[str, str]) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    remaining = dict(updates)
+    new_lines: List[str] = []
+    for line in lines:
+        replacement = line
+        for key in list(remaining):
+            match = env_assignment_re(key).match(line)
+            if match:
+                replacement = f"{match.group(1)}{format_env_value(remaining.pop(key))}{match.group(3)}"
+                break
+        new_lines.append(replacement)
+    if remaining:
+        new_lines.extend(["", "# Added by deploy/ai_fallback_check.py setup helper"])
+        for key, value in remaining.items():
+            new_lines.append(f"{key}={format_env_value(value)}")
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
 def host_is_public(hostname: str) -> bool:
@@ -278,7 +313,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Production AI fallback route",
         "Pass" if openai_ready or managed_ready else "Blocker",
         "platform OpenAI" if openai_ready else "managed AI" if managed_ready else "missing",
-        "Set OPENAI_API_KEY or enable a live HTTPS public OpenAI-compatible managed AI endpoint.",
+        "Set OPENAI_API_KEY or enable a live HTTPS public OpenAI-compatible managed AI endpoint; use --write-ai-env for repeatable setup.",
     )
     add(
         results,
@@ -286,7 +321,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "OpenAI API key",
         "Pass" if openai_ready else "Warn",
         nonsecret_evidence("OPENAI_API_KEY", env.get("OPENAI_API_KEY", "")),
-        "Set OPENAI_API_KEY for platform fallback or keep a managed route fully configured.",
+        "Set OPENAI_API_KEY for platform fallback with --write-ai-env --ai-route openai, or keep a managed route fully configured.",
     )
     default_model = safe_text(env.get("ERRORSWEEP_OPENAI_DEFAULT_MODEL") or env.get("OPENAI_MODEL"))
     add(
@@ -479,9 +514,86 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
     return "\n".join(lines)
 
 
+def read_required_secret_env(name: str, label: str) -> str:
+    env_name = safe_text(name)
+    if not env_name:
+        raise ValueError(f"Set --{label}.")
+    value = safe_text(os.environ.get(env_name, ""))
+    if not value:
+        raise ValueError(f"{env_name} is not set or is empty.")
+    return value
+
+
+def write_ai_env(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file) if args.env_file else DEFAULT_ENV_PATH
+    route = safe_text(args.ai_route).lower()
+    model = safe_text(args.model) or "gpt-4o-mini"
+    updates: Dict[str, str] = {"ERRORSWEEP_OPENAI_DEFAULT_MODEL": model}
+    try:
+        if route == "openai":
+            openai_key = read_required_secret_env(args.openai_key_env, "openai-key-env")
+            if not openai_key_ready(openai_key):
+                raise ValueError("OpenAI fallback key must look like a production OpenAI API key starting with sk-.")
+            updates.update(
+                {
+                    "OPENAI_API_KEY": openai_key,
+                    "ERRORSWEEP_MANAGED_AI_ENABLED": "false",
+                    "ERRORSWEEP_MANAGED_AI_BASE_URL": "",
+                    "ERRORSWEEP_MANAGED_AI_API_KEY": "",
+                }
+            )
+        elif route == "managed":
+            managed_base_url = normalize_openai_base_url(args.managed_base_url)
+            if not https_public_url(managed_base_url):
+                raise ValueError("--managed-base-url must be a public HTTPS OpenAI-compatible base URL.")
+            managed_api_key = read_required_secret_env(args.managed_api_key_env, "managed-api-key-env")
+            managed_model = safe_text(args.managed_model) or safe_text(args.model) or "errorsweep-managed"
+            if not configured_secret(managed_api_key, min_length=8):
+                raise ValueError("Managed AI API key must be at least 8 non-placeholder characters.")
+            if not managed_model or is_placeholder(managed_model):
+                raise ValueError("Managed AI model must be a non-placeholder model name.")
+            updates.update(
+                {
+                    "OPENAI_API_KEY": "",
+                    "ERRORSWEEP_MANAGED_AI_ENABLED": "true",
+                    "ERRORSWEEP_MANAGED_AI_BASE_URL": managed_base_url,
+                    "ERRORSWEEP_MANAGED_AI_API_KEY": managed_api_key,
+                    "ERRORSWEEP_MANAGED_AI_MODEL": managed_model,
+                }
+            )
+        else:
+            raise ValueError("--ai-route must be either openai or managed.")
+        write_env_updates(env_path, updates)
+    except Exception as exc:
+        print(safe_text(exc), file=sys.stderr)
+        return 1
+
+    payload = {
+        "env_file": str(env_path),
+        "route": route,
+        "updated": sorted(updates.keys()),
+        "model": updates.get("ERRORSWEEP_MANAGED_AI_MODEL") or updates.get("ERRORSWEEP_OPENAI_DEFAULT_MODEL") or model,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Updated {env_path}")
+        print(f"AI fallback route: {route}")
+        print(f"Model: {payload['model']}")
+        print("Secrets were read from environment variables and were not printed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate ErrorSweep production AI fallback launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
+    parser.add_argument("--write-ai-env", action="store_true", help="Write production AI fallback settings into the env file from environment variables.")
+    parser.add_argument("--ai-route", choices=["openai", "managed"], default="openai", help="AI fallback route to write with --write-ai-env.")
+    parser.add_argument("--openai-key-env", default="", help="Environment variable containing OPENAI_API_KEY for the platform fallback route.")
+    parser.add_argument("--model", default="", help="Default OpenAI-compatible model name for the selected route.")
+    parser.add_argument("--managed-base-url", default="", help="Public HTTPS OpenAI-compatible /v1 base URL for the managed route.")
+    parser.add_argument("--managed-api-key-env", default="", help="Environment variable containing the managed AI bearer/API token.")
+    parser.add_argument("--managed-model", default="", help="Managed AI model name for the managed route.")
     parser.add_argument("--probe-models", action="store_true", help="Probe the configured OpenAI-compatible /models route.")
     parser.add_argument("--probe-chat", action="store_true", help="Run one tiny chat-completions probe against the configured route.")
     parser.add_argument("--timeout", type=int, default=60, help="Endpoint probe timeout in seconds.")
@@ -489,6 +601,9 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")
     parser.add_argument("--fail-on-warn", action="store_true", help="Exit non-zero on warnings as well as blockers.")
     args = parser.parse_args()
+
+    if args.write_ai_env:
+        return write_ai_env(args)
 
     env_path = Path(args.env_file) if args.env_file else None
     results = sorted(

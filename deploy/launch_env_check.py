@@ -203,6 +203,50 @@ def require_flag(
     add(results, area, check, "Pass" if env_bool(env, name) else status_when_false, bool_evidence(env, name), action)
 
 
+def env_assignment_re(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^(\s*(?:export\s+)?{re.escape(key)}\s*=\s*)(.*?)(\s*)$")
+
+
+def format_env_value(value: str) -> str:
+    text = safe_text(value)
+    if re.search(r"\s|#|'|\"", text):
+        return json.dumps(text)
+    return text
+
+
+def write_env_updates(path: Path, updates: Dict[str, str]) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    remaining = dict(updates)
+    new_lines: List[str] = []
+    for line in lines:
+        replacement = line
+        for key in list(remaining):
+            match = env_assignment_re(key).match(line)
+            if match:
+                replacement = f"{match.group(1)}{format_env_value(remaining.pop(key))}{match.group(3)}"
+                break
+        new_lines.append(replacement)
+    if remaining:
+        new_lines.extend(["", "# Added by deploy/launch_env_check.py billing setup helper"])
+        for key, value in remaining.items():
+            new_lines.append(f"{key}={format_env_value(value)}")
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def read_required_secret_env(name: str, label: str, *, min_length: int = 8) -> str:
+    env_name = safe_text(name)
+    if not env_name:
+        raise ValueError(f"Set --{label}.")
+    value = safe_text(os.environ.get(env_name, ""))
+    if not value:
+        raise ValueError(f"{env_name} is not set or is empty.")
+    if is_placeholder(value) or len(value) < min_length:
+        raise ValueError(f"{env_name} must be at least {min_length} non-placeholder characters.")
+    return value
+
+
 def check_core(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
     mode = safe_text(env.get("ERRORSWEEP_ENV")).lower()
     add(results, "Core", "Production mode", "Pass" if mode == "production" else "Blocker", mode or "missing", "Set ERRORSWEEP_ENV=production.")
@@ -231,7 +275,7 @@ def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "Owner bootstrap password hash",
         "Pass" if pbkdf2_hash_ready(owner_hash) else "Blocker",
         "configured" if pbkdf2_hash_ready(owner_hash) else nonsecret_evidence("ERRORSWEEP_OWNER_PASSWORD_HASH", owner_hash),
-        "Set ERRORSWEEP_OWNER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash.",
+        "Set ERRORSWEEP_OWNER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash or --password-env.",
     )
     add(
         results,
@@ -247,7 +291,7 @@ def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "Workspace bootstrap password hash",
         "Pass" if pbkdf2_hash_ready(user_hash) else "Blocker",
         "configured" if pbkdf2_hash_ready(user_hash) else nonsecret_evidence("ERRORSWEEP_USER_PASSWORD_HASH", user_hash),
-        "Set ERRORSWEEP_USER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash.",
+        "Set ERRORSWEEP_USER_PASSWORD_HASH to a PBKDF2 hash from deploy/auth_session_check.py --generate-password-hash or --password-env.",
     )
     add(
         results,
@@ -258,7 +302,7 @@ def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "Set ERRORSWEEP_ORG_NAME to the initial production workspace name.",
     )
     role = value_for(env, ["ERRORSWEEP_DEFAULT_USER_ROLE"]) or "Workspace Owner"
-    allowed_roles = {"Workspace Owner", "Workspace Admin", "Project Manager", "Translator", "Reviewer", "Client Viewer", "Billing Admin", "User"}
+    allowed_roles = {"Workspace Owner", "Company Admin", "Workspace Admin", "Project Manager", "Team Lead", "Translator", "Reviewer", "Freelancer", "Client", "Client Viewer", "Billing Admin", "Talent Manager", "Individual Owner", "Individual User", "User"}
     add(
         results,
         "Auth",
@@ -279,9 +323,9 @@ def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
 
 
 def check_persistence(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    require_https(results, env, "Persistence", "Supabase URL", "SUPABASE_URL", "Set SUPABASE_URL to the production Supabase project URL.")
-    require_value(results, env, "Persistence", "Supabase anon key", ["SUPABASE_ANON_KEY"], "Set SUPABASE_ANON_KEY in the production secret store.", min_length=24)
-    require_value(results, env, "Persistence", "Supabase service role key", ["SUPABASE_SERVICE_ROLE_KEY"], "Set SUPABASE_SERVICE_ROLE_KEY from the production Supabase project.", min_length=24)
+    require_https(results, env, "Persistence", "Supabase URL", "SUPABASE_URL", "Set SUPABASE_URL to the production Supabase project URL; use deploy/supabase_schema_check.py --write-supabase-env for repeatable setup.")
+    require_value(results, env, "Persistence", "Supabase anon key", ["SUPABASE_ANON_KEY"], "Set SUPABASE_ANON_KEY in the production secret store; use deploy/supabase_schema_check.py --write-supabase-env.", min_length=24)
+    require_value(results, env, "Persistence", "Supabase service role key", ["SUPABASE_SERVICE_ROLE_KEY"], "Set SUPABASE_SERVICE_ROLE_KEY from the production Supabase project; use deploy/supabase_schema_check.py --write-supabase-env.", min_length=24)
 
 
 def check_storage(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
@@ -330,7 +374,7 @@ def check_ai_mt(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "Production AI fallback route",
         "Pass" if openai_ready or managed_ready else "Blocker",
         "platform OpenAI" if openai_ready else "managed AI" if managed_ready else "missing",
-        "Configure OPENAI_API_KEY or enable ERRORSWEEP_MANAGED_AI_ENABLED with a live HTTPS OpenAI-compatible/vLLM endpoint.",
+        "Configure OPENAI_API_KEY or enable ERRORSWEEP_MANAGED_AI_ENABLED with a live HTTPS OpenAI-compatible/vLLM endpoint; use deploy/ai_fallback_check.py --write-ai-env for repeatable setup.",
     )
     add(
         results,
@@ -377,20 +421,20 @@ def check_billing(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "Billing provider",
         "Pass" if provider in {"stripe", "razorpay"} else "Blocker",
         provider or "missing",
-        "Set ERRORSWEEP_BILLING_PROVIDER to stripe or razorpay.",
+        "Set ERRORSWEEP_BILLING_PROVIDER to stripe or razorpay; use --write-billing-env for repeatable setup.",
     )
     if provider == "stripe":
-        require_value(results, env, "Billing", "Stripe secret key", ["STRIPE_SECRET_KEY", "ERRORSWEEP_STRIPE_SECRET_KEY"], "Set the live Stripe secret key.", min_length=12)
-        require_value(results, env, "Billing", "Stripe webhook secret", ["STRIPE_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"], "Set the Stripe webhook signing secret.", min_length=12)
-        require_value(results, env, "Billing", "Stripe Pro price ID", ["STRIPE_PRICE_ID_PRO"], "Set the live Pro price ID.", status_when_missing="Warn")
-        require_value(results, env, "Billing", "Stripe Agency price ID", ["STRIPE_PRICE_ID_AGENCY"], "Set the live Agency price ID.", status_when_missing="Warn")
+        require_value(results, env, "Billing", "Stripe secret key", ["STRIPE_SECRET_KEY", "ERRORSWEEP_STRIPE_SECRET_KEY"], "Set the live Stripe secret key with --write-billing-env.", min_length=12)
+        require_value(results, env, "Billing", "Stripe webhook secret", ["STRIPE_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"], "Set the Stripe webhook signing secret with --write-billing-env.", min_length=12)
+        require_value(results, env, "Billing", "Stripe Pro price ID", ["STRIPE_PRICE_ID_PRO"], "Set the live Pro price ID with --write-billing-env --pro-plan-id.", status_when_missing="Warn")
+        require_value(results, env, "Billing", "Stripe Agency price ID", ["STRIPE_PRICE_ID_AGENCY"], "Set the live Agency price ID with --write-billing-env --agency-plan-id.", status_when_missing="Warn")
     elif provider == "razorpay":
-        require_value(results, env, "Billing", "Razorpay key ID", ["RAZORPAY_KEY_ID"], "Set the live Razorpay key ID.", min_length=8)
-        require_value(results, env, "Billing", "Razorpay key secret", ["RAZORPAY_KEY_SECRET"], "Set the live Razorpay key secret.", min_length=8)
-        require_value(results, env, "Billing", "Razorpay webhook secret", ["RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"], "Set the Razorpay webhook signing secret.", min_length=8)
-        require_value(results, env, "Billing", "Razorpay Pro plan ID", ["RAZORPAY_PLAN_ID_PRO"], "Set the live Pro plan ID.", status_when_missing="Warn")
-        require_value(results, env, "Billing", "Razorpay Agency plan ID", ["RAZORPAY_PLAN_ID_AGENCY"], "Set the live Agency plan ID.", status_when_missing="Warn")
-    require_https(results, env, "Billing", "Webhook receiver URL", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", "Expose billing_webhook_receiver.py behind HTTPS and set the public URL.")
+        require_value(results, env, "Billing", "Razorpay key ID", ["RAZORPAY_KEY_ID"], "Set the live Razorpay key ID with --write-billing-env.", min_length=8)
+        require_value(results, env, "Billing", "Razorpay key secret", ["RAZORPAY_KEY_SECRET"], "Set the live Razorpay key secret with --write-billing-env.", min_length=8)
+        require_value(results, env, "Billing", "Razorpay webhook secret", ["RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"], "Set the Razorpay webhook signing secret with --write-billing-env.", min_length=8)
+        require_value(results, env, "Billing", "Razorpay Pro plan ID", ["RAZORPAY_PLAN_ID_PRO"], "Set the live Pro plan ID with --write-billing-env --pro-plan-id.", status_when_missing="Warn")
+        require_value(results, env, "Billing", "Razorpay Agency plan ID", ["RAZORPAY_PLAN_ID_AGENCY"], "Set the live Agency plan ID with --write-billing-env --agency-plan-id.", status_when_missing="Warn")
+    require_https(results, env, "Billing", "Webhook receiver URL", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", "Expose billing_webhook_receiver.py behind HTTPS and set the public URL with --write-billing-env.")
     add(
         results,
         "Billing",
@@ -515,14 +559,116 @@ def markdown_report(summary: Dict[str, Any], results: Sequence[Dict[str, str]]) 
     return "\n".join(lines)
 
 
+def optional_update(updates: Dict[str, str], key: str, value: str) -> None:
+    text = safe_text(value)
+    if text:
+        updates[key] = text
+
+
+def write_billing_env(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file)
+    if not env_path.is_absolute():
+        env_path = ROOT / env_path
+    provider = safe_text(args.billing_provider).lower()
+    webhook_url = safe_text(args.billing_webhook_url)
+    try:
+        if provider not in {"razorpay", "stripe"}:
+            raise ValueError("--billing-provider must be razorpay or stripe.")
+        if not https_url(webhook_url):
+            raise ValueError("--billing-webhook-url must be a public HTTPS webhook receiver URL.")
+
+        updates: Dict[str, str] = {
+            "ERRORSWEEP_BILLING_PROVIDER": provider,
+            "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL": webhook_url,
+            "ERRORSWEEP_WEBHOOK_APPLY_UPDATES": "true" if args.enable_webhook_updates else "false",
+            "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT": "true" if args.create_provider_checkout else "false",
+        }
+
+        if provider == "razorpay":
+            key_id = read_required_secret_env(args.razorpay_key_id_env, "razorpay-key-id-env", min_length=8)
+            key_secret = read_required_secret_env(args.razorpay_key_secret_env, "razorpay-key-secret-env", min_length=8)
+            webhook_secret = read_required_secret_env(args.razorpay_webhook_secret_env, "razorpay-webhook-secret-env", min_length=8)
+            updates.update(
+                {
+                    "RAZORPAY_KEY_ID": key_id,
+                    "RAZORPAY_KEY_SECRET": key_secret,
+                    "RAZORPAY_WEBHOOK_SECRET": webhook_secret,
+                    "ERRORSWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
+                }
+            )
+            optional_update(updates, "RAZORPAY_PLAN_ID_PRO", args.pro_plan_id)
+            optional_update(updates, "RAZORPAY_PLAN_ID_AGENCY", args.agency_plan_id)
+            optional_update(updates, "RAZORPAY_PLAN_ID_ENTERPRISE", args.enterprise_plan_id)
+        else:
+            secret_key = read_required_secret_env(args.stripe_secret_key_env, "stripe-secret-key-env", min_length=12)
+            webhook_secret = read_required_secret_env(args.stripe_webhook_secret_env, "stripe-webhook-secret-env", min_length=12)
+            updates.update(
+                {
+                    "STRIPE_SECRET_KEY": secret_key,
+                    "STRIPE_WEBHOOK_SECRET": webhook_secret,
+                    "ERRORSWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
+                }
+            )
+            optional_update(updates, "STRIPE_PRICE_ID_PRO", args.pro_plan_id)
+            optional_update(updates, "STRIPE_PRICE_ID_AGENCY", args.agency_plan_id)
+            optional_update(updates, "STRIPE_PRICE_ID_ENTERPRISE", args.enterprise_plan_id)
+
+        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_PRO", args.pro_mandate_link)
+        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_AGENCY", args.agency_mandate_link)
+        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_ENTERPRISE", args.enterprise_mandate_link)
+        optional_update(updates, "ERRORSWEEP_TRIAL_MANDATE_LINK", args.trial_mandate_link)
+        write_env_updates(env_path, updates)
+    except Exception as exc:
+        print(safe_text(exc), file=sys.stderr)
+        return 1
+
+    payload = {
+        "env_file": str(env_path),
+        "billing_provider": provider,
+        "webhook_receiver_url": webhook_url,
+        "webhook_updates_enabled": bool(args.enable_webhook_updates),
+        "provider_checkout_enabled": bool(args.create_provider_checkout),
+        "updated": sorted(updates.keys()),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Updated {env_path}")
+        print(f"Billing provider: {provider}")
+        print(f"Webhook receiver URL: {webhook_url}")
+        print(f"Webhook apply updates: {'enabled' if args.enable_webhook_updates else 'disabled'}")
+        print("Billing secrets were read from environment variables and were not printed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate ErrorSweep production env configuration without printing secrets.")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_PATH), help="Path to the production env file to validate.")
     parser.add_argument("--include-os-env", action="store_true", help="Merge existing OS environment values for keys not present in the file.")
+    parser.add_argument("--write-billing-env", action="store_true", help="Write billing provider credentials and webhook settings into the env file from environment variables.")
+    parser.add_argument("--billing-provider", choices=["razorpay", "stripe"], default="razorpay", help="Billing provider to write with --write-billing-env.")
+    parser.add_argument("--billing-webhook-url", default="", help="Public HTTPS billing webhook receiver URL.")
+    parser.add_argument("--razorpay-key-id-env", default="", help="Environment variable containing RAZORPAY_KEY_ID.")
+    parser.add_argument("--razorpay-key-secret-env", default="", help="Environment variable containing RAZORPAY_KEY_SECRET.")
+    parser.add_argument("--razorpay-webhook-secret-env", default="", help="Environment variable containing RAZORPAY_WEBHOOK_SECRET.")
+    parser.add_argument("--stripe-secret-key-env", default="", help="Environment variable containing STRIPE_SECRET_KEY.")
+    parser.add_argument("--stripe-webhook-secret-env", default="", help="Environment variable containing STRIPE_WEBHOOK_SECRET.")
+    parser.add_argument("--pro-plan-id", default="", help="Provider Pro plan/price ID.")
+    parser.add_argument("--agency-plan-id", default="", help="Provider Agency plan/price ID.")
+    parser.add_argument("--enterprise-plan-id", default="", help="Provider Enterprise plan/price ID.")
+    parser.add_argument("--pro-mandate-link", default="", help="Hosted Pro monthly mandate/payment link fallback.")
+    parser.add_argument("--agency-mandate-link", default="", help="Hosted Agency monthly mandate/payment link fallback.")
+    parser.add_argument("--enterprise-mandate-link", default="", help="Hosted Enterprise monthly mandate/payment link fallback.")
+    parser.add_argument("--trial-mandate-link", default="", help="Hosted trial mandate/payment authorization link fallback.")
+    parser.add_argument("--enable-webhook-updates", action="store_true", help="Set ERRORSWEEP_WEBHOOK_APPLY_UPDATES=true after provider webhook verification.")
+    parser.add_argument("--create-provider-checkout", action="store_true", help="Set ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true after live provider checkout testing.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")
     parser.add_argument("--fail-on-warn", action="store_true", help="Exit non-zero on warnings as well as blockers.")
     args = parser.parse_args()
+
+    if args.write_billing_env:
+        return write_billing_env(args)
 
     env_path = Path(args.env_file)
     if not env_path.is_absolute():
