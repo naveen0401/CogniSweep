@@ -11995,6 +11995,77 @@ def missing_launch_configuration_template(rows: List[Dict[str, str]]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def billing_reconciliation_findings() -> List[Dict[str, str]]:
+    findings: List[Dict[str, str]] = []
+
+    def add(severity: str, check: str, evidence: str, action: str) -> None:
+        findings.append({
+            "Severity": severity,
+            "Check": check,
+            "Evidence": evidence,
+            "Action": action,
+        })
+
+    try:
+        checkout_rows = list(st.session_state.get("checkout_sessions", []))
+        subscription_rows = list(st.session_state.get("subscriptions", []))
+        payment_rows = list(st.session_state.get("payments", []))
+        billing_event_rows = list(st.session_state.get("billing_events", []))
+    except Exception as exc:
+        LOGGER.debug("Unable to read billing records for reconciliation: %s", exc)
+        return findings
+
+    success_statuses = {"paid", "complete", "completed", "succeeded", "active", "mandate_active"}
+    failed_statuses = {"failed", "cancelled", "canceled", "expired", "unpaid", "past_due"}
+    active_subscriptions = [
+        row for row in subscription_rows
+        if safe_text(row.get("status")).lower() in {"active", "trialing", "mandate_active"}
+    ]
+
+    for event in billing_event_rows:
+        event_id = safe_text(event.get("event_id") or event.get("id") or "billing event")
+        signature_status = safe_text(event.get("signature_status")).lower()
+        event_status = safe_text(event.get("status")).lower()
+        if signature_status == "invalid":
+            add("High", "Invalid billing webhook signature", event_id, "Review the webhook source and rotate provider webhook secrets if needed.")
+        if event_status in success_statuses and not bool(event.get("applied")):
+            add("High", "Successful billing event was not applied", event_id, "Replay or manually reconcile the event before relying on paid-plan access.")
+
+    for checkout in checkout_rows:
+        checkout_status = safe_text(checkout.get("status")).lower()
+        workspace = safe_text(checkout.get("workspace"))
+        plan = safe_text(checkout.get("plan"))
+        checkout_id = safe_text(checkout.get("id") or checkout.get("provider_session_id") or "checkout")
+        if checkout_status in success_statuses:
+            has_subscription = any(
+                safe_text(sub.get("workspace")) == workspace
+                and (not plan or safe_text(sub.get("plan")) == plan)
+                and safe_text(sub.get("status")).lower() in {"active", "trialing", "mandate_active"}
+                for sub in active_subscriptions
+            )
+            if not has_subscription:
+                add("High", "Completed checkout has no active subscription", checkout_id, "Create or repair the subscription record linked to this checkout.")
+        elif checkout_status in failed_statuses:
+            continue
+
+    if billing_live_checkout_enabled():
+        for subscription in active_subscriptions:
+            if not safe_text(subscription.get("provider_subscription_id")):
+                add(
+                    "Medium",
+                    "Active subscription missing provider subscription ID",
+                    safe_text(subscription.get("workspace") or subscription.get("id") or "subscription"),
+                    "Backfill provider_subscription_id after provider checkout/webhook confirmation.",
+                )
+
+    for payment in payment_rows:
+        status = safe_text(payment.get("status")).lower()
+        if status in success_statuses and not safe_text(payment.get("workspace")):
+            add("Medium", "Paid payment missing workspace", safe_text(payment.get("id") or "payment"), "Attach the payment to a workspace for audit and invoice lookup.")
+
+    return findings
+
+
 def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_live_checks: bool = True) -> List[Dict[str, str]]:
     health = health or {}
     rows: List[Dict[str, str]] = []
