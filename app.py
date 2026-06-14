@@ -17333,15 +17333,6 @@ def render_signup() -> None:
             upsert_session_record("workspaces", workspace_record)
         add_audit("Basic signup", clean_email)
         verify_url = queue_verification_email(clean_email, workspace, clean_name)
-        welcome_record = queue_email_notification(
-            clean_email,
-            "Welcome to CogniSweep",
-            f"Your CogniSweep account for '{workspace}' is ready.",
-            "signup.welcome",
-            metadata={"workspace": workspace, "name": clean_name, "verify_url": verify_url, "role": role},
-            workspace=workspace,
-        )
-        dispatch_queued_email_if_configured(welcome_record)
         if is_production_mode():
             record_consent_acceptance(clean_email, role, account_type, workspace, "signup_pending_verification")
             st.success("Account created. Please verify your email before signing in.")
