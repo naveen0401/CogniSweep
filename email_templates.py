@@ -50,10 +50,10 @@ TEMPLATE_META = {
     },
     "signup.welcome": {
         "key": "welcome",
-        "eyebrow": "Workspace ready",
+        "eyebrow": "Account verification",
         "headline": "Welcome to CogniSweep",
-        "preheader": "Your trial workspace is ready for localization QA.",
-        "cta_label": "Open workspace",
+        "preheader": "Verify your account to activate your trial workspace.",
+        "cta_label": "Verify account",
         "url_keys": ("verify_url", "workspace_url", "url", "action_url"),
     },
     "job.assigned": {
