@@ -22554,8 +22554,92 @@ def render_app() -> None:
         st.session_state.page = "Subtitle / Transcription Editor" if editor_type == "media" else "Human Review Editor"
         render_root_app_shell(lambda: render_external_editor_router(), page_frame=True, show_navigation=False)
         return
-    user = current_user()
-    if not user:
+
+    if route.get("route") == "unknown":
+        def render_unknown_route() -> None:
+            st.error(f"Unknown page: {route.get('unknown')}")
+            if st.button("Return to Dashboard"):
+                navigate("Dashboard")
+
+        st.session_state.page = "Dashboard"
+        render_root_app_shell(render_unknown_route)
+        return
+
+    page = route.get("page")
+    if page == "Talent Database" and not has_active_premium_entitlement():
+        st.session_state.page = "Talent Database"
+        render_root_app_shell(render_talent_premium_required_page)
+        return
+
+    if not page or page not in allowed_pages():
+        def render_unauthorized_route() -> None:
+            st.error("You do not have access to this page.")
+            if st.button("Return to Dashboard"):
+                navigate("Dashboard")
+
+        st.session_state.page = "Dashboard"
+        render_root_app_shell(render_unauthorized_route)
+        return
+
+    st.session_state.page = page
+    renderer = PAGE_RENDERERS.get(page)
+
+    def render_page_content() -> None:
+        if page == "Human Review Workspace":
+            st.markdown("<style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content { padding: var(--es-shell-frame-padding) !important; }</style>", unsafe_allow_html=True)
+        render_status_incident_banner()
+        if renderer:
+            renderer()
+        else:
+            st.error(f"Renderer for '{page}' is missing.")
+
+    render_root_app_shell(render_page_content)
+
+
+if __name__ == "__main__":
+    render_global_logout_listener()
+
+    if query_get("es_logout") == "1":
+        logout()
+
+    restore_session_from_query()
+    sync_browser_session_cookie()
+
+    route = get_current_route()
+    explicit_route_target = route_query_has_explicit_target()
+    if not is_authenticated():
+        render_session_restore_bridge()
+    else:
+        render_route_restore_bridge()
+
+    route = get_current_route()
+    if (
+        not is_authenticated()
+        and not explicit_route_target
+        and not protected_route_requested()
+        and not query_get("public")
+        and not query_get("route")
+    ):
+        route = {"route": "landing", "public": "landing", "page": "Landing"}
+
+    if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
+        st.stop()
+
+    if is_authenticated() and authenticated_public_entry_route(route):
+        return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")
+        if return_to and apply_return_to(return_to):
+            route = get_current_route()
+        else:
+            target_page = safe_text(st.session_state.get("page") or st.session_state.get("es_page") or "Dashboard")
+            if public_route_for_es_page(target_page):
+                target_page = "Dashboard"
+            st.session_state.page = normalize_es_page(target_page)
+            set_route_query({"es_page": st.session_state.page})
+            route = get_current_route()
+        if route.get("route") in PUBLIC_ROUTES:
+            route = authenticated_shell_route_from_session()
+
+    if route.get("route") in PUBLIC_ROUTES:
         render_public_app()
     else:
         if not is_authenticated():
@@ -22565,5 +22649,5 @@ def render_app() -> None:
             sync_browser_route_state(current_route)
             hydrate_saas_state_for_user()
             render_app()
-            
+
     render_router_debug_panel(decision="render_complete")
