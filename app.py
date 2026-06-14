@@ -4376,10 +4376,28 @@ def save_current_user_profile(changes: Dict[str, Any]) -> Optional[Dict[str, Any
     return fallback
 
 
+def dispatch_queued_email_if_configured(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Send newly queued auth email immediately when a live provider is configured."""
+    if not isinstance(record, dict):
+        return record
+    provider_fn = globals().get("email_provider_label")
+    provider = provider_fn() if callable(provider_fn) else "not_configured"
+    if provider not in {"resend", "sendgrid", "smtp"}:
+        return record
+    dispatcher = globals().get("dispatch_email_notification")
+    if not callable(dispatcher):
+        return record
+    try:
+        return dispatcher(record)
+    except Exception as exc:
+        LOGGER.warning("Immediate email dispatch failed: %s", exc)
+        return record
+
+
 def queue_verification_email(email: str, workspace: str, name: str = "") -> str:
     token, _ = create_auth_token(email, "email_verification", workspace, metadata={"name": name})
     link = public_auth_link("verify", token)
-    queue_email_notification(
+    record = queue_email_notification(
         email,
         "Verify your CogniSweep email",
         f"Verify your CogniSweep workspace email for '{workspace}'.",
@@ -4387,13 +4405,14 @@ def queue_verification_email(email: str, workspace: str, name: str = "") -> str:
         metadata={"workspace": workspace, "verify_url": link},
         workspace=workspace,
     )
+    dispatch_queued_email_if_configured(record)
     return link
 
 
 def queue_password_reset_email(email: str, workspace: str = "") -> str:
     token, _ = create_auth_token(email, "password_reset", workspace or "Demo Workspace")
     link = public_auth_link("reset", token)
-    queue_email_notification(
+    record = queue_email_notification(
         email,
         "Reset your CogniSweep password",
         "Reset your CogniSweep password from the secure action.",
@@ -4401,6 +4420,7 @@ def queue_password_reset_email(email: str, workspace: str = "") -> str:
         metadata={"reset_url": link},
         workspace=workspace or "Demo Workspace",
     )
+    dispatch_queued_email_if_configured(record)
     return link
 
 
@@ -17313,7 +17333,7 @@ def render_signup() -> None:
             upsert_session_record("workspaces", workspace_record)
         add_audit("Basic signup", clean_email)
         verify_url = queue_verification_email(clean_email, workspace, clean_name)
-        queue_email_notification(
+        welcome_record = queue_email_notification(
             clean_email,
             "Welcome to CogniSweep",
             f"Your CogniSweep account for '{workspace}' is ready.",
@@ -17321,6 +17341,7 @@ def render_signup() -> None:
             metadata={"workspace": workspace, "name": clean_name, "verify_url": verify_url, "role": role},
             workspace=workspace,
         )
+        dispatch_queued_email_if_configured(welcome_record)
         if is_production_mode():
             record_consent_acceptance(clean_email, role, account_type, workspace, "signup_pending_verification")
             st.success("Account created. Please verify your email before signing in.")
