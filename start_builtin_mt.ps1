@@ -1,6 +1,7 @@
 param(
     [switch]$WithMadlad,
-    [switch]$WithIndicTrans2
+    [switch]$WithoutIndicTrans2,
+    [switch]$WithoutOpus
 )
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -41,7 +42,17 @@ function Start-MTWorker {
         -WindowStyle Hidden
 }
 
-Start-MTWorker -Name "OPUS-MT" -Module "opus_mt_server_v45" -Port 8100
+if ($WithoutOpus) {
+    Write-Host "Skipping OPUS-MT because -WithoutOpus was passed."
+} else {
+    Start-MTWorker -Name "OPUS-MT" -Module "opus_mt_server_v45" -Port 8100
+}
+
+if ($WithoutIndicTrans2) {
+    Write-Host "Skipping IndicTrans2 because -WithoutIndicTrans2 was passed."
+} else {
+    Start-MTWorker -Name "IndicTrans2" -Module "indictrans2_worker" -Port 8000
+}
 
 if ($WithMadlad) {
     Start-MTWorker -Name "MADLAD-400" -Module "madlad_mt_server" -Port 8200
@@ -49,14 +60,12 @@ if ($WithMadlad) {
     Write-Host "Skipping MADLAD-400. Pass -WithMadlad to start it."
 }
 
-if ($WithIndicTrans2) {
-    Start-MTWorker -Name "IndicTrans2" -Module "indictrans2_worker" -Port 8000
-} else {
-    Write-Host "Skipping IndicTrans2. Pass -WithIndicTrans2 to start it."
-}
-
 Write-Host ""
+Write-Host "Active default engines: IndicTrans2 + OPUS-MT"
 Write-Host "Default endpoints:"
-Write-Host "  OPUS_MT_ENDPOINT=http://127.0.0.1:8100/translate"
-Write-Host "  MADLAD_ENDPOINT=http://127.0.0.1:8200/translate"
 Write-Host "  INDICTRANS2_ENDPOINT=http://127.0.0.1:8000/translate"
+Write-Host "  OPUS_MT_ENDPOINT=http://127.0.0.1:8100/translate"
+Write-Host "  MADLAD_ENDPOINT=http://127.0.0.1:8200/translate (optional: -WithMadlad)"
+Write-Host ""
+Write-Host "To make the app use only IndicTrans2 + OPUS-MT:"
+Write-Host "  `$env:SELF_HOSTED_MT_ACTIVE_ENGINES='indictrans2,opus'"
