@@ -89,9 +89,6 @@ None currently tracked.
 
 ## Unresolved & New Issues
 
-<<<<<<< HEAD
-None currently tracked after this pass.
-=======
 ### 1. LibreTranslate Code Residuals
 *   **The Issue:** Despite being marked as resolved (Corrected Issue #15), `local_translation_engine.py` still contains and defaults to `translate_with_libretranslate`.
 
@@ -100,7 +97,6 @@ None currently tracked after this pass.
 
 ### 3. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 *   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
->>>>>>> 6f25319 (For login purpose.)
 
 ---
 
