@@ -6385,6 +6385,32 @@ def render_navigation() -> None:
     user_email = safe_text(user.get("email", "user@errorsweep.local"))
     user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
     role = current_role()
+    active_panel = safe_text(query_get("es_panel")).lower()
+    current_page = safe_text(st.session_state.get("page") or "Dashboard")
+    unread_notes = notification_badge_count(normalized_notification_notes(st.session_state.get("notifications", []), user, current_page))
+    ui_language_code, _ = current_ui_language(user)
+    notes_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "notes"}))
+    language_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "language"}))
+    notes_badge = f'<i class="es-topnav-badge">{unread_notes}</i>' if unread_notes else ""
+    jobs_tool = (
+        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs">'
+        f'<b>{open_count}</b><span>Jobs</span></a>'
+    )
+    notes_tool = (
+        f'<a class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
+        f'href="{notes_href}" target="_self" title="Open notifications">'
+        f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</a>'
+        if "notes.view" in permissions
+        else ""
+    )
+    language_tool = (
+        f'<a class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
+        f'href="{language_href}" target="_self" title="Change interface language">'
+        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></a>'
+        if "language.select" in permissions
+        else ""
+    )
+    user_avatar = escape(monogram(user_name or user_email or "User"))
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
     billing_item = (
         f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
@@ -9270,7 +9296,7 @@ def email_deliverability_test_is_recent(record: Optional[Dict[str, Any]] = None,
     record = record if isinstance(record, dict) else email_deliverability_last_test()
     if safe_text(record.get("status")).lower() != "sent":
         return False
-    tested_at = parse_record_time(record.get("sent_at") or record.get("tested_at"))
+    tested_at = parse_record_datetime(record.get("sent_at") or record.get("tested_at"))
     if tested_at is None:
         return False
     return datetime.now(timezone.utc) - tested_at <= timedelta(days=max(1, int(max_age_days or 30)))
