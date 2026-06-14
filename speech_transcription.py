@@ -1,4 +1,4 @@
-"""ErrorSweep speech/transcription helper — v32.
+"""CogniSweep speech/transcription helper — v32.
 
 Policy:
 - Auto transcription is available only when the user provides a BYO API key.

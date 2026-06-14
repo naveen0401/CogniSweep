@@ -1,4 +1,4 @@
-"""Compatibility shim for older ErrorSweep QA engine imports.
+"""Compatibility shim for older CogniSweep QA engine imports.
 
 The active implementation lives in qa_engine_global_v15. Keeping this module
 as a re-export prevents old routes from drifting on duplicated code.

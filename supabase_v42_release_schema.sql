@@ -1,4 +1,4 @@
--- ErrorSweep v42 release hardening schema
+-- CogniSweep v42 release hardening schema
 -- Run this in Supabase SQL Editor before enabling production persistence.
 
 create extension if not exists pgcrypto;

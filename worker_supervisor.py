@@ -1,7 +1,7 @@
-"""ErrorSweep production worker supervisor.
+"""CogniSweep production worker supervisor.
 
 This script is a lightweight process supervisor for the background services
-ErrorSweep needs outside Streamlit: async QA/Pro processing, transactional email
+CogniSweep needs outside Streamlit: async QA/Pro processing, transactional email
 dispatch, operational backups, and optionally the billing webhook receiver.
 
 It is intentionally small and dependency-free so it can run on Windows, Linux,
@@ -304,7 +304,7 @@ def read_status() -> Dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run and monitor ErrorSweep background workers.")
+    parser = argparse.ArgumentParser(description="Run and monitor CogniSweep background workers.")
     parser.add_argument("--smoke", action="store_true", help="Validate supervisor configuration and write a status snapshot without starting services.")
     parser.add_argument("--status", action="store_true", help="Print the latest supervisor status snapshot.")
     parser.add_argument("--plan", action="store_true", help="Print configured service commands without starting services.")

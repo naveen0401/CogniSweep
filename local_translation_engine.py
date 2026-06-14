@@ -1,5 +1,5 @@
 """
-ErrorSweep local/self-hosted translation adapter v15.
+CogniSweep local/self-hosted translation adapter v15.
 
 Key guarantees for localization files:
 - Curly placeholders / variables / tags / URLs / emails are preserved by the app-level guard.

@@ -1,6 +1,6 @@
-# ErrorSweep Production Deployment Pack
+# CogniSweep Production Deployment Pack
 
-This folder contains the non-secret deployment template for running ErrorSweep as separate production processes.
+This folder contains the non-secret deployment template for running CogniSweep as separate production processes.
 
 Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This README is the short deployment pack reference; the launch runbook is the go/no-go checklist for opening public traffic.
 
@@ -40,7 +40,7 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
    ```powershell
    $env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
    $env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
-   python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@your-domain.com --workspace-email workspace-owner@your-domain.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+   python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
    ```
 7. Write Supabase persistence and Supabase Storage settings from shell environment variables:
    ```powershell
@@ -53,7 +53,7 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
    $env:RAZORPAY_KEY_ID="<razorpay-key-id>"
    $env:RAZORPAY_KEY_SECRET="<razorpay-key-secret>"
    $env:RAZORPAY_WEBHOOK_SECRET="<razorpay-webhook-secret>"
-   python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.your-domain.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
+   python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.cognisweep.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
    ```
 9. Point public HTTPS routes at:
    - app: `http://errorsweep-app:8501`

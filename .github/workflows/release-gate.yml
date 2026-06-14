@@ -1,4 +1,4 @@
-name: ErrorSweep Release Gate
+name: CogniSweep Release Gate
 
 on:
   pull_request:

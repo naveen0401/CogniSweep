@@ -1,4 +1,4 @@
-"""Production smoke-test runner for ErrorSweep.
+"""Production smoke-test runner for CogniSweep.
 
 Use this in CI/CD or before public launch to validate deployment wiring without
 importing the Streamlit app or printing secret values.
@@ -36,7 +36,7 @@ PLACEHOLDER_MARKERS = (
     "placeholder",
     "changeme",
     "change-me",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
     "demo workspace",
 )
 PBKDF2_RE = re.compile(r"^pbkdf2_sha256\$(\d+)\$([^$]{16,})\$([A-Za-z0-9_-]{32,})$")
@@ -583,7 +583,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Production Smoke Test",
+        "# CogniSweep Production Smoke Test",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -601,7 +601,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run ErrorSweep production smoke checks.")
+    parser = argparse.ArgumentParser(description="Run CogniSweep production smoke checks.")
     parser.add_argument("--markdown", action="store_true", help="Print a Markdown report instead of JSON.")
     parser.add_argument("--probe-endpoints", action="store_true", help="Probe public app and webhook health URLs.")
     parser.add_argument("--probe-timeout", type=int, default=10)

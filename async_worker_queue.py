@@ -1,4 +1,4 @@
-"""Async worker queue adapter for ErrorSweep.
+"""Async worker queue adapter for CogniSweep.
 
 This module keeps local development unchanged, while allowing production
 deployments to hand long-running QA/Pro work to an external worker through one

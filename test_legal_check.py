@@ -22,7 +22,7 @@ def test_legal_check_script_contract():
     text = source(CHECK)
 
     for token in [
-        "Validate ErrorSweep legal and compliance launch readiness",
+        "Validate CogniSweep legal and compliance launch readiness",
         "def validate_app_contract",
         "def validate_env_config",
         "def probe_public_routes",

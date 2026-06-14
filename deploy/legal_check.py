@@ -1,4 +1,4 @@
-"""Validate ErrorSweep legal and compliance launch readiness.
+"""Validate CogniSweep legal and compliance launch readiness.
 
 Offline mode checks public legal routes, policy copy hooks, legal versioning,
 consent capture, privacy request/export support, subprocessor tracking, schema
@@ -74,7 +74,7 @@ PLACEHOLDER_MARKERS = (
     "todo",
     "changeme",
     "change-me",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
 )
 SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|HASH|KEY|SERVICE_ROLE|USERNAME|WORKSPACE|ORG)", re.IGNORECASE)
 
@@ -370,7 +370,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Legal Check",
+        "# CogniSweep Legal Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -388,7 +388,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep legal and compliance launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep legal and compliance launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline app/schema/template checks.")
     parser.add_argument("--base-url", default="", help="Public app base URL to use with --probe-public.")
     parser.add_argument("--probe-public", action="store_true", help="Probe Terms, Privacy, Security, Cookie Notice, and DPA public routes.")

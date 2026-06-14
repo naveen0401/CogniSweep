@@ -1,6 +1,6 @@
 # Global Language Linguistic Rules & Instructions for Translation, QA, Transcription and Subtitling Services
 
-This document serves as the master linguistic reference for the ErrorSweep AI-powered translation and QA platform. It dictates the structural, typographical, and cultural rules required to achieve native-level localization quality across global languages.
+This document serves as the master linguistic reference for the CogniSweep AI-powered translation and QA platform. It dictates the structural, typographical, and cultural rules required to achieve native-level localization quality across global languages.
 
 **Legend:**
 *   ⚠️ Rule differs significantly from English conventions.
@@ -10,7 +10,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Hindi
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Follows Subject-Object-Verb (SOV) order (e.g., "मैं सेब खाता हूँ" / "I apple eat").
@@ -75,7 +75,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Bengali (Bangla)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order (e.g., "আমি বই পড়ি" / I book read).
@@ -127,7 +127,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Tamil
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Strictly Subject-Object-Verb (SOV) (e.g., "நான் புத்தகம் படிக்கிறேன்" / I book read).
@@ -175,7 +175,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Telugu
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order (e.g., "నేను అన్నం తిన్నాను" / I rice ate).
@@ -220,7 +220,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Kannada
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -255,7 +255,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Malayalam
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order.
@@ -299,7 +299,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Marathi
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order.
@@ -340,7 +340,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Gujarati
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order.
@@ -378,7 +378,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Punjabi (Gurmukhi)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order.
@@ -412,7 +412,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Urdu
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV) order. Grammatically mutually intelligible with Hindi at a conversational level.
@@ -446,7 +446,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## English (UK vs. US)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -485,7 +485,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## French
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -524,7 +524,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## German
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** SVO in main clauses, but verbs move to the end of the sentence in subordinate clauses (SOV). Compound verbs are split (e.g., "Ich *mache* die Tür *auf*").
@@ -561,7 +561,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Spanish (Spain & Latin America)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO). 
@@ -604,7 +604,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Italian
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO), but highly flexible due to verb inflection.
@@ -644,7 +644,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Portuguese (Portugal vs. Brazil)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -685,7 +685,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Dutch
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** SVO in main clauses, but V2 (verb-second) word order applies, meaning the finite verb is always the second element. In subordinate clauses, it is SOV (verbs move to the end).
@@ -719,7 +719,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Polish
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** SVO is the default, but highly flexible due to the case system.
@@ -752,7 +752,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Swedish, Norwegian, Danish (Nordic Languages)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** SVO in main clauses, but V2 (Verb-second) rule strictly applies (e.g., "Today *go* we" instead of "Today we go").
@@ -780,7 +780,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Greek
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** SVO, but highly flexible.
@@ -810,7 +810,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Russian
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** SVO is standard, but the rich inflectional system allows almost any order for emphasis.
@@ -849,7 +849,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Ukrainian
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Flexible SVO.
@@ -880,7 +880,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Arabic (Modern Standard, Gulf, Egyptian)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Traditionally Verb-Subject-Object (VSO), but Subject-Verb-Object (SVO) is increasingly common in modern digital contexts.
@@ -921,7 +921,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Hebrew
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -960,7 +960,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Persian (Farsi)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -993,7 +993,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Turkish
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -1030,7 +1030,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Swahili (Kiswahili)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1060,7 +1060,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Amharic
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -1092,7 +1092,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Yoruba
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1119,7 +1119,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Hausa
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1145,7 +1145,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Zulu (isiZulu)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1171,7 +1171,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Afrikaans
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** SVO in main clauses, SOV in subordinate clauses (similar to Dutch/German).
@@ -1199,7 +1199,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Mandarin Chinese (Simplified)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO), though topic-prominent structures are very common.
@@ -1247,7 +1247,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Mandarin Chinese (Traditional)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   Identical to Simplified Chinese.
@@ -1285,7 +1285,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Japanese
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Strictly Subject-Object-Verb (SOV). The verb MUST come at the end of the sentence.
@@ -1328,7 +1328,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Korean
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -1365,7 +1365,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Vietnamese
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1402,7 +1402,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Thai
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1436,7 +1436,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Indonesian (Bahasa Indonesia)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1472,7 +1472,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Malay (Bahasa Melayu)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** SVO. Highly mutually intelligible with Indonesian, sharing the same base grammar and affixation rules.
@@ -1499,7 +1499,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Tagalog / Filipino
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Verb-Subject-Object (VSO) is the native structure, though SVO is common due to English influence.
@@ -1531,7 +1531,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Burmese (Myanmar)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -1562,7 +1562,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Khmer (Cambodian)
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1592,7 +1592,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Lao
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   **Sentence structure:** Subject-Verb-Object (SVO).
@@ -1619,7 +1619,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Sinhala
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).
@@ -1647,7 +1647,7 @@ This document serves as the master linguistic reference for the ErrorSweep AI-po
 ---
 
 ## Mongolian
-### Implementation Status: Implemented in ErrorSweep
+### Implementation Status: Implemented in CogniSweep
 
 ### 1. GRAMMAR RULES
 *   ⚠️ **Sentence structure:** Subject-Object-Verb (SOV).

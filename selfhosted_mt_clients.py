@@ -1,4 +1,4 @@
-"""HTTP clients and placeholder protection for ErrorSweep self-hosted MT."""
+"""HTTP clients and placeholder protection for CogniSweep self-hosted MT."""
 from __future__ import annotations
 import logging
 import re, time

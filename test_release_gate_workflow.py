@@ -17,7 +17,7 @@ def test_github_actions_release_gate_contract():
     workflow = source(WORKFLOW)
 
     for token in [
-        "name: ErrorSweep Release Gate",
+        "name: CogniSweep Release Gate",
         "pull_request:",
         "push:",
         "release/**",

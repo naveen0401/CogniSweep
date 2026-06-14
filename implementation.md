@@ -1,4 +1,4 @@
-# ErrorSweep Graphical Implementation Guide
+# CogniSweep Graphical Implementation Guide
 
 ## Implemented Editor Productivity Foundations (CAT & Media)
 To further bridge the gap between the Streamlit-based UI and native desktop localization tools (like Phrase, memoQ, or Ooona), the following editor productivity foundations are now implemented:
@@ -27,7 +27,7 @@ To further bridge the gap between the Streamlit-based UI and native desktop loca
 *   **Completed:** Separate CAT editor single-click editing improved by removing non-focused input suppression from the grid and focusing the Streamlit data-editor overlay immediately after the one-click edit helper opens a cell.
 
 ## Proposed Public SaaS Launch Requirements
-Before opening ErrorSweep to public sign-ups and paying customers, the following infrastructural and commercial upgrades are required to transition from a Streamlit MVP to a scalable SaaS:
+Before opening CogniSweep to public sign-ups and paying customers, the following infrastructural and commercial upgrades are required to transition from a Streamlit MVP to a scalable SaaS:
 
 *   **Billing & Subscription Gateway:** Foundation is implemented with plan catalog, subscriptions, checkout-intent records, usage allowance display, payment records, draft invoice/receipt records, and Platform Settings diagnostics. External launch gate: live Stripe/Razorpay checkout credentials, tax-advisor approved invoice templates, provider invoices, and reconciliation.
 *   **Asynchronous Task Queues:** Foundation is implemented with durable task lifecycle records, progress, retry requests, Jobs/Platform visibility, an external handoff adapter, a standalone HTTP task receiver, and a worker-side QA/Pro processor for queued handoffs. External launch gate: deploy receiver/processor as managed services and test high-volume jobs with production buckets and secrets.
@@ -74,7 +74,7 @@ This table tracks the launch checklist shared in the latest SaaS launch prompt. 
 ---
 
 ## Implemented Global SaaS UI/UX Redesign (All Pages)
-To elevate the entire ErrorSweep platform to a world-class, premium SaaS standard, the following visual and UX enhancements were implemented across application workflows:
+To elevate the entire CogniSweep platform to a world-class, premium SaaS standard, the following visual and UX enhancements were implemented across application workflows:
 
 ### Global Layout & Navigation
 *   **Completed:** Horizontal glassmorphic top navigation with workspace/owner sections, route tabs, job/notification indicators, and an account dropdown.
@@ -85,7 +85,7 @@ To elevate the entire ErrorSweep platform to a world-class, premium SaaS standar
 *   **Completed:** Job context flyout-style panel with metadata and notes, plus an optional raw table for auditability.
 *   **Completed:** Projects and Jobs workflow redesigned into a project-owned model: Projects creates and opens project workspaces, job creation happens inside a selected project, and Jobs now uses a narrow framed left project selector with a wide right-side selected-project jobs list.
 
-### ErrorSweep QA & Pro (Workflow Setup)
+### CogniSweep QA & Pro (Workflow Setup)
 *   **Completed:** Branded dropzone panels above QA and Pro upload controls with file-type guidance and glowing dashed styling.
 *   **Completed:** Wizard/stepper visual guidance for QA and Pro setup flows.
 
@@ -112,7 +112,7 @@ To elevate the post-login Home page to a world-class SaaS standard, the followin
 
 ---
 
-The ErrorSweep platform is built on top of Streamlit, but it heavily overrides the default Streamlit UI using custom CSS injection, HTML rendering, and full-screen external routing to create a professional, SaaS-like experience. Furthermore, the graphical interface incorporates compliance, accessibility, and legal safeguards (such as data privacy indicators and NDA warnings) directly into the user experience.
+The CogniSweep platform is built on top of Streamlit, but it heavily overrides the default Streamlit UI using custom CSS injection, HTML rendering, and full-screen external routing to create a professional, SaaS-like experience. Furthermore, the graphical interface incorporates compliance, accessibility, and legal safeguards (such as data privacy indicators and NDA warnings) directly into the user experience.
 
 ## Planned Upgrades & Security Fixes
 Before transitioning to a full production release, the following critical upgrades and architectural fixes were tracked and implemented where practical in the Streamlit codebase:
@@ -125,13 +125,13 @@ Before transitioning to a full production release, the following critical upgrad
 *   **Completed:** Local editor-job persistence uses temp-file writes with `os.replace`, and usage-event JSONL storage rotates by size/retained line count.
 *   **Completed:** Session history collections now have explicit max sizes, and uploaded rule ZIPs surface visible warnings for oversized or highly expanded packs instead of silently truncating rules.
 *   **Completed:** Silent translation-adapter failures now emit Python logging warnings.
-*   **Completed:** Translation routing remains limited to commercial-safe self-hosted/BYO routes selected for ErrorSweep; AGPL-licensed LibreTranslate integration was intentionally removed.
+*   **Completed:** Translation routing remains limited to commercial-safe self-hosted/BYO routes selected for CogniSweep; AGPL-licensed LibreTranslate integration was intentionally removed.
 *   **Completed:** Self-hosted MT workers use reduced model caches and clear CUDA cache after generation batches when running on GPU.
 *   **Verified:** The versioned `qa_engine_global_v13.py` and `qa_engine_global_v14.py` shims remain for backward compatibility, re-export the canonical `qa_engine_global_v15.py` implementation, and are now covered by `test_qa_engine_shims.py`.
 
 ### UI & Workflow Progress
 *   **Completed:** Login flows now require explicit Terms of Service, Privacy Policy, and NDA/confidentiality acknowledgement before owner, workspace, or demo access.
-*   **Completed:** ErrorSweep Pro shows a persistent routing privacy indicator so users can distinguish local self-hosted MT from external BYO AI routes.
+*   **Completed:** CogniSweep Pro shows a persistent routing privacy indicator so users can distinguish local self-hosted MT from external BYO AI routes.
 *   **Completed:** Account AI access supports any user-supplied OpenAI-compatible API key, model, and base URL, with presets for OpenAI, OpenRouter, Groq, Together, Fireworks, Gemini OpenAI-compatible, local vLLM, and LM Studio.
 *   **Completed:** Uploaded Pro rows and CAT review rows now surface sensitive-data indicators for emails, phone-like numbers, and credential-like text before reviewers approve or route content externally.
 *   **Completed:** Subtitle/transcription setup now requires explicit media-rights/client-authorization acknowledgement before creating a media workspace.
@@ -158,7 +158,7 @@ Before transitioning to a full production release, the following critical upgrad
 *   **Completed:** All paid subscription checkouts now use card/UPI monthly mandate links for recurring monthly deduction instead of optional one-time payment links.
 *   **Completed:** Billing cancellation foundation added for active subscriptions and pending trial/payment mandates, including persisted cancellation fields, audit trail, and cancellation notification events.
 *   **Completed:** Billing webhook reconciliation foundation added with Stripe/Razorpay/manual event normalization, optional signature verification, persisted billing-event records, owner-side event import, mandate checkout status updates, subscription activation, and payment recording.
-*   **Completed:** Billing provider checkout bridge added for Stripe/Razorpay subscriptions: ErrorSweep now builds provider-specific checkout/subscription payloads from plan selection, stores downloadable JSON/curl diagnostics with checkout intents, supports hosted mandate links as fallback, and can optionally create live provider checkout URLs when `ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true` plus plan IDs/price IDs are configured.
+*   **Completed:** Billing provider checkout bridge added for Stripe/Razorpay subscriptions: CogniSweep now builds provider-specific checkout/subscription payloads from plan selection, stores downloadable JSON/curl diagnostics with checkout intents, supports hosted mandate links as fallback, and can optionally create live provider checkout URLs when `ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true` plus plan IDs/price IDs are configured.
 *   **Completed:** Standalone billing webhook receiver service added with `/webhooks/billing/stripe` and `/webhooks/billing/razorpay` routes, provider signature checks, durable billing-event persistence, subscription/payment lifecycle updates, health check support, production env template fields, and launch preflight gating for `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL`.
 *   **Completed:** Billing reconciliation diagnostics added in Platform Settings with checkout/webhook/subscription/payment/invoice mismatch detection, high/medium/low severity findings, CSV export, and launch preflight blocking for high-risk billing inconsistencies.
 *   **Completed:** Plan usage enforcement added for QA and Pro workflows: uploads are estimated before execution or external queue handoff, over-limit jobs are blocked with upgrade guidance, near-limit jobs warn the user, and completed QA/Pro runs are logged as billable segment/character usage.
@@ -170,8 +170,8 @@ Before transitioning to a full production release, the following critical upgrad
 *   **Completed:** Enterprise SSO readiness foundation added with owner-managed workspace SSO connection records, OIDC/SAML metadata tracking, verified-domain/JIT/role-mapping notes, Platform Settings diagnostics, login-surface provider awareness, production `.env` template fields, and launch preflight gating.
 *   **Completed:** Enterprise SSO signed handoff bridge added with a public `?public=sso_handoff` route, HMAC-verified short-lived payloads, replay tracking, domain/workspace matching against enabled SSO connections, optional JIT user provisioning, login-surface provider links, launch configuration checks, and preflight gating for `ERRORSWEEP_SSO_HANDOFF_SECRET`.
 *   **Completed:** Dashboard now uses a bento-style operations grid with inline sparklines and an activity pulse drawer.
-*   **Completed:** ErrorSweep Pro page-load performance improved by making MT diagnostics on-demand and delaying Human Review session restoration until the editor is opened.
-*   **Completed:** The unauthenticated entry point now includes a product landing page adapted from the Tailwind landing reference: first-viewport ErrorSweep hero, browser-frame workflow preview, social proof, stats, persona cards, feature sections, pricing/readiness bands, final CTA, footer, login forms, demo access, and enterprise SSO placeholders.
+*   **Completed:** CogniSweep Pro page-load performance improved by making MT diagnostics on-demand and delaying Human Review session restoration until the editor is opened.
+*   **Completed:** The unauthenticated entry point now includes a product landing page adapted from the Tailwind landing reference: first-viewport CogniSweep hero, browser-frame workflow preview, social proof, stats, persona cards, feature sections, pricing/readiness bands, final CTA, footer, login forms, demo access, and enterprise SSO placeholders.
 *   **Completed:** Landing page CTAs now clearly present a free trial path with "Try for Free" and a paid growth path with "Subscribe" for teams needing more seats, usage, or guided support.
 *   **Completed:** The navigation now uses one shared horizontal top bar for all accounts, with permission-based route tabs, clickable NOTES and UI-language panels, and Team/Billing/Admin links shown only when allowed.
 *   **Completed:** Team, Billing, Admin, Notes, and language visibility now resolve through an account-type + role + permission-flag matrix. Company management roles receive Team/Billing/Admin by default, lower company roles require explicit grants, and individual/freelancer accounts get personal Billing/Premium access without company Team/Admin sections.
@@ -187,7 +187,7 @@ Before transitioning to a full production release, the following critical upgrad
 *   **Completed:** Local `linguisticrules.md` is now loaded as a master linguistic profile source in Memory & Rules, included in matching-language AI prompts, and backed by deterministic QA checks for Hindi, Bengali, Tamil, Telugu, Kannada, Malayalam, Marathi, Gujarati, Punjabi, Urdu, Arabic, Persian, Hebrew/RTL context, English locale spelling, French spacing/formality, German formality/length risk, Spanish inverted punctuation, Italian/Portuguese/Turkish/Russian/Ukrainian/Afrikaans formality, Greek question marks/formality, Dutch/Nordic length risk, Polish gendered-formality review, Swahili time-expression review, Hausa Ajami-script review, Sinhala/Zulu profile guidance, Amharic punctuation/formality, Yoruba honorific address, Chinese/Japanese full-width punctuation, Korean direct-pronoun review, Thai gendered particles, Indonesian/Malay formality and locale formatting, Tagalog over-localization hints, Burmese/Khmer native punctuation, Lao Thai-script contamination, Mongolian formality, and Ukrainian apostrophe handling.
 *   **Completed:** Project source/target selectors now use a shared 48-language catalog aligned with implemented `linguisticrules.md` profiles instead of the earlier short demo list.
 *   **Completed:** Pro translation routing now explicitly uses BYO AI when an API key is present, falls back to built-in MT when no key is present, and opens Human Review with a clear MT-unavailable notice when the configured engines cannot translate the requested language.
-*   **Completed:** ErrorSweep Pro and Human Review now provide a same-format reviewed download matching common business/localization upload extensions (`.xlsx`, `.xlsm`, `.csv`, `.tsv`, `.docx`, `.txt`, `.html`, `.json`, `.xliff`, `.xlf`, `.po`, `.pot`, `.xml`, `.properties`, `.srt`, or `.vtt`) alongside the standard Excel/CSV/text exports.
+*   **Completed:** CogniSweep Pro and Human Review now provide a same-format reviewed download matching common business/localization upload extensions (`.xlsx`, `.xlsm`, `.csv`, `.tsv`, `.docx`, `.txt`, `.html`, `.json`, `.xliff`, `.xlf`, `.po`, `.pot`, `.xml`, `.properties`, `.srt`, or `.vtt`) alongside the standard Excel/CSV/text exports.
 *   **Completed:** Pro translation now splits large source containers into sentence-level Human Review segments while storing a reconstruction map on each sentence row, so same-format export joins reviewed sentences back into the original paragraph, table/cell, slide text box, JSON value, HTML/XML text node, or text line instead of flattening the file into sentence rows.
 *   **Completed:** QA and Pro uploaders now prioritize high-use company file formats only; QA still exports the professional Excel QA workbook, while Pro preserves the uploaded file type for reviewed delivery when that format is supported.
 *   **Completed:** Source/target extraction now uses the same structured header detector for CSV/TSV and blocks metadata columns such as `target language` from being treated as target text. QA stops with a clear message when bilingual content cannot be detected; Pro continues with source-only content and routes uncertain rows to Human Review.
@@ -267,7 +267,7 @@ The platform leverages advanced CSS injection to completely transcend standard S
 **Implementation status:** Completed with product landing hero, product-scene visual, workflow cards, pricing/readiness bands, compliance-gated owner/workspace/demo login flows, secure password handling, and enterprise SSO placeholders.
 
 The authentication gateway sets the tone with high-end micro-interactions.
-*   **Dynamic Ambient Background:** A slow-moving, animated WebGL/CSS blob gradient (incorporating ErrorSweep's cyan and purple brand colors) that reacts subtly to mouse movement.
+*   **Dynamic Ambient Background:** A slow-moving, animated WebGL/CSS blob gradient (incorporating CogniSweep's cyan and purple brand colors) that reacts subtly to mouse movement.
 *   **Floating Authentication Card:** The login form floats centrally with a heavily blurred backdrop, subtle 1px semi-transparent borders, and soft drop shadows (`box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5)`).
 *   **Modern Input Micro-interactions:** Input fields feature floating labels that smoothly glide out of the way on focus, with validation rings that transition from neutral to red/green dynamically.
 *   **Enterprise SSO Mockup:** Visual placeholders for SAML/SSO integrations (e.g., "Continue with Okta/Microsoft Entra") to immediately signal enterprise readiness to prospective clients.

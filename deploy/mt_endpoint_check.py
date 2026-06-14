@@ -1,4 +1,4 @@
-"""Validate ErrorSweep built-in MT endpoint launch readiness.
+"""Validate CogniSweep built-in MT endpoint launch readiness.
 
 Offline mode checks the router, clients, worker servers, templates, tests, and
 requirements. Use --env-file for production endpoint validation, --probe-health
@@ -474,7 +474,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep MT Endpoint Check",
+        "# CogniSweep MT Endpoint Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -492,7 +492,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep built-in MT endpoint launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep built-in MT endpoint launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
     parser.add_argument("--probe-health", action="store_true", help="Probe configured MT endpoint /health routes.")
     parser.add_argument("--probe-translate", action="store_true", help="Run one direct /translate probe per configured MT endpoint.")

@@ -1,4 +1,4 @@
-"""Sentence segmentation and reconstruction metadata for ErrorSweep Pro.
+"""Sentence segmentation and reconstruction metadata for CogniSweep Pro.
 
 The Pro editor can expose one source paragraph/cell/node as several sentence
 segments. These helpers keep enough metadata on each sentence row for exporters

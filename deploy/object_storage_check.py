@@ -1,4 +1,4 @@
-"""Validate ErrorSweep object-storage launch readiness.
+"""Validate CogniSweep object-storage launch readiness.
 
 Offline mode checks that the adapter, templates, and dependencies cover the
 supported production providers. Use --env-file to validate a real production
@@ -437,7 +437,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Object Storage Check",
+        "# CogniSweep Object Storage Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -455,7 +455,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep object-storage launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep object-storage launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline adapter/template checks.")
     parser.add_argument("--probe-write", action="store_true", help="Upload, sign, and best-effort cleanup a tiny probe object.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")

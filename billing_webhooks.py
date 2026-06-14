@@ -1,4 +1,4 @@
-"""Billing webhook normalization helpers for ErrorSweep.
+"""Billing webhook normalization helpers for CogniSweep.
 
 The Streamlit app can use these helpers for owner-side webhook reconciliation
 today, and a deployed API worker can reuse the same logic for live provider

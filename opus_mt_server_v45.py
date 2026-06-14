@@ -1,8 +1,8 @@
 """
-ErrorSweep OPUS-MT Self-Hosted Translation Server (v45)
+CogniSweep OPUS-MT Self-Hosted Translation Server (v45)
 
 Purpose:
-- First practical self-hosted MT endpoint for ErrorSweep without Azure/NLLB.
+- First practical self-hosted MT endpoint for CogniSweep without Azure/NLLB.
 - Starts with English -> French/Spanish/German/Italian/Portuguese.
 - Uses Helsinki-NLP OPUS-MT models from Hugging Face.
 - OpenAI/API key is not required.
@@ -214,7 +214,7 @@ def translate_texts(texts: List[str], src_code: str, tgt_code: str) -> Tuple[Lis
     return outputs, model_name
 
 
-app = FastAPI(title="ErrorSweep OPUS-MT Server", version=APP_VERSION)
+app = FastAPI(title="CogniSweep OPUS-MT Server", version=APP_VERSION)
 
 
 @app.get("/health")

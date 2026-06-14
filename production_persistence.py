@@ -1,4 +1,4 @@
-"""ErrorSweep v42 production persistence helpers.
+"""CogniSweep v42 production persistence helpers.
 
 Purpose
 -------
@@ -466,7 +466,7 @@ def load_persistent_editor_job(job_id: str) -> Optional[Dict[str, Any]]:
                     "job_type": row.get("job_type") or metadata.get("job_type") or "cat",
                     "rows": row.get("rows") or [],
                     "metadata": metadata,
-                    "title": metadata.get("title") or metadata.get("source") or "ErrorSweep CAT",
+                    "title": metadata.get("title") or metadata.get("source") or "CogniSweep CAT",
                     "target_language": row.get("target_language") or metadata.get("target_language") or "",
                     "file_name": row.get("file_name") or metadata.get("file_name") or "",
                     "created": str(row.get("created_at") or ""),

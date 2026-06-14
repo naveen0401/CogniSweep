@@ -1,5 +1,5 @@
 """
-ErrorSweep built-in translation router.
+CogniSweep built-in translation router.
 
 Commercial-safe self-hosted MT route:
 - IndicTrans2 endpoint for Indian languages

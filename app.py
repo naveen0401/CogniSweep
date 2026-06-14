@@ -49,7 +49,7 @@ except Exception as exc:
     ai_json_items = None
     select_ai_route = None
 
-# ErrorSweep backend-only translation router:
+# CogniSweep backend-only translation router:
 # Built-in route = self-hosted commercial-safe MT router
 # IndicTrans2 for Indian languages + OPUS-MT for supported global pairs
 try:
@@ -173,7 +173,7 @@ except Exception as exc:
 
 
 # ==========================================================
-# ErrorSweep Platform
+# CogniSweep Platform
 # Security hardening + production persistence + usage tracking + external CAT/media editor launcher
 # Built-in MT: self-hosted IndicTrans2, MADLAD-400 when enabled, and OPUS-MT fallback.
 # Editor jobs and usage persist to Supabase when configured, with local JSON fallback
@@ -268,7 +268,7 @@ SUBPROCESSOR_DEFAULT_REGISTER = {
         "approval_status": "Approved",
         "dpa_status": "Not applicable",
         "customer_notice": "Covered in policy",
-        "notes": "Self-hosted/local MT should stay inside ErrorSweep-controlled infrastructure.",
+        "notes": "Self-hosted/local MT should stay inside CogniSweep-controlled infrastructure.",
     },
     "byo_ai": {
         "approval_status": "Customer controlled",
@@ -507,8 +507,68 @@ LOCALIZATION_VISUAL_PREFIX_RE = re.compile(
 LOCALIZATION_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?")
 TIME_DISPLAY_COLUMNS = {"created_at", "updated_at", "created", "updated", "time", "date", "login_at"}
 
+BRAND_LOGO_ASSET_CANDIDATES = (
+    Path(__file__).resolve().parent / "assets" / "cognisweep-logo.png",
+    Path(__file__).resolve().parent / "assets" / "cognisweep-logo.jpg",
+    Path(__file__).resolve().parent / "assets" / "cognisweep-logo.jpeg",
+    Path(__file__).resolve().parent / "assets" / "cognisweep-logo.webp",
+    Path(__file__).resolve().parent / "assets" / "cognisweep-logo.svg",
+)
+
+
+def brand_logo_asset_data_uri() -> str:
+    mime_by_suffix = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    for path in BRAND_LOGO_ASSET_CANDIDATES:
+        if not path.exists():
+            continue
+        mime = mime_by_suffix.get(path.suffix.lower(), "image/png")
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except Exception as exc:
+            LOGGER.warning("Unable to load CogniSweep logo asset %s: %s", path, exc)
+            return ""
+        return f"data:{mime};base64,{encoded}"
+    return ""
+
+
+def render_brand_logo_asset_override() -> None:
+    logo_data_uri = brand_logo_asset_data_uri()
+    if not logo_data_uri:
+        return
+    st.markdown(
+        f"""
+<style>
+.es-lp-logo,
+.es-topnav-mark {{
+  background: #fffdf7 !important;
+  border: 1px solid rgba(62,42,128,.12) !important;
+  box-shadow: 0 18px 42px rgba(86,52,176,.16), inset 0 1px 0 rgba(255,255,255,.94) !important;
+}}
+
+.es-lp-logo::before,
+.es-topnav-mark::before {{
+  inset: 0 !important;
+  background: center / contain no-repeat url("{logo_data_uri}") !important;
+  filter: none !important;
+}}
+
+.es-lp-logo::after,
+.es-topnav-mark::after {{
+  display: none !important;
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
 st.set_page_config(
-    page_title="ErrorSweep",
+    page_title="CogniSweep",
     page_icon="🧹",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -1232,50 +1292,101 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   padding: 0 20px;
 }
 
-.es-lp-nav {
-  position: sticky;
-  top: 0;
-  z-index: 12;
-  margin: 0 -20px;
-  border-bottom: 1px solid rgba(255,255,255,.10);
-  background: rgba(5,7,19,.70);
-  backdrop-filter: blur(18px);
-}
-
-.es-lp-nav-inner {
+.es-lp-hero-top {
+  position: relative;
+  z-index: 2;
   max-width: 1280px;
   margin: 0 auto;
-  padding: 16px 20px;
+  padding: 34px 20px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 28px;
 }
 
-.es-lp-brand {
+.es-lp-brand,
+.es-lp-hero-brand {
   display: inline-flex;
   align-items: center;
   gap: 12px;
   color: #fff;
 }
 
-.es-lp-logo {
+.es-lp-logo,
+.es-topnav-mark {
   width: 40px;
   height: 40px;
-  border-radius: 18px;
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #050713;
-  font-weight: 950;
-  background: linear-gradient(135deg, #11f5b5, #4aa8ff, #9c5cff);
-  box-shadow: 0 0 80px rgba(17,245,181,.16);
+  color: transparent;
+  font-size: 0;
+  background:
+    radial-gradient(circle at 28% 18%, rgba(255,255,255,.98), transparent 28%),
+    linear-gradient(145deg, #fffdf7 0%, #fbf8ef 58%, #f4efe3 100%);
+  border: 1px solid rgba(62,42,128,.12);
+  box-shadow: 0 18px 42px rgba(86,52,176,.16), inset 0 1px 0 rgba(255,255,255,.94);
+}
+
+.es-lp-logo::before,
+.es-topnav-mark::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: 2;
+  background: center / contain no-repeat url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20128%20128%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%2235%22%20y1%3D%229%22%20x2%3D%2296%22%20y2%3D%22121%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%2328d7a6%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220.38%22%20stop-color%3D%22%231d799e%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220.66%22%20stop-color%3D%22%233d0d82%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23dd4fd7%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22url(%23g)%22%20stroke-width%3D%228.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M62%2017c-7.8-7-20.9-5.5-27.4%203.7-9.7-.5-18.9%206.9-20.4%2017-8.1%205.3-9.8%2017.7-3.7%2026.2-1.9%209.5%204.7%2019.5%2014.4%2021.7%206.8%2010.8%2022.4%2011.5%2031%202.5%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M68%2017c7.7-7.1%2021-5.3%2027.1%204.1%2011.7.6%2021.3%2010.7%2020.5%2022.5%208.9%206.9%209.5%2021.4%201.1%2029.2-3.8%2012.1-18.5%2018.3-30%2012.1-6.4%204.8-15.8%204.9-22.1.3%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M66%2016c-4.5%2023.4-2.1%2046.4%2010.1%2068.8%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M28%2037c10.3-.8%2018.4%204.2%2021%2012.9%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M34%2022c9.2.8%2014.2%206.3%2014.4%2015%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M26%2055c-6.6-3.8-14.1-.3-15.4%207.6%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M31%2061c-6%203.6-5.8%2010.7-.3%2015.6%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M56%2039c-7.1%202.6-8.9%209.1-4.2%2015.8%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M73%2025c9.4-.1%2015.8%205.7%2016.5%2015%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M73%2054c12.9-.3%2022-5.7%2025.3-15.4%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M72%2072c16.4-2.1%2027.7-1.5%2038.3%204.1%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M46%2085c7.8-7.2%2016.7-12.6%2027.8-15.7%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22url(%23g)%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20stroke-width%3D%229%22%20d%3D%22M77.4%2084.4c5.4%208.2%209.5%2016.4%2012.9%2025.5%22%2F%3E%0A%20%20%20%20%3Cpath%20fill%3D%22url(%23g)%22%20stroke-width%3D%220%22%20d%3D%22M82.8%20104.8c4.7-6.1%2013.7-6.1%2018.5-.3l-2.3%206.4-13.7%203.6z%22%2F%3E%0A%20%20%20%20%3Cpath%20stroke-width%3D%225.6%22%20d%3D%22M87%20112c11.3%207.1%2023.2%207.7%2036.2%201.2%22%2F%3E%0A%20%20%20%20%3Cpath%20stroke-width%3D%225.2%22%20d%3D%22M82.7%20117.2c12.5%207.3%2025.7%208.1%2039.7%202.5%22%2F%3E%0A%20%20%20%20%3Cpath%20stroke-width%3D%224.8%22%20d%3D%22M78.5%20121.3c13.5%206.5%2027.4%206.8%2041.4%201%22%2F%3E%0A%20%20%20%20%3Cpath%20stroke-width%3D%224.4%22%20d%3D%22M92.4%20107.9c6.5%208%2016.1%209.5%2028.6%204.6%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E");
+  filter: drop-shadow(0 5px 10px rgba(62, 13, 130, .22));
+}
+
+.es-lp-logo::after,
+.es-topnav-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(circle at 24% 18%, rgba(255,255,255,.46), transparent 32%);
 }
 
 .es-lp-brand-name {
   font-size: 18px;
   font-weight: 950;
   line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.es-lp-hero-brand .es-lp-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(56,189,248,.24);
+}
+
+.es-lp-hero-brand .es-lp-logo::before {
+  inset: 6px;
+}
+
+.es-lp-hero-brand .es-lp-brand-name {
+  color: transparent;
+  background: linear-gradient(90deg, #ffffff 0%, #b7f7df 42%, #94d5ff 72%, #e7d7ff 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  font-size: clamp(44px, 5vw, 72px);
+  display: inline-block;
+  line-height: 1.16;
+  padding-bottom: .14em;
+  text-shadow: 0 24px 80px rgba(74,168,255,.20);
+}
+
+.es-lp-brand-kicker {
+  margin-top: 0;
+  color: rgba(183,247,223,.78);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.2;
 }
 
 .es-lp-brand-sub {
@@ -1332,7 +1443,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 .es-lp-hero {
   position: relative;
   text-align: center;
-  padding: 82px 0 56px;
+  padding: 0 0 56px;
 }
 
 .es-lp-grid-bg {
@@ -1350,33 +1461,12 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 .es-lp-hero-content {
   position: relative;
   max-width: 1120px;
-  margin: 0 auto;
-}
-
-.es-lp-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid rgba(17,245,181,.25);
-  border-radius: 999px;
-  background: rgba(17,245,181,.10);
-  color: #11f5b5;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 950;
-}
-
-.es-lp-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #11f5b5;
-  box-shadow: 0 0 18px rgba(17,245,181,.95);
+  margin: 100px auto 0;
 }
 
 .es-lp-title {
   max-width: 1120px;
-  margin: 24px auto 0;
+  margin: 0 auto;
   color: #fff;
   font-size: clamp(48px, 6.4vw, 84px);
   line-height: 1.02;
@@ -2194,26 +2284,22 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
 .es-topnav-mark {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(135deg, rgba(0,217,133,.98), rgba(52,189,246,.92));
-  color: #04131c;
-  font-weight: 950;
-  letter-spacing: -.06em;
-  box-shadow: 0 16px 38px rgba(52,189,246,.22);
+  border-radius: 14px;
 }
 
 .es-topnav-name {
-  font-size: 23px;
+  font-size: 22px;
   line-height: 1;
   font-weight: 950;
-  letter-spacing: -.04em;
-  color: #4aa8ff;
+  letter-spacing: 0;
+  color: transparent;
+  background: linear-gradient(90deg, #ffffff 0%, #94d5ff 58%, #d8c5ff 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
 }
 
 .es-topnav-name span {
-  color: #34bdf6;
+  color: inherit;
   font-weight: 850;
 }
 
@@ -3324,6 +3410,8 @@ input.es-grid-overlay-escaped {
     unsafe_allow_html=True,
 )
 
+render_brand_logo_asset_override()
+
 components.html(
     """
     <script>
@@ -4293,8 +4381,8 @@ def queue_verification_email(email: str, workspace: str, name: str = "") -> str:
     link = public_auth_link("verify", token)
     queue_email_notification(
         email,
-        "Verify your ErrorSweep email",
-        f"Verify your ErrorSweep workspace email for '{workspace}'.",
+        "Verify your CogniSweep email",
+        f"Verify your CogniSweep workspace email for '{workspace}'.",
         "auth.email_verification",
         metadata={"workspace": workspace, "verify_url": link},
         workspace=workspace,
@@ -4307,8 +4395,8 @@ def queue_password_reset_email(email: str, workspace: str = "") -> str:
     link = public_auth_link("reset", token)
     queue_email_notification(
         email,
-        "Reset your ErrorSweep password",
-        "Reset your ErrorSweep password from the secure action.",
+        "Reset your CogniSweep password",
+        "Reset your CogniSweep password from the secure action.",
         "auth.password_reset",
         metadata={"reset_url": link},
         workspace=workspace or "Demo Workspace",
@@ -4763,9 +4851,9 @@ def render_post_login_tool_launch_bridge() -> None:
     session_token_json = json.dumps(session_token)
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
-    st.success("Signed in. ErrorSweep is opening the tool in a new tab.")
+    st.success("Signed in. CogniSweep is opening the tool in a new tab.")
     st.markdown(
-        f'<a class="es-lp-btn primary" href="{escape(launch_url)}" target="_blank" rel="noopener">Open ErrorSweep Tool</a>',
+        f'<a class="es-lp-btn primary" href="{escape(launch_url)}" target="_blank" rel="noopener">Open CogniSweep Tool</a>',
         unsafe_allow_html=True,
     )
     components.html(
@@ -4905,18 +4993,18 @@ def init_state() -> None:
         "review_segments": [],
         "subtitle_segments": [],
         "payments": [
-            {"date": "2026-05-01", "workspace": "Demo Workspace", "user": "demo@errorsweep.local", "plan": "Trial", "amount": 0, "currency": "INR", "status": "Demo"}
+            {"date": "2026-05-01", "workspace": "Demo Workspace", "user": "demo@cognisweep.local", "plan": "Trial", "amount": 0, "currency": "INR", "status": "Demo"}
         ],
         "invoices": [],
         "workspaces": [
-            {"workspace": "Demo Workspace", "owner": "demo@errorsweep.local", "plan": "Trial", "status": "Active", "users": 3, "jobs": 0}
+            {"workspace": "Demo Workspace", "owner": "demo@cognisweep.local", "plan": "Trial", "status": "Active", "users": 3, "jobs": 0}
             ,
             {"workspace": UNLIMITED_ACCESS_WORKSPACE, "owner": UNLIMITED_ACCESS_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
         ],
         "users": [
-            {"email": "owner@errorsweep.local", "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Owner", "status": "Active"},
-            {"email": "demo@errorsweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "account_type": "company", "plan": "Trial", "status": "Active"},
-            {"email": "reviewer@errorsweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "account_type": "company", "plan": "Trial", "status": "Active"},
+            {"email": "owner@cognisweep.local", "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Owner", "status": "Active"},
+            {"email": "demo@cognisweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "account_type": "company", "plan": "Trial", "status": "Active"},
+            {"email": "reviewer@cognisweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "account_type": "company", "plan": "Trial", "status": "Active"},
             {"email": UNLIMITED_ACCESS_EMAIL, "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Unlimited", "status": "Active", "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH, "email_verified": True},
         ],
         "audit_logs": [],
@@ -5039,8 +5127,8 @@ WORKSPACE_PAGES = [
     "Dashboard",
     "Projects",
     "Jobs",
-    "ErrorSweep QA",
-    "ErrorSweep Pro",
+    "CogniSweep QA",
+    "CogniSweep Pro",
     "Subtitle / Transcription Editor",
     "Scorecards",
     "Memory & Rules",
@@ -5072,8 +5160,8 @@ PAGE_PERMISSIONS = {
     "Dashboard": "page.dashboard",
     "Projects": "page.projects",
     "Jobs": "page.jobs",
-    "ErrorSweep QA": "page.qa",
-    "ErrorSweep Pro": "page.pro",
+    "CogniSweep QA": "page.qa",
+    "CogniSweep Pro": "page.pro",
     "Subtitle / Transcription Editor": "page.media",
     "Scorecards": "page.scorecards",
     "Memory & Rules": "page.memory",
@@ -5188,13 +5276,13 @@ ROUTE_PAGE_ALIASES = {
     "landing": "",
     "login": "",
     "dashboard": "Dashboard",
-    "errorsweep_pro": "ErrorSweep Pro",
+    "errorsweep_pro": "CogniSweep Pro",
     "projects": "Projects",
     "jobs": "Jobs",
-    "pro": "ErrorSweep Pro",
-    "quality": "ErrorSweep QA",
-    "quality-checks": "ErrorSweep QA",
-    "qa": "ErrorSweep QA",
+    "pro": "CogniSweep Pro",
+    "quality": "CogniSweep QA",
+    "quality-checks": "CogniSweep QA",
+    "qa": "CogniSweep QA",
     "glossary": "Memory & Rules",
     "translation-memory": "Memory & Rules",
     "tm": "Memory & Rules",
@@ -5302,19 +5390,19 @@ def normalize_es_page(raw_page: Any) -> str:
         "billing success": "Billing Success",
         "billing cancel": "Billing Cancel",
         "dashboard": "Dashboard",
-        "errorsweep pro": "ErrorSweep Pro",
-        "error sweep pro": "ErrorSweep Pro",
-        "errorsweeppro": "ErrorSweep Pro",
+        "errorsweep pro": "CogniSweep Pro",
+        "error sweep pro": "CogniSweep Pro",
+        "errorsweeppro": "CogniSweep Pro",
         "human review editor": "Human Review Editor",
         "humanrevieweditor": "Human Review Editor",
-        "pro": "ErrorSweep Pro",
+        "pro": "CogniSweep Pro",
         "projects": "Projects",
         "jobs": "Jobs",
-        "qa tasks": "ErrorSweep QA",
-        "qa": "ErrorSweep QA",
-        "quality": "ErrorSweep QA",
-        "quality checks": "ErrorSweep QA",
-        "errorsweep qa": "ErrorSweep QA",
+        "qa tasks": "CogniSweep QA",
+        "qa": "CogniSweep QA",
+        "quality": "CogniSweep QA",
+        "quality checks": "CogniSweep QA",
+        "errorsweep qa": "CogniSweep QA",
         "rules": "Memory & Rules",
         "memory": "Memory & Rules",
         "memory rules": "Memory & Rules",
@@ -5476,7 +5564,7 @@ def can_access_talent_database(user: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def platform_owner_emails() -> set:
-    owner_user = safe_text(secret("ERRORSWEEP_OWNER_USERNAME", "owner@errorsweep.local")).strip().lower()
+    owner_user = safe_text(secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")).strip().lower()
     return {email for email in {owner_user, UNLIMITED_ACCESS_EMAIL.lower()} if email}
 
 
@@ -5914,7 +6002,7 @@ def apply_return_to(return_to: str) -> bool:
 
 
 def open_page(page: str) -> None:
-    """Open an internal ErrorSweep route as a dedicated page in the same session."""
+    """Open an internal CogniSweep route as a dedicated page in the same session."""
     params: Dict[str, str] = {}
     if page == "Human Review Workspace":
         session_id = st.session_state.get("active_review_session_id")
@@ -6113,7 +6201,7 @@ def normalized_notification_note(record: Dict[str, Any], user: Dict[str, Any], a
     if event_type == "auth.email_verification" and not bool(user.get("email_verified")):
         verify_url = safe_text(metadata.get("verify_url"))
         title = "Verify your email"
-        message = "Secure your ErrorSweep account by verifying your email address."
+        message = "Secure your CogniSweep account by verifying your email address."
         action_required = True
         if verify_url:
             actions.append({"label": "Verify email", "href": verify_url, "kind": "primary"})
@@ -6124,7 +6212,7 @@ def normalized_notification_note(record: Dict[str, Any], user: Dict[str, Any], a
         if reset_url:
             actions.append({"label": "Reset password", "href": reset_url, "kind": "primary"})
     elif event_type == "signup.welcome":
-        title = "Welcome to ErrorSweep"
+        title = "Welcome to CogniSweep"
         message = "Your account is ready. Complete your profile to help employers and managers match you with suitable work."
         if normalized_profile_completion_status(user) != "completed":
             action_required = True
@@ -6252,8 +6340,8 @@ def render_navigation() -> None:
         "Dashboard": "Dashboard",
         "Projects": "Projects",
         "Jobs": "Jobs",
-        "ErrorSweep QA": "QA Tasks",
-        "ErrorSweep Pro": "Pro",
+        "CogniSweep QA": "QA Tasks",
+        "CogniSweep Pro": "Pro",
         "Subtitle / Transcription Editor": "Subtitles",
         "Scorecards": "Scorecards",
         "Memory & Rules": "Rules",
@@ -6313,10 +6401,9 @@ def render_navigation() -> None:
     <nav class="es-topnav">
       <div class="es-topnav-row">
         <div class="es-topnav-brand">
-          <div class="es-topnav-mark">ES</div>
+          <div class="es-topnav-mark" aria-hidden="true"></div>
           <div class="es-topnav-brand-copy">
-            <div class="es-topnav-name">error<span>sweep</span></div>
-            <div class="es-topnav-sub">by Nawin Corp</div>
+            <div class="es-topnav-name">Cogni<span>Sweep</span></div>
           </div>
         </div>
         <div class="es-topnav-links">
@@ -6962,7 +7049,7 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
     storage_provider = safe_text(storage_health.get("provider") or "local")
     storage_active = bool(storage_health.get("configured")) and storage_provider != "local"
     async_active = async_health.get("mode") == "external" and bool(async_health.get("ready") or secret_is_configured("ERRORSWEEP_ASYNC_WORKER_URL") or secret_is_configured("REDIS_URL") or secret_is_configured("CELERY_BROKER_URL"))
-    email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local"
+    email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
     billing_active = billing_provider in {"stripe", "razorpay"} and billing_provider_ready(billing_provider)
     self_hosted_active = feature_flag("self_hosted_engines") and (
         any_secret_configured(["INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT", "OPUS_MT_ENDPOINT"])
@@ -7486,11 +7573,11 @@ def ensure_sso_user(payload: Dict[str, Any], connection: Dict[str, str]) -> Tupl
     existing = find_user_by_email(email)
     if existing:
         if safe_text(existing.get("workspace")) != workspace:
-            return None, "This SSO identity belongs to a different ErrorSweep workspace."
+            return None, "This SSO identity belongs to a different CogniSweep workspace."
         if safe_text(existing.get("role")) == "Platform Owner" and safe_sso_role(payload, connection) != "Platform Owner":
             return None, "Platform owner access is not enabled for this SSO connection."
         if safe_text(existing.get("status", "Active")).lower() not in {"active", "invited"}:
-            return None, "This SSO account is not active in ErrorSweep."
+            return None, "This SSO account is not active in CogniSweep."
         if not bool(existing.get("email_verified")):
             existing = update_stored_user(email, {"email_verified": True, "verified_at": now_stamp(), "status": "Active"}) or existing
         return existing, ""
@@ -7618,7 +7705,7 @@ def render_enterprise_sso_panel(workspace_options: Optional[List[str]] = None) -
         c6, c7, c8 = st.columns(3)
         client_id = c6.text_input("OIDC client ID", value="" if selected.get("client_id") in {"Configured", "Missing"} else safe_text(selected.get("client_id")))
         entity_id = c7.text_input("SAML entity ID", value="" if selected.get("entity_id") in {"Configured", "Missing"} else safe_text(selected.get("entity_id")))
-        redirect_uri = c8.text_input("Redirect / ACS URL", value=safe_text(selected.get("redirect_uri")), placeholder="https://app.your-domain.com/?public=sso_handoff")
+        redirect_uri = c8.text_input("Redirect / ACS URL", value=safe_text(selected.get("redirect_uri")), placeholder="https://app.cognisweep.com/?public=sso_handoff")
         login_url = st.text_input("IdP / broker login URL", value=safe_text(selected.get("login_url")), placeholder="https://idp.example.com/login?client_id=...")
         c9, c10 = st.columns(2)
         status_value = safe_text(selected.get("status") or "Draft")
@@ -7751,9 +7838,9 @@ def parse_operational_backup(data: bytes) -> Dict[str, Any]:
     except UnicodeDecodeError:
         payload = json.loads(data.decode("utf-8-sig"))
     if not isinstance(payload, dict) or payload.get("export_type") != "errorsweep_operational_backup":
-        raise ValueError("This is not an ErrorSweep operational backup JSON file.")
+        raise ValueError("This is not a CogniSweep operational backup JSON file.")
     if int(payload.get("schema_version") or 0) > BACKUP_SCHEMA_VERSION:
-        raise ValueError("This backup was generated by a newer ErrorSweep backup schema.")
+        raise ValueError("This backup was generated by a newer CogniSweep backup schema.")
     records = payload.get("records")
     if not isinstance(records, dict):
         raise ValueError("Backup file does not contain a valid records object.")
@@ -7928,7 +8015,7 @@ def render_operational_backup_panel(workspace_options: Optional[List[str]] = Non
                 default=[item for item in importable if item in BACKUP_DEFAULT_COLLECTIONS],
                 key="restore_backup_collections",
             )
-            confirm_restore = st.checkbox("I understand this will upsert selected records into the current ErrorSweep workspace/session.", key="confirm_operational_restore")
+            confirm_restore = st.checkbox("I understand this will upsert selected records into the current CogniSweep workspace/session.", key="confirm_operational_restore")
             if st.button("Restore selected records", use_container_width=True, disabled=not confirm_restore or not selected_restore):
                 result = restore_operational_backup(restore_payload, selected_restore)
                 total = sum(result.get("restored_counts", {}).values())
@@ -8364,7 +8451,7 @@ def create_support_ticket(category: str, priority: str, subject: str, message: s
     queue_email_notification(
         requester,
         f"Support ticket opened: {record['subject']}",
-        f"Your ErrorSweep support ticket was opened with priority {record['priority']}. Status: Open.",
+        f"Your CogniSweep support ticket was opened with priority {record['priority']}. Status: Open.",
         "support.ticket_opened",
         metadata={"ticket_id": record["id"], "category": record["category"], "priority": record["priority"]},
         workspace=workspace,
@@ -8373,7 +8460,7 @@ def create_support_ticket(category: str, priority: str, subject: str, message: s
     if support_recipient and support_recipient.lower() != requester.lower():
         queue_email_notification(
             support_recipient,
-            f"New ErrorSweep support ticket: {record['subject']}",
+            f"New CogniSweep support ticket: {record['subject']}",
             f"{requester} opened a {record['priority']} priority {record['category']} ticket for {workspace}.",
             "support.ticket_notify_owner",
             metadata={"ticket_id": record["id"], "workspace": workspace},
@@ -8415,7 +8502,7 @@ def render_account_support_panel() -> None:
     user = current_user() or {}
     my_email = safe_text(user.get("email")).lower()
     st.markdown("### Support tickets")
-    st.caption("Send product, billing, account, or translation-quality questions to the ErrorSweep support queue.")
+    st.caption("Send product, billing, account, or translation-quality questions to the CogniSweep support queue.")
     with st.form("account_support_ticket_form", enter_to_submit=False):
         c1, c2 = st.columns(2)
         category = c1.selectbox("Category", SUPPORT_TICKET_CATEGORIES)
@@ -8575,7 +8662,7 @@ def create_status_incident(
     if record["scope"] == "All Workspaces":
         queue_email_notification(
             safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or safe_text(user.get("email")),
-            f"ErrorSweep status notice: {record['title']}",
+            f"CogniSweep status notice: {record['title']}",
             f"{record['severity']} {record['incident_type']} is now {record['status']}.\n\n{record['message']}",
             "status.incident_created",
             metadata={"incident_id": record["id"], "scope": record["scope"], "severity": record["severity"]},
@@ -8956,7 +9043,7 @@ def email_from_address() -> str:
         secret("ERRORSWEEP_EMAIL_FROM", "")
         or secret("SENDGRID_FROM_EMAIL", "")
         or secret("RESEND_FROM_EMAIL", "")
-        or "no-reply@errorsweep.local"
+        or "no-reply@cognisweep.local"
     ).strip()
 
 
@@ -8998,7 +9085,7 @@ def notification_email_payload(record: Dict[str, Any]) -> Dict[str, str]:
         event_type=safe_text(record.get("event_type")),
         metadata=metadata,
         app_base_url=safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")),
-        brand_name="ErrorSweep",
+        brand_name="CogniSweep",
     )
 
 
@@ -9209,9 +9296,9 @@ def run_email_deliverability_test(recipient: str) -> Tuple[Dict[str, Any], Dict[
     tested_at = now_stamp()
     notification = queue_email_notification(
         recipient,
-        "ErrorSweep email delivery test",
+        "CogniSweep email delivery test",
         (
-            "This is a controlled ErrorSweep deliverability test. It validates the configured sender, provider route, "
+            "This is a controlled CogniSweep deliverability test. It validates the configured sender, provider route, "
             "HTML template, and plain-text fallback before public launch."
         ),
         "email.deliverability_test",
@@ -9466,9 +9553,9 @@ def task_review_job_id(task: Dict[str, Any]) -> str:
 def task_source_page(task: Dict[str, Any]) -> str:
     task_type = safe_text(task.get("task_type")).lower()
     if task_type in {"qa", "qa_workflow"}:
-        return "ErrorSweep QA"
+        return "CogniSweep QA"
     if task_type in {"pro_translation", "pro", "translate_review"}:
-        return "ErrorSweep Pro"
+        return "CogniSweep Pro"
     if task_type in {"subtitle", "subtitle_editor", "transcription", "media"}:
         return "Subtitle / Transcription Editor"
     return ""
@@ -9482,7 +9569,7 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
     if task_id:
         links.append(("Monitor in Jobs", task_monitor_link(task_id), False))
     if source_page:
-        links.append((f"Back to {source_page.replace('ErrorSweep ', '')}", app_page_link(source_page), False))
+        links.append((f"Back to {source_page.replace('CogniSweep ', '')}", app_page_link(source_page), False))
     if review_job_id:
         links.append(("Open Human Review Editor", human_review_editor_link(review_job_id), True))
     if not links:
@@ -10070,7 +10157,7 @@ def create_invoice_record(
         "source_payment_id": safe_text(source_payment_id),
         "notes": safe_text(notes),
         "metadata_json": {
-            "seller_name": safe_text(secret("ERRORSWEEP_BILLING_LEGAL_NAME", "Nawin Corp")),
+            "seller_name": safe_text(secret("ERRORSWEEP_BILLING_LEGAL_NAME", "CogniSweep")),
             "seller_gstin": safe_text(secret("ERRORSWEEP_BILLING_GSTIN", "")),
             "seller_address": safe_text(secret("ERRORSWEEP_BILLING_ADDRESS", "")),
         },
@@ -10082,7 +10169,7 @@ def create_invoice_record(
     add_audit("Invoice generated", f"{invoice['invoice_number']} for {invoice['workspace']} / {format_money(invoice['total'], invoice['currency'])}")
     queue_email_notification(
         safe_text(customer_email),
-        f"ErrorSweep invoice generated: {invoice['invoice_number']}",
+        f"CogniSweep invoice generated: {invoice['invoice_number']}",
         f"Invoice {invoice['invoice_number']} was generated for {invoice['workspace']} total {format_money(invoice['total'], invoice['currency'], decimals=True)}.",
         "billing.invoice_generated",
         metadata={"invoice_id": invoice["id"], "invoice_number": invoice["invoice_number"], "workspace": invoice["workspace"]},
@@ -10102,7 +10189,7 @@ def build_invoice_workbook(invoice: Dict[str, Any]) -> bytes:
         except Exception:
             meta = {}
 
-    ws["A1"] = "ErrorSweep Invoice"
+    ws["A1"] = "CogniSweep Invoice"
     ws["A1"].font = Font(bold=True, size=18, color="FFFFFF")
     ws["A1"].fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     ws.merge_cells("A1:D1")
@@ -10112,7 +10199,7 @@ def build_invoice_workbook(invoice: Dict[str, Any]) -> bytes:
         ("Status", invoice.get("status", "")),
         ("Issued at", format_local_time(invoice.get("created_at", ""))),
         ("Billing period", invoice.get("billing_period", "")),
-        ("Seller", meta.get("seller_name", "Nawin Corp")),
+        ("Seller", meta.get("seller_name", "CogniSweep")),
         ("Seller GSTIN", meta.get("seller_gstin", "")),
         ("Seller address", meta.get("seller_address", "")),
         ("Customer workspace", invoice.get("workspace", "")),
@@ -10134,7 +10221,7 @@ def build_invoice_workbook(invoice: Dict[str, Any]) -> bytes:
         cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
         cell.alignment = Alignment(horizontal="center")
     row_index += 1
-    description = f"ErrorSweep {invoice.get('plan', '')} subscription - {invoice.get('billing_period', '')}"
+    description = f"CogniSweep {invoice.get('plan', '')} subscription - {invoice.get('billing_period', '')}"
     ws.cell(row=row_index, column=1, value=description)
     ws.cell(row=row_index, column=2, value=float(invoice.get("subtotal") or 0))
     ws.cell(row=row_index, column=3, value=float(invoice.get("tax_rate_percent") or 0))
@@ -10185,7 +10272,7 @@ def render_invoice_panel(workspace: str, subscription: Dict[str, Any]) -> None:
         invoice_currency = c5.text_input("Currency", value=safe_text(subscription.get("currency") or plan.get("currency", "INR")))
         customer_gstin = c6.text_input("Customer GSTIN / tax ID", value="")
         billing_period = st.text_input("Billing period", value=datetime.now(local_timezone()).strftime("%B %Y"))
-        notes = st.text_area("Invoice notes", height=80, value="Subscription payment recorded for ErrorSweep SaaS access.")
+        notes = st.text_area("Invoice notes", height=80, value="Subscription payment recorded for CogniSweep SaaS access.")
         create_invoice = st.form_submit_button("Generate invoice record", use_container_width=True, disabled=not can_generate)
     if create_invoice:
         if not safe_text(customer_email):
@@ -11080,7 +11167,7 @@ def create_checkout_intent(
     trim_session_list("checkout_sessions")
     queue_email_notification(
         user.get("email", ""),
-        "ErrorSweep trial mandate created" if is_trial else "ErrorSweep monthly mandate created",
+        "CogniSweep trial mandate created" if is_trial else "CogniSweep monthly mandate created",
         (
             f"Trial setup started for {workspace}. A card or UPI mandate is required for {post_plan['name']} "
             f"at {format_money(mandate_amount, post_plan['currency'])}/month after the {trial_days}-day trial. "
@@ -11149,7 +11236,7 @@ def activate_subscription(plan_name: str, billing_cycle: str, provider: str = ""
     add_audit("Subscription activated", f"{workspace}: {plan['name']} {cycle}")
     queue_email_notification(
         user.get("email", ""),
-        "ErrorSweep subscription updated",
+        "CogniSweep subscription updated",
         f"Your workspace '{workspace}' is now on the {plan['name']} plan.",
         "billing.subscription_updated",
         metadata={"plan": plan["name"], "billing_cycle": cycle},
@@ -11206,8 +11293,8 @@ def cancel_current_billing(reason: str = "") -> Tuple[str, Dict[str, Any]]:
         _replace_session_record("subscriptions", persisted)
         queue_email_notification(
             user.get("email", ""),
-            "ErrorSweep subscription cancelled",
-            f"Your ErrorSweep {safe_text(updated.get('plan'))} subscription for '{workspace}' was cancelled. Reason: {reason}.",
+            "CogniSweep subscription cancelled",
+            f"Your CogniSweep {safe_text(updated.get('plan'))} subscription for '{workspace}' was cancelled. Reason: {reason}.",
             "billing.subscription_cancelled",
             metadata={"workspace": workspace, "plan": updated.get("plan"), "cancelled_at": cancelled_at, "reason": reason},
             workspace=workspace,
@@ -11234,8 +11321,8 @@ def cancel_current_billing(reason: str = "") -> Tuple[str, Dict[str, Any]]:
         _replace_session_record("checkout_sessions", persisted)
         queue_email_notification(
             user.get("email", ""),
-            "ErrorSweep trial mandate cancelled",
-            f"Your pending ErrorSweep trial/payment mandate for '{workspace}' was cancelled before activation. Reason: {reason}.",
+            "CogniSweep trial mandate cancelled",
+            f"Your pending CogniSweep trial/payment mandate for '{workspace}' was cancelled before activation. Reason: {reason}.",
             "billing.trial_mandate_cancelled",
             metadata={"workspace": workspace, "plan": updated_checkout.get("plan"), "cancelled_at": cancelled_at, "reason": reason},
             workspace=workspace,
@@ -11350,8 +11437,8 @@ def _activate_subscription_from_billing_event(normalized: Dict[str, Any], checko
             break
     queue_email_notification(
         safe_text(normalized.get("user_email")) or user.get("email", ""),
-        "ErrorSweep mandate activated",
-        f"Your ErrorSweep {plan['name']} monthly mandate for '{workspace}' is active.",
+        "CogniSweep mandate activated",
+        f"Your CogniSweep {plan['name']} monthly mandate for '{workspace}' is active.",
         "billing.mandate_activated",
         metadata={"plan": plan["name"], "workspace": workspace, "event_id": normalized.get("event_id")},
         workspace=workspace,
@@ -11503,7 +11590,7 @@ def launch_readiness_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
         safe_text(value) == "ok" for value in (health.get("saas_tables") or {}).values()
     )
     email_provider = email_provider_label()
-    email_ready = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local"
+    email_ready = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
     billing_provider = billing_provider_label()
     billing_webhook_ready = bool(secret("STRIPE_WEBHOOK_SECRET", "") or secret("RAZORPAY_WEBHOOK_SECRET", "") or secret("ERRORSWEEP_BILLING_WEBHOOK_SECRET", ""))
     billing_webhook_receiver_ready = secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL")
@@ -11601,7 +11688,7 @@ def launch_secret_is_ready(name: str, min_length: int = 1) -> bool:
     if len(value) < min_length or value == DEFAULT_SESSION_SECRET:
         return False
     lowered = value.lower()
-    placeholders = ("replace-with", "your-domain.com", "your-project", "placeholder", "change-me", "changeme", "errorsweep.local", "demo workspace")
+    placeholders = ("replace-with", "your-domain.com", "your-project", "placeholder", "change-me", "changeme", "errorsweep.local", "cognisweep.local", "demo workspace")
     return not any(marker in lowered for marker in placeholders)
 
 
@@ -11700,22 +11787,22 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     add("Workers", "ERRORSWEEP_WORKER_SUPERVISOR_ENABLED=true", safe_text(secret("ERRORSWEEP_WORKER_SUPERVISOR_ENABLED", "")).lower() in {"1", "true", "yes", "on"}, "Production worker operations", "Run worker_supervisor.py as the managed background service in production.")
     add("Billing", "ERRORSWEEP_BILLING_PROVIDER", billing_provider in {"stripe", "razorpay"}, "Paid plans", "Set stripe or razorpay.")
     add("Billing", "Stripe or Razorpay API keys", billing_provider_ready(billing_provider), "Paid plans", "Use STRIPE_SECRET_KEY or RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET.")
-    add("Billing", "STRIPE_PRICE_ID_* / RAZORPAY_PLAN_ID_*", billing_provider_checkout_bridge_ready(billing_provider), "Provider checkout", "Required for ErrorSweep to prepare subscription checkout sessions from plan selection.")
-    add("Billing", "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT", billing_live_checkout_enabled(), "Live checkout API", "When true, ErrorSweep calls Stripe/Razorpay to create the checkout/subscription URL. Leave false for payload-only testing.")
+    add("Billing", "STRIPE_PRICE_ID_* / RAZORPAY_PLAN_ID_*", billing_provider_checkout_bridge_ready(billing_provider), "Provider checkout", "Required for CogniSweep to prepare subscription checkout sessions from plan selection.")
+    add("Billing", "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT", billing_live_checkout_enabled(), "Live checkout API", "When true, CogniSweep calls Stripe/Razorpay to create the checkout/subscription URL. Leave false for payload-only testing.")
     add("Billing", "STRIPE_WEBHOOK_SECRET / RAZORPAY_WEBHOOK_SECRET", any_secret_configured(["STRIPE_WEBHOOK_SECRET", "RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"]), "Billing reconciliation", "Required before applying live webhook events.")
-    add("Billing", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"), "Live billing webhooks", "Public HTTPS endpoint for billing_webhook_receiver.py, for example https://billing.your-domain.com/webhooks/billing/razorpay.")
+    add("Billing", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"), "Live billing webhooks", "Public HTTPS endpoint for billing_webhook_receiver.py, for example https://billing.cognisweep.com/webhooks/billing/razorpay.")
     add("Billing", "ERRORSWEEP_MONTHLY_MANDATE_LINK_*", any_secret_configured(["ERRORSWEEP_MONTHLY_MANDATE_LINK", "ERRORSWEEP_CARD_UPI_MANDATE_LINK", "ERRORSWEEP_TRIAL_MANDATE_LINK"]), "Mandate checkout", "Configure plan-specific Pro/Agency/Enterprise links where possible.")
     add("Email", "ERRORSWEEP_EMAIL_PROVIDER", email_provider in {"resend", "sendgrid", "smtp"}, "Verification/reset/invites", "Use resend, sendgrid, or smtp.")
     add("Email", "ERRORSWEEP_EMAIL_HTML_ENABLED", email_templates_enabled() and render_transactional_email is not None, "Transactional email", "Sends branded HTML with plain-text fallback for Resend, SendGrid, and SMTP.")
     add("Email", "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true", email_worker_enabled, "Public launch", "Run email_dispatch_worker.py so queued notifications send without opening Platform Settings.")
     add("Email", "Platform Settings: email_deliverability_last_test", email_deliverability_test_is_recent(), "Public launch", "Send a test message from Platform Settings after provider credentials and sender domain are configured.")
     add("Email", "Provider API key or SMTP credentials", any_secret_configured(["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY", "SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY", "SMTP_HOST", "ERRORSWEEP_SMTP_HOST"]), "Transactional email", "Needed for live delivery.")
-    add("Email", "ERRORSWEEP_EMAIL_FROM / verified sender", email_from_address() != "no-reply@errorsweep.local", "Transactional email", "Use a verified domain address.")
+    add("Email", "ERRORSWEEP_EMAIL_FROM / verified sender", email_from_address() != "no-reply@cognisweep.local", "Transactional email", "Use a verified domain address.")
     sso_summary = enterprise_sso_summary()
     add("SSO", "Platform Settings: enterprise_sso_connections", sso_summary["ready"] > 0, "Enterprise launch", "At least one enabled workspace connection with domain and IdP metadata.")
     add("SSO", "ERRORSWEEP_ENTERPRISE_SSO_ENABLED", secret_is_configured("ERRORSWEEP_ENTERPRISE_SSO_ENABLED") or sso_summary["enabled"] > 0, "Enterprise launch", "Environment flag or enabled Platform Settings connection.")
     add("SSO", "ERRORSWEEP_SSO_ISSUER_URL / METADATA_URL / CLIENT_ID", sso_summary["metadata"] > 0 or any_secret_configured(["ERRORSWEEP_SSO_ISSUER_URL", "ERRORSWEEP_SSO_METADATA_URL", "ERRORSWEEP_SSO_CLIENT_ID", "ERRORSWEEP_SSO_ENTITY_ID"]), "Enterprise launch", "Public IdP metadata for OIDC/SAML. Keep client secrets outside this register.")
-    add("SSO", "ERRORSWEEP_SSO_HANDOFF_SECRET", secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET"), "Live SSO handoff", "Shared secret used by the trusted IdP/broker to sign short-lived ErrorSweep handoff tokens.")
+    add("SSO", "ERRORSWEEP_SSO_HANDOFF_SECRET", secret_is_configured("ERRORSWEEP_SSO_HANDOFF_SECRET"), "Live SSO handoff", "Shared secret used by the trusted IdP/broker to sign short-lived CogniSweep handoff tokens.")
     add("SSO", "ERRORSWEEP_SSO_LOGIN_URL / connection login_url", sso_summary["login_urls"] > 0 or secret_is_configured("ERRORSWEEP_SSO_LOGIN_URL"), "Login button routing", "Provider or broker URL shown on the public login surface.")
     add("Legal", "ERRORSWEEP_LEGAL_REVIEWED=true", safe_text(secret("ERRORSWEEP_LEGAL_REVIEWED", "")).lower() in {"1", "true", "yes"}, "Public launch", "Set only after replacing draft policies with approved docs.")
     add("Legal", "Platform Settings: subprocessor_register", subprocessor_launch_summary().get("blockers", 0) == 0, "Public launch", "Approve active external processors and DPA/customer notice status.")
@@ -11747,19 +11834,19 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
 def production_env_template() -> str:
     return dedent(
         """
-        # ErrorSweep production launch template
+        # CogniSweep production launch template
         # Fill values in your deployment provider or Streamlit secrets. Do not commit real secrets.
 
         ERRORSWEEP_ENV=production
         ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true
-        ERRORSWEEP_PUBLIC_BASE_URL=https://app.your-domain.com
+        ERRORSWEEP_PUBLIC_BASE_URL=https://app.cognisweep.com
         ERRORSWEEP_SESSION_SECRET=replace-with-a-long-random-secret
 
         # Auth bootstrap credentials
         # Generate hashes with: python deploy/auth_session_check.py --generate-password-hash
-        ERRORSWEEP_OWNER_USERNAME=owner@your-domain.com
+        ERRORSWEEP_OWNER_USERNAME=owner@cognisweep.com
         ERRORSWEEP_OWNER_PASSWORD_HASH=replace-with-owner-pbkdf2-hash
-        ERRORSWEEP_USER_USERNAME=workspace-owner@your-domain.com
+        ERRORSWEEP_USER_USERNAME=workspace-owner@cognisweep.com
         ERRORSWEEP_USER_PASSWORD_HASH=replace-with-workspace-pbkdf2-hash
         ERRORSWEEP_ORG_NAME=replace-with-initial-workspace-name
         ERRORSWEEP_DEFAULT_USER_ROLE=Workspace Owner
@@ -11776,7 +11863,7 @@ def production_env_template() -> str:
         ERRORSWEEP_MANAGED_AI_ENABLED=false
         ERRORSWEEP_MANAGED_AI_BASE_URL=
         ERRORSWEEP_MANAGED_AI_API_KEY=
-        ERRORSWEEP_MANAGED_AI_MODEL=errorsweep-managed
+        ERRORSWEEP_MANAGED_AI_MODEL=cognisweep-managed
 
         # Object storage: choose one provider
         ERRORSWEEP_OBJECT_STORAGE_PROVIDER=supabase
@@ -11787,7 +11874,7 @@ def production_env_template() -> str:
         # GCS_BUCKET=
 
         # Async workers: choose HTTP worker or Redis/Celery
-        ERRORSWEEP_ASYNC_WORKER_URL=https://worker.your-domain.com/tasks
+        ERRORSWEEP_ASYNC_WORKER_URL=https://worker.cognisweep.com/tasks
         ERRORSWEEP_ASYNC_WORKER_TOKEN=replace-with-worker-token
         ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true
         ERRORSWEEP_ASYNC_WORKER_REQUIRE_TOKEN=true
@@ -11816,7 +11903,7 @@ def production_env_template() -> str:
         RAZORPAY_KEY_ID=
         RAZORPAY_KEY_SECRET=
         RAZORPAY_WEBHOOK_SECRET=
-        ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL=https://billing.your-domain.com/webhooks/billing/razorpay
+        ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL=https://billing.cognisweep.com/webhooks/billing/razorpay
         ERRORSWEEP_WEBHOOK_APPLY_UPDATES=true
         RAZORPAY_PLAN_ID_PRO=
         RAZORPAY_PLAN_ID_AGENCY=
@@ -11838,7 +11925,7 @@ def production_env_template() -> str:
         ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true
         ERRORSWEEP_EMAIL_WORKER_INTERVAL_SECONDS=60
         ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT=25
-        ERRORSWEEP_EMAIL_FROM=ErrorSweep <no-reply@your-domain.com>
+        ERRORSWEEP_EMAIL_FROM=CogniSweep <no-reply@cognisweep.com>
         RESEND_API_KEY=
         # SENDGRID_API_KEY=
         # SMTP_HOST=
@@ -11855,7 +11942,7 @@ def production_env_template() -> str:
         ERRORSWEEP_SSO_DOMAINS=customer.com
         ERRORSWEEP_SSO_ISSUER_URL=
         ERRORSWEEP_SSO_CLIENT_ID=
-        ERRORSWEEP_SSO_REDIRECT_URI=https://app.your-domain.com/?public=sso_handoff
+        ERRORSWEEP_SSO_REDIRECT_URI=https://app.cognisweep.com/?public=sso_handoff
         ERRORSWEEP_SSO_LOGIN_URL=
         ERRORSWEEP_SSO_HANDOFF_SECRET=replace-with-long-random-shared-secret
         # ERRORSWEEP_SSO_METADATA_URL=
@@ -11873,9 +11960,9 @@ def production_env_template() -> str:
         ERRORSWEEP_BACKUP_OUTPUT_DIR=
 
         # Self-hosted MT endpoints for no-key translation
-        INDICTRANS2_ENDPOINT=https://mt.your-domain.com/indictrans2/translate
-        MADLAD_ENDPOINT=https://mt.your-domain.com/madlad/translate
-        OPUS_MT_ENDPOINT=https://mt.your-domain.com/opus/translate
+        INDICTRANS2_ENDPOINT=https://mt.cognisweep.com/indictrans2/translate
+        MADLAD_ENDPOINT=https://mt.cognisweep.com/madlad/translate
+        OPUS_MT_ENDPOINT=https://mt.cognisweep.com/opus/translate
         SELF_HOSTED_MT_TIMEOUT=300
         """
     ).strip() + "\n"
@@ -11885,7 +11972,7 @@ def missing_launch_configuration_template(rows: List[Dict[str, str]]) -> str:
     missing = [row for row in rows if row.get("Status") == "Missing"]
     if not missing:
         return "# All tracked production launch configuration checks are currently configured.\n"
-    lines = ["# Missing ErrorSweep launch configuration", "# Fill only the providers you plan to use.", ""]
+    lines = ["# Missing CogniSweep launch configuration", "# Fill only the providers you plan to use.", ""]
     for row in missing:
         variable = safe_text(row.get("Variable / option"))
         lines.append(f"# {row.get('Area')}: {row.get('Notes')}")
@@ -12075,7 +12162,7 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_li
     )
     add(
         "Transactional email",
-        "Pass" if email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@errorsweep.local" else "Blocker",
+        "Pass" if email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local" else "Blocker",
         f"{email_provider} / {email_from_address()}",
         "Configure provider credentials and a verified sender domain.",
     )
@@ -12173,7 +12260,7 @@ def launch_preflight_report(rows: List[Dict[str, str]]) -> str:
         "Blocker": sum(1 for row in rows if row.get("Status") == "Blocker"),
     }
     lines = [
-        "# ErrorSweep Launch Preflight Report",
+        "# CogniSweep Launch Preflight Report",
         "",
         f"Generated: {now_stamp()}",
         f"Pass: {counts['Pass']} | Warnings: {counts['Warn']} | Blockers: {counts['Blocker']}",
@@ -13091,7 +13178,7 @@ def render_scorecard_mapping_controls(label: str, uploaded_file, mode: str, key_
     options = _scorecard_table_options(uploaded_file)
     mapping: Dict[str, Optional[int]] = {"table_idx": None, "source_col": None, "target_col": None}
     if not options:
-        st.warning(f"No structured table could be detected in {label}. ErrorSweep will use fallback extraction.")
+        st.warning(f"No structured table could be detected in {label}. CogniSweep will use fallback extraction.")
         return options, mapping
 
     table_labels = [opt["label"] for opt in options]
@@ -13471,7 +13558,7 @@ def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_nam
     border = Side(style="thin", color="A6A6A6")
 
     ws_summary.merge_cells("A1:D1")
-    ws_summary["A1"] = f"ErrorSweep {safe_text(workflow) or 'Media'} QA Report"
+    ws_summary["A1"] = f"CogniSweep {safe_text(workflow) or 'Media'} QA Report"
     ws_summary["A1"].font = Font(bold=True, size=16, color="FFFFFF")
     ws_summary["A1"].fill = PatternFill("solid", fgColor=dark)
     ws_summary["A1"].alignment = Alignment(horizontal="center")
@@ -13591,7 +13678,7 @@ def save_review_session_to_store(
         "target_language": target_language,
         "file_name": file_name,
         "created": now_stamp() if "now_stamp" in globals() else "",
-        "source": "ErrorSweep Pro",
+        "source": "CogniSweep Pro",
         "workspace": user.get("workspace", "Demo Workspace"),
         "user_email": user.get("email", ""),
         "status": "draft",
@@ -13643,7 +13730,7 @@ def save_review_session_to_store(
         "row_count": len(rows or []),
         "created": metadata.get("created", ""),
         "updated_at": metadata.get("created", ""),
-        "source": metadata.get("source", "ErrorSweep Pro"),
+        "source": metadata.get("source", "CogniSweep Pro"),
     }
     st.session_state["last_pro_task_details"] = owner_job_record
     st.session_state.setdefault("owner_recent_editor_jobs", [])
@@ -13981,7 +14068,7 @@ def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video
     video_type = getattr(video_file, "type", "") if video_file is not None else ""
     media_preview = save_media_preview_file(job_id, video_file)
     metadata = {
-        "title": f"ErrorSweep {workflow} Editor",
+        "title": f"CogniSweep {workflow} Editor",
         "target_language": target_language or st.session_state.get("subtitle_target_language", ""),
         "file_name": video_name or f"{workflow.lower()}_job",
         "video_name": video_name,
@@ -14070,7 +14157,7 @@ def load_review_session_from_store(session_id: str) -> bool:
     st.session_state.latest_human_review_segments = rows
     st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = min(int(st.session_state.get("selected_review_index", 0) or 0), max(len(rows)-1, 0))
-    st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "ErrorSweep Pro"
+    st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "CogniSweep Pro"
     st.session_state.review_workspace_language = metadata.get("target_language") or payload.get("target_language") or ""
     st.session_state.review_workspace_file_name = metadata.get("file_name") or payload.get("file_name") or ""
     st.session_state.review_workspace_context = metadata.get("context") or payload.get("context") or {}
@@ -14082,7 +14169,7 @@ def load_review_session_from_store(session_id: str) -> bool:
 
 def prepare_human_review_session(
     rows: List[Dict[str, Any]],
-    source: str = "ErrorSweep Pro",
+    source: str = "CogniSweep Pro",
     target_language: str = "",
     file_name: str = "",
     rules: Optional[Dict[str, Any]] = None,
@@ -14232,7 +14319,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
         return
     rows = payload.get("rows") or []
     metadata = payload.get("metadata") or {
-        "title": payload.get("title", "ErrorSweep CAT"),
+        "title": payload.get("title", "CogniSweep CAT"),
         "target_language": payload.get("target_language", ""),
         "file_name": payload.get("file_name", ""),
     }
@@ -14241,7 +14328,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
         "rows": rows,
         "metadata": {**metadata, "export_source": export_source},
         "rules": payload.get("rules") or metadata.get("rules") or {},
-        "title": metadata.get("title", "ErrorSweep CAT"),
+        "title": metadata.get("title", "CogniSweep CAT"),
         "target_language": metadata.get("target_language", ""),
         "file_name": metadata.get("file_name", ""),
         "created": metadata.get("created", ""),
@@ -14352,7 +14439,7 @@ def render_reference_cat_editor_shell(
         st.error("CAT editor reference HTML is missing. Restore assets/cat_editor_reference.html.")
         return
 
-    title = safe_text(metadata.get("title", "ErrorSweep CAT")) or "ErrorSweep CAT"
+    title = safe_text(metadata.get("title", "CogniSweep CAT")) or "CogniSweep CAT"
     file_name = safe_text(metadata.get("file_name", "translation_job")) or "translation_job"
     language = safe_text(metadata.get("target_language", "Target")) or "Target"
     source_language = safe_text(metadata.get("source_language", "en")) or "en"
@@ -14424,7 +14511,7 @@ def render_reference_cat_editor_shell(
     )
     html = re.sub(
         r'<div class="subtitle">.*?</div>',
-        f'<div class="subtitle">ErrorSweep CAT Editor &middot; Pro Human Review &middot; File: {escape(file_name)}</div>',
+        f'<div class="subtitle">CogniSweep CAT Editor &middot; Pro Human Review &middot; File: {escape(file_name)}</div>',
         html,
         count=1,
         flags=re.S,
@@ -14550,7 +14637,7 @@ def render_reference_cat_editor_shell(
 def render_external_cat_editor(job_id: str) -> None:
     payload = load_external_editor_payload(job_id)
     if not payload:
-        st.error("Editor job not found or expired. Please go back to ErrorSweep Pro and open the editor again.")
+        st.error("Editor job not found or expired. Please go back to CogniSweep Pro and open the editor again.")
         return
     rows = payload.get("rows") or []
     metadata = payload.get("metadata") or payload
@@ -14641,7 +14728,7 @@ def render_external_media_editor(job_id: str) -> None:
     st.markdown(
         f"""
         <div class="es-media-top">
-          <div><div class="es-media-title">ErrorSweep Media Editor</div><div class="es-media-sub">{escape(str(workflow))} · {escape(str(file_name))} · {escape(str(target_language))}</div></div>
+          <div><div class="es-media-title">CogniSweep Media Editor</div><div class="es-media-sub">{escape(str(workflow))} · {escape(str(file_name))} · {escape(str(target_language))}</div></div>
           <div class="es-media-pill">Separate Editor</div>
         </div>
         """,
@@ -14835,7 +14922,7 @@ def render_reference_media_editor_shell(
         "job_id": safe_text(job_id),
         "file_slug": file_slug,
         "metadata": {
-            "title": safe_text(metadata.get("title") or "ErrorSweep Media Editor") or "ErrorSweep Media Editor",
+            "title": safe_text(metadata.get("title") or "CogniSweep Media Editor") or "CogniSweep Media Editor",
             "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
             or "Subtitle / Transcription Workspace",
             "file_name": file_name,
@@ -14942,7 +15029,7 @@ def render_external_editor_router() -> bool:
             st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -14953,7 +15040,7 @@ def render_external_editor_router() -> bool:
             st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -14966,7 +15053,7 @@ def render_external_editor_router() -> bool:
             st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the ErrorSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -15211,7 +15298,7 @@ def add_row_comment(row: Dict[str, Any], body: str) -> None:
     mentions = ", ".join(sorted(set(re.findall(r"@([A-Za-z0-9_.-]+)", body))))
     comments = row_comments(row)
     comments.append({
-        "author": safe_text((current_user() or {}).get("email", "reviewer@errorsweep.local")),
+        "author": safe_text((current_user() or {}).get("email", "reviewer@cognisweep.local")),
         "body": body,
         "mentions": mentions,
         "created_at": now_stamp(),
@@ -15222,7 +15309,7 @@ def add_row_comment(row: Dict[str, Any], body: str) -> None:
 
 def current_editor_identity() -> str:
     user = current_user() or {}
-    return safe_text(user.get("email") or user.get("name") or "local_reviewer@errorsweep.local")
+    return safe_text(user.get("email") or user.get("name") or "local_reviewer@cognisweep.local")
 
 
 def render_row_lock_controls(row: Dict[str, Any], key_prefix: str) -> bool:
@@ -15662,7 +15749,7 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str,
             return ["" for _ in texts]
 
         system_prompt = f"""
-You are ErrorSweep AI, a professional localization translator.
+You are CogniSweep AI, a professional localization translator.
 Return JSON only. Do not use markdown.
 
 Task:
@@ -15766,7 +15853,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
 
     v32 policy:
     - Auto transcription is available only when the user provides a BYO OpenAI-compatible API key.
-    - Built-in self-hosted MT is text-only in ErrorSweep and is NOT used for transcription.
+    - Built-in self-hosted MT is text-only in CogniSweep and is NOT used for transcription.
     - If no user API key is available, return blank starter rows for manual human editing.
     """
     if video_file is None:
@@ -15859,7 +15946,7 @@ def call_main_api_qa(rows: List[Dict[str, Any]], domain: str, strictness: str = 
 
     rules_text = rules_summary_for_ai(rules)
     system_prompt = f"""
-You are ErrorSweep AI, a conservative localization QA reviewer.
+You are CogniSweep AI, a conservative localization QA reviewer.
 Return JSON only. Do not invent errors.
 Flag only real issues supported by source/target evidence.
 DNT/placeholder/number damage is severe. Empty target is Critical.
@@ -16165,7 +16252,7 @@ def qa_manual_finding(row: Dict[str, Any], severity: str, category: str, issue: 
         "Wrong Part": issue,
         "Suggestion": suggestion,
         "Explanation": issue,
-        "Check Source": "ErrorSweep QA",
+        "Check Source": "CogniSweep QA",
         "Rule Source": "Built-in QA",
         "Confidence": "High",
         "Rule ID": f"manual.{re.sub(r'[^a-z0-9]+', '_', category.lower()).strip('_')}",
@@ -16245,7 +16332,7 @@ def create_qa_excel_report(segment_rows: List[Dict[str, Any]], detailed_findings
     border = Side(style="thin", color="A6A6A6")
 
     ws_summary.merge_cells("A1:D1")
-    ws_summary["A1"] = "ErrorSweep QA Report"
+    ws_summary["A1"] = "CogniSweep QA Report"
     ws_summary["A1"].font = Font(bold=True, size=16, color="FFFFFF")
     ws_summary["A1"].fill = PatternFill("solid", fgColor=dark)
     ws_summary["A1"].alignment = Alignment(horizontal="center")
@@ -16390,7 +16477,6 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         safe_text((current_user() or {}).get("email")),
     )
     render_router_debug_panel(route, f"landing:{reason}")
-    local_status = current_ai_route_label()
     st.html(
         dedent("""
         <div id="errorsweep-landing-page-marker"></div>
@@ -16446,44 +16532,29 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
     st.html(
         dedent(f"""
         <div class="es-lp">
-          <header class="es-lp-nav">
-            <div class="es-lp-nav-inner">
-              <div class="es-lp-brand">
-                <div class="es-lp-logo">ES</div>
-                <div>
-                  <div class="es-lp-brand-name">ErrorSweep</div>
-                  <div class="es-lp-brand-sub">Nawin Corp</div>
-                </div>
-              </div>
-              <div class="es-lp-links">
-                <a class="es-lp-link" href="#solutions">Solutions</a>
-                <a class="es-lp-link" href="#product">Product</a>
-                <a class="es-lp-link" href="#resources">Resources</a>
-                <a class="es-lp-link" href="#developers">Developers</a>
-                <a class="es-lp-link" href="#pricing">Pricing</a>
-              </div>
-              <div class="es-lp-actions">
-                <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
-                <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Sign up</a>
-              </div>
-            </div>
-          </header>
-
           <main>
             <section class="es-lp-hero">
               <div class="es-lp-grid-bg"></div>
+              <div class="es-lp-hero-top">
+                <div class="es-lp-hero-brand">
+                  <div class="es-lp-logo" aria-hidden="true"></div>
+                  <div>
+                    <div class="es-lp-brand-name">CogniSweep</div>
+                    <div class="es-lp-brand-kicker">AI localization command center</div>
+                  </div>
+                </div>
+                <div class="es-lp-actions">
+                  <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
+                  <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
+                </div>
+              </div>
               <div class="es-lp-inner">
                 <div class="es-lp-hero-content">
-                  <div class="es-lp-badge"><span class="es-lp-dot"></span>{escape(local_status)}</div>
-                  <h1 class="es-lp-title">AI localization that scales your growth, not your overhead.</h1>
+                  <h1 class="es-lp-title">Localization QA, translation review, media, and scorecards in one workspace.</h1>
                   <p class="es-lp-copy">
-                    Simplify localization every step of the way. Focus on growth while our AI automates translation quality checks,
-                    identifies linguistic bugs, and drives issue resolution without slowing you down.
+                    Upload product files, apply client rules, run AI QA, translate with managed or self-hosted MT,
+                    open Human Review, and export delivery-ready reports without juggling scattered spreadsheets.
                   </p>
-                  <div class="es-lp-hero-actions">
-                    <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
-                    <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
-                  </div>
                 </div>
               </div>
             </section>
@@ -16496,52 +16567,52 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                   <div class="es-lp-window">
                     <div class="es-lp-window-top">
                       <div class="es-lp-traffic"><span></span><span></span><span></span></div>
-                      <div class="es-lp-window-label">ErrorSweep Localization Workflow</div>
+                      <div class="es-lp-window-label">CogniSweep Production Workflow</div>
                     </div>
 
                     <div class="es-lp-workflow">
                       <div class="es-lp-panel">
                         <div class="es-lp-panel-head">
                           <div>
-                            <div class="es-lp-eyebrow">Active QA job</div>
-                            <h3>Mobile App UI - French</h3>
+                            <div class="es-lp-eyebrow">CogniSweep Pro run</div>
+                            <h3>Mobile app strings - French</h3>
                           </div>
-                          <div class="es-lp-status">Review ready</div>
+                          <div class="es-lp-status">Human Review ready</div>
                         </div>
                         <div class="es-lp-task">
-                          <div class="es-lp-task-row"><span>Placeholder integrity</span><span class="es-lp-green">Passed</span></div>
+                          <div class="es-lp-task-row"><span>Source intake</span><span class="es-lp-green">XLSX parsed</span></div>
                           <div class="es-lp-progress"><span style="width:92%;"></span></div>
                         </div>
                         <div class="es-lp-task">
-                          <div class="es-lp-task-row"><span>Linguistic issues</span><span class="es-lp-yellow">12 findings</span></div>
+                          <div class="es-lp-task-row"><span>QA findings</span><span class="es-lp-yellow">12 rows need review</span></div>
                           <div class="es-lp-findings">
-                            <div class="es-lp-finding red">2 Critical</div>
-                            <div class="es-lp-finding yellow">6 Major</div>
-                            <div class="es-lp-finding blue">4 Minor</div>
+                            <div class="es-lp-finding red">Placeholders</div>
+                            <div class="es-lp-finding yellow">Terminology</div>
+                            <div class="es-lp-finding blue">Tone</div>
                           </div>
                         </div>
                         <div class="es-lp-task">
-                          <div class="es-lp-task-row"><span>Human Review</span><span class="es-lp-violet">Assigned to Reviewer</span></div>
+                          <div class="es-lp-task-row"><span>Review workspace</span><span class="es-lp-violet">TM + glossary + DNT</span></div>
                         </div>
                       </div>
 
                       <div>
                         <div class="es-lp-panel">
-                          <div class="es-lp-eyebrow es-lp-sky">Translation Quality Index</div>
+                          <div class="es-lp-eyebrow es-lp-sky">Delivery readiness</div>
                           <div class="es-lp-score">
-                            <div class="es-lp-score-number">A</div>
-                            <div class="es-lp-muted">review-ready score</div>
+                            <div class="es-lp-score-number">95</div>
+                            <div class="es-lp-muted">QA pass threshold</div>
                           </div>
                           <div class="es-lp-mini-grid">
-                            <div class="es-lp-mini">Glossary<br><span class="es-lp-green">Aligned</span></div>
-                            <div class="es-lp-mini">DNT<br><span class="es-lp-green">Locked</span></div>
+                            <div class="es-lp-mini">QA workbook<br><span class="es-lp-green">Ready</span></div>
+                            <div class="es-lp-mini">Same-format export<br><span class="es-lp-green">Queued</span></div>
                           </div>
                         </div>
                         <div class="es-lp-panel es-lp-pipeline">
                           <div class="es-lp-eyebrow">Pipeline</div>
-                          <div class="es-lp-pipeline-row"><span>Extract strings</span><span class="es-lp-green">Done</span></div>
-                          <div class="es-lp-pipeline-row"><span>Run AI QA</span><span class="es-lp-green">Done</span></div>
-                          <div class="es-lp-pipeline-row"><span>Review scorecard</span><span class="es-lp-yellow">In progress</span></div>
+                          <div class="es-lp-pipeline-row"><span>Translate with rules</span><span class="es-lp-green">Done</span></div>
+                          <div class="es-lp-pipeline-row"><span>Run QA gate</span><span class="es-lp-green">Done</span></div>
+                          <div class="es-lp-pipeline-row"><span>Approve in editor</span><span class="es-lp-yellow">In review</span></div>
                         </div>
                       </div>
                     </div>
@@ -16559,20 +16630,20 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         <div class="es-lp">
           <section class="es-lp-social">
             <div class="es-lp-inner">
-              <p class="es-lp-social-title">Built for localization teams who want fewer spreadsheet handoffs and cleaner multilingual releases.</p>
+              <p class="es-lp-social-title">Everything your localization operation needs before a multilingual release.</p>
               <div class="es-lp-logo-grid">
-                <div class="es-lp-logo-card">ACME</div>
-                <div class="es-lp-logo-card">GLOBEX</div>
-                <div class="es-lp-logo-card">NOVA APP</div>
-                <div class="es-lp-logo-card">ATLAS</div>
-                <div class="es-lp-logo-card">BRIGHTTEL</div>
-                <div class="es-lp-logo-card">TASKFLOW</div>
+                <div class="es-lp-logo-card">QA TASKS</div>
+                <div class="es-lp-logo-card">PRO TRANSLATION</div>
+                <div class="es-lp-logo-card">HUMAN REVIEW</div>
+                <div class="es-lp-logo-card">MEDIA EDITOR</div>
+                <div class="es-lp-logo-card">SCORECARDS</div>
+                <div class="es-lp-logo-card">RULE MEMORY</div>
               </div>
               <div class="es-lp-awards">
-                <span class="es-lp-award es-lp-yellow">QA Workflow</span>
-                <span class="es-lp-award es-lp-sky">Human Review</span>
-                <span class="es-lp-award es-lp-green">No-Key MT</span>
-                <span class="es-lp-award es-lp-violet">Scorecards</span>
+                <span class="es-lp-award es-lp-yellow">Projects & Jobs</span>
+                <span class="es-lp-award es-lp-sky">Team Access</span>
+                <span class="es-lp-award es-lp-green">Self-hosted MT</span>
+                <span class="es-lp-award es-lp-violet">Billing & Admin</span>
               </div>
             </div>
           </section>
@@ -16580,9 +16651,9 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           <section class="es-lp-section">
             <div class="es-lp-inner">
               <div class="es-lp-stats">
-                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-green">QA</div><p>Placeholder, terminology, formatting, and DNT checks</p></div>
-                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-sky">MT</div><p>Built-in self-hosted translation route for no-key workflows</p></div>
-                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-violet">LQA</div><p>Review-ready editor jobs and Excel scorecards</p></div>
+                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-green">QA</div><p>Find placeholder, tag, number, terminology, DNT, and linguistic issues.</p></div>
+                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-sky">PRO</div><p>Translate, run QA, and route risky rows into Human Review.</p></div>
+                <div class="es-lp-stat"><div class="es-lp-stat-number es-lp-violet">MEDIA</div><p>Create subtitle and transcription workspaces with review-locked exports.</p></div>
               </div>
             </div>
           </section>
@@ -16590,27 +16661,27 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           <section id="solutions" class="es-lp-section">
             <div class="es-lp-inner">
               <div class="es-lp-section-title">
-                <div class="es-lp-eyebrow">Solutions</div>
-                <h2>Shape your localization strategy to fit your needs</h2>
+                <div class="es-lp-eyebrow">Core workflows</div>
+                <h2>Built around the pages your team actually uses.</h2>
               </div>
               <div class="es-lp-card-grid">
                 <article class="es-lp-card">
-                  <div class="es-lp-icon">DEV</div>
-                  <h3>Developers</h3>
-                  <p>Ship multilingual product updates without spreadsheet handoffs. Connect strings, rules, and QA directly to release workflows.</p>
-                  <span class="es-lp-card-link">Explore developer workflows -></span>
+                  <div class="es-lp-icon">QA</div>
+                  <h3>CogniSweep QA</h3>
+                  <p>Upload bilingual files, attach client rules, detect translation issues, and export a professional QA workbook.</p>
+                  <span class="es-lp-card-link">Review existing translations</span>
                 </article>
                 <article class="es-lp-card">
-                  <div class="es-lp-icon">OPS</div>
-                  <h3>Localization Managers</h3>
-                  <p>Track jobs, linguists, scorecards, client rules, TMs, and QA findings from one control center.</p>
-                  <span class="es-lp-card-link es-lp-sky">Build scalable operations -></span>
+                  <div class="es-lp-icon">PRO</div>
+                  <h3>CogniSweep Pro</h3>
+                  <p>Translate source files with rules, run QA automatically, and open a dedicated Human Review editor for approval.</p>
+                  <span class="es-lp-card-link es-lp-sky">Translate + QA + review</span>
                 </article>
                 <article class="es-lp-card">
-                  <div class="es-lp-icon">UX</div>
-                  <h3>Product Teams</h3>
-                  <p>Find localization bugs before they reach users. Prioritize high-impact issues with quality scores and review status.</p>
-                  <span class="es-lp-card-link es-lp-violet">Protect user experience -></span>
+                  <div class="es-lp-icon">SRT</div>
+                  <h3>Subtitle & Transcription</h3>
+                  <p>Build timing rows, edit transcripts and subtitles, preview media context, and lock downloads until work is confirmed.</p>
+                  <span class="es-lp-card-link es-lp-violet">Manage media localization</span>
                 </article>
               </div>
             </div>
@@ -16620,21 +16691,21 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
             <div class="es-lp-inner">
               <div class="es-lp-feature-grid">
                 <div class="es-lp-feature">
-                  <div class="es-lp-eyebrow">Collaboration hub</div>
-                  <h2>One place for every team, every language, every project.</h2>
-                  <p>Centralize jobs, source files, translations, reviewer feedback, terminology, and vendor scorecards. Give developers, translators, reviewers, and clients the right view without slowing delivery.</p>
+                  <div class="es-lp-eyebrow">Operations hub</div>
+                  <h2>Projects, jobs, rules, team access, and billing stay connected.</h2>
+                  <p>CogniSweep is not only a translator. It is a working SaaS surface for managing client workspaces, assignments, uploads, review status, invoices, subscriptions, and operational audit history.</p>
                   <ul class="es-lp-list">
-                    <li><span class="es-lp-green">OK</span> Role-based workspaces for owners, PMs, translators, reviewers, and clients</li>
-                    <li><span class="es-lp-green">OK</span> Human review editor with TM, glossary, DNT, and QA context</li>
-                    <li><span class="es-lp-green">OK</span> Excel-first scorecards for vendor and translator quality</li>
+                    <li><span class="es-lp-green">OK</span> Project and job tracking for QA, Pro, subtitle, transcription, and scorecard workflows</li>
+                    <li><span class="es-lp-green">OK</span> Memory & Rules for glossary, DNT, reusable client instructions, and QA context</li>
+                    <li><span class="es-lp-green">OK</span> Team roles, permissions, billing records, subscriptions, and admin readiness checks</li>
                   </ul>
                 </div>
                 <div class="es-lp-mock">
                   <div class="es-lp-mock-inner">
-                    <div class="es-lp-task-row"><span class="es-lp-muted">Workspace</span><span class="es-lp-status">Live</span></div>
-                    <div class="es-lp-mock-row"><b>Project:</b> Mobile App UI <span style="float:right;" class="es-lp-green">12 languages</span></div>
-                    <div class="es-lp-mock-row"><b>Reviewer:</b> Assigned <span style="float:right;" class="es-lp-sky">68 rows</span></div>
-                    <div class="es-lp-mock-row"><b>Client rules:</b> Active <span style="float:right;" class="es-lp-violet">Glossary + DNT</span></div>
+                    <div class="es-lp-task-row"><span class="es-lp-muted">Workspace</span><span class="es-lp-status">Operational</span></div>
+                    <div class="es-lp-mock-row"><b>Projects:</b> Client/product workspaces <span style="float:right;" class="es-lp-green">Tracked</span></div>
+                    <div class="es-lp-mock-row"><b>Jobs:</b> QA, Pro, media, scorecards <span style="float:right;" class="es-lp-sky">Assignable</span></div>
+                    <div class="es-lp-mock-row"><b>Admin:</b> Legal, email, storage, billing <span style="float:right;" class="es-lp-violet">Readiness</span></div>
                   </div>
                 </div>
               </div>
@@ -16645,23 +16716,23 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                     <div class="es-lp-three">
                       <div class="es-lp-count" style="background:rgba(239,68,68,.10);"><strong class="es-lp-violet">3</strong><span class="es-lp-muted">Critical</span></div>
                       <div class="es-lp-count" style="background:rgba(234,179,8,.10);"><strong class="es-lp-yellow">9</strong><span class="es-lp-muted">Major</span></div>
-                      <div class="es-lp-count" style="background:rgba(17,245,181,.10);"><strong class="es-lp-green">A</strong><span class="es-lp-muted">TQI</span></div>
+                      <div class="es-lp-count" style="background:rgba(17,245,181,.10);"><strong class="es-lp-green">95</strong><span class="es-lp-muted">Gate</span></div>
                     </div>
                     <div class="es-lp-issue">
-                      <b>Detected issue</b>
-                      <p>Placeholder <span class="es-lp-code">{{email}}</span> was removed from target string.</p>
-                      <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Send to Human Review</a>
+                      <b>Review gate</b>
+                      <p>Critical or Major issues block delivery until a reviewer confirms the row or fixes the target.</p>
+                      <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start review workflow</a>
                     </div>
                   </div>
                 </div>
                 <div class="es-lp-feature">
-                  <div class="es-lp-eyebrow es-lp-sky">Translation quality</div>
-                  <h2>Redefine translation quality with TQI.</h2>
-                  <p>Automatically validate string health, linguistic accuracy, placeholders, formatting, DNT terms, and terminology. Route risky segments to reviewers and keep production-ready content moving.</p>
+                  <div class="es-lp-eyebrow es-lp-sky">Quality gate</div>
+                  <h2>Every export has a review path.</h2>
+                  <p>CogniSweep keeps quality decisions visible. QA findings, translator edits, reviewer comments, timing checks, and scorecard penalties remain tied to the work that produced them.</p>
                   <ul class="es-lp-list">
-                    <li><span class="es-lp-sky">OK</span> Automated QA checks for placeholders, numbers, tags, and language issues</li>
-                    <li><span class="es-lp-sky">OK</span> Scorecard output for PMs, reviewers, and vendor evaluation</li>
-                    <li><span class="es-lp-sky">OK</span> Human-in-the-loop workflows for uncertain translations</li>
+                    <li><span class="es-lp-sky">OK</span> QA reports for bilingual content and Pro translation output</li>
+                    <li><span class="es-lp-sky">OK</span> Human Review editor with source, target, TM, glossary, DNT, issues, and history</li>
+                    <li><span class="es-lp-sky">OK</span> Translator-vs-reviewer Excel scorecards with anonymized export</li>
                   </ul>
                 </div>
               </div>
@@ -16671,8 +16742,8 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           <section id="pricing" class="es-lp-section">
             <div class="es-lp-inner">
               <div class="es-lp-cta">
-                <h2>Build a localization operation your product team actually enjoys using.</h2>
-                <p>Start with AI QA, translation review, scorecards, and managed workflows, then scale into full localization operations.</p>
+                <h2>Launch a real localization command center, not another file handoff process.</h2>
+                <p>Start with QA and Pro review, then expand into media localization, scorecards, team access, billing, and production readiness.</p>
                 <div class="es-lp-hero-actions">
                   <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
                   <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
@@ -16683,7 +16754,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
 
           <footer id="resources" class="es-lp-footer">
             <div class="es-lp-inner es-lp-footer-row">
-              <span>Copyright 2026 ErrorSweep by Nawin Corp. All rights reserved.</span>
+              <span>Copyright 2026 CogniSweep. All rights reserved.</span>
               <span class="es-lp-footer-links">
                 <a class="es-lp-link" href="{public_page_link('security')}" target="_self">Security</a>
                 <a class="es-lp-link" href="#developers">Developers</a>
@@ -16706,7 +16777,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           .es-lp-stats, .es-lp-card-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 640px) {
-          .es-lp-nav-inner { align-items: flex-start; }
+          .es-lp-hero-top { flex-direction: column; align-items: flex-start; }
           .es-lp-actions { flex-direction: column; align-items: stretch; }
           .es-lp-btn { width: 100%; }
           .es-lp-title { font-size: 44px; }
@@ -16730,10 +16801,9 @@ def render_login() -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -16743,7 +16813,7 @@ def render_login() -> None:
         </div>
         """).strip(),
     )
-    st.markdown("## Login to ErrorSweep")
+    st.markdown("## Login to CogniSweep")
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
     if is_authenticated():
@@ -16752,9 +16822,9 @@ def render_login() -> None:
         st.rerun()
         return
 
-    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@errorsweep.local")
+    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
     owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
-    bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@errorsweep.local")
+    bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@cognisweep.local")
     bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
     default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
 
@@ -16803,7 +16873,7 @@ def render_login() -> None:
 
         matched = find_user_by_email(clean_email)
         if matched and safe_text(matched.get("status", "Active")).lower() not in {"active", "invited"}:
-            st.error("This account is not active. Contact your workspace owner or ErrorSweep management.")
+            st.error("This account is not active. Contact your workspace owner or CogniSweep management.")
             return
         if matched and verify_password(password, safe_text(matched.get("password_hash", ""))):
             if is_production_mode() and not bool(matched.get("email_verified")):
@@ -16866,7 +16936,7 @@ def render_profile_completion_form(user: Dict[str, Any], form_key: str = "profil
     except Exception:
         per_word_rate_default = 0.0
 
-    st.caption("Complete your profile to attract employers and help ErrorSweep management match you with suitable jobs.")
+    st.caption("Complete your profile to attract employers and help CogniSweep management match you with suitable jobs.")
     with st.form(form_key, enter_to_submit=False):
         p1, p2 = st.columns(2)
         phone = p1.text_input("Phone / WhatsApp", value=safe_text(user.get("phone")))
@@ -16970,7 +17040,7 @@ def open_account_professional_profile_editor() -> None:
 
 
 def render_profile_completion_choice(user: Dict[str, Any]) -> None:
-    st.write("Complete your profile to attract employers and help ErrorSweep management match you with suitable job opportunities.")
+    st.write("Complete your profile to attract employers and help CogniSweep management match you with suitable job opportunities.")
     st.caption("This is optional. You can skip now and complete it later from Account.")
     c1, c2 = st.columns(2)
     if c1.button("Complete profile now", use_container_width=True, key="profile_completion_start"):
@@ -17013,10 +17083,9 @@ def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17027,7 +17096,7 @@ def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
         """).strip(),
     )
     st.markdown("## Public launch not open yet")
-    st.info("Signup is temporarily locked while ErrorSweep completes production launch checks. Existing users can still log in.")
+    st.info("Signup is temporarily locked while CogniSweep completes production launch checks. Existing users can still log in.")
     st.caption(f"Launch preflight is enforced and currently has {int(gate.get('blocker_count') or 0)} blocker(s). Platform Owners can review details in Platform Settings -> Launch Readiness.")
 
 
@@ -17042,10 +17111,9 @@ def render_signup() -> None:
             dedent(f"""
             <div class="es-auth-shell">
               <div class="es-lp-brand">
-                <div class="es-lp-logo">ES</div>
+                <div class="es-lp-logo" aria-hidden="true"></div>
                 <div>
-                  <div class="es-lp-brand-name">ErrorSweep</div>
-                  <div class="es-lp-brand-sub">Nawin Corp</div>
+                  <div class="es-lp-brand-name">CogniSweep</div>
                 </div>
               </div>
               <div class="es-auth-links">
@@ -17062,10 +17130,9 @@ def render_signup() -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17075,7 +17142,7 @@ def render_signup() -> None:
         </div>
         """).strip(),
     )
-    st.markdown("## Create your ErrorSweep account")
+    st.markdown("## Create your CogniSweep account")
     st.caption("Start with basic account details. You can complete your professional profile after signup.")
 
     with st.form("signup_form", enter_to_submit=False):
@@ -17092,7 +17159,7 @@ def render_signup() -> None:
         selected_account_type = next((key for key, label in ACCOUNT_TYPE_LABELS.items() if label == account_type_label), "individual")
         workspace_name = c2.text_input(
             "Workspace name",
-            help="Required for Enterprise / Company. Optional for Individual Contractor; when blank, ErrorSweep creates a personal workspace from your name.",
+            help="Required for Enterprise / Company. Optional for Individual Contractor; when blank, CogniSweep creates a personal workspace from your name.",
         )
         accepted = st.checkbox(compliance_ack_label(), key="signup_compliance_ack")
         submitted = st.form_submit_button("Create account", use_container_width=True)
@@ -17163,8 +17230,8 @@ def render_signup() -> None:
         verify_url = queue_verification_email(clean_email, workspace, clean_name)
         queue_email_notification(
             clean_email,
-            "Welcome to ErrorSweep",
-            f"Your ErrorSweep account for '{workspace}' is ready.",
+            "Welcome to CogniSweep",
+            f"Your CogniSweep account for '{workspace}' is ready.",
             "signup.welcome",
             metadata={"workspace": workspace, "name": clean_name, "verify_url": verify_url, "role": role},
             workspace=workspace,
@@ -17186,7 +17253,7 @@ def render_public_document(kind: str) -> None:
         "terms": {
             "title": "Terms of Service",
             "body": [
-                "ErrorSweep is provided for authorized localization QA, translation review, subtitle, transcription, and scorecard workflows.",
+                "CogniSweep is provided for authorized localization QA, translation review, subtitle, transcription, and scorecard workflows.",
                 "Users must only upload content they are authorized to process, including client, confidential, copyrighted, or regulated material.",
                 "Accounts are workspace-scoped. Do not share credentials or attempt to access another workspace's data.",
                 "Trial and local development records are provided for evaluation and may be reset during product setup.",
@@ -17195,7 +17262,7 @@ def render_public_document(kind: str) -> None:
         "privacy": {
             "title": "Privacy Policy",
             "body": [
-                "ErrorSweep stores account, workspace, job, audit, and usage records needed to operate the SaaS workflow.",
+                "CogniSweep stores account, workspace, job, audit, and usage records needed to operate the SaaS workflow.",
                 "Uploaded localization content is processed for translation QA, human review, media editing, and export generation.",
                 "When Supabase is not configured, local development uses JSON fallback storage on this machine.",
                 "External AI or grammar routes should be used only when the customer has approved that processing path.",
@@ -17213,7 +17280,7 @@ def render_public_document(kind: str) -> None:
         "cookies": {
             "title": "Cookie Notice",
             "body": [
-                "ErrorSweep uses essential session storage for login, workspace routing, security, auditability, and download tracking.",
+                "CogniSweep uses essential session storage for login, workspace routing, security, auditability, and download tracking.",
                 "Optional analytics or product diagnostics should only be enabled after the customer chooses the appropriate privacy option.",
                 "Customers can request export, correction, deletion, restriction, or consent-withdrawal review from the privacy request tracker.",
             ],
@@ -17232,10 +17299,9 @@ def render_public_document(kind: str) -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17256,10 +17322,9 @@ def render_verify_email() -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17294,10 +17359,9 @@ def render_password_reset() -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17343,10 +17407,9 @@ def render_sso_handoff() -> None:
         dedent(f"""
         <div class="es-auth-shell">
           <div class="es-lp-brand">
-            <div class="es-lp-logo">ES</div>
+            <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
-              <div class="es-lp-brand-name">ErrorSweep</div>
-              <div class="es-lp-brand-sub">Nawin Corp</div>
+              <div class="es-lp-brand-name">CogniSweep</div>
             </div>
           </div>
           <div class="es-auth-links">
@@ -17386,7 +17449,7 @@ def render_sso_handoff() -> None:
 
     with st.form("sso_handoff_confirm", enter_to_submit=False):
         accepted = st.checkbox(compliance_ack_label(), key="sso_handoff_compliance_ack")
-        submitted = st.form_submit_button("Continue to ErrorSweep", use_container_width=True)
+        submitted = st.form_submit_button("Continue to CogniSweep", use_container_width=True)
     if submitted:
         if not accepted:
             st.error("Please accept the workspace compliance terms before continuing.")
@@ -17547,12 +17610,12 @@ def page_dashboard() -> None:
                   </div>
                   <div class="es-fab-row">
                     <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
-                    <a class="es-fab-action" href="{page_link('ErrorSweep Pro')}" target="_self">Run Pro Translation</a>
+                    <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self">Run Pro Translation</a>
                     <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
-                    <a class="es-fab-action secondary" href="{page_link('ErrorSweep QA')}" target="_self">Run QA</a>
+                    <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self">Run QA</a>
                   </div>
                 </div>
-                <div class="es-hero-orb">ErrorSweep<br/>Live</div>
+                <div class="es-hero-orb">CogniSweep<br/>Live</div>
               </div>
             </section>
 
@@ -17777,7 +17840,7 @@ def create_job_for_project(
     add_audit("Project job created", f"{safe_text(project.get('project'))}: {job_type} assigned to {assignee}")
     queue_email_notification(
         assignee,
-        "New ErrorSweep job assigned",
+        "New CogniSweep job assigned",
         f"A new {job_type} job has been assigned to you for {language} in project '{safe_text(project.get('project'))}'. Attachments: {len(attachment_manifests)}.",
         "job.assigned",
         metadata={"job_id": job_id, "project_id": project_id, "project": safe_text(project.get("project")), "job_type": job_type, "language": language, "attachment_count": len(attachment_manifests)},
@@ -17793,7 +17856,7 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
         c1, c2, c3 = st.columns(3)
         job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
         language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index(default_language), key=f"{form_key}_language")
-        assignee = c3.text_input("Assignee", value="reviewer@errorsweep.local", key=f"{form_key}_assignee")
+        assignee = c3.text_input("Assignee", value="reviewer@cognisweep.local", key=f"{form_key}_assignee")
         assignment_files = st.file_uploader("Assignment upload (optional)", accept_multiple_files=True, key=f"{form_key}_files", help="Upload any file or ZIP package that should be assigned with this project job.")
         note = st.text_area("Notes", height=80, key=f"{form_key}_note")
         submitted = st.form_submit_button(submit_label, use_container_width=True)
@@ -18009,7 +18072,7 @@ def page_jobs() -> None:
     return
 
 def page_qa() -> None:
-    hero("ErrorSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
+    hero("CogniSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
     render_stepper(["Upload bilingual file", "Select rules and strictness", "Run QA report"], active_idx=0)
     render_upload_dropzone("Drop bilingual content here", "Supports Excel, CSV, DOCX, TXT, SRT, and VTT. Rules ZIP can be attached for client-specific QA.", "XLSX / CSV / DOCX / SRT")
     file = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="qa_file")
@@ -18104,7 +18167,7 @@ def page_qa() -> None:
                     safe_text(item.get("issue") or item.get("reason") or "AI reviewer flagged this segment."),
                     safe_text(item.get("suggestion") or ""),
                 )
-                ai_finding["Check Source"] = "ErrorSweep AI QA"
+                ai_finding["Check Source"] = "CogniSweep AI QA"
                 ai_finding["Rule Source"] = "Uploaded/Saved Rules + AI"
                 ai_finding["Rule ID"] = "ai.rules_qa"
                 ai_finding["Explanation"] = safe_text(item.get("reason") or ai_finding["Explanation"])
@@ -18161,7 +18224,7 @@ def page_qa() -> None:
         record_billable_workflow_usage("qa_workflow", findings, provider="errorsweep_qa", model="deterministic_ai_rules")
         queue_email_notification(
             (current_user() or {}).get("email", ""),
-            "ErrorSweep QA completed",
+            "CogniSweep QA completed",
             f"QA completed for {len(findings)} segment(s). Score: {qa_summary['qa_score']} ({qa_summary['result']}).",
             "qa.completed",
             metadata={"segments": len(findings), "score": qa_summary["qa_score"], "result": qa_summary["result"]},
@@ -18194,9 +18257,9 @@ def page_qa() -> None:
 
 
 def page_pro() -> None:
-    hero("ErrorSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
+    hero("CogniSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
     if not feature_flag("pro_human_review"):
-        st.warning("ErrorSweep Pro and Human Review are currently disabled by Platform Settings.")
+        st.warning("CogniSweep Pro and Human Review are currently disabled by Platform Settings.")
         return
     st.caption(f"AI access: {current_ai_route_label()}")
     render_privacy_route_notice("Translation route")
@@ -18240,7 +18303,7 @@ def page_pro() -> None:
             render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
         else:
             st.error("Missing review_id. Run Pro translation before opening Human Review.")
-    render_upload_dropzone("Drop source or bilingual content here", "ErrorSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
+    render_upload_dropzone("Drop source or bilingual content here", "CogniSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "pptx", "txt", "html", "json", "xml", "xlf", "xliff", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
     context_upload = st.file_uploader(
@@ -18369,7 +18432,7 @@ def page_pro() -> None:
                         safe_text(item.get("issue") or item.get("reason") or "AI reviewer flagged this segment."),
                         safe_text(item.get("suggestion") or ""),
                     )
-                    ai_finding["Check Source"] = "ErrorSweep AI QA"
+                    ai_finding["Check Source"] = "CogniSweep AI QA"
                     ai_finding["Rule Source"] = "Uploaded/Saved Rules + AI"
                     ai_finding["Rule ID"] = "ai.rules_qa"
                     ai_finding["Explanation"] = safe_text(item.get("reason") or ai_finding["Explanation"])
@@ -18401,7 +18464,7 @@ def page_pro() -> None:
         # Without this, the Human Review page can open with no rows and look blank.
         prepare_human_review_session(
             review_rows,
-            source="ErrorSweep Pro",
+            source="CogniSweep Pro",
             target_language=target_language,
             file_name=getattr(uploaded, "name", "uploaded_file"),
             rules=client_rules,
@@ -18438,7 +18501,7 @@ def page_pro() -> None:
         record_billable_workflow_usage("pro_translation", review_rows, provider="errorsweep_pro", model="translate_qa_review")
         queue_email_notification(
             (current_user() or {}).get("email", ""),
-            "ErrorSweep Pro translation completed",
+            "CogniSweep Pro translation completed",
             f"Pro translation for {target_language} finished with status '{status}'. Segments: {len(review_rows)}. Missing/review rows: {missing}.",
             "pro.completed",
             metadata={
@@ -18860,7 +18923,7 @@ def render_subtitle_transcription_editor() -> None:
 
 def page_subtitle_transcription_editor() -> None:
     # Public/manual editor page. This page is only for subtitle and transcription work.
-    # Pro post-editing Human Review is opened only from ErrorSweep Pro via the hidden
+    # Pro post-editing Human Review is opened only from CogniSweep Pro via the hidden
     # Human Review Workspace route.
     st.markdown(
         """
@@ -18902,7 +18965,7 @@ def page_human_review() -> None:
 
 
 def page_human_review_workspace() -> None:
-    """Dedicated CAT-style post-editing route opened from ErrorSweep Pro outputs only."""
+    """Dedicated CAT-style post-editing route opened from CogniSweep Pro outputs only."""
     st.markdown('<div id="human-review-editor-page-marker" class="human_review_editor_page" aria-hidden="true"></div>', unsafe_allow_html=True)
     if not feature_flag("pro_human_review"):
         st.warning("Human Review is currently disabled by Platform Settings.")
@@ -18913,7 +18976,7 @@ def page_human_review_workspace() -> None:
     if not st.session_state.get("review_segments") and st.session_state.get("pro_post_edit_rows"):
         prepare_human_review_session(
             st.session_state.get("pro_post_edit_rows", []),
-            source="ErrorSweep Pro",
+            source="CogniSweep Pro",
             target_language=st.session_state.get("pro_post_edit_language", ""),
             file_name=st.session_state.get("pro_post_edit_file_name", ""),
             context=st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
@@ -18926,9 +18989,9 @@ def page_human_review_workspace() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.warning("No Pro post-editing rows are loaded yet. Run ErrorSweep Pro first, then click Open Human Review workspace.")
-        if st.button("Go to ErrorSweep Pro", type="primary", use_container_width=True):
-            open_page("ErrorSweep Pro")
+        st.warning("No Pro post-editing rows are loaded yet. Run CogniSweep Pro first, then click Open Human Review workspace.")
+        if st.button("Go to CogniSweep Pro", type="primary", use_container_width=True):
+            open_page("CogniSweep Pro")
         return
 
     render_text_review_editor()
@@ -19156,7 +19219,7 @@ def create_scorecard_excel(records: List[Dict[str, Any]], summary: Dict[str, Any
 
     # Sheet 1: QA Eval Sheet
     ws.merge_cells("B1:M1")
-    ws["B1"] = "ErrorSweep Linguistic Review Form"
+    ws["B1"] = "CogniSweep Linguistic Review Form"
     ws["B1"].font = Font(bold=True, size=14, color="FFFFFF")
     ws["B1"].alignment = Alignment(horizontal="center")
     ws["B1"].fill = PatternFill("solid", fgColor=dark)
@@ -19411,7 +19474,7 @@ def page_scorecards() -> None:
         st.download_button(
             "Download Anonymized Excel Scorecard" if anonymize_export else "Download Excel Scorecard",
             xlsx_bytes,
-            file_name="ErrorSweep_Translator_Scorecard_Anonymized.xlsx" if anonymize_export else "ErrorSweep_Translator_Scorecard.xlsx",
+            file_name="CogniSweep_Translator_Scorecard_Anonymized.xlsx" if anonymize_export else "CogniSweep_Translator_Scorecard.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -19624,7 +19687,7 @@ def page_memory_rules() -> None:
             rules_zip = st.file_uploader("Upload client rules ZIP", type=["zip"], key="memory_rules_zip")
             render_rules_zip_warning(rules_zip)
             if rules_zip is None:
-                st.info("Upload a client ZIP containing TXT, MD, CSV, TSV, DOCX, or XLSX rules. ErrorSweep will extract glossary, DNT, and instruction hints before QA or translation.")
+                st.info("Upload a client ZIP containing TXT, MD, CSV, TSV, DOCX, or XLSX rules. CogniSweep will extract glossary, DNT, and instruction hints before QA or translation.")
             else:
                 parsed_rules = enrich_rules_from_chunks(parse_rules_zip(rules_zip))
                 metrics([
@@ -19796,7 +19859,7 @@ def page_memory_rules() -> None:
         rules_zip = st.file_uploader("Upload client rules ZIP", type=["zip"], key="memory_rules_zip")
         render_rules_zip_warning(rules_zip)
         if rules_zip is None:
-            st.info("Upload a client ZIP containing TXT, MD, CSV, TSV, DOCX, or XLSX rules. ErrorSweep will extract glossary, DNT, and instruction hints before QA or translation.")
+            st.info("Upload a client ZIP containing TXT, MD, CSV, TSV, DOCX, or XLSX rules. CogniSweep will extract glossary, DNT, and instruction hints before QA or translation.")
         else:
             parsed_rules = enrich_rules_from_chunks(parse_rules_zip(rules_zip))
             metrics([
@@ -20068,7 +20131,7 @@ def page_team_roles() -> None:
                 add_audit("User added", email)
                 queue_email_notification(
                     email,
-                    "You were invited to ErrorSweep",
+                    "You were invited to CogniSweep",
                     f"You have been added to the '{workspace}' workspace as {role}. Sign in to review assigned localization work.",
                     "workspace.invite",
                     metadata={"role": role, "status": status},
@@ -20207,7 +20270,7 @@ def page_team_roles() -> None:
         add_audit("User added", email)
         queue_email_notification(
             email,
-            "You were invited to ErrorSweep",
+            "You were invited to CogniSweep",
             f"You have been added to the '{workspace}' workspace as {role}. Sign in to review assigned localization work.",
             "workspace.invite",
             metadata={"role": role, "status": status},
@@ -20426,7 +20489,7 @@ def page_billing() -> None:
                         st.success("Monthly mandate recorded. Open it below to authorize recurring card/UPI deduction.")
                         st.link_button("Open card / UPI monthly mandate link", intent["checkout_url"], use_container_width=True)
                 elif safe_text(intent.get("status")) == "provider_checkout_ready":
-                    st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let ErrorSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
+                    st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let CogniSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
                 elif safe_text(intent.get("status")) == "provider_checkout_error":
                     st.error("Provider checkout creation was attempted but failed. Review the provider error in the checkout intent metadata.")
                 elif safe_text(intent.get("status")) == "manual_pending":
@@ -20727,7 +20790,7 @@ def page_billing() -> None:
                 st.success("Monthly mandate recorded. Open it below to authorize recurring card/UPI deduction.")
                 st.link_button("Open card / UPI monthly mandate link", intent["checkout_url"], use_container_width=True)
         elif safe_text(intent.get("status")) == "provider_checkout_ready":
-            st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let ErrorSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
+            st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let CogniSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
         elif safe_text(intent.get("status")) == "provider_checkout_error":
             st.error("Provider checkout creation was attempted but failed. Review the provider error in the checkout intent metadata.")
         elif safe_text(intent.get("status")) == "manual_pending":
@@ -21413,7 +21476,7 @@ def page_payments_received() -> None:
                 add_audit("Payment record added", f"{workspace}: {amount}")
                 queue_email_notification(
                     user,
-                    "ErrorSweep payment recorded",
+                    "CogniSweep payment recorded",
                     f"Payment record added for workspace '{workspace}': {format_money(amount, plan_currency)} on plan {plan}.",
                     "billing.payment_recorded",
                     metadata={"workspace": workspace, "plan": plan, "amount": amount, "currency": plan_currency},
@@ -22160,8 +22223,8 @@ PAGE_RENDERERS = {
     "Dashboard": page_dashboard,
     "Projects": page_projects,
     "Jobs": page_jobs,
-    "ErrorSweep QA": page_qa,
-    "ErrorSweep Pro": page_pro,
+    "CogniSweep QA": page_qa,
+    "CogniSweep Pro": page_pro,
     "Subtitle / Transcription Editor": page_subtitle_transcription_editor,
     "Subtitle Workspace": page_subtitle_workspace,
     "Transcription Workspace": page_transcription_workspace,

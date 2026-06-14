@@ -21,7 +21,7 @@ def test_backup_check_script_contract():
     text = source(CHECK)
 
     for token in [
-        "Validate ErrorSweep operational backup launch readiness",
+        "Validate CogniSweep operational backup launch readiness",
         "def validate_worker_contract",
         "def validate_env_config",
         "def run_local_smoke",

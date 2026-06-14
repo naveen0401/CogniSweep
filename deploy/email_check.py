@@ -1,4 +1,4 @@
-"""Validate ErrorSweep transactional email launch readiness.
+"""Validate CogniSweep transactional email launch readiness.
 
 Offline mode checks that the dispatch worker, transactional templates,
 supervisor wiring, provider templates, and dependencies are present. Use
@@ -103,7 +103,7 @@ PLACEHOLDER_MARKERS = (
     "todo",
     "changeme",
     "change-me",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
 )
 SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|KEY|CREDENTIAL)", re.IGNORECASE)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -462,7 +462,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Email Check",
+        "# CogniSweep Email Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -480,7 +480,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep transactional email launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep transactional email launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline worker/template checks.")
     parser.add_argument("--run-smoke", action="store_true", help="Run a local email dispatch dry-run smoke check.")
     parser.add_argument("--timeout", type=int, default=60, help="Smoke timeout in seconds.")

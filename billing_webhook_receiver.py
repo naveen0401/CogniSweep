@@ -1,4 +1,4 @@
-"""Standalone billing webhook receiver for ErrorSweep.
+"""Standalone billing webhook receiver for CogniSweep.
 
 Run this beside the Streamlit app when Stripe/Razorpay live billing is enabled:
 
@@ -137,7 +137,7 @@ def signature_header_for_provider(provider: str, headers: Mapping[str, str]) -> 
         return safe_text(headers.get("Stripe-Signature"))
     if provider == "razorpay":
         return safe_text(headers.get("X-Razorpay-Signature"))
-    return safe_text(headers.get("X-ErrorSweep-Signature") or headers.get("Stripe-Signature") or headers.get("X-Razorpay-Signature"))
+    return safe_text(headers.get("X-CogniSweep-Signature") or headers.get("Stripe-Signature") or headers.get("X-Razorpay-Signature"))
 
 
 def verify_signature(provider: str, raw_payload: str, headers: Mapping[str, str]) -> str:
@@ -167,7 +167,7 @@ def fetch_collection(collection: str, workspace: str = "") -> List[Dict[str, Any
 
 def persist(collection: str, record: Dict[str, Any], workspace: str = "", user_email: str = "") -> Dict[str, Any]:
     actor = {
-        "email": safe_text(user_email) or "billing-webhook@errorsweep.local",
+        "email": safe_text(user_email) or "billing-webhook@cognisweep.local",
         "workspace": safe_text(workspace) or safe_text(record.get("workspace")) or "Platform",
     }
     return save_saas_record(collection, record, user=actor)
@@ -459,7 +459,7 @@ def provider_from_path(path: str) -> str:
 
 
 class BillingWebhookHandler(BaseHTTPRequestHandler):
-    server_version = "ErrorSweepBillingWebhook/1.0"
+    server_version = "CogniSweepBillingWebhook/1.0"
 
     def send_json(self, status_code: int, payload: Dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

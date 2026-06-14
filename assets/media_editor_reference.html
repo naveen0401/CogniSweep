@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ErrorSweep Subtitle & Transcription Editor</title>
+  <title>CogniSweep Subtitle & Transcription Editor</title>
   <style>
     :root {
       --bg: #080a12;
@@ -628,7 +628,7 @@
       <div class="brand">
         <div class="logo">ES</div>
         <div class="title-block">
-          <div class="title" id="editorTitle">ErrorSweep Media Editor</div>
+          <div class="title" id="editorTitle">CogniSweep Media Editor</div>
           <div class="subtitle" id="editorSubtitle">Subtitle / Transcription Workspace</div>
         </div>
       </div>
@@ -885,7 +885,7 @@
 
     function setupHeader() {
       const meta = payload.metadata || {};
-      el("editorTitle").textContent = meta.title || "ErrorSweep Media Editor";
+      el("editorTitle").textContent = meta.title || "CogniSweep Media Editor";
       const parts = [meta.workflow || `${modeTitle()} Workspace`, meta.file_name || "", meta.target_language || ""].filter(Boolean);
       el("editorSubtitle").textContent = parts.join(" · ");
       applyEditorMode();
@@ -1695,11 +1695,11 @@
         { name: "xl/worksheets/sheet1.xml", content: xlsxSheetXml(dataRows) },
         {
           name: "docProps/core.xml",
-          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>ErrorSweep</dc:creator><cp:lastModifiedBy>ErrorSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>CogniSweep</dc:creator><cp:lastModifiedBy>CogniSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
         },
         {
           name: "docProps/app.xml",
-          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ErrorSweep</Application></Properties>`,
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>CogniSweep</Application></Properties>`,
         },
       ];
       return createZipBytes(files);
@@ -1721,7 +1721,7 @@
       });
       const confirmed = confirmedCount();
       const reportRows = [
-        [`ErrorSweep ${modeTitle()} QA Report`],
+        [`CogniSweep ${modeTitle()} QA Report`],
         [],
         ["Package", packageKind],
         ["File", safe((payload.metadata || {}).file_name || payload.file_slug || "media_editor")],

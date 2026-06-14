@@ -1,4 +1,4 @@
-"""Validate ErrorSweep production auth/session launch readiness.
+"""Validate CogniSweep production auth/session launch readiness.
 
 Offline mode checks the app auth contract, deployment templates, persistence
 schema, and release wiring without importing app.py or printing secrets. Use
@@ -109,7 +109,7 @@ PLACEHOLDER_MARKERS = (
     "changeme",
     "change-me",
     "demo workspace",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
 )
 SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|HASH|KEY|USERNAME|EMAIL|WORKSPACE|ORG)", re.IGNORECASE)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -595,7 +595,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Auth/Session Check",
+        "# CogniSweep Auth/Session Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -741,7 +741,7 @@ def write_bootstrap_env(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep production auth/session launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep production auth/session launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
     parser.add_argument("--probe-public-url", action="store_true", help="Probe ERRORSWEEP_PUBLIC_BASE_URL.")
     parser.add_argument("--timeout", type=int, default=15, help="Endpoint probe timeout in seconds.")

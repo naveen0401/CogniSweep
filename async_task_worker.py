@@ -1,4 +1,4 @@
-"""Standalone async task receiver for ErrorSweep QA/Pro handoffs.
+"""Standalone async task receiver for CogniSweep QA/Pro handoffs.
 
 This service gives production deployments a real HTTP endpoint for
 ERRORSWEEP_ASYNC_WORKER_URL. It accepts task handoffs from Streamlit, persists a
@@ -144,7 +144,7 @@ def normalize_task_record(payload: Dict[str, Any], status: str = "queued", progr
     record = {
         "id": task_id,
         "workspace": safe_text(payload.get("workspace") or metadata.get("workspace") or "Unassigned"),
-        "user_email": safe_text(payload.get("user_email") or metadata.get("user_email") or "async-worker@errorsweep.local"),
+        "user_email": safe_text(payload.get("user_email") or metadata.get("user_email") or "async-worker@cognisweep.local"),
         "task_type": safe_text(payload.get("task_type") or workflow or "external_task"),
         "label": safe_text(payload.get("label") or metadata.get("file_name") or workflow or task_id),
         "status": status,
@@ -178,7 +178,7 @@ def persist_task_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "task_queue",
         record,
         user={
-            "email": safe_text(record.get("user_email")) or "async-worker@errorsweep.local",
+            "email": safe_text(record.get("user_email")) or "async-worker@cognisweep.local",
             "workspace": safe_text(record.get("workspace")) or "Platform",
         },
     )
@@ -193,7 +193,7 @@ def accept_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "id": record["id"],
         "task_id": record["id"],
         "status": persisted.get("status", "queued"),
-        "message": "Task accepted by ErrorSweep async worker receiver.",
+        "message": "Task accepted by CogniSweep async worker receiver.",
     }
     if process_on_accept():
         if process_task_payload is None:
@@ -265,7 +265,7 @@ def authorize(headers: Any) -> Tuple[bool, str]:
 
 
 class AsyncTaskWorkerHandler(BaseHTTPRequestHandler):
-    server_version = "ErrorSweepAsyncWorker/1.0"
+    server_version = "CogniSweepAsyncWorker/1.0"
 
     def _json(self, status: int, payload: Dict[str, Any]) -> None:
         raw = json.dumps(payload, ensure_ascii=False, default=safe_text).encode("utf-8")
@@ -343,7 +343,7 @@ def smoke_check() -> Dict[str, Any]:
         "task_type": "smoke_test",
         "label": "Async worker smoke test",
         "workspace": "Platform",
-        "user_email": "async-worker@errorsweep.local",
+        "user_email": "async-worker@cognisweep.local",
         "metadata": {"workflow": "smoke_test"},
         "payload": {"workflow": "smoke_test", "input_files": [], "rules_files": [], "parameters": {}},
     }
@@ -367,7 +367,7 @@ def run_server(host: str, port: int) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the ErrorSweep async task worker receiver.")
+    parser = argparse.ArgumentParser(description="Run the CogniSweep async task worker receiver.")
     parser.add_argument("--host", default=safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_HOST")) or DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=int(os.getenv("ERRORSWEEP_ASYNC_WORKER_PORT", str(DEFAULT_PORT))))
     parser.add_argument("--smoke", action="store_true", help="Persist a smoke-test task and exit.")

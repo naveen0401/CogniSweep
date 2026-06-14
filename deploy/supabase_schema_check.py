@@ -1,4 +1,4 @@
-"""Check Supabase release schema drift against ErrorSweep persistence code.
+"""Check Supabase release schema drift against CogniSweep persistence code.
 
 This is an offline-first launch helper. By default it reads
 supabase_v42_release_schema.sql and production_persistence.py without importing
@@ -407,7 +407,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Supabase Schema Check",
+        "# CogniSweep Supabase Schema Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -485,7 +485,7 @@ def write_supabase_env(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep Supabase release schema coverage.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep Supabase release schema coverage.")
     parser.add_argument("--schema", default=str(DEFAULT_SCHEMA_PATH), help="Path to supabase_v42_release_schema.sql.")
     parser.add_argument("--persistence", default=str(DEFAULT_PERSISTENCE_PATH), help="Path to production_persistence.py.")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_PATH), help="Production env file used only with --probe-rest.")

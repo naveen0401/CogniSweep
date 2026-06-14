@@ -1,6 +1,6 @@
-# ErrorSweep Platform Issues and Fixes
+# CogniSweep Platform Issues and Fixes
 
-Based on a review of the ErrorSweep build (v46), these are the currently tracked issues and their resolution status.
+Based on a review of the CogniSweep build (v46), these are the currently tracked issues and their resolution status.
 
 ## Summary of All Tracked Issues
 
@@ -152,8 +152,8 @@ None currently tracked after this pass.
 *   **The Fix:** Added proper `logging.warning/error` across the application. *(Verified fixed)*.
 
 ### 15. Unsupported LibreTranslate Route Removed
-*   **The Issue:** LibreTranslate was considered as a fallback route, but it was intentionally removed from ErrorSweep after licensing/commercial-use review.
-*   **The Fix:** ErrorSweep now stays on commercial-safe self-hosted/BYO translation routes and preserves batch processing through the supported MT router. *(Verified fixed)*.
+*   **The Issue:** LibreTranslate was considered as a fallback route, but it was intentionally removed from CogniSweep after licensing/commercial-use review.
+*   **The Fix:** CogniSweep now stays on commercial-safe self-hosted/BYO translation routes and preserves batch processing through the supported MT router. *(Verified fixed)*.
 
 ### 16. CUDA Out-Of-Memory Risk in MT Servers
 *   **The Issue:** Transformer model caches could retain too many models at once.

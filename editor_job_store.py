@@ -1,4 +1,4 @@
-"""Tiny JSON-backed editor job store for ErrorSweep v41.
+"""Tiny JSON-backed editor job store for CogniSweep v41.
 
 This lets the Streamlit dashboard open CAT/subtitle editors in a separate
 browser tab using a job_id. Streamlit session_state is not reliable across

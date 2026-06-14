@@ -1,7 +1,7 @@
 """
-ErrorSweep IndicTrans2 Self-Hosted Translation Server.
+CogniSweep IndicTrans2 Self-Hosted Translation Server.
 
-This worker exposes the same /translate contract used by ErrorSweep's built-in
+This worker exposes the same /translate contract used by CogniSweep's built-in
 MT router. It is intended for Indian-language routes, while MADLAD-400 handles
 broad global coverage and OPUS-MT remains a lightweight fallback.
 """
@@ -240,7 +240,7 @@ def translate_texts(texts: List[str], src: str, tgt: str) -> Tuple[List[str], st
     return outputs, model_name
 
 
-app = FastAPI(title="ErrorSweep IndicTrans2 Server", version=APP_VERSION)
+app = FastAPI(title="CogniSweep IndicTrans2 Server", version=APP_VERSION)
 
 
 @app.on_event("startup")

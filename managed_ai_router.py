@@ -1,5 +1,5 @@
 """
-managed_ai_router.py — ErrorSweep Managed AI safe fallback router
+managed_ai_router.py — CogniSweep Managed AI safe fallback router
 
 What this file does:
 1. If the user added their own API key, use that key with the selected provider/base URL.

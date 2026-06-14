@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ErrorSweep CAT Editor - Two Column Single Page</title>
+  <title>CogniSweep CAT Editor - Two Column Single Page</title>
   <style>
     :root {
       --bg: #080a12;
@@ -587,7 +587,7 @@
         <div class="logo">ES</div>
         <div class="title-block">
           <div class="title">Web_2_2-24hr / Automated Project / Telugu Review</div>
-          <div class="subtitle">ErrorSweep CAT Editor · Pro Human Review · File: Translate word.docx</div>
+          <div class="subtitle">CogniSweep CAT Editor · Pro Human Review · File: Translate word.docx</div>
         </div>
       </div>
       <div class="header-actions">
@@ -2384,11 +2384,11 @@
         { name: 'xl/worksheets/sheet1.xml', content: xlsxSheetXml(dataRows) },
         {
           name: 'docProps/core.xml',
-          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>ErrorSweep</dc:creator><cp:lastModifiedBy>ErrorSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>CogniSweep</dc:creator><cp:lastModifiedBy>CogniSweep</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`,
         },
         {
           name: 'docProps/app.xml',
-          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ErrorSweep</Application></Properties>`,
+          content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>CogniSweep</Application></Properties>`,
         },
       ];
       return createZipBytes(files);
@@ -2398,7 +2398,7 @@
       const findings = rows.flatMap((row, idx) => translationQaFindingsForRow(row, idx));
       const confirmed = rows.filter(row => row.done).length;
       const reportRows = [
-        ['ErrorSweep Translation QA Report'],
+        ['CogniSweep Translation QA Report'],
         [],
         ['Rows', rows.length],
         ['Confirmed', `${confirmed} / ${rows.length}`],

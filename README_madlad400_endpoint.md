@@ -1,6 +1,6 @@
-# ErrorSweep + MADLAD-400 setup
+# CogniSweep + MADLAD-400 setup
 
-MADLAD-400 is the broad commercial-friendly global MT fallback for ErrorSweep.
+MADLAD-400 is the broad commercial-friendly global MT fallback for CogniSweep.
 Use it for global languages, and keep IndicTrans2 for Indian languages when that
 worker is available and gives better quality.
 
@@ -17,7 +17,7 @@ Then, start the worker pointing to your local disk:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements_madlad_mt_server.txt
 
-$env:MADLAD_MODEL_NAME="C:\ErrorSweep\Error-Sweep\models\madlad400-3b-mt"
+$env:MADLAD_MODEL_NAME=".\models\madlad400-3b-mt"
 $env:MADLAD_FORCE_CPU="false"
 .\.venv\Scripts\python.exe -m uvicorn madlad_mt_server:app --host 127.0.0.1 --port 8200
 ```
@@ -33,7 +33,7 @@ To download only MADLAD:
 powershell -ExecutionPolicy Bypass -File .\download_models.ps1 -SkipIndicTrans2
 ```
 
-## Connect ErrorSweep
+## Connect CogniSweep
 
 ```toml
 MADLAD_ENDPOINT = "http://127.0.0.1:8200/translate"

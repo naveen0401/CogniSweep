@@ -1,6 +1,6 @@
-# ErrorSweep SaaS Launch Runbook
+# CogniSweep SaaS Launch Runbook
 
-Use this runbook to move ErrorSweep from a production-ready code branch to a public SaaS launch. Public traffic should not be enabled until the strict smoke test reports zero blockers.
+Use this runbook to move CogniSweep from a production-ready code branch to a public SaaS launch. Public traffic should not be enabled until the strict smoke test reports zero blockers.
 
 ```powershell
 python deploy/release_check.py --strict
@@ -80,7 +80,7 @@ For repeatable setup, keep plaintext passwords in your shell environment and let
 ```powershell
 $env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
 $env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
-python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@your-domain.com --workspace-email workspace-owner@your-domain.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
 ```
 
 For a temporary launch credential pair, add `--generate-temporary-passwords` instead of the two `--*-password-env` options and store the printed passwords securely before closing the terminal.
@@ -214,7 +214,7 @@ Or write a managed OpenAI-compatible endpoint route:
 
 ```powershell
 $env:ERRORSWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
-python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.your-domain.com/v1 --managed-api-key-env ERRORSWEEP_MANAGED_AI_TOKEN --managed-model your-model
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.cognisweep.com/v1 --managed-api-key-env ERRORSWEEP_MANAGED_AI_TOKEN --managed-model your-model
 ```
 
 Required no-key MT values:
@@ -263,7 +263,7 @@ Write Razorpay settings into the ignored env file without putting keys on the co
 $env:RAZORPAY_KEY_ID="<razorpay-key-id>"
 $env:RAZORPAY_KEY_SECRET="<razorpay-key-secret>"
 $env:RAZORPAY_WEBHOOK_SECRET="<razorpay-webhook-secret>"
-python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.your-domain.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
+python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider razorpay --billing-webhook-url https://billing.cognisweep.com/webhooks/billing/razorpay --razorpay-key-id-env RAZORPAY_KEY_ID --razorpay-key-secret-env RAZORPAY_KEY_SECRET --razorpay-webhook-secret-env RAZORPAY_WEBHOOK_SECRET --pro-plan-id plan_pro --agency-plan-id plan_agency
 ```
 
 Or write Stripe settings:
@@ -271,7 +271,7 @@ Or write Stripe settings:
 ```powershell
 $env:STRIPE_SECRET_KEY="<stripe-secret-key>"
 $env:STRIPE_WEBHOOK_SECRET="<stripe-webhook-secret>"
-python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider stripe --billing-webhook-url https://billing.your-domain.com/webhooks/billing/stripe --stripe-secret-key-env STRIPE_SECRET_KEY --stripe-webhook-secret-env STRIPE_WEBHOOK_SECRET --pro-plan-id price_pro --agency-plan-id price_agency
+python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider stripe --billing-webhook-url https://billing.cognisweep.com/webhooks/billing/stripe --stripe-secret-key-env STRIPE_SECRET_KEY --stripe-webhook-secret-env STRIPE_WEBHOOK_SECRET --pro-plan-id price_pro --agency-plan-id price_agency
 ```
 
 Keep `ERRORSWEEP_WEBHOOK_APPLY_UPDATES=false` until provider test webhooks validate signature checks and event mapping. Turn it on only after successful staging verification.

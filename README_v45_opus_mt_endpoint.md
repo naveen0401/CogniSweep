@@ -1,4 +1,4 @@
-# ErrorSweep v45 — First Self-Hosted OPUS-MT Endpoint
+# CogniSweep v45 — First Self-Hosted OPUS-MT Endpoint
 
 This is the next practical step after v44.
 
@@ -69,7 +69,7 @@ python test_opus_mt_endpoint.py
 
 The first run downloads model files and may take time.
 
-## Connect to ErrorSweep v44
+## Connect to CogniSweep v44
 
 For local testing:
 

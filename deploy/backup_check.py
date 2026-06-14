@@ -1,4 +1,4 @@
-"""Validate ErrorSweep operational backup launch readiness.
+"""Validate CogniSweep operational backup launch readiness.
 
 Offline mode checks that the scheduled backup worker, supervisor wiring,
 templates, and redaction safeguards are present. Use --env-file to validate a
@@ -65,7 +65,7 @@ PLACEHOLDER_MARKERS = (
     "todo",
     "changeme",
     "change-me",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
 )
 SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|HASH|KEY|SERVICE_ROLE|CREDENTIAL)", re.IGNORECASE)
 
@@ -384,7 +384,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Backup Check",
+        "# CogniSweep Backup Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -402,7 +402,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep operational backup launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep operational backup launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline worker/template checks.")
     parser.add_argument("--run-smoke", action="store_true", help="Run a local backup worker dry-run smoke check.")
     parser.add_argument("--timeout", type=int, default=60, help="Smoke timeout in seconds.")

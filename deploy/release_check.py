@@ -1,4 +1,4 @@
-"""Offline release validation for the ErrorSweep deployment pack.
+"""Offline release validation for the CogniSweep deployment pack.
 
 This script intentionally avoids importing app.py so it can run in CI/CD before
 secrets are available. It checks repository packaging, compose wiring, ignored
@@ -866,7 +866,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Release Check",
+        "# CogniSweep Release Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -884,7 +884,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run offline ErrorSweep release checks.")
+    parser = argparse.ArgumentParser(description="Run offline CogniSweep release checks.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
     parser.add_argument("--run-smoke", action="store_true", help="Also run production_smoke_test.py --markdown.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")

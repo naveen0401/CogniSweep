@@ -1,4 +1,4 @@
-"""Run a repeatable ErrorSweep launch rehearsal.
+"""Run a repeatable CogniSweep launch rehearsal.
 
 This script combines the offline release guard, production env validator,
 runtime smoke test, and optional public/worker health probes into one go/no-go
@@ -29,7 +29,7 @@ PLACEHOLDER_MARKERS = (
     "placeholder",
     "changeme",
     "change-me",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
     "demo workspace",
 )
 SENSITIVE_MARKERS = ("SECRET", "TOKEN", "PASSWORD", "HASH", "KEY", "SERVICE_ROLE")
@@ -314,7 +314,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Launch Rehearsal",
+        "# CogniSweep Launch Rehearsal",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -332,7 +332,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the ErrorSweep launch rehearsal.")
+    parser = argparse.ArgumentParser(description="Run the CogniSweep launch rehearsal.")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_PATH), help="Production env file to rehearse.")
     parser.add_argument("--base-url", default="", help="Override ERRORSWEEP_PUBLIC_BASE_URL for route probes.")
     parser.add_argument("--include-os-env", action="store_true", help="Merge host environment variables into the env file values.")

@@ -1,6 +1,6 @@
-# ErrorSweep SaaS
+# CogniSweep SaaS
 
-ErrorSweep runs from the repository root:
+CogniSweep runs from the repository root:
 
 - Streamlit entrypoint: `app.py`
 - Production dependency file: `requirements.txt`

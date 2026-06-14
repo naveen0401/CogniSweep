@@ -1,12 +1,12 @@
 
 """
-ErrorSweep QA Engine v2
+CogniSweep QA Engine v2
 -----------------------
 Modular, source-driven offline QA rule engine.
 
 This module is designed to sit beside the Streamlit app. It does not replace
 file extraction/output. It only receives segment dictionaries and returns
-report rows compatible with the existing ErrorSweep report schema.
+report rows compatible with the existing CogniSweep report schema.
 
 Segment contract:
 {
@@ -522,7 +522,7 @@ def rule_zwnj_integrity(segment, rules, target_language, domain):
                 "Medium",
                 "Zero Width Non-Joiner",
                 "Remove the ZWNJ unless the client language rules require it.",
-                "Target contains ZWNJ in a script where ErrorSweep does not normally expect it.",
+                "Target contains ZWNJ in a script where CogniSweep does not normally expect it.",
                 rule_source="Global Unicode rules",
                 priority=62,
             ))
@@ -2488,7 +2488,7 @@ def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, Any]
     - forbidden: X -> preferred: Y
 
     This lets companies upload their own spelling/grammar/style/terminology
-    dictionaries and lets ErrorSweep work without API keys.
+    dictionaries and lets CogniSweep work without API keys.
     """
     corrections: List[Dict[str, str]] = []
 

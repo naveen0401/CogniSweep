@@ -22,7 +22,7 @@ def source(path: Path) -> str:
 def test_launch_rehearsal_script_contract():
     text = source(REHEARSAL)
 
-    assert "Run a repeatable ErrorSweep launch rehearsal" in text
+    assert "Run a repeatable CogniSweep launch rehearsal" in text
     assert "def run_public_route_probes" in text
     assert "billing_success" in text
     assert "billing_cancel" in text

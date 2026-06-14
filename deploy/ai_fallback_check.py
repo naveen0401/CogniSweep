@@ -1,4 +1,4 @@
-"""Validate ErrorSweep production AI fallback launch readiness.
+"""Validate CogniSweep production AI fallback launch readiness.
 
 Offline mode checks router code, templates, and release wiring. Use --env-file
 to validate production settings, --probe-models for OpenAI-compatible /models
@@ -497,7 +497,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep AI Fallback Check",
+        "# CogniSweep AI Fallback Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -585,7 +585,7 @@ def write_ai_env(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep production AI fallback launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep production AI fallback launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
     parser.add_argument("--write-ai-env", action="store_true", help="Write production AI fallback settings into the env file from environment variables.")
     parser.add_argument("--ai-route", choices=["openai", "managed"], default="openai", help="AI fallback route to write with --write-ai-env.")

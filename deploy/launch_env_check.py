@@ -1,4 +1,4 @@
-"""Validate ErrorSweep production environment files without exposing secrets.
+"""Validate CogniSweep production environment files without exposing secrets.
 
 This script is intentionally standalone. It does not import app.py and it does
 not contact providers. Use it before the runtime smoke test to catch missing
@@ -34,7 +34,7 @@ PLACEHOLDER_MARKERS = (
     "change-me",
     "todo",
     "placeholder",
-    "errorsweep.local",
+    "errorsweep.local", "cognisweep.local",
     "demo workspace",
 )
 
@@ -543,7 +543,7 @@ def summarize(results: Sequence[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: Sequence[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Launch Environment Check",
+        "# CogniSweep Launch Environment Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -643,7 +643,7 @@ def write_billing_env(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep production env configuration without printing secrets.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep production env configuration without printing secrets.")
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_PATH), help="Path to the production env file to validate.")
     parser.add_argument("--include-os-env", action="store_true", help="Merge existing OS environment values for keys not present in the file.")
     parser.add_argument("--write-billing-env", action="store_true", help="Write billing provider credentials and webhook settings into the env file from environment variables.")

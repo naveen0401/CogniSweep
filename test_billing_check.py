@@ -21,7 +21,7 @@ def test_billing_check_script_contract():
     text = source(CHECK)
 
     for token in [
-        "Validate ErrorSweep billing and webhook launch readiness",
+        "Validate CogniSweep billing and webhook launch readiness",
         "def validate_receiver_contract",
         "def validate_env_config",
         "def run_local_smoke",

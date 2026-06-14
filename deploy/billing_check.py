@@ -1,4 +1,4 @@
-"""Validate ErrorSweep billing and webhook launch readiness.
+"""Validate CogniSweep billing and webhook launch readiness.
 
 Offline mode checks that billing normalization, signature verification,
 standalone webhook receiver wiring, templates, and compose deployment are
@@ -490,7 +490,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Billing Check",
+        "# CogniSweep Billing Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -508,7 +508,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep billing and webhook launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep billing and webhook launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline receiver/template checks.")
     parser.add_argument("--run-smoke", action="store_true", help="Run a local billing webhook receiver health smoke check.")
     parser.add_argument("--probe-health", action="store_true", help="Probe the configured public billing webhook receiver /health endpoint.")

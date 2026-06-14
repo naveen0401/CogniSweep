@@ -21,7 +21,7 @@ def test_email_check_script_contract():
     text = source(CHECK)
 
     for token in [
-        "Validate ErrorSweep transactional email launch readiness",
+        "Validate CogniSweep transactional email launch readiness",
         "def validate_worker_contract",
         "def validate_env_config",
         "def run_local_smoke",

@@ -1,5 +1,5 @@
 """
-ErrorSweep MADLAD-400 Self-Hosted Translation Server.
+CogniSweep MADLAD-400 Self-Hosted Translation Server.
 
 Commercial-safe broad-coverage MT worker using google/madlad400-3b-mt
 (Apache-2.0). This server exposes the same /translate contract used by the
@@ -198,7 +198,7 @@ def translate_texts(texts: List[str], target_code: str) -> List[str]:
     return outputs
 
 
-app = FastAPI(title="ErrorSweep MADLAD-400 Server", version=APP_VERSION)
+app = FastAPI(title="CogniSweep MADLAD-400 Server", version=APP_VERSION)
 
 
 @app.get("/health")

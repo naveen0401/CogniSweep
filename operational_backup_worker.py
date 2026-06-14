@@ -1,4 +1,4 @@
-"""Scheduled operational backup worker for ErrorSweep.
+"""Scheduled operational backup worker for CogniSweep.
 
 This worker creates redacted JSON snapshots from the production persistence
 layer. It can run once for a smoke test or loop on a schedule in production.
@@ -196,7 +196,7 @@ def build_backup_payload(collections: List[str], limit: int) -> Dict[str, Any]:
         "schema_version": BACKUP_SCHEMA_VERSION,
         "generated_at": _now_iso(),
         "scope": "All workspaces",
-        "requested_by": "operational-backup-worker@errorsweep.local",
+        "requested_by": "operational-backup-worker@cognisweep.local",
         "requested_role": "System",
         "redaction_policy": {
             "auth_tokens": "excluded",
@@ -239,7 +239,7 @@ def store_backup_manifest(path: Path, payload: Dict[str, Any], storage_result: D
     record = {
         "id": f"backup-{_safe_text(payload.get('snapshot_sha256'))[:24]}",
         "workspace": "Platform",
-        "user_email": "operational-backup-worker@errorsweep.local",
+        "user_email": "operational-backup-worker@cognisweep.local",
         "file_name": path.name,
         "purpose": "operational_backup",
         "mime_type": "application/json",
@@ -257,7 +257,7 @@ def store_backup_manifest(path: Path, payload: Dict[str, Any], storage_result: D
     return save_saas_record(
         "files",
         record,
-        user={"email": "operational-backup-worker@errorsweep.local", "workspace": "Platform"},
+        user={"email": "operational-backup-worker@cognisweep.local", "workspace": "Platform"},
     )
 
 
@@ -274,11 +274,11 @@ def save_audit_event(payload: Dict[str, Any], manifest: Dict[str, Any], removed:
             "id": uuid.uuid4().hex,
             "workspace": "Platform",
             "time": _now_iso(),
-            "actor": "operational-backup-worker@errorsweep.local",
+            "actor": "operational-backup-worker@cognisweep.local",
             "action": "Scheduled operational backup created",
             "details": details,
         },
-        user={"email": "operational-backup-worker@errorsweep.local", "workspace": "Platform"},
+        user={"email": "operational-backup-worker@cognisweep.local", "workspace": "Platform"},
     )
 
 
@@ -352,7 +352,7 @@ def run_backup(collections: List[str], limit: int, retention_days: int, dry_run:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create scheduled ErrorSweep operational backups.")
+    parser = argparse.ArgumentParser(description="Create scheduled CogniSweep operational backups.")
     parser.add_argument("--once", action="store_true", help="Run one backup pass and exit.")
     parser.add_argument("--dry-run", action="store_true", help="Build the backup summary without writing files or manifests.")
     parser.add_argument("--collections", default=_env("ERRORSWEEP_BACKUP_COLLECTIONS"), help="Comma-separated collection list.")
@@ -365,7 +365,7 @@ def main() -> int:
     run_once = args.once or _bool_env("ERRORSWEEP_BACKUP_WORKER_ONCE", False)
     collections = configured_collections(args.collections)
     storage_health = object_storage_status() if object_storage_status is not None else {"provider": "local", "mode": "local_fallback"}
-    LOGGER.info("Starting ErrorSweep backup worker collections=%s storage=%s", len(collections), storage_health)
+    LOGGER.info("Starting CogniSweep backup worker collections=%s storage=%s", len(collections), storage_health)
     while True:
         summary = run_backup(collections, args.limit, args.retention_days, dry_run=args.dry_run)
         LOGGER.info("Operational backup summary: %s", json.dumps(summary, sort_keys=True, default=_safe_text))

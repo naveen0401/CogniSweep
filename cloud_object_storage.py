@@ -1,4 +1,4 @@
-"""Cloud object storage adapter for ErrorSweep.
+"""Cloud object storage adapter for CogniSweep.
 
 The app can run fully in local mode, but production deployments should set one
 of these providers so uploaded files and media previews survive app restarts and

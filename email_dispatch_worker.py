@@ -1,4 +1,4 @@
-"""ErrorSweep transactional email dispatch worker.
+"""CogniSweep transactional email dispatch worker.
 
 Run this beside the Streamlit app in production so queued notification records
 are delivered automatically through Resend, SendGrid, or SMTP.
@@ -77,7 +77,7 @@ def email_from_address() -> str:
         _env("ERRORSWEEP_EMAIL_FROM")
         or _env("SENDGRID_FROM_EMAIL")
         or _env("RESEND_FROM_EMAIL")
-        or "no-reply@errorsweep.local"
+        or "no-reply@cognisweep.local"
     )
 
 
@@ -110,7 +110,7 @@ def notification_email_payload(record: Dict[str, Any]) -> Dict[str, str]:
         event_type=_safe_text(record.get("event_type")),
         metadata=_metadata(record),
         app_base_url=_env("ERRORSWEEP_PUBLIC_BASE_URL"),
-        brand_name="ErrorSweep",
+        brand_name="CogniSweep",
     )
 
 
@@ -247,7 +247,7 @@ def persist_notification(record: Dict[str, Any]) -> Dict[str, Any]:
     return save_saas_record(
         "notifications",
         record,
-        user={"email": "email-dispatch-worker@errorsweep.local", "workspace": workspace},
+        user={"email": "email-dispatch-worker@cognisweep.local", "workspace": workspace},
     )
 
 
@@ -272,7 +272,7 @@ def dispatch_pending(limit: int = DEFAULT_BATCH_LIMIT, dry_run: bool = False) ->
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Dispatch queued ErrorSweep transactional emails.")
+    parser = argparse.ArgumentParser(description="Dispatch queued CogniSweep transactional emails.")
     parser.add_argument("--once", action="store_true", help="Run one dispatch pass and exit.")
     parser.add_argument("--dry-run", action="store_true", help="Render/check pending emails without sending or persisting status.")
     parser.add_argument("--limit", type=int, default=_int_env("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", DEFAULT_BATCH_LIMIT))
@@ -281,7 +281,7 @@ def main() -> int:
 
     logging.basicConfig(level=_env("ERRORSWEEP_EMAIL_WORKER_LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
     run_once = args.once or _bool_env("ERRORSWEEP_EMAIL_WORKER_ONCE", False)
-    LOGGER.info("Starting ErrorSweep email worker provider=%s dry_run=%s", email_provider_label(), args.dry_run)
+    LOGGER.info("Starting CogniSweep email worker provider=%s dry_run=%s", email_provider_label(), args.dry_run)
     while True:
         summary = dispatch_pending(limit=args.limit, dry_run=args.dry_run)
         LOGGER.info("Email dispatch summary: %s", json.dumps(summary, sort_keys=True))

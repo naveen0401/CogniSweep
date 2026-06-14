@@ -1,4 +1,4 @@
-"""Transactional email templates for ErrorSweep.
+"""Transactional email templates for CogniSweep.
 
 The app stores notification records in the outbox, then renders provider-ready
 plain text and HTML at dispatch time. Templates stay deterministic and local so
@@ -35,7 +35,7 @@ TEMPLATE_META = {
     "auth.email_verification": {
         "key": "verification",
         "eyebrow": "Account security",
-        "headline": "Verify your ErrorSweep email",
+        "headline": "Verify your CogniSweep email",
         "preheader": "Confirm your email address to secure workspace access.",
         "cta_label": "Verify email",
         "url_keys": ("verify_url", "url", "action_url"),
@@ -43,7 +43,7 @@ TEMPLATE_META = {
     "auth.password_reset": {
         "key": "password_reset",
         "eyebrow": "Account recovery",
-        "headline": "Reset your ErrorSweep password",
+        "headline": "Reset your CogniSweep password",
         "preheader": "Use the secure reset link to choose a new password.",
         "cta_label": "Reset password",
         "url_keys": ("reset_url", "url", "action_url"),
@@ -51,7 +51,7 @@ TEMPLATE_META = {
     "signup.welcome": {
         "key": "welcome",
         "eyebrow": "Workspace ready",
-        "headline": "Welcome to ErrorSweep",
+        "headline": "Welcome to CogniSweep",
         "preheader": "Your trial workspace is ready for localization QA.",
         "cta_label": "Open workspace",
         "url_keys": ("verify_url", "workspace_url", "url", "action_url"),
@@ -60,7 +60,7 @@ TEMPLATE_META = {
         "key": "job_assigned",
         "eyebrow": "New assignment",
         "headline": "A job was assigned to you",
-        "preheader": "Review the task details and attached files in ErrorSweep.",
+        "preheader": "Review the task details and attached files in CogniSweep.",
         "cta_label": "Open jobs",
         "url_keys": ("job_url", "workspace_url", "url", "action_url"),
     },
@@ -84,14 +84,14 @@ TEMPLATE_META = {
         "key": "billing_checkout",
         "eyebrow": "Billing setup",
         "headline": "Your monthly mandate setup has started",
-        "preheader": "Complete checkout to activate the selected ErrorSweep plan.",
+        "preheader": "Complete checkout to activate the selected CogniSweep plan.",
         "cta_label": "Open checkout",
         "url_keys": ("checkout_url", "payment_url", "url", "action_url"),
     },
     "billing.subscription_updated": {
         "key": "subscription_updated",
         "eyebrow": "Subscription updated",
-        "headline": "Your ErrorSweep plan changed",
+        "headline": "Your CogniSweep plan changed",
         "preheader": "The selected workspace subscription has been updated.",
         "cta_label": "View billing",
         "url_keys": ("billing_url", "workspace_url", "url", "action_url"),
@@ -116,7 +116,7 @@ TEMPLATE_META = {
         "key": "payment_recorded",
         "eyebrow": "Payment recorded",
         "headline": "A payment record was added",
-        "preheader": "The billing record is now available in ErrorSweep.",
+        "preheader": "The billing record is now available in CogniSweep.",
         "cta_label": "View payments",
         "url_keys": ("billing_url", "payment_url", "workspace_url", "url", "action_url"),
     },
@@ -124,7 +124,7 @@ TEMPLATE_META = {
         "key": "support_opened",
         "eyebrow": "Support",
         "headline": "Your support ticket is open",
-        "preheader": "The ErrorSweep support queue has received your ticket.",
+        "preheader": "The CogniSweep support queue has received your ticket.",
         "cta_label": "Open support",
         "url_keys": ("support_url", "workspace_url", "url", "action_url"),
     },
@@ -139,25 +139,25 @@ TEMPLATE_META = {
     "status.incident_created": {
         "key": "status_notice",
         "eyebrow": "Service status",
-        "headline": "ErrorSweep status notice",
+        "headline": "CogniSweep status notice",
         "preheader": "A platform status or maintenance notice was published.",
-        "cta_label": "Open ErrorSweep",
+        "cta_label": "Open CogniSweep",
         "url_keys": ("status_url", "workspace_url", "url", "action_url"),
     },
     "privacy_request_opened": {
         "key": "privacy_request",
         "eyebrow": "Privacy workflow",
         "headline": "Privacy request opened",
-        "preheader": "Track the due date and owner notes in ErrorSweep.",
+        "preheader": "Track the due date and owner notes in CogniSweep.",
         "cta_label": "Open privacy tracker",
         "url_keys": ("privacy_url", "workspace_url", "url", "action_url"),
     },
     "email.deliverability_test": {
         "key": "deliverability_test",
         "eyebrow": "Deliverability test",
-        "headline": "ErrorSweep email delivery test",
+        "headline": "CogniSweep email delivery test",
         "preheader": "This confirms provider, sender, HTML template, and plain-text fallback delivery.",
-        "cta_label": "Open ErrorSweep",
+        "cta_label": "Open CogniSweep",
         "url_keys": ("workspace_url", "url", "action_url"),
     },
 }
@@ -188,9 +188,9 @@ def _template_for_event(event_type: str) -> Dict[str, Any]:
     return {
         "key": "generic",
         "eyebrow": "Notification",
-        "headline": "ErrorSweep notification",
+        "headline": "CogniSweep notification",
         "preheader": "A workspace notification is ready for review.",
-        "cta_label": "Open ErrorSweep",
+        "cta_label": "Open CogniSweep",
         "url_keys": ("workspace_url", "url", "action_url"),
     }
 
@@ -204,12 +204,12 @@ def _cta(meta: Dict[str, Any], template: Dict[str, Any], body: str, app_base_url
     for key in template.get("url_keys", ()):
         url = _safe_text(meta.get(key))
         if url:
-            return _safe_text(template.get("cta_label")) or "Open ErrorSweep", url
+            return _safe_text(template.get("cta_label")) or "Open CogniSweep", url
     body_url = _first_url_from_text(body)
     if body_url:
-        return _safe_text(template.get("cta_label")) or "Open ErrorSweep", body_url
+        return _safe_text(template.get("cta_label")) or "Open CogniSweep", body_url
     if app_base_url:
-        return "Open ErrorSweep", app_base_url
+        return "Open CogniSweep", app_base_url
     return "", ""
 
 
@@ -241,7 +241,7 @@ def render_transactional_email(
     event_type: str,
     metadata: Any = None,
     app_base_url: str = "",
-    brand_name: str = "ErrorSweep",
+    brand_name: str = "CogniSweep",
 ) -> Dict[str, str]:
     meta = _metadata(metadata)
     template = _template_for_event(event_type)

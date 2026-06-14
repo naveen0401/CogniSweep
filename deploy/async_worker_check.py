@@ -1,4 +1,4 @@
-"""Validate ErrorSweep async worker launch readiness.
+"""Validate CogniSweep async worker launch readiness.
 
 Offline mode checks that the queue adapter, HTTP receiver, QA/Pro processor,
 supervisor, compose wiring, templates, and dependencies are present. Use
@@ -471,7 +471,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# ErrorSweep Async Worker Check",
+        "# CogniSweep Async Worker Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -489,7 +489,7 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate ErrorSweep async worker launch readiness.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep async worker launch readiness.")
     parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline adapter/template checks.")
     parser.add_argument("--run-smoke", action="store_true", help="Run local receiver, processor, and supervisor smoke checks.")
     parser.add_argument("--probe-health", action="store_true", help="Probe the configured HTTP async receiver /health endpoint.")
