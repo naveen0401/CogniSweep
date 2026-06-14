@@ -23,12 +23,15 @@ Run the offline release check before cutting or deploying a launch branch:
 python deploy/release_check.py --strict
 ```
 
+Pull requests and pushes to `main`, `master`, and `release/**` also run the GitHub Actions release gate in `.github/workflows/release-gate.yml`. That workflow installs production dependencies, compiles launch entrypoints, runs launch-safe regression tests, runs `deploy/release_check.py --strict`, and exercises the launch rehearsal runner without external probes.
+
 This validates:
 
 - Root `app.py` and `requirements.txt` are present.
 - Docker runs `streamlit run app.py`.
 - Required production packages are listed in `requirements.txt`.
 - Deployment pack files and compose services are present.
+- The GitHub Actions release gate is present and launch-safe.
 - Private env and secret files are ignored.
 - Production entrypoints compile.
 

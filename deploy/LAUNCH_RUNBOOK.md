@@ -7,6 +7,7 @@ python deploy/release_check.py --strict
 python deploy/auth_session_check.py --env-file deploy/.env.production --strict
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 python production_smoke_test.py --markdown --strict --probe-endpoints
+python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict
 ```
 
 The local template intentionally fails several launch gates until real production services, secrets, legal approvals, and edge controls are configured.
@@ -16,8 +17,10 @@ The local template intentionally fails several launch gates until real productio
 Launch is allowed only when all of these are true:
 
 - `deploy/release_check.py --strict` exits successfully.
+- The GitHub Actions release gate in `.github/workflows/release-gate.yml` passes on the release branch or pull request.
 - `deploy/launch_env_check.py --env-file deploy/.env.production --strict` exits successfully without exposing secrets.
 - `production_smoke_test.py --markdown --strict --probe-endpoints` exits successfully in the production environment.
+- `deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict` exits successfully from the release host or deployed app container.
 - All required public URLs use HTTPS.
 - Billing, email, async workers, backups, object storage, and Supabase persistence are configured with production credentials.
 - Legal documents and processor approvals are reviewed and versioned.
@@ -32,6 +35,10 @@ python deploy/release_check.py --strict
 python deploy/ai_fallback_check.py --strict
 python deploy/auth_session_check.py --strict
 python deploy/async_worker_check.py --strict
+python deploy/backup_check.py --strict
+python deploy/billing_check.py --strict
+python deploy/email_check.py --strict
+python deploy/legal_check.py --strict
 python deploy/mt_endpoint_check.py --strict
 python deploy/object_storage_check.py --strict
 python deploy/supabase_schema_check.py --strict
@@ -39,7 +46,7 @@ python deploy/supabase_schema_check.py --strict
 
 Expected result: no blockers.
 
-This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, AI fallback readiness, auth/session readiness, async worker readiness, built-in MT endpoint contracts, object-storage adapter readiness, Supabase schema drift, and Python syntax for production entry points.
+This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, GitHub Actions release gate, AI fallback readiness, auth/session readiness, async worker readiness, backup worker readiness, billing/webhook readiness, transactional email readiness, legal/compliance route readiness, built-in MT endpoint contracts, object-storage adapter readiness, Supabase schema drift, and Python syntax for production entry points. The GitHub workflow also installs production dependencies, runs launch-safe regression tests, runs `deploy/release_check.py --strict`, and exercises the launch rehearsal runner without external probes.
 
 ## Phase 1: Production Environment File
 
@@ -269,6 +276,15 @@ python deploy/launch_env_check.py --env-file deploy/.env.production --write-bill
 
 Keep `ERRORSWEEP_WEBHOOK_APPLY_UPDATES=false` until provider test webhooks validate signature checks and event mapping. Turn it on only after successful staging verification.
 
+Useful checks:
+
+```powershell
+python deploy/billing_check.py --strict
+python deploy/billing_check.py --env-file deploy/.env.production --strict
+python deploy/billing_check.py --run-smoke --strict
+python deploy/billing_check.py --env-file deploy/.env.production --probe-health --strict
+```
+
 ## Phase 7: Transactional Email
 
 Configure one production email provider and verify the sender domain.
@@ -288,6 +304,9 @@ Provider-specific keys:
 Required validation:
 
 ```powershell
+python deploy/email_check.py --strict
+python deploy/email_check.py --env-file deploy/.env.production --strict
+python deploy/email_check.py --run-smoke --strict
 python email_dispatch_worker.py --dry-run
 python production_smoke_test.py --markdown
 ```
@@ -307,6 +326,14 @@ Required product checks:
 - Terms, Privacy, Cookie Notice, Security, NDA/confidentiality, and DPA routes are current.
 - Active external processors are approved in the subprocessor register.
 - Customer notices match the live data-routing setup.
+
+Useful checks:
+
+```powershell
+python deploy/legal_check.py --strict
+python deploy/legal_check.py --env-file deploy/.env.production --strict
+python deploy/legal_check.py --env-file deploy/.env.production --probe-public --strict
+```
 
 ## Phase 9: CDN, WAF, And Public Routes
 
@@ -336,7 +363,10 @@ Required env keys:
 Useful checks:
 
 ```powershell
-python operational_backup_worker.py --dry-run
+python deploy/backup_check.py --strict
+python deploy/backup_check.py --env-file deploy/.env.production --strict
+python deploy/backup_check.py --run-smoke --strict
+python operational_backup_worker.py --once --dry-run
 python production_smoke_test.py --markdown
 ```
 
@@ -366,6 +396,7 @@ Run strict smoke tests from the deployed environment.
 ```powershell
 python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 python deploy/auth_session_check.py --env-file deploy/.env.production --probe-public-url --strict
+python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict
 docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-app python production_smoke_test.py --markdown --strict --probe-endpoints
 docker compose --env-file deploy/.env.production -f docker-compose.production.yml exec errorsweep-worker-supervisor python worker_supervisor.py --status
 ```

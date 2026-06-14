@@ -29,11 +29,17 @@ REQUIRED_DEPLOYMENT_FILES = [
     "deploy/ai_fallback_check.py",
     "deploy/auth_session_check.py",
     "deploy/async_worker_check.py",
+    "deploy/backup_check.py",
+    "deploy/billing_check.py",
+    "deploy/email_check.py",
+    "deploy/legal_check.py",
     "deploy/launch_env_check.py",
     "deploy/mt_endpoint_check.py",
     "deploy/object_storage_check.py",
     "deploy/supabase_schema_check.py",
     "deploy/release_check.py",
+    "deploy/launch_rehearsal.py",
+    ".github/workflows/release-gate.yml",
 ]
 
 REQUIRED_ROOT_FILES = [
@@ -93,6 +99,7 @@ REQUIRED_COMPOSE_SERVICES = [
 
 REQUIRED_ENV_KEYS = [
     "ERRORSWEEP_ENV",
+    "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
     "ERRORSWEEP_OWNER_USERNAME",
@@ -116,10 +123,22 @@ REQUIRED_ENV_KEYS = [
     "ERRORSWEEP_ASYNC_WORKER_TOKEN",
     "ERRORSWEEP_WORKER_SUPERVISOR_ENABLED",
     "ERRORSWEEP_BILLING_PROVIDER",
+    "ERRORSWEEP_BILLING_WEBHOOK_SECRET",
     "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL",
+    "ERRORSWEEP_WEBHOOK_APPLY_UPDATES",
+    "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT",
     "ERRORSWEEP_EMAIL_PROVIDER",
+    "ERRORSWEEP_EMAIL_FROM",
+    "ERRORSWEEP_EMAIL_HTML_ENABLED",
     "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED",
+    "ERRORSWEEP_EMAIL_WORKER_INTERVAL_SECONDS",
+    "ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT",
+    "ERRORSWEEP_BACKUP_PROVIDER",
     "ERRORSWEEP_BACKUP_WORKER_ENABLED",
+    "ERRORSWEEP_BACKUP_INTERVAL_HOURS",
+    "ERRORSWEEP_BACKUP_RETENTION_DAYS",
+    "ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED",
+    "ERRORSWEEP_BACKUP_OUTPUT_DIR",
     "ERRORSWEEP_WAF_PROVIDER",
     "INDICTRANS2_ENDPOINT",
     "MADLAD_ENDPOINT",
@@ -129,6 +148,7 @@ REQUIRED_ENV_KEYS = [
 
 REQUIRED_STREAMLIT_SECRET_KEYS = [
     "ERRORSWEEP_ENV",
+    "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
     "ERRORSWEEP_OWNER_USERNAME",
@@ -146,12 +166,16 @@ REQUIRED_STREAMLIT_SECRET_KEYS = [
     "ERRORSWEEP_ASYNC_WORKER_URL",
     "ERRORSWEEP_ASYNC_WORKER_TOKEN",
     "ERRORSWEEP_BILLING_PROVIDER",
+    "ERRORSWEEP_BILLING_WEBHOOK_SECRET",
     "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL",
+    "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT",
     "ERRORSWEEP_EMAIL_PROVIDER",
     "ERRORSWEEP_EMAIL_FROM",
     "ERRORSWEEP_LEGAL_REVIEWED",
     "ERRORSWEEP_WAF_PROVIDER",
+    "ERRORSWEEP_BACKUP_PROVIDER",
     "ERRORSWEEP_BACKUP_WORKER_ENABLED",
+    "ERRORSWEEP_BACKUP_RETENTION_DAYS",
     "INDICTRANS2_ENDPOINT",
     "MADLAD_ENDPOINT",
     "OPUS_MT_ENDPOINT",
@@ -162,10 +186,15 @@ PYTHON_ENTRYPOINTS = [
     "deploy/ai_fallback_check.py",
     "deploy/auth_session_check.py",
     "deploy/async_worker_check.py",
+    "deploy/backup_check.py",
+    "deploy/billing_check.py",
+    "deploy/email_check.py",
+    "deploy/legal_check.py",
     "deploy/launch_env_check.py",
     "deploy/mt_endpoint_check.py",
     "deploy/object_storage_check.py",
     "deploy/supabase_schema_check.py",
+    "deploy/launch_rehearsal.py",
     "production_smoke_test.py",
     "async_task_worker.py",
     "async_workflow_processor.py",
@@ -374,6 +403,122 @@ def check_async_worker_contract(results: List[Dict[str, str]]) -> None:
     )
 
 
+def check_backup_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/backup_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Backup", "Backup launch check", "Warn", safe_text(exc)[:220], "Run deploy/backup_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Backup",
+        "Backup launch check",
+        status,
+        evidence,
+        "Keep operational backup worker, redaction, manifest/audit records, object-storage upload, supervisor wiring, and backup env templates deploy-ready.",
+    )
+
+
+def check_billing_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/billing_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Billing", "Billing launch check", "Warn", safe_text(exc)[:220], "Run deploy/billing_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Billing",
+        "Billing launch check",
+        status,
+        evidence,
+        "Keep billing provider env templates, provider signature checks, webhook receiver service, checkout settings, compose wiring, and receiver health smoke deploy-ready.",
+    )
+
+
+def check_email_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/email_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Email", "Email launch check", "Warn", safe_text(exc)[:220], "Run deploy/email_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Email",
+        "Email launch check",
+        status,
+        evidence,
+        "Keep provider env templates, transactional templates, Resend/SendGrid/SMTP dispatch worker, supervisor wiring, and dry-run smoke deploy-ready.",
+    )
+
+
+def check_legal_contract(results: List[Dict[str, str]]) -> None:
+    command = [sys.executable, "deploy/legal_check.py", "--json"]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        add(results, "Legal", "Legal launch check", "Warn", safe_text(exc)[:220], "Run deploy/legal_check.py manually.")
+        return
+    output = completed.stdout or completed.stderr or ""
+    try:
+        payload = json.loads(output)
+        summary = payload.get("summary") or {}
+        counts = summary.get("counts") or {}
+        blocker_count = int(counts.get("Blocker") or 0)
+        warn_count = int(counts.get("Warn") or 0)
+        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
+        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
+    except Exception:
+        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
+        status = "Pass" if completed.returncode == 0 else "Blocker"
+    add(
+        results,
+        "Legal",
+        "Legal launch check",
+        status,
+        evidence,
+        "Keep public legal routes, policy version controls, consent capture, privacy requests, subprocessor register, schema, and legal/WAF env keys deploy-ready.",
+    )
+
+
 def check_ai_fallback_contract(results: List[Dict[str, str]]) -> None:
     command = [sys.executable, "deploy/ai_fallback_check.py", "--json"]
     try:
@@ -469,7 +614,43 @@ def check_required_files(results: List[Dict[str, str]]) -> None:
         "Deployment pack files",
         "Pass" if not missing else "Blocker",
         "all present" if not missing else ", ".join(missing),
-        "Keep Dockerfile, compose, Supabase schema, env example, deployment README, launch runbook, AI fallback check, auth/session check, async worker check, launch env check, MT endpoint check, object storage check, Supabase schema check, and release_check.py in the release branch.",
+        "Keep Dockerfile, compose, Supabase schema, env example, deployment README, launch runbook, launch checkers, release guard, and launch rehearsal script in the release branch.",
+    )
+
+
+def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
+    workflow = read_text(".github/workflows/release-gate.yml")
+    required = [
+        "workflow_dispatch:",
+        "actions/setup-python@v5",
+        "python-version: \"3.11\"",
+        "python -m pip install -r requirements.txt",
+        "deploy/backup_check.py",
+        "deploy/billing_check.py",
+        "deploy/email_check.py",
+        "deploy/legal_check.py",
+        "python test_backup_check.py",
+        "python test_billing_check.py",
+        "python test_email_check.py",
+        "python test_legal_check.py",
+        "python test_launch_rehearsal.py",
+        "python test_launch_public_lock.py",
+        "python test_release_gate_workflow.py",
+        "python deploy/release_check.py --strict",
+        "python deploy/launch_rehearsal.py",
+        "--base-url http://localhost:8501",
+        "--skip-release-check",
+        "--skip-launch-env-check",
+        "--skip-smoke-test",
+    ]
+    missing = missing_items(required, workflow)
+    add(
+        results,
+        "Release",
+        "GitHub Actions release gate",
+        "Pass" if workflow and not missing else "Blocker",
+        "launch-safe CI workflow present" if workflow and not missing else ", ".join(missing) or "missing workflow",
+        "Keep .github/workflows/release-gate.yml running production dependency install, launch-safe tests, release_check.py --strict, and rehearsal smoke without external probes.",
     )
 
 
@@ -644,11 +825,16 @@ def collect_results(run_smoke: bool = False) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     check_launch_branch_files(results)
     check_required_files(results)
+    check_ci_release_gate(results)
     check_secret_ignore_rules(results)
     check_requirements(results)
     check_ai_fallback_contract(results)
     check_auth_session_contract(results)
     check_async_worker_contract(results)
+    check_backup_contract(results)
+    check_billing_contract(results)
+    check_email_contract(results)
+    check_legal_contract(results)
     check_mt_endpoint_contract(results)
     check_supabase_schema(results)
     check_supabase_schema_contract(results)

@@ -11629,6 +11629,8 @@ def deployment_pack_status() -> Dict[str, Any]:
         "deploy/object_storage_check.py",
         "deploy/supabase_schema_check.py",
         "deploy/release_check.py",
+        "deploy/launch_rehearsal.py",
+        ".github/workflows/release-gate.yml",
     ]
     required_services = [
         "errorsweep-app:",
@@ -11675,6 +11677,7 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
         })
 
     add("Core", "ERRORSWEEP_ENV=production", is_production_mode(), "Public launch", "Enables production safety checks.")
+    add("Core", "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true", public_launch_preflight_enforced() or not is_production_mode(), "Public launch", "Locks public signup while launch preflight blockers remain.")
     add("Core", "ERRORSWEEP_SESSION_SECRET", launch_secret_is_ready("ERRORSWEEP_SESSION_SECRET", min_length=32), "Public launch", "Use a long random value. Never use the dev default.")
     add("Core", "ERRORSWEEP_PUBLIC_BASE_URL", launch_secret_is_ready("ERRORSWEEP_PUBLIC_BASE_URL") and safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")).startswith("https://"), "Public links", "Used in verification/reset and outbound links.")
     add("Auth", "ERRORSWEEP_OWNER_USERNAME", launch_secret_is_ready("ERRORSWEEP_OWNER_USERNAME"), "Public launch", "Production platform owner bootstrap email.")
@@ -11722,6 +11725,7 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     add("Release", "docker-compose.production.yml", Path("docker-compose.production.yml").exists(), "Container deploy", "Runs app, async receiver, worker supervisor, billing webhook receiver, and optional Redis.")
     add("Release", "deploy/.env.production.example", Path("deploy/.env.production.example").exists(), "Container deploy", "Copy to deploy/.env.production and fill real values outside git.")
     add("Release", "deploy/release_check.py", Path("deploy/release_check.py").exists(), "Every deployment", "Runs offline release checks for packaging, compose wiring, ignored secrets, env template coverage, and Python syntax.")
+    add("Release", "deploy/launch_rehearsal.py", Path("deploy/launch_rehearsal.py").exists(), "Final rehearsal", "Runs release, env, smoke, and optional public/worker route probes in one go/no-go report.")
     add("Release", "deployment service wiring", bool(deployment_status["services_ready"]), "Container deploy", "Compose file includes app, async receiver, worker supervisor, and billing webhook services.")
     add("Release", "production_smoke_test.py --strict", Path("production_smoke_test.py").exists(), "Every deployment", "Run the standalone smoke-test runner in CI/CD or staging before release.")
     backup_worker_enabled = safe_text(secret("ERRORSWEEP_BACKUP_WORKER_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
@@ -11747,6 +11751,7 @@ def production_env_template() -> str:
         # Fill values in your deployment provider or Streamlit secrets. Do not commit real secrets.
 
         ERRORSWEEP_ENV=production
+        ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true
         ERRORSWEEP_PUBLIC_BASE_URL=https://app.your-domain.com
         ERRORSWEEP_SESSION_SECRET=replace-with-a-long-random-secret
 
@@ -11892,7 +11897,7 @@ def missing_launch_configuration_template(rows: List[Dict[str, str]]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def launch_preflight_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_live_checks: bool = True) -> List[Dict[str, str]]:
     health = health or {}
     rows: List[Dict[str, str]] = []
 
@@ -11967,7 +11972,7 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
         "Deployment pack",
         "Pass" if deployment_status["files_ready"] and deployment_status["services_ready"] else "Warn",
         f"{len(deployment_status['present_files'])}/{len(deployment_status['required_files'])} files; {len(deployment_status['present_services'])}/{len(deployment_status['required_services'])} services",
-        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, and deploy/release_check.py with the release branch.",
+        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, CI release gate, release guard, and launch rehearsal script with the release branch.",
     )
     add(
         "Supabase persistence",
@@ -12141,21 +12146,22 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None) -> List[Dict[
         "Enable only when MT workers are deployed or keep disabled and rely on BYO keys/human review.",
     )
 
-    if builtin_engine_status is None:
-        add("Self-hosted MT", "Warn", "MT diagnostics unavailable", "Verify IndicTrans2/MADLAD/OPUS workers manually.")
-    else:
-        try:
-            mt_rows = builtin_engine_status(timeout=2)
-            ready_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled") and row.get("ready")]
-            enabled_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled")]
-            add(
-                "Self-hosted MT",
-                "Pass" if ready_engines else "Warn",
-                ", ".join(ready_engines) if ready_engines else f"Enabled but not ready: {', '.join(enabled_engines) or 'none'}",
-                "Start or deploy MT workers for no-key translation coverage.",
-            )
-        except Exception as exc:
-            add("Self-hosted MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Check MT worker endpoints and logs.")
+    if include_live_checks:
+        if builtin_engine_status is None:
+            add("Self-hosted MT", "Warn", "MT diagnostics unavailable", "Verify IndicTrans2/MADLAD/OPUS workers manually.")
+        else:
+            try:
+                mt_rows = builtin_engine_status(timeout=2)
+                ready_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled") and row.get("ready")]
+                enabled_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled")]
+                add(
+                    "Self-hosted MT",
+                    "Pass" if ready_engines else "Warn",
+                    ", ".join(ready_engines) if ready_engines else f"Enabled but not ready: {', '.join(enabled_engines) or 'none'}",
+                    "Start or deploy MT workers for no-key translation coverage.",
+                )
+            except Exception as exc:
+                add("Self-hosted MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Check MT worker endpoints and logs.")
 
     return rows
 
@@ -12182,6 +12188,29 @@ def launch_preflight_report(rows: List[Dict[str, str]]) -> str:
             + " |"
         )
     return "\n".join(lines).strip() + "\n"
+
+
+def public_launch_preflight_enforced() -> bool:
+    if not is_production_mode():
+        return False
+    return parse_bool_flag(secret("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "true"), True)
+
+
+def launch_preflight_blockers(rows: Optional[List[Dict[str, str]]] = None, health: Optional[Dict[str, Any]] = None, *, include_live_checks: bool = True) -> List[Dict[str, str]]:
+    preflight_rows = rows if rows is not None else launch_preflight_rows(health, include_live_checks=include_live_checks)
+    return [row for row in preflight_rows if safe_text(row.get("Status")) == "Blocker"]
+
+
+def public_signup_launch_gate(health: Optional[Dict[str, Any]] = None, rows: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    if not public_launch_preflight_enforced():
+        return {"locked": False, "enforced": False, "blockers": [], "blocker_count": 0}
+    blockers = launch_preflight_blockers(rows=rows, health=health, include_live_checks=False)
+    return {
+        "locked": bool(blockers),
+        "enforced": True,
+        "blockers": blockers,
+        "blocker_count": len(blockers),
+    }
 
 
 def split_text_lines(text: str) -> List[str]:
@@ -16979,7 +17008,35 @@ def render_profile_completion_prompt() -> None:
         st.stop()
 
 
+def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
+    st.html(
+        dedent(f"""
+        <div class="es-auth-shell">
+          <div class="es-lp-brand">
+            <div class="es-lp-logo">ES</div>
+            <div>
+              <div class="es-lp-brand-name">ErrorSweep</div>
+              <div class="es-lp-brand-sub">Nawin Corp</div>
+            </div>
+          </div>
+          <div class="es-auth-links">
+            <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
+          </div>
+        </div>
+        """).strip(),
+    )
+    st.markdown("## Public launch not open yet")
+    st.info("Signup is temporarily locked while ErrorSweep completes production launch checks. Existing users can still log in.")
+    st.caption(f"Launch preflight is enforced and currently has {int(gate.get('blocker_count') or 0)} blocker(s). Platform Owners can review details in Platform Settings -> Launch Readiness.")
+
+
 def render_signup() -> None:
+    launch_gate = public_signup_launch_gate()
+    if launch_gate.get("locked"):
+        render_public_signup_launch_locked(launch_gate)
+        return
+
     if not feature_flag("public_registration"):
         st.html(
             dedent(f"""
@@ -21559,6 +21616,11 @@ def platform_settings_workspaces() -> List[str]:
 def render_platform_launch_readiness_section(health: Dict[str, Any]) -> None:
     st.markdown("### Public launch readiness")
     readiness_rows = launch_readiness_rows(health)
+    preflight_rows = launch_preflight_rows(health)
+    preflight_blockers = launch_preflight_blockers(rows=preflight_rows)
+    preflight_warnings = [row for row in preflight_rows if safe_text(row.get("Status")) == "Warn"]
+    launch_gate = public_signup_launch_gate(health=health, rows=preflight_rows)
+    lock_state = "Locked" if launch_gate.get("locked") else "Open" if launch_gate.get("enforced") else "Inactive"
     ready_count = sum(
         1 for row in readiness_rows
         if safe_text(row.get("Launch gate")).lower() in {"ready", "ready to send", "ready to test provider"}
@@ -21571,7 +21633,28 @@ def render_platform_launch_readiness_section(health: Dict[str, Any]) -> None:
         ("Needs setup", max(0, len(readiness_rows) - ready_count), "before public launch"),
         ("Mode", "Production" if is_production_mode() else "Local", "environment"),
     ])
+    metrics([
+        ("Launch lock", lock_state, f"{len(preflight_blockers)} blocker(s)"),
+        ("Preflight warnings", len(preflight_warnings), "review before launch"),
+        ("Public signup", "Enabled" if feature_flag("public_registration") else "Disabled", "feature flag"),
+        ("Enforcement", "On" if public_launch_preflight_enforced() else "Off", "production guard"),
+    ])
+    if launch_gate.get("locked"):
+        st.warning("Public signup is locked until production launch blockers are resolved.")
+    elif launch_gate.get("enforced"):
+        st.success("Public signup launch gate is enforced and no blockers are currently detected.")
+    else:
+        st.info("Launch preflight enforcement is inactive outside production mode or when explicitly disabled.")
     st.dataframe(pd.DataFrame(readiness_rows), use_container_width=True, hide_index=True)
+    with st.expander("Production preflight details", expanded=bool(preflight_blockers)):
+        st.dataframe(pd.DataFrame(preflight_rows), use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download launch preflight report",
+            launch_preflight_report(preflight_rows),
+            file_name="errorsweep_launch_preflight_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
 
 def render_platform_launch_configuration_section(health: Dict[str, Any]) -> None:

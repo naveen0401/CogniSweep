@@ -27,6 +27,7 @@ from production_persistence import persistence_health
 LOGGER = logging.getLogger("errorsweep.production_smoke_test")
 DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
 PLACEHOLDER_MARKERS = (
+    "todo",
     "replace-with",
     "your-domain.com",
     "yourdomain.com",
@@ -158,6 +159,8 @@ def deployment_pack_status() -> Dict[str, Any]:
         "deploy/object_storage_check.py",
         "deploy/supabase_schema_check.py",
         "deploy/release_check.py",
+        "deploy/launch_rehearsal.py",
+        ".github/workflows/release-gate.yml",
     ]
     required_services = [
         "errorsweep-app:",
@@ -209,6 +212,14 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         "Pass" if env_mode == "production" else "Blocker",
         env_mode or "missing",
         "Set ERRORSWEEP_ENV=production before public traffic.",
+    )
+    add_result(
+        results,
+        "Core",
+        "Public launch preflight lock",
+        "Pass" if _env_bool("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", True) else "Blocker",
+        "enabled" if _env_bool("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", True) else "disabled",
+        "Keep ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true until all production blockers are cleared.",
     )
     add_result(
         results,
@@ -266,7 +277,7 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         "Deployment pack files",
         "Pass" if deployment_status["files_ready"] else "Warn",
         f"{len(deployment_status['present_files'])}/{len(deployment_status['required_files'])} present",
-        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, deploy/LAUNCH_RUNBOOK.md, deploy/ai_fallback_check.py, deploy/auth_session_check.py, deploy/async_worker_check.py, deploy/launch_env_check.py, deploy/mt_endpoint_check.py, deploy/object_storage_check.py, deploy/supabase_schema_check.py, and deploy/release_check.py with the release branch.",
+        "Keep Dockerfile, docker-compose.production.yml, deploy/.env.production.example, deploy/README_DEPLOYMENT.md, deploy/LAUNCH_RUNBOOK.md, launch checkers, CI release gate, release guard, and launch rehearsal script with the release branch.",
     )
     add_result(
         results,
@@ -462,6 +473,7 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
 
     email_provider = _env("ERRORSWEEP_EMAIL_PROVIDER").lower()
     email_from = _env("ERRORSWEEP_EMAIL_FROM") or _env("SENDGRID_FROM_EMAIL") or _env("RESEND_FROM_EMAIL")
+    email_from_ready = bool(email_from) and not _is_placeholder(email_from) and "errorsweep.local" not in email_from
     add_result(
         results,
         "Email",
@@ -474,8 +486,8 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         results,
         "Email",
         "Verified sender",
-        "Pass" if email_from and "errorsweep.local" not in email_from else "Blocker",
-        "configured" if email_from else "missing",
+        "Pass" if email_from_ready else "Blocker",
+        "configured" if email_from_ready else "missing/default/placeholder",
         "Use a verified production sender domain.",
     )
     add_result(

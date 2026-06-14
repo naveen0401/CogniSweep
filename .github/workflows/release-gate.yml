@@ -1,0 +1,95 @@
+name: ErrorSweep Release Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - release/**
+  push:
+    branches:
+      - main
+      - master
+      - release/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    name: Release guard and launch-safe tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install production dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile launch entrypoints
+        run: |
+          python -m py_compile \
+            app.py \
+            deploy/ai_fallback_check.py \
+            deploy/auth_session_check.py \
+            deploy/async_worker_check.py \
+            deploy/backup_check.py \
+            deploy/billing_check.py \
+            deploy/email_check.py \
+            deploy/legal_check.py \
+            deploy/launch_env_check.py \
+            deploy/launch_rehearsal.py \
+            deploy/mt_endpoint_check.py \
+            deploy/object_storage_check.py \
+            deploy/release_check.py \
+            deploy/supabase_schema_check.py \
+            production_smoke_test.py \
+            async_task_worker.py \
+            async_workflow_processor.py \
+            worker_supervisor.py \
+            billing_webhook_receiver.py \
+            email_dispatch_worker.py \
+            operational_backup_worker.py
+
+      - name: Run launch-safe regression tests
+        run: |
+          python test_auth_talent_upgrade.py
+          python test_top_navigation.py
+          python test_sectioned_pages.py
+          python test_launch_public_lock.py
+          python test_launch_rehearsal.py
+          python test_backup_check.py
+          python test_billing_check.py
+          python test_email_check.py
+          python test_legal_check.py
+          python test_release_gate_workflow.py
+          python test_cat_editor_regressions.py
+          python test_media_editor_reference.py
+          python test_media_timing_tools.py
+          python test_pro_reconstruction.py
+          python test_qa_engine_shims.py
+          python test_qa_engine_telugu_rules.py
+
+      - name: Run offline release guard
+        run: python deploy/release_check.py --strict
+
+      - name: Exercise launch rehearsal without external probes
+        run: |
+          python deploy/launch_rehearsal.py \
+            --env-file deploy/.env.production.example \
+            --base-url http://localhost:8501 \
+            --skip-release-check \
+            --skip-launch-env-check \
+            --skip-smoke-test \
+            --json

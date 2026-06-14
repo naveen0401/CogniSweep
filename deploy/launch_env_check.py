@@ -250,6 +250,7 @@ def read_required_secret_env(name: str, label: str, *, min_length: int = 8) -> s
 def check_core(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
     mode = safe_text(env.get("ERRORSWEEP_ENV")).lower()
     add(results, "Core", "Production mode", "Pass" if mode == "production" else "Blocker", mode or "missing", "Set ERRORSWEEP_ENV=production.")
+    require_flag(results, env, "Core", "Public launch preflight lock", "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "Keep ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true until all production blockers are cleared.")
     require_https(results, env, "Core", "Public app URL", "ERRORSWEEP_PUBLIC_BASE_URL", "Set ERRORSWEEP_PUBLIC_BASE_URL to the live HTTPS app URL.")
     require_value(results, env, "Core", "Session secret", ["ERRORSWEEP_SESSION_SECRET"], "Use a long random session secret.", min_length=32)
 
