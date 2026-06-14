@@ -6364,9 +6364,12 @@ def render_topnav_panel(active_page: str, user: Dict[str, Any], notifications: L
 
 
 def render_navigation() -> None:
+    """Render the shared top navigation bar for all roles. Hides unauthorized menu items based on role."""
     user = current_user() or {}
     permissions = effective_permissions(user)
     pages = allowed_pages()
+    
+    # Page label display names
     label_map = {
         "Dashboard": "Dashboard",
         "Projects": "Projects",
@@ -6380,55 +6383,38 @@ def render_navigation() -> None:
         "Billing": "Billing",
         "Account": "Account",
         "Admin": "Admin",
-        "Talent Database": "Talent",
     }
-    nav_pages = topnav_page_order(pages)
-    primary_nav_pages = [page for page in nav_pages if page in WORKSPACE_PAGES]
-    owner_nav_pages = [page for page in OWNER_PAGES if page in pages] if is_owner() else []
-    active_page = safe_text(st.session_state.get("page", "Dashboard"))
-    handle_topnav_note_action()
+    workspace_links = []
+    for page in WORKSPACE_PAGES:
+        if page not in pages:
+            continue
+        active = " active" if st.session_state.get("page") == page else ""
+        workspace_links.append(
+            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+        )
+    owner_links = []
+    if is_owner():
+        for page in OWNER_PAGES:
+            active = " active" if st.session_state.get("page") == page else ""
+            owner_links.append(
+                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
+            )
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
-        if safe_text(job.get("status")).lower() in {"draft", "needs human review", "needs_review", "running"}
+        if safe_text(job.get("status", "")).lower() in {"draft", "needs human review", "needs_review", "running"}
     )
-    visible_notifications = user_visible_notifications(user)
-    notification_count = notification_badge_count(normalized_notification_notes(visible_notifications, user, active_page))
-    user_name = display_name_from_user(user)
+    notification_count = len(st.session_state.get("notifications", []))
+    user_email = safe_text(user.get("email", "user@errorsweep.local"))
+    user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
     role = current_role()
-    active_panel = safe_text(query_get("es_panel")).lower()
-    language_code, _ = current_ui_language(user)
-    notes_href = topnav_panel_link(active_page, "notes")
-    language_href = topnav_panel_link(active_page, "language")
-    nav_links = "".join(
-        f'<a class="es-topnav-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
-        for page in primary_nav_pages
+    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
+    billing_item = (
+        f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
+        if "Billing" in pages
+        else ""
     )
-    owner_nav_links = "".join(
-        f'<a class="es-topnav-owner-link {"active" if page == active_page else ""}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
-        for page in owner_nav_pages
-    )
-    jobs_tool = (
-        f'<a class="es-topnav-tool" href="{escape(page_link("Jobs"))}" target="_self" title="Jobs">JOBS<span class="es-topnav-badge">{open_count}</span></a>'
-        if "Jobs" in pages else ""
-    )
-    notes_tool = (
-        f'<a class="es-topnav-tool {"active" if active_panel == "notes" else ""}" href="{escape(notes_href)}" target="_self" title="Notifications">NOTES<span class="es-topnav-badge">{notification_count}</span></a>'
-        if "notes.view" in permissions else ""
-    )
-    language_tool = (
-        f'<a class="es-topnav-tool {"active" if active_panel in {"language", "lang"} else ""}" href="{escape(language_href)}" target="_self" title="Language">{escape(language_code)}</a>'
-        if "language.select" in permissions else ""
-    )
-    account_links: List[str] = []
-    account_menu_pages = ["Jobs", "Team & Roles", "Billing", "Admin", "Talent Database", "Platform Settings", "Owner Console", "Account"]
-    for page in account_menu_pages:
-        if page in pages:
-            badge = str(open_count) if page == "Jobs" else ("Profile" if page == "Account" else "Open")
-            account_links.append(f'<a href="{escape(page_link(page))}" target="_self">{escape(label_map.get(page, page))} <span>{escape(badge)}</span></a>')
-    account_links.append('<a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>')
-    account_menu = "".join(account_links)
-    topnav = dedent(f"""
+    topnav = f"""
     <nav class="es-topnav">
       <div class="es-topnav-row">
         <div class="es-topnav-brand">
@@ -6438,7 +6424,7 @@ def render_navigation() -> None:
           </div>
         </div>
         <div class="es-topnav-links">
-          {nav_links}
+          {''.join(workspace_links)}
         </div>
         <div class="es-topnav-tools">
           {jobs_tool}
@@ -6447,32 +6433,26 @@ def render_navigation() -> None:
           <div class="es-topnav-user-wrap">
             <div class="es-topnav-user" tabindex="0" title="Account menu">
               <div>
-                <div style="font-weight:900;white-space:nowrap;">{escape(user_name)}</div>
-                <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{escape(role)}</div>
+                <div style="font-weight:900;white-space:nowrap;">{user_name}</div>
+                <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{role}</div>
               </div>
-              <div class="es-topnav-avatar">{escape(monogram(user_name))}</div>
+              <div class="es-topnav-avatar">{user_avatar}</div>
               <span class="es-account-caret">v</span>
             </div>
             <div class="es-account-menu">
-              {account_menu}
+              <a href="{page_link('Account')}" target="_self">Profile <span>Account</span></a>
+              <a href="{page_link(settings_page)}" target="_self">Settings <span>{escape(settings_page)}</span></a>
+              {billing_item}
+              <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
+              <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
             </div>
           </div>
         </div>
       </div>
-      <div class="es-topnav-owner-row" style="display: {"flex" if owner_nav_links else "none"};">
-        <div class="es-topnav-owner-tag">Owner tools</div>
-        <div class="es-topnav-owner-links">
-          {owner_nav_links}
-        </div>
-      </div>
+      {f'<div class="es-owner-strip"><span>Owner only</span>{"".join(owner_links)}</div>' if owner_links else ''}
     </nav>
-    """).strip()
-    # Keep the fragment out of Markdown block/code parsing, especially when
-    # role-specific optional sections such as the owner badge are empty.
-    topnav = "".join(line.strip() for line in topnav.splitlines() if line.strip())
+    """
     st.markdown(topnav, unsafe_allow_html=True)
-    render_topnav_panel(active_page, user, visible_notifications)
-    return
 
 
 # ==========================================================
@@ -22500,90 +22480,8 @@ def render_app() -> None:
         st.session_state.page = "Subtitle / Transcription Editor" if editor_type == "media" else "Human Review Editor"
         render_root_app_shell(lambda: render_external_editor_router(), page_frame=True, show_navigation=False)
         return
-    
-    if route.get("route") == "unknown":
-        def render_unknown_route() -> None:
-            st.error(f"Unknown page: {route.get('unknown')}")
-            if st.button("Return to Dashboard"):
-                navigate("Dashboard")
-        st.session_state.page = "Dashboard"
-        render_root_app_shell(render_unknown_route)
-        return
-
-    page = route.get("page")
-    if page == "Talent Database" and not has_active_premium_entitlement():
-        st.session_state.page = "Talent Database"
-        render_root_app_shell(render_talent_premium_required_page)
-        return
-
-    if not page or page not in allowed_pages():
-        def render_unauthorized_route() -> None:
-            st.error("You do not have access to this page.")
-            if st.button("Return to Dashboard"):
-                navigate("Dashboard")
-        st.session_state.page = "Dashboard"
-        render_root_app_shell(render_unauthorized_route)
-        return
-
-    st.session_state.page = page
-    renderer = PAGE_RENDERERS.get(page)
-
-    def render_page_content() -> None:
-        if page == "Human Review Workspace":
-            st.markdown("<style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content { padding: var(--es-shell-frame-padding) !important; }</style>", unsafe_allow_html=True)
-        render_status_incident_banner()
-        if renderer:
-            renderer()
-        else:
-            st.error(f"Renderer for '{page}' is missing.")
-
-    render_root_app_shell(render_page_content)
-
-
-if __name__ == "__main__":
-    render_global_logout_listener()
-
-    if query_get("es_logout") == "1":
-        logout()
-
-    restore_session_from_query()
-    sync_browser_session_cookie()
-
-    route = get_current_route()
-    explicit_route_target = route_query_has_explicit_target()
-    if not is_authenticated():
-        render_session_restore_bridge()
-    else:
-        render_route_restore_bridge()
-
-    route = get_current_route()
-    if (
-        not is_authenticated()
-        and not explicit_route_target
-        and not protected_route_requested()
-        and not query_get("public")
-        and not query_get("route")
-    ):
-        route = {"route": "landing", "public": "landing", "page": "Landing"}
-
-    if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
-        st.stop()
-
-    if is_authenticated() and authenticated_public_entry_route(route):
-        return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")
-        if return_to and apply_return_to(return_to):
-            route = get_current_route()
-        else:
-            target_page = safe_text(st.session_state.get("page") or st.session_state.get("es_page") or "Dashboard")
-            if public_route_for_es_page(target_page):
-                target_page = "Dashboard"
-            st.session_state.page = normalize_es_page(target_page)
-            set_route_query({"es_page": st.session_state.page})
-            route = get_current_route()
-        if route.get("route") in PUBLIC_ROUTES:
-            route = authenticated_shell_route_from_session()
-
-    if route.get("route") in PUBLIC_ROUTES:
+    user = current_user()
+    if not user:
         render_public_app()
 <<<<<<< HEAD
     else:
