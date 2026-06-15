@@ -579,7 +579,8 @@ def test_media_editor_uses_reference_template() -> None:
     assert "media_preview_component_payload(media_source, media_type, media_name or file_name)" in shell_body
     assert "build_editor_language_resources(workspace_rules())" in shell_body
     assert 'id="media-editor-page-marker"' in shell_body
-    assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" in shell_body
+    assert "body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content" in shell_body
+    assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" not in shell_body
     assert "max-width:var(--es-shell-content-width) !important" in shell_body
     assert "components.html(html, height=900, scrolling=False)" in shell_body
     assert "width:100vw !important" not in shell_body
@@ -680,8 +681,9 @@ def test_human_review_editor_density_is_scoped_to_iframe_shell() -> None:
     assert "iframe" in body
     assert "height:100% !important" in body
     assert "overflow:hidden !important" in body
-    assert '.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe)' in body
-    assert '.st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker)' in body
+    assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe)' in body
+    assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker)' in body
+    assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content" not in body
     assert "height:0 !important" in body
     assert "width:100% !important" in body
     assert "max-width:100% !important" in body
@@ -703,12 +705,13 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert 'id="errorsweep-dashboard-page-marker"' in dashboard_body
     assert 'class="errorsweep_dashboard_page"' in dashboard_body
     assert "def render_root_app_shell(" in source
+    assert "def render_editor_app_shell(" in source
     assert "def render_shell_scroll_bridge()" in source
     assert "MutationObserver(applyShellScroll)" in source
-    assert "const editorMode = !!editorMarker;" in source
     assert 'scrollTarget.style.overflowY = "hidden"' in source
-    assert 'contentKey.style.overflowY = editorMode ? "hidden" : "auto"' in source
-    assert 'contentKey.style.overscrollBehavior = editorMode ? "none" : "contain"' in source
+    assert 'contentKey.style.overflowY = "auto"' in source
+    assert 'contentKey.style.overscrollBehavior = "contain"' in source
+    assert "editorMode" not in source[source.index("def render_shell_scroll_bridge"):source.index("def render_editor_shell_bridge")]
     assert "--es-shell-frame-padding: 0 18px 0;" in source
     assert "--es-shell-content-width: min(1760px, calc(100vw - 56px));" in source
     assert "body:has(#errorsweep-root-shell-marker) [data-testid=\"stAppViewContainer\"] .main .block-container" in source
@@ -719,9 +722,9 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert ".st-key-errorsweep_page_frame" in source
     assert 'key="errorsweep_page_frame"' in source
     assert "def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True)" in source
-    assert "page_frame=True" in source
-    assert "show_navigation=False" in source
-    assert 'const shellFrameWidth = editorMode ? "100%" : "min(1760px, calc(100vw - 56px))";' in source
+    assert "render_editor_app_shell(lambda: render_external_editor_router())" in source
+    assert "render_root_app_shell(lambda: render_external_editor_router()" not in source
+    assert 'const shellFrameWidth = "min(1760px, calc(100vw - 56px))";' in source
     assert "const fullBleedEditor = !!(" not in source
     assert "node.style.width = \"100%\"" in source
     assert "node.style.maxWidth = shellFrameWidth" in source
@@ -736,6 +739,9 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert 'key="errorsweep_app_shell"' in source
     assert 'key="errorsweep_shell_top"' in source
     assert 'key="errorsweep_shell_content"' in source
+    assert 'key="errorsweep_editor_shell"' in source
+    assert 'key="errorsweep_editor_content"' in source
+    assert 'key="errorsweep_editor_frame"' in source
     assert ".es-topnav-row {" in source
     assert "min-height: 62px;" in source
     assert "flex-wrap: nowrap;" in source
@@ -751,7 +757,7 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "overflow-y: scroll !important" in source
     assert "overscroll-behavior: contain !important" in source
     assert "scrollbar-gutter: stable both-edges !important" in source
-    assert "render_root_app_shell(lambda: render_external_editor_router(), page_frame=True, show_navigation=False)" in source
+    assert "render_editor_app_shell(lambda: render_external_editor_router())" in source
     assert "def render_task_navigation_links(task: Dict[str, Any]) -> None" in source
     assert "task_monitor_link(task_id)" in source
     assert "human_review_editor_link(review_job_id)" in source
@@ -759,7 +765,8 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "body:has(#errorsweep-dashboard-page-marker) .stButton > button" in source
     assert "body:has(#human-review-editor-page-marker) .block-container" not in editor_body
     assert 'body:has(#human-review-editor-page-marker) [data-testid="stMainBlockContainer"]' not in editor_body
-    assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content" in editor_body
+    assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content" in editor_body
+    assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content" not in editor_body
     assert "errorsweep-dashboard-page-marker" not in editor_body
     assert "human-review-editor-page-marker" not in dashboard_body
     assert re.search(r"(?m)^\s*\.stButton\s*>", source) is None

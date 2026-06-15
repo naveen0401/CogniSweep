@@ -638,7 +638,9 @@ html, body, [class*="css"] {
 #errorsweep-dashboard-page-marker,
 #errorsweep-root-shell-marker,
 #errorsweep-shell-top-row-marker,
-#errorsweep-shell-content-row-marker {
+#errorsweep-shell-content-row-marker,
+#errorsweep-editor-shell-marker,
+#errorsweep-editor-content-marker {
   display: none !important;
 }
 
@@ -705,6 +707,56 @@ body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVe
   margin: 0 !important;
   padding: 0 !important;
   overflow: hidden !important;
+}
+
+body:has(#errorsweep-editor-shell-marker) .block-container > div[data-testid="stVerticalBlock"] {
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-editor-shell-marker) .block-container > div[data-testid="stVerticalBlock"] > div:has(.st-key-errorsweep_editor_shell) {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_shell,
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_shell > div[data-testid="stVerticalBlock"],
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_content,
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_frame,
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_frame > div[data-testid="stVerticalBlock"] {
+  box-sizing: border-box !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_shell {
+  position: fixed !important;
+  inset: 0 !important;
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  background: #080a12 !important;
+  z-index: 1 !important;
 }
 
 body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell {
@@ -15030,7 +15082,7 @@ def render_reference_cat_editor_shell(
         body:has(#human-review-editor-page-marker) footer {
             display:none !important;
         }
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content {
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content {
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
@@ -15041,12 +15093,12 @@ def render_reference_cat_editor_shell(
             margin:0 !important;
             overflow:hidden !important;
         }
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell,
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"],
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_page_frame,
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_page_frame > div[data-testid="stVerticalBlock"],
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_shell,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_shell > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div,
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div,
         body:has(#human-review-editor-page-marker) div[data-testid="stIFrame"],
@@ -15064,8 +15116,8 @@ def render_reference_cat_editor_shell(
             transform:none !important;
             overflow:hidden !important;
         }
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
             height:100% !important;
             max-height:100% !important;
@@ -15078,10 +15130,10 @@ def render_reference_cat_editor_shell(
             border:0 !important;
             border-radius:0 !important;
         }
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {
             gap:0 !important;
         }
-        body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker) {
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker) {
             height:0 !important;
             max-height:0 !important;
             min-height:0 !important;
@@ -15193,8 +15245,8 @@ def render_external_media_editor(job_id: str) -> None:
         #media-editor-page-marker {display:none !important;}
         body:has(#media-editor-page-marker) [data-testid="stSidebar"] {display:none !important;}
         body:has(#media-editor-page-marker) [data-testid="stHeader"] {display:none !important;}
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content {padding: var(--es-shell-frame-padding) !important;}
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {max-width: var(--es-shell-content-width) !important;}
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content {padding: var(--es-shell-frame-padding) !important;}
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {max-width: var(--es-shell-content-width) !important;}
         .es-media-top {display:flex;justify-content:space-between;align-items:center;background:#242a2f;color:white;border:1px solid #334155;border-radius:10px;padding:10px 14px;margin-bottom:10px;}
         .es-media-title {font-weight:900;font-size:15px;}
         .es-media-sub {font-size:12px;color:#cbd5e1;margin-top:2px;}
@@ -15432,7 +15484,7 @@ def render_reference_media_editor_shell(
         body:has(#media-editor-page-marker) footer {
             display:none !important;
         }
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content {
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content {
             width:100% !important;
             max-width:var(--es-shell-content-width) !important;
             min-width:0 !important;
@@ -15440,10 +15492,10 @@ def render_reference_media_editor_shell(
             margin:0 auto !important;
             overflow:hidden !important;
         }
-        body:has(#media-editor-page-marker) .st-key-errorsweep_app_shell,
-        body:has(#media-editor-page-marker) .st-key-errorsweep_app_shell > div[data-testid="stVerticalBlock"],
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div,
         body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
         body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
             width:100% !important;
@@ -15455,8 +15507,8 @@ def render_reference_media_editor_shell(
             right:auto !important;
             transform:none !important;
         }
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
         body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
             height:100% !important;
             max-height:100% !important;
@@ -15469,10 +15521,10 @@ def render_reference_media_editor_shell(
             border:0 !important;
             border-radius:0 !important;
         }
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] {
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {
             gap:0 !important;
         }
-        body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"] > div:has(#media-editor-page-marker) {
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(#media-editor-page-marker) {
             height:0 !important;
             max-height:0 !important;
             min-height:0 !important;
@@ -19454,12 +19506,6 @@ def page_human_review_workspace() -> None:
         )
 
     if not st.session_state.get("review_segments"):
-        st.markdown(
-            """
-            <style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content{padding:var(--es-shell-frame-padding)!important;} body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"]{max-width:var(--es-shell-content-width)!important;}</style>
-            """,
-            unsafe_allow_html=True,
-        )
         st.warning("No Pro post-editing rows are loaded yet. Run CogniSweep Pro first, then click Open Human Review workspace.")
         if st.button("Go to CogniSweep Pro", type="primary", use_container_width=True):
             open_page("CogniSweep Pro")
@@ -22717,7 +22763,7 @@ PAGE_RENDERERS = {
 
 
 def render_shell_scroll_bridge() -> None:
-    """Keep the authenticated shell locked to two rows after Streamlit mounts wrappers."""
+    """Keep the normal authenticated app shell locked to topbar + scrolling content."""
     components.html(
         """
         <script>
@@ -22730,9 +22776,6 @@ def render_shell_scroll_bridge() -> None:
             const topMarker = parentDoc.getElementById("errorsweep-shell-top-row-marker");
             const contentMarker = parentDoc.getElementById("errorsweep-shell-content-row-marker");
             if (!rootMarker || !topMarker || !contentMarker) return;
-            const editorMarker = parentDoc.getElementById("human-review-editor-page-marker")
-              || parentDoc.getElementById("media-editor-page-marker");
-            const editorMode = !!editorMarker;
 
             const appShell = parentDoc.querySelector(".st-key-errorsweep_app_shell");
             if (!appShell) return;
@@ -22755,7 +22798,7 @@ def render_shell_scroll_bridge() -> None:
             const contentWrapper = directChildContaining(appGrid, contentMarker)
               || contentMarker.closest(".st-key-errorsweep_shell_content");
             const contentKey = contentMarker.closest(".st-key-errorsweep_shell_content");
-            const shellFrameWidth = editorMode ? "100%" : "min(1760px, calc(100vw - 56px))";
+            const shellFrameWidth = "min(1760px, calc(100vw - 56px))";
 
             const fullHeight = (node) => {
               if (!node) return;
@@ -22841,19 +22884,19 @@ def render_shell_scroll_bridge() -> None:
 
             if (topWrapper) {
               topWrapper.style.gridRow = "1";
-              topWrapper.style.height = editorMode ? "0" : "";
-              topWrapper.style.maxHeight = editorMode ? "0" : "";
+              topWrapper.style.height = "";
+              topWrapper.style.maxHeight = "";
               topWrapper.style.minHeight = "0";
               topWrapper.style.margin = "0";
               topWrapper.style.padding = "0";
-              topWrapper.style.overflow = editorMode ? "hidden" : "visible";
+              topWrapper.style.overflow = "visible";
               topWrapper.style.zIndex = "900";
             }
 
-            const topHeight = topWrapper && !editorMode
+            const topHeight = topWrapper
               ? Math.ceil(topWrapper.getBoundingClientRect().height)
               : 0;
-            const contentHeight = editorMode ? "100dvh" : `calc(100dvh - ${topHeight}px)`;
+            const contentHeight = `calc(100dvh - ${topHeight}px)`;
             const scrollTarget = contentWrapper || contentKey;
             if (scrollTarget) {
               scrollTarget.style.gridRow = "2";
@@ -22882,9 +22925,9 @@ def render_shell_scroll_bridge() -> None:
               contentKey.style.maxHeight = contentHeight;
               contentKey.style.minHeight = "0";
               contentKey.style.overflowX = "hidden";
-              contentKey.style.overflowY = editorMode ? "hidden" : "auto";
-              contentKey.style.overscrollBehavior = editorMode ? "none" : "contain";
-              contentKey.style.scrollbarGutter = editorMode ? "auto" : "stable both-edges";
+              contentKey.style.overflowY = "auto";
+              contentKey.style.overscrollBehavior = "contain";
+              contentKey.style.scrollbarGutter = "stable both-edges";
             } else if (scrollTarget) {
               centerRail(scrollTarget);
             }
@@ -22892,10 +22935,10 @@ def render_shell_scroll_bridge() -> None:
             parentDoc.querySelectorAll(".st-key-errorsweep_page_frame").forEach((node) => {
               centerRail(node);
               node.style.boxSizing = "border-box";
-              node.style.height = editorMode ? "100%" : "";
-              node.style.maxHeight = editorMode ? "100%" : "";
+              node.style.height = "";
+              node.style.maxHeight = "";
               node.style.minHeight = "0";
-              node.style.overflow = editorMode ? "hidden" : "";
+              node.style.overflow = "";
             });
 
             if (contentKey && contentKey !== scrollTarget) {
@@ -22903,7 +22946,7 @@ def render_shell_scroll_bridge() -> None:
               contentKey.style.maxHeight = contentHeight;
               contentKey.style.minHeight = "0";
               contentKey.style.overflowX = "hidden";
-              contentKey.style.overflowY = editorMode ? "hidden" : "auto";
+              contentKey.style.overflowY = "auto";
             }
           };
 
@@ -22920,6 +22963,95 @@ def render_shell_scroll_bridge() -> None:
         height=0,
         scrolling=False,
     )
+
+
+def render_editor_shell_bridge() -> None:
+    """Keep standalone CAT/media editors in an isolated full-screen shell."""
+    components.html(
+        """
+        <script>
+        (() => {
+          const parentDoc = window.parent && window.parent.document;
+          if (!parentDoc) return;
+
+          const applyEditorShell = () => {
+            const shellMarker = parentDoc.getElementById("errorsweep-editor-shell-marker");
+            const contentMarker = parentDoc.getElementById("errorsweep-editor-content-marker");
+            if (!shellMarker || !contentMarker) return;
+            const editorShell = parentDoc.querySelector(".st-key-errorsweep_editor_shell");
+            const editorContent = parentDoc.querySelector(".st-key-errorsweep_editor_content");
+            const editorFrame = parentDoc.querySelector(".st-key-errorsweep_editor_frame");
+            if (!editorShell || !editorContent) return;
+
+            const fullViewport = (node) => {
+              if (!node) return;
+              node.style.boxSizing = "border-box";
+              node.style.height = "100dvh";
+              node.style.maxHeight = "100dvh";
+              node.style.minHeight = "0";
+              node.style.width = "100vw";
+              node.style.maxWidth = "100vw";
+              node.style.minWidth = "0";
+              node.style.margin = "0";
+              node.style.padding = "0";
+              node.style.overflow = "hidden";
+            };
+
+            fullViewport(parentDoc.documentElement);
+            fullViewport(parentDoc.body);
+            fullViewport(parentDoc.querySelector(".stApp"));
+            fullViewport(parentDoc.querySelector('[data-testid="stAppViewContainer"]'));
+            fullViewport(parentDoc.querySelector('[data-testid="stMain"]'));
+            fullViewport(parentDoc.querySelector('[data-testid="stMainBlockContainer"]'));
+            parentDoc.querySelectorAll(".block-container").forEach(fullViewport);
+
+            const rootVertical = parentDoc.querySelector(".block-container > div[data-testid='stVerticalBlock']");
+            if (rootVertical) {
+              fullViewport(rootVertical);
+              rootVertical.style.display = "grid";
+              rootVertical.style.gridTemplateRows = "minmax(0, 1fr)";
+              rootVertical.style.gridTemplateColumns = "minmax(0, 1fr)";
+              rootVertical.style.gap = "0";
+            }
+
+            const shellWrapper = editorShell.parentElement;
+            fullViewport(shellWrapper);
+            fullViewport(editorShell);
+            editorShell.style.position = "fixed";
+            editorShell.style.inset = "0";
+            editorShell.style.display = "grid";
+            editorShell.style.gridTemplateRows = "minmax(0, 1fr)";
+            editorShell.style.gridTemplateColumns = "minmax(0, 1fr)";
+            fullViewport(editorShell.querySelector('[data-testid="stVerticalBlock"]'));
+            fullViewport(editorContent);
+            fullViewport(editorContent.querySelector('[data-testid="stVerticalBlock"]'));
+            fullViewport(editorFrame);
+            fullViewport(editorFrame && editorFrame.querySelector('[data-testid="stVerticalBlock"]'));
+          };
+
+          applyEditorShell();
+          window.setTimeout(applyEditorShell, 250);
+          window.setTimeout(applyEditorShell, 1000);
+          if (!parentDoc.__errorsweepEditorShellObserver) {
+            parentDoc.__errorsweepEditorShellObserver = new MutationObserver(applyEditorShell);
+            parentDoc.__errorsweepEditorShellObserver.observe(parentDoc.body, { childList: true, subtree: true });
+          }
+        })();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
+def render_editor_app_shell(content_renderer) -> None:
+    """Render standalone editor routes in a shell that normal pages never mount."""
+    st.markdown('<div id="errorsweep-editor-shell-marker" class="errorsweep_editor_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
+    with st.container(key="errorsweep_editor_shell", gap=None):
+        with st.container(key="errorsweep_editor_content", gap=None):
+            st.markdown('<div id="errorsweep-editor-content-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
+            with st.container(key="errorsweep_editor_frame", gap=None):
+                content_renderer()
 
 
 def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
@@ -22952,7 +23084,7 @@ def render_app() -> None:
 
     if external_editor_requested:
         st.session_state.page = "Subtitle / Transcription Editor" if editor_type == "media" else "Human Review Editor"
-        render_root_app_shell(lambda: render_external_editor_router(), page_frame=True, show_navigation=False)
+        render_editor_app_shell(lambda: render_external_editor_router())
         return
 
     if route.get("route") == "unknown":
@@ -22985,8 +23117,6 @@ def render_app() -> None:
     renderer = PAGE_RENDERERS.get(page)
 
     def render_page_content() -> None:
-        if page == "Human Review Workspace":
-            st.markdown("<style>body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content { padding: var(--es-shell-frame-padding) !important; }</style>", unsafe_allow_html=True)
         render_status_incident_banner()
         if renderer:
             renderer()
