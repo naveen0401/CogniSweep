@@ -37,6 +37,12 @@ from openai import OpenAI
 LOGGER = logging.getLogger(__name__)
 
 try:
+    from streamlit_cookies_controller import CookieController
+except Exception as exc:
+    CookieController = None
+    LOGGER.warning("streamlit_cookies_controller import failed: %s", exc)
+
+try:
     import defusedxml.ElementTree as ET
 except ImportError:
     ET = _StdET
@@ -315,6 +321,7 @@ SESSION_COLLECTION_LIMITS = {
 }
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
+SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
@@ -4559,12 +4566,57 @@ def signed_session_token_for_user(user: Dict[str, Any]) -> str:
     return token
 
 
+def browser_cookie_controller() -> Optional[Any]:
+    if CookieController is None:
+        return None
+    try:
+        return CookieController(key=SESSION_COOKIE_CONTROLLER_KEY)
+    except Exception as exc:
+        LOGGER.debug("Unable to initialize browser cookie controller: %s", exc)
+        return None
+
+
+def component_session_cookie() -> str:
+    controller = browser_cookie_controller()
+    if controller is None:
+        return ""
+    try:
+        return safe_text(controller.get(SESSION_COOKIE_NAME) or "")
+    except Exception as exc:
+        LOGGER.debug("Unable to read browser session cookie from component: %s", exc)
+        return ""
+
+
+def sync_component_session_cookie(token: str = "", clear_cookie: bool = False) -> None:
+    controller = browser_cookie_controller()
+    if controller is None:
+        return
+    try:
+        if token:
+            expires = datetime.now() + timedelta(seconds=SESSION_PERSISTENCE_SECONDS)
+            controller.set(
+                SESSION_COOKIE_NAME,
+                token,
+                path="/",
+                expires=expires,
+                max_age=SESSION_PERSISTENCE_SECONDS,
+                same_site="lax",
+            )
+        elif clear_cookie:
+            if controller.get(SESSION_COOKIE_NAME) is not None:
+                controller.remove(SESSION_COOKIE_NAME, path="/", same_site="lax")
+    except Exception as exc:
+        LOGGER.debug("Unable to sync browser session cookie component: %s", exc)
+
+
 def browser_session_cookie() -> str:
     try:
-        return safe_text(st.context.cookies.get(SESSION_COOKIE_NAME, ""))
+        token = safe_text(st.context.cookies.get(SESSION_COOKIE_NAME, ""))
+        if token:
+            return token
     except Exception as exc:
         LOGGER.debug("Unable to read browser session cookie: %s", exc)
-        return ""
+    return component_session_cookie()
 
 
 def browser_cookie_domain_js_function() -> str:
@@ -4691,6 +4743,7 @@ def sync_browser_session_cookie() -> None:
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
     domain_js = browser_cookie_domain_js_function()
+    sync_component_session_cookie(token, clear_cookie=clear_cookie)
     components.html(
         f"""
         <script>
@@ -5218,6 +5271,7 @@ def render_post_login_tool_launch_bridge() -> None:
     render_logged_in_login_state(opened_elsewhere=True)
     if session_token:
         st.session_state["_pending_session_cookie"] = session_token
+        sync_component_session_cookie(session_token)
     components.html(
         f"""
         <script>

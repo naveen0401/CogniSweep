@@ -247,16 +247,26 @@ def test_logout_routes_every_window_to_landing() -> None:
 
 def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     source = read_app()
+    requirements = Path(__file__).with_name("requirements.txt").read_text(encoding="utf-8")
     assert "SESSION_COOKIE_NAME = \"errorsweep_session\"" in source
     assert "SESSION_STORAGE_KEY = \"errorsweep_session\"" in source
+    assert "SESSION_COOKIE_CONTROLLER_KEY = \"errorsweep_browser_cookies\"" in source
+    assert "streamlit-cookies-controller>=0.0.4" in requirements
     assert "SESSION_PERSISTENCE_SECONDS" in source
+    assert "from streamlit_cookies_controller import CookieController" in source
     assert "def browser_session_cookie()" in source
+    assert "def browser_cookie_controller()" in source
+    assert "def component_session_cookie()" in source
+    assert "def sync_component_session_cookie" in source
     assert "def render_session_restore_bridge()" in source
     assert "def restore_session_from_cookie()" in source
     assert "token = browser_session_cookie()" in source
     assert "restore_user_from_signed_session(token)" in source
     assert 'st.session_state["_pending_session_cookie"] = token' in source
     assert "sync_browser_session_cookie()" in source
+    assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in source
+    assert "sync_component_session_cookie(session_token)" in source
+    assert "return component_session_cookie()" in source
     assert "def browser_cookie_domain_js_function()" in source
     assert "cookieDomainAttribute" in source
     assert 'url.searchParams.set("es_restore", token)' not in source
@@ -364,6 +374,7 @@ def test_login_session_persists_until_explicit_logout() -> None:
     sync_start = source.index("def sync_browser_session_cookie")
     sync_end = source.index("def render_session_restore_bridge", sync_start)
     sync_body = source[sync_start:sync_end]
+    assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in sync_body
     assert "max_age = SESSION_PERSISTENCE_SECONDS if token else 0" in sync_body
     assert "storage.removeItem(storageKey)" in sync_body
 
