@@ -148,8 +148,8 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert 'set_route_query({"es_page": "Dashboard"})' in source
     assert "def authenticated_shell_route_from_session(default_page: str = \"Dashboard\") -> Dict[str, str]:" in source
     assert "def authenticated_login_handoff_route(route: Dict[str, Any]) -> bool:" in source
-    assert "login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)" in source
-    assert "authenticated_public_entry_route(route) and not login_handoff_route" in source
+    assert "login_handoff_route = auth_state == AUTH_STATE_AUTHENTICATED and authenticated_login_handoff_route(route)" in source
+    assert "auth_state == AUTH_STATE_AUTHENTICATED and authenticated_public_entry_route(route) and not login_handoff_route" in source
     assert 'if route.get("route") in PUBLIC_ROUTES:\n            route = authenticated_shell_route_from_session()' in source
     assert 'route = {"route": "dashboard", "page": "Dashboard", "es_page": "Dashboard"}' in source
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
@@ -168,6 +168,8 @@ def test_public_entry_routes_use_cookie_provider_not_restore_miss_gate() -> None
     app_body = source[app_start:app_end]
     assert "restore_session_from_cookie()" in app_body
     assert "sync_browser_session_cookie()" in app_body
+    assert "current_auth_state(route)" in app_body
+    assert "render_auth_unknown_state(route)" in app_body
     assert "render_session_restore_bridge" not in app_body
     assert "session_restore_probe_pending" not in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
@@ -244,6 +246,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "SESSION_COOKIE_NAME = \"errorsweep_session\"" in source
     assert "SESSION_STORAGE_KEY = \"errorsweep_session\"" in source
     assert "SESSION_COOKIE_CONTROLLER_KEY = \"errorsweep_browser_cookies\"" in source
+    assert 'AUTH_CHECK_QUERY_PARAM = "es_auth_checked"' in source
+    assert 'AUTH_STATE_UNKNOWN = "unknown"' in source
+    assert 'AUTH_STATE_AUTHENTICATED = "authenticated"' in source
+    assert 'AUTH_STATE_UNAUTHENTICATED = "unauthenticated"' in source
     assert "streamlit-cookies-controller>=0.0.4" in requirements
     assert "SESSION_PERSISTENCE_SECONDS" in source
     assert "from streamlit_cookies_controller import CookieController" in source
@@ -252,6 +258,8 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "def component_session_cookie()" in source
     assert "def sync_component_session_cookie" in source
     assert "def render_browser_session_bootstrap" in source
+    assert "def current_auth_state" in source
+    assert "def render_auth_unknown_state" in source
     assert "def render_session_restore_bridge()" not in source
     assert "def restore_session_from_cookie()" in source
     assert "token = browser_session_cookie()" in source
@@ -269,6 +277,8 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
     assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken)' in source
     assert 'const token = cookieToken || storageToken;' in source
+    assert 'url.searchParams.set(authCheckedKey, "1")' in source
+    assert 'st.caption("Loading...")' in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
 
@@ -308,7 +318,11 @@ def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     app_body = source[app_start:app_end]
     assert "restore_session_from_cookie()" in app_body
     assert "sync_browser_session_cookie()" in app_body
-    assert "render_browser_session_bootstrap(route)" in app_body
+    assert "current_auth_state(route)" in app_body
+    assert "render_auth_unknown_state(route)" in app_body
+    unknown_idx = app_body.index("render_auth_unknown_state(route)")
+    first_public_idx = app_body.index("render_public_app()")
+    assert unknown_idx < first_public_idx
     assert 'render_public_app()' in app_body
     assert '"missing_or_invalid_cookie_show_landing"' in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body

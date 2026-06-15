@@ -322,6 +322,10 @@ SESSION_COLLECTION_LIMITS = {
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
+AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
+AUTH_STATE_UNKNOWN = "unknown"
+AUTH_STATE_AUTHENTICATED = "authenticated"
+AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
@@ -4695,6 +4699,7 @@ def restore_session_from_cookie() -> None:
         session_valid = restore_user_from_signed_session(token)
         if session_valid:
             st.session_state["_pending_session_cookie"] = token
+            query_clear(AUTH_CHECK_QUERY_PARAM)
             query_clear("es_session")
             query_clear("es_restore")
             query_clear("es_restore_miss")
@@ -4809,6 +4814,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    auth_checked_key_json = json.dumps(AUTH_CHECK_QUERY_PARAM)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
     domain_js = browser_cookie_domain_js_function()
@@ -4819,6 +4825,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
           try {{
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
+            const authCheckedKey = {auth_checked_key_json};
             const routeParamKeys = {route_param_keys_json};
             const publicEntryPages = new Set({public_entry_pages_json});
             const candidateWindows = [window.parent, window.top, window];
@@ -4882,7 +4889,13 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const cookieToken = readCookie(targetDoc);
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const token = cookieToken || storageToken;
-            if (!token) return;
+            if (!token) {{
+              if (!url.searchParams.has(authCheckedKey)) {{
+                url.searchParams.set(authCheckedKey, "1");
+                loc.replace(url.toString());
+              }}
+              return;
+            }}
             const attemptKey = storageKey + "_bootstrap_attempted";
             if (!cookieToken && sessionStorage && sessionStorage.getItem(attemptKey) === token) return;
             if (!cookieToken && sessionStorage) sessionStorage.setItem(attemptKey, token);
@@ -4892,7 +4905,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", authCheckedKey].forEach((key) => url.searchParams.delete(key));
             if (publicEntry) {{
               ["public", "route", "return_to", "tool_tab"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
@@ -4908,12 +4921,49 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
     )
 
 
+def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
+    if st.session_state.get("authenticated") and st.session_state.get("user"):
+        return False
+    if query_get(AUTH_CHECK_QUERY_PARAM) == "1":
+        return False
+    route = route or {}
+    route_name = safe_text(route.get("public") or route.get("route")).strip().lower()
+    if route_name in AUTHENTICATED_PUBLIC_ENTRY_ROUTES:
+        return True
+    if protected_route_requested():
+        return True
+    return (
+        not route_query_has_explicit_target()
+        and not query_get("public")
+        and not query_get("route")
+    )
+
+
+def current_auth_state(route: Optional[Dict[str, Any]] = None) -> str:
+    if is_authenticated():
+        return AUTH_STATE_AUTHENTICATED
+    if auth_bootstrap_pending(route):
+        return AUTH_STATE_UNKNOWN
+    return AUTH_STATE_UNAUTHENTICATED
+
+
+def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
+    set_auth_debug_state(bool(browser_session_cookie()), False, "auth_unknown_resolving", route or {})
+    render_browser_session_bootstrap(route)
+    render_auth_debug_panel(route, "auth_unknown_resolving")
+    st.caption("Loading...")
+    st.stop()
+
+
 def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
+    auth_checked_key_json = json.dumps(AUTH_CHECK_QUERY_PARAM)
     return f"""
+            const authCheckedKey = {auth_checked_key_json};
             const url = new URL(loc.href);
             ["es_session", "es_restore", "es_restore_miss", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
+            url.searchParams.set(authCheckedKey, "1");
             {logout_marker_js}
     """
 
@@ -5263,6 +5313,7 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     set_route_query(launch_params)
     query_clear("public")
     query_clear("return_to")
+    query_clear(AUTH_CHECK_QUERY_PARAM)
     query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
@@ -5280,6 +5331,7 @@ def logout() -> None:
     for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"):
         query_clear(key)
     query_set("es_page", "Landing")
+    query_set(AUTH_CHECK_QUERY_PARAM, "1")
     render_logout_bridge()
     render_landing_page("logout")
     st.stop()
@@ -22919,7 +22971,11 @@ if __name__ == "__main__":
 
     route = get_current_route()
     explicit_route_target = route_query_has_explicit_target()
-    if is_authenticated():
+    auth_state = current_auth_state(route)
+    if auth_state == AUTH_STATE_UNKNOWN:
+        render_auth_unknown_state(route)
+
+    if auth_state == AUTH_STATE_AUTHENTICATED:
         render_route_restore_bridge()
 
     route = get_current_route()
@@ -22934,11 +22990,12 @@ if __name__ == "__main__":
     elif query_get("es_restore_miss"):
         query_clear("es_restore_miss")
 
-    if not is_authenticated():
-        render_browser_session_bootstrap(route)
+    auth_state = current_auth_state(route)
+    if auth_state == AUTH_STATE_UNKNOWN:
+        render_auth_unknown_state(route)
 
     if (
-        not is_authenticated()
+        auth_state == AUTH_STATE_UNAUTHENTICATED
         and not explicit_route_target
         and not protected_route_requested()
         and not query_get("public")
@@ -22947,13 +23004,13 @@ if __name__ == "__main__":
         route = {"route": "landing", "public": "landing", "page": "Landing"}
         set_auth_debug_state(
             bool(browser_session_cookie()),
-            bool(st.session_state.get("authenticated") and st.session_state.get("user")),
+            False,
             "missing_or_invalid_cookie_show_landing",
             route,
         )
 
     if (
-        is_authenticated()
+        auth_state == AUTH_STATE_AUTHENTICATED
         and not explicit_route_target
         and not query_get("public")
         and not query_get("route")
@@ -22963,11 +23020,11 @@ if __name__ == "__main__":
         route = {"route": "dashboard", "page": "Dashboard", "es_page": "Dashboard"}
         set_auth_debug_state(bool(browser_session_cookie()), True, "valid_cookie_root_to_dashboard", route)
 
-    if not is_authenticated() and route.get("route") not in PUBLIC_ROUTES and protected_route_requested():
+    if auth_state == AUTH_STATE_UNAUTHENTICATED and route.get("route") not in PUBLIC_ROUTES and protected_route_requested():
         set_auth_debug_state(bool(browser_session_cookie()), False, "missing_or_invalid_cookie_show_landing", route)
 
-    login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)
-    if is_authenticated() and authenticated_public_entry_route(route) and not login_handoff_route:
+    login_handoff_route = auth_state == AUTH_STATE_AUTHENTICATED and authenticated_login_handoff_route(route)
+    if auth_state == AUTH_STATE_AUTHENTICATED and authenticated_public_entry_route(route) and not login_handoff_route:
         return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")
         if return_to and apply_return_to(return_to):
             route = get_current_route()
@@ -22986,7 +23043,7 @@ if __name__ == "__main__":
         render_auth_debug_panel(route, safe_text((st.session_state.get("_auth_debug") or {}).get("route_decision")) or f"public:{route.get('route')}")
         render_public_app()
     else:
-        if not is_authenticated():
+        if auth_state == AUTH_STATE_UNAUTHENTICATED:
             landing_route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
             render_auth_debug_panel(landing_route, "missing_or_invalid_cookie_show_landing")
             render_public_app()

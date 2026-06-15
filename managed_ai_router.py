@@ -47,6 +47,7 @@ _PROTECTED_LINK_KEYS = {"es_page", "es_editor", "job_id", "review_id", "task_id"
 _ROUTE_KEYS = {
     "es_page", "es_editor", "job_id", "review_id", "task_id", "es_session",
     "es_restore", "tool_tab", "return_to", "route", "public", "es_restore_miss",
+    "es_auth_checked",
 }
 _SESSION_COOKIE_NAME = "errorsweep_session"
 _SESSION_STORAGE_KEY = "errorsweep_session"
