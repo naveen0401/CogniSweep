@@ -168,7 +168,10 @@ def test_public_entry_routes_probe_persistent_session_before_rendering() -> None
     restore_end = source.index("def render_auth_restore_bridge", restore_start)
     restore_body = source[restore_start:restore_end]
     assert "firstStorage" in restore_body
-    assert "publicEntryRoutes" in restore_body
+    assert "publicEntryRoutes" not in restore_body
+    assert "if (isPublic)" in restore_body
+    assert 'url.searchParams.delete("es_restore_miss")' in restore_body
+    assert 'url.searchParams.set("es_page", "Landing")' in restore_body
     assert "cookieDomainAttribute" in restore_body
     assert "Domain=.cognisweep.com" in source
     assert 'url.searchParams.set("es_restore_miss", "1")' in restore_body

@@ -4508,6 +4508,11 @@ def query_get(name: str) -> str:
 
 def query_set(name: str, value: str) -> None:
     try:
+        st.query_params[name] = value
+        return
+    except Exception as exc:
+        LOGGER.debug("Unable to set query param %s via st.query_params: %s", name, exc)
+    try:
         params = {k: (v if isinstance(v, list) else [v]) for k, v in st.query_params.items()}
         params[name] = [value]
         st.experimental_set_query_params(**params)
@@ -4516,6 +4521,12 @@ def query_set(name: str, value: str) -> None:
 
 
 def query_clear(name: str) -> None:
+    try:
+        if name in st.query_params:
+            del st.query_params[name]
+        return
+    except Exception as exc:
+        LOGGER.debug("Unable to clear query param %s via st.query_params: %s", name, exc)
     try:
         params = {k: v for k, v in st.query_params.items() if k != name}
         st.experimental_set_query_params(**params)
@@ -4922,9 +4933,19 @@ def render_session_restore_bridge() -> None:
               const publicEsRoute = publicEsPageAliases[esPage] || "";
               const isPublic = (route && publicRoutes.includes(route)) || (publicEsRoute && publicRoutes.includes(publicEsRoute));
               const hasRouteTarget = Boolean(route) || routeParamKeys.some((key) => url.searchParams.has(key));
-              const publicEntryRoutes = ["", "landing", "login", "signup"];
-              const isPublicEntry = (!hasRouteTarget && !url.searchParams.has("public")) || publicEntryRoutes.includes(route) || publicEntryRoutes.includes(publicEsRoute);
-              if ((isPublicEntry || (hasRouteTarget && !isPublic)) && !url.searchParams.has("es_restore_miss")) {{
+              if (isPublic) {{
+                if (url.searchParams.has("es_restore_miss")) {{
+                  url.searchParams.delete("es_restore_miss");
+                  loc.replace(url.toString());
+                }}
+                return;
+              }}
+              if (hasRouteTarget && !url.searchParams.has("es_restore_miss")) {{
+                url.searchParams.delete("route");
+                url.searchParams.delete("public");
+                url.searchParams.delete("return_to");
+                routeParamKeys.forEach((key) => url.searchParams.delete(key));
+                url.searchParams.set("es_page", "Landing");
                 url.searchParams.set("es_restore_miss", "1");
                 loc.replace(url.toString());
               }}
