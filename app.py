@@ -4928,8 +4928,11 @@ def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
         return False
     route = route or {}
     route_name = safe_text(route.get("public") or route.get("route")).strip().lower()
-    if route_name in AUTHENTICATED_PUBLIC_ENTRY_ROUTES:
-        return True
+    if route_name in PUBLIC_ROUTES:
+        return False
+    public_es_route = public_route_for_es_page(query_get("es_page"))
+    if public_es_route in PUBLIC_ROUTES:
+        return False
     if protected_route_requested():
         return True
     return (

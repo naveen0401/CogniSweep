@@ -345,6 +345,14 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     assert "del st.query_params[stale]" in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
+    pending_start = source.index("def auth_bootstrap_pending")
+    pending_end = source.index("def current_auth_state", pending_start)
+    pending_body = source[pending_start:pending_end]
+    assert "if route_name in PUBLIC_ROUTES:" in pending_body
+    assert "public_es_route = public_route_for_es_page(query_get(\"es_page\"))" in pending_body
+    assert "return False" in pending_body
+    assert "route_name in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" not in pending_body
+
 
 def test_login_session_persists_until_explicit_logout() -> None:
     source = read_app()
