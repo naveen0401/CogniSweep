@@ -23013,9 +23013,6 @@ if __name__ == "__main__":
     if auth_state == AUTH_STATE_AUTHENTICATED:
         query_clear(AUTH_CHECK_QUERY_PARAM)
 
-    if auth_state == AUTH_STATE_AUTHENTICATED:
-        render_route_restore_bridge()
-
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
     if route_public in {"login", "signup"}:

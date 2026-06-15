@@ -438,7 +438,7 @@ def test_refresh_restores_last_authenticated_route() -> None:
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
     app_body = source[app_start:app_end]
-    assert "render_route_restore_bridge()" in app_body
+    assert "render_route_restore_bridge()" not in app_body
     assert "sync_browser_session_cookie()" in app_body
     assert "authenticated_public_entry_route(route)" in app_body
     assert 'current_route.get("public") != "login"' not in app_body
