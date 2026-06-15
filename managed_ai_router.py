@@ -264,10 +264,23 @@ def _current_signed_session_token() -> str:
     return ""
 
 
+def _cookie_domain_js_function() -> str:
+    return """
+        const cookieDomainAttribute = (hostname) => {
+          const host = String(hostname || "").toLowerCase();
+          if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") return "";
+          if (/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(host)) return "";
+          if (host === "cognisweep.com" || host.endsWith(".cognisweep.com")) return "; Domain=.cognisweep.com";
+          return "";
+        };
+    """.rstrip()
+
+
 def _protected_page_session_script(token: str) -> str:
     token_json = json.dumps(token)
     cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
+    domain_js = _cookie_domain_js_function()
     return f"""
     <script>
     (() => {{
@@ -276,6 +289,7 @@ def _protected_page_session_script(token: str) -> str:
         const cookieName = {cookie_name_json};
         const storageKey = {storage_key_json};
         const candidateWindows = [window.parent, window.top, window];
+{domain_js}
         const firstWindow = () => {{
           for (const candidate of candidateWindows) {{
             try {{
@@ -305,7 +319,7 @@ def _protected_page_session_script(token: str) -> str:
         const doc = firstDocument();
         const secure = hostWindow.location.protocol === "https:" ? "; Secure" : "";
         try {{
-          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+          doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(hostWindow.location.hostname);
         }} catch (err) {{}}
         try {{
           const storage = firstStorage();

@@ -4556,6 +4556,18 @@ def browser_session_cookie() -> str:
         return ""
 
 
+def browser_cookie_domain_js_function() -> str:
+    return """
+          const cookieDomainAttribute = (hostname) => {
+            const host = String(hostname || "").toLowerCase();
+            if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") return "";
+            if (/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(host)) return "";
+            if (host === "cognisweep.com" || host.endsWith(".cognisweep.com")) return "; Domain=.cognisweep.com";
+            return "";
+          };
+    """.rstrip()
+
+
 def set_auth_debug_state(cookie_found: bool, session_valid: bool, route_decision: str = "", route: Optional[Dict[str, Any]] = None) -> None:
     st.session_state["_auth_debug"] = {
         "cookie_found": bool(cookie_found),
@@ -4611,6 +4623,11 @@ def restore_session_from_cookie() -> None:
     token = browser_session_cookie()
     cookie_found = bool(token)
     session_valid = False
+    if st.session_state.get("authenticated") and st.session_state.get("user"):
+        session_valid = True
+        st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
+        set_auth_debug_state(cookie_found, session_valid)
+        return
     if token:
         session_valid = restore_user_from_signed_session(token)
         if session_valid:
@@ -4632,9 +4649,24 @@ def session_restore_probe_pending(route: Optional[Dict[str, str]] = None, explic
         return False
     if browser_session_cookie():
         return False
-    if isinstance(route, dict) and route.get("route") in PUBLIC_ROUTES:
-        return False
+    if isinstance(route, dict):
+        public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
+        if public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES:
+            return True
+        if public_route in PUBLIC_ROUTES:
+            return False
     return bool(explicit_route_target or protected_route_requested())
+
+
+def render_session_restore_checkpoint(route: Optional[Dict[str, Any]] = None, route_decision: str = "checking_browser_session_before_routing") -> None:
+    set_auth_debug_state(bool(browser_session_cookie()), False, route_decision, route)
+    st.info("Checking your session")
+    st.markdown("If you are already logged in, Dashboard will open automatically.")
+    st.markdown(
+        "[Continue to Login](?es_page=Login&es_restore_miss=1) &nbsp; [Continue to Landing](?es_page=Landing&es_restore_miss=1)",
+        unsafe_allow_html=True,
+    )
+    render_auth_debug_panel(route, route_decision)
 
 
 def sync_browser_session_cookie() -> None:
@@ -4655,6 +4687,7 @@ def sync_browser_session_cookie() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
+    domain_js = browser_cookie_domain_js_function()
     components.html(
         f"""
         <script>
@@ -4663,8 +4696,18 @@ def sync_browser_session_cookie() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const value = {token_json};
-          const secure = window.location.protocol === "https:" ? "; Secure" : "";
           const candidateWindows = [window.parent, window.top, window];
+          const firstWindow = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.location) return candidate;
+              }} catch (err) {{}}
+            }}
+            return window;
+          }};
+          const hostWindow = firstWindow();
+          const secure = hostWindow.location.protocol === "https:" ? "; Secure" : "";
+{domain_js}
           const firstDocument = () => {{
             for (const candidate of candidateWindows) {{
               try {{
@@ -4684,8 +4727,14 @@ def sync_browser_session_cookie() -> None:
           }};
           try {{
             const targetDoc = firstDocument();
-            targetDoc.cookie = name + "=" + encodeURIComponent(value) +
-              "; Max-Age={max_age}; Path=/; SameSite=Lax" + secure;
+            const domainAttr = cookieDomainAttribute(hostWindow.location.hostname);
+            if (value) {{
+              targetDoc.cookie = name + "=" + encodeURIComponent(value) +
+                "; Max-Age={max_age}; Path=/; SameSite=Lax" + secure + domainAttr;
+            }} else {{
+              targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+              targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + domainAttr;
+            }}
           }} catch (err) {{}}
           try {{
             const storage = firstStorage();
@@ -4718,6 +4767,7 @@ def render_global_logout_listener() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    domain_js = browser_cookie_domain_js_function()
     components.html(
         f"""
         <script>
@@ -4729,6 +4779,7 @@ def render_global_logout_listener() -> None:
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
           const candidateWindows = [window.parent, window.top, window];
+{domain_js}
           const firstWindow = () => {{
             for (const candidate of candidateWindows) {{
               try {{
@@ -4770,7 +4821,7 @@ def render_global_logout_listener() -> None:
               if (!currentPublicEntryUrl(url)) return;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
-                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
               ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
               if (loc.href !== url.toString()) loc.replace(url.toString());
@@ -4778,9 +4829,11 @@ def render_global_logout_listener() -> None:
           }};
           const clearAuthAndGoLanding = () => {{
             try {{
-              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              const loc = firstWindow().location;
+              const secure = loc.protocol === "https:" ? "; Secure" : "";
               const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             }} catch (err) {{}}
             try {{
               const storage = firstStorage();
@@ -4819,6 +4872,7 @@ def render_session_restore_bridge() -> None:
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     public_routes_json = json.dumps(list(PUBLIC_ROUTES))
     public_es_page_aliases_json = json.dumps(PUBLIC_ES_PAGE_ALIASES)
+    domain_js = browser_cookie_domain_js_function()
     components.html(
         f"""
         <script>
@@ -4832,6 +4886,7 @@ def render_session_restore_bridge() -> None:
             const publicRoutes = {public_routes_json};
             const publicEsPageAliases = {public_es_page_aliases_json};
             const candidateWindows = [window.parent, window.top, window];
+{domain_js}
             const firstWindow = () => {{
               for (const candidate of candidateWindows) {{
                 try {{
@@ -4888,7 +4943,7 @@ def render_session_restore_bridge() -> None:
             try {{
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               targetDoc.cookie = cookieName + "=" + encodeURIComponent(token) +
-                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             }} catch (err) {{}}
             const hasRouteTarget = routeBlockingKeys.some((key) => url.searchParams.has(key));
             const hasAnyQuery = Array.from(url.searchParams.keys()).length > 0;
@@ -4922,6 +4977,7 @@ def render_auth_restore_bridge(return_to: str = "") -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     return_to_json = json.dumps(safe_text(return_to))
+    domain_js = browser_cookie_domain_js_function()
     components.html(
         f"""
         <script>
@@ -4947,6 +5003,7 @@ def render_auth_restore_bridge(return_to: str = "") -> None:
             const cookieName = {cookie_name_json};
             const returnTo = {return_to_json};
             const candidateWindows = [window.parent, window.top, window];
+{domain_js}
             const firstWindow = () => {{
               for (const candidate of candidateWindows) {{
                 try {{
@@ -4984,7 +5041,7 @@ def render_auth_restore_bridge(return_to: str = "") -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               try {{
                 firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
-                  "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+                  "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
               }} catch (err) {{}}
               url.searchParams.delete("public");
               url.searchParams.delete("es_session");
@@ -5010,6 +5067,7 @@ def render_logout_bridge() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    domain_js = browser_cookie_domain_js_function()
     components.html(
         f"""
         <script>
@@ -5019,8 +5077,8 @@ def render_logout_bridge() -> None:
             const storageKey = {storage_key_json};
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
-            const secure = window.location.protocol === "https:" ? "; Secure" : "";
             const candidateWindows = [window.parent, window.top, window];
+{domain_js}
             const firstWindow = () => {{
               for (const candidate of candidateWindows) {{
                 try {{
@@ -5047,8 +5105,11 @@ def render_logout_bridge() -> None:
               return null;
             }};
             try {{
+              const loc = firstWindow().location;
+              const secure = loc.protocol === "https:" ? "; Secure" : "";
               const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             }} catch (err) {{}}
             try {{
               const storage = firstStorage();
@@ -5101,20 +5162,14 @@ def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dic
 
 def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
     status_line = "ErrorSweep is open in another tab" if opened_elsewhere else "Your ErrorSweep session is active."
+    st.success("You are logged in")
+    st.markdown(f"**{status_line}**")
+    c1, c2 = st.columns(2)
+    if c1.button("Open Dashboard", key="logged_in_open_dashboard", use_container_width=True):
+        navigate_es_page("Dashboard")
+    if c2.button("Logout", key="logged_in_logout", use_container_width=True):
+        logout()
     st.markdown(
-        """
-        <style>
-        .es-auth-shell:not(.es-login-status-card),
-        h2,
-        [data-testid="stForm"],
-        [data-testid="stCaptionContainer"] {
-          display: none !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.html(
         dedent(f"""
         <section class="es-auth-shell es-login-status-card" aria-label="Logged in">
           <div class="es-lp-brand">
@@ -5130,6 +5185,7 @@ def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
           </div>
         </section>
         """).strip(),
+        unsafe_allow_html=True,
     )
 
 
@@ -5145,7 +5201,10 @@ def render_post_login_tool_launch_bridge() -> None:
     session_token_json = json.dumps(session_token)
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    domain_js = browser_cookie_domain_js_function()
     render_logged_in_login_state(opened_elsewhere=True)
+    if session_token:
+        st.session_state["_pending_session_cookie"] = session_token
     components.html(
         f"""
         <script>
@@ -5158,6 +5217,7 @@ def render_post_login_tool_launch_bridge() -> None:
             const storageKey = {storage_key_json};
             const key = "errorsweep_tool_launch_" + launchId;
             const candidateWindows = [window.parent, window.top, window];
+{domain_js}
             const firstWindow = () => {{
               for (const candidate of candidateWindows) {{
                 try {{
@@ -5187,10 +5247,11 @@ def render_post_login_tool_launch_bridge() -> None:
             if (storage && storage.getItem(key)) return;
             if (storage) storage.setItem(key, "1");
             if (sessionToken) {{
-              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              const loc = firstWindow().location;
+              const secure = loc.protocol === "https:" ? "; Secure" : "";
               const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken) +
-                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
+                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
               const persistentStorage = firstStorage("localStorage");
               if (persistentStorage) persistentStorage.setItem(storageKey, sessionToken);
             }}
@@ -6229,6 +6290,7 @@ def redirect_to_login_with_return_to(reason: str = "unknown") -> None:
     return_url = encode_return_to()
     st.session_state["post_login_return_to"] = return_url
     st.session_state["_router_redirect_reason"] = reason
+    render_session_restore_checkpoint(get_current_route(), "missing_or_invalid_cookie_redirect_to_login")
     render_auth_restore_bridge(return_url)
     st.stop()
 
@@ -22902,6 +22964,22 @@ if __name__ == "__main__":
         render_route_restore_bridge()
 
     route = get_current_route()
+    root_entry_without_target = (
+        not explicit_route_target
+        and not protected_route_requested()
+        and not query_get("public")
+        and not query_get("route")
+    )
+    if (
+        not is_authenticated()
+        and root_entry_without_target
+        and query_get("es_restore_miss") != "1"
+        and not browser_session_cookie()
+    ):
+        probe_route = {"route": "landing", "public": "landing", "page": "Landing"}
+        render_session_restore_checkpoint(probe_route)
+        st.stop()
+
     if (
         not is_authenticated()
         and not explicit_route_target
@@ -22929,6 +23007,7 @@ if __name__ == "__main__":
         set_auth_debug_state(bool(browser_session_cookie()), True, "valid_cookie_root_to_dashboard", route)
 
     if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
+        render_session_restore_checkpoint(route)
         st.stop()
 
     login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)

@@ -158,14 +158,20 @@ def test_public_entry_routes_probe_persistent_session_before_rendering() -> None
     probe_start = source.index("def session_restore_probe_pending")
     probe_end = source.index("def sync_browser_session_cookie", probe_start)
     probe_body = source[probe_start:probe_end]
-    assert 'if isinstance(route, dict) and route.get("route") in PUBLIC_ROUTES:' in probe_body
+    assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES" in probe_body
+    assert "public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" in probe_body
+    assert "return True" in probe_body
     assert "return False" in probe_body
+    assert "def render_session_restore_checkpoint" in probe_body
+    assert "Checking your session" in probe_body
 
     restore_start = source.index("def render_session_restore_bridge")
     restore_end = source.index("def render_auth_restore_bridge", restore_start)
     restore_body = source[restore_start:restore_end]
     assert "firstStorage" in restore_body
     assert "publicEntryRoutes" in restore_body
+    assert "cookieDomainAttribute" in restore_body
+    assert "Domain=.cognisweep.com" in source
     assert 'url.searchParams.set("es_restore_miss", "1")' in restore_body
     assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in restore_body
     assert 'url.searchParams.delete("es_restore")' in restore_body
@@ -182,6 +188,9 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     assert "ErrorSweep is open in another tab" in state_body
     assert "Open Dashboard" in state_body
     assert "?es_logout=1" in state_body
+    assert 'st.success("You are logged in")' in state_body
+    assert 'button("Open Dashboard"' in state_body
+    assert 'button("Logout"' in state_body
 
     login_start = source.index("def render_login")
     login_end = source.index("def profile_language_defaults", login_start)
@@ -246,6 +255,8 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "restore_user_from_signed_session(token)" in source
     assert 'st.session_state["_pending_session_cookie"] = token' in source
     assert "sync_browser_session_cookie()" in source
+    assert "def browser_cookie_domain_js_function()" in source
+    assert "cookieDomainAttribute" in source
     assert 'url.searchParams.set("es_restore", token)' not in source
     assert 'url.searchParams.set("es_session", token)' not in source
     assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in source
@@ -274,6 +285,24 @@ def test_debug_auth_reports_cookie_state_and_route_decision() -> None:
     assert '"valid_cookie_public_entry_to_dashboard"' in app_body
 
 
+def test_session_restore_stop_renders_nonblank_checkpoint() -> None:
+    source = read_app()
+    assert "def render_session_restore_checkpoint" in source
+    checkpoint_start = source.index("def render_session_restore_checkpoint")
+    checkpoint_end = source.index("def sync_browser_session_cookie", checkpoint_start)
+    checkpoint_body = source[checkpoint_start:checkpoint_end]
+    assert "Checking your session" in checkpoint_body
+    assert "Continue to Login" in checkpoint_body
+    assert "Continue to Landing" in checkpoint_body
+
+    app_start = source.index('if __name__ == "__main__"')
+    app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
+    app_body = source[app_start:app_end]
+    stop_idx = app_body.index("st.stop()", app_body.index("session_restore_probe_pending"))
+    checkpoint_idx = app_body.index("render_session_restore_checkpoint(route)")
+    assert checkpoint_idx < stop_idx
+
+
 def test_login_session_persists_until_explicit_logout() -> None:
     source = read_app()
     assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")' in source
@@ -293,6 +322,8 @@ def test_login_session_persists_until_explicit_logout() -> None:
     restore_body = source[restore_start:restore_end]
     assert "find_user_by_email" in restore_body
     assert "SESSION_TOKEN_USER_FIELDS" in restore_body
+    assert 'st.session_state.get("authenticated") and st.session_state.get("user")' in restore_body
+    assert 'st.session_state["_pending_session_cookie"] = signed_session_token_for_user' in restore_body
 
     verify_start = source.index("def verify_payload")
     verify_end = source.index("def query_get", verify_start)
@@ -679,6 +710,7 @@ if __name__ == "__main__":
     test_editor_urls_are_clean_routes_without_session_tokens()
     test_human_review_editor_uses_es_page_review_id_route()
     test_reload_session_restore_uses_cookie_not_url_only()
+    test_session_restore_stop_renders_nonblank_checkpoint()
     test_login_session_persists_until_explicit_logout()
     test_refresh_restores_last_authenticated_route()
     test_translation_editor_uses_supplied_html_template()
