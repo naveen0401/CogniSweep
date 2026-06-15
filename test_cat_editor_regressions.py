@@ -169,9 +169,25 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     auth_start = login_body.index("if is_authenticated():")
     auth_end = login_body.index("owner_user =", auth_start)
     auth_branch = login_body[auth_start:auth_end]
+    auth_header_start = login_body.index("signup_enabled = feature_flag")
+    form_start = login_body.index('with st.form("unified_login"')
+    assert auth_start < auth_header_start < form_start
+    assert "render_post_login_tool_launch_bridge()" in auth_branch
     assert "render_logged_in_login_state" in auth_branch
     assert "st.rerun()" not in auth_branch
     assert 'st.form("unified_login"' in login_body
+
+
+def test_login_new_tab_bridge_reruns_before_rendering_status() -> None:
+    source = Path(__file__).with_name("managed_ai_router.py").read_text(encoding="utf-8")
+    start = source.index("def _install_login_new_tab_bridge")
+    end = source.index("_install_signup_scroll_fix()", start)
+    body = source[start:end]
+    assert 'st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)' in body
+    assert 'st.session_state["_login_window_stay_open"] = True' in body
+    assert "_leave_current_tab_on_login()" in body
+    assert "render_post_login_tool_launch_bridge" not in body
+    assert "return original_rerun(*args, **kwargs)" in body
 
 
 def test_logout_routes_every_window_to_landing() -> None:
@@ -599,6 +615,7 @@ if __name__ == "__main__":
     test_login_success_opens_target_route_in_current_tab()
     test_public_login_and_authenticated_entry_routes_open_dashboard()
     test_authenticated_login_tab_shows_logged_in_state()
+    test_login_new_tab_bridge_reruns_before_rendering_status()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()

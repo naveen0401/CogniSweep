@@ -651,10 +651,6 @@ def _install_login_new_tab_bridge() -> None:
                         st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
                         st.session_state["_login_window_stay_open"] = True
                         _leave_current_tab_on_login()
-                        render_bridge = getattr(_main_module(), "render_post_login_tool_launch_bridge", None)
-                        if callable(render_bridge):
-                            render_bridge()
-                            st.stop()
             except Exception:
                 pass
             return original_rerun(*args, **kwargs)

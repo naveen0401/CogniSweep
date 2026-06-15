@@ -4888,9 +4888,22 @@ def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dic
 
 def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
     status_line = "ErrorSweep is open in another tab" if opened_elsewhere else "Your ErrorSweep session is active."
+    st.markdown(
+        """
+        <style>
+        .es-auth-shell:not(.es-login-status-card),
+        h2,
+        [data-testid="stForm"],
+        [data-testid="stCaptionContainer"] {
+          display: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.html(
         dedent(f"""
-        <section class="es-auth-shell" aria-label="Logged in">
+        <section class="es-auth-shell es-login-status-card" aria-label="Logged in">
           <div class="es-lp-brand">
             <div class="es-lp-logo" aria-hidden="true"></div>
             <div>
@@ -16949,6 +16962,13 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
 
 
 def render_login() -> None:
+    if is_authenticated():
+        if safe_text(st.session_state.get("_post_login_tool_launch_url", "")):
+            render_post_login_tool_launch_bridge()
+        else:
+            render_logged_in_login_state(opened_elsewhere=bool(st.session_state.get("_login_window_stay_open", False)))
+        return
+
     signup_enabled = feature_flag("public_registration")
     signup_href = public_page_link("signup") if signup_enabled else public_page_link("landing")
     signup_label = "Sign up" if signup_enabled else "Signups closed"
@@ -16970,10 +16990,6 @@ def render_login() -> None:
     )
     st.markdown("## Login to CogniSweep")
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
-
-    if is_authenticated():
-        render_logged_in_login_state(opened_elsewhere=bool(st.session_state.get("_login_window_stay_open", False)))
-        return
 
     owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
     owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
