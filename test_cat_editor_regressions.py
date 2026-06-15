@@ -294,6 +294,11 @@ def test_session_restore_stop_renders_nonblank_checkpoint() -> None:
     assert "Checking your session" in checkpoint_body
     assert "Continue to Login" in checkpoint_body
     assert "Continue to Landing" in checkpoint_body
+    assert 'button("Continue to Login"' in checkpoint_body
+    assert 'button("Continue to Landing"' in checkpoint_body
+    assert 'go({{ es_page: "Landing", es_restore_miss: "1" }})' in checkpoint_body
+    assert 'target_page = "Dashboard"' in checkpoint_body
+    assert '"tool_tab"' in checkpoint_body
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
@@ -301,6 +306,13 @@ def test_session_restore_stop_renders_nonblank_checkpoint() -> None:
     stop_idx = app_body.index("st.stop()", app_body.index("session_restore_probe_pending"))
     checkpoint_idx = app_body.index("render_session_restore_checkpoint(route)")
     assert checkpoint_idx < stop_idx
+    assert '"invalid_cookie_show_landing"' in app_body
+
+    auth_restore_start = source.index("def render_auth_restore_bridge")
+    auth_restore_end = source.index("def render_logout_bridge", auth_restore_start)
+    auth_restore_body = source[auth_restore_start:auth_restore_end]
+    assert 'url.searchParams.set("es_page", "Landing")' in auth_restore_body
+    assert 'url.searchParams.set("es_restore_miss", "1")' in auth_restore_body
 
 
 def test_login_session_persists_until_explicit_logout() -> None:
