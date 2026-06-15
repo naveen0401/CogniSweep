@@ -186,6 +186,13 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-shell-split-v2"
+DEPLOY_EXPECTED_BRANCH = "main"
+DEPLOY_EXPECTED_FEATURES = (
+    "separate_global_and_editor_shells",
+    "editor_css_scoped_to_editor_shell",
+    "direct_selected_page_navigation",
+)
 DEFAULT_MODEL = "gpt-4o-mini"
 # Persistent browser sessions should survive reloads and browser restarts until
 # the user explicitly clicks Logout. Browser cookies still need a finite
@@ -4728,6 +4735,35 @@ def render_auth_debug_panel(route: Optional[Dict[str, Any]] = None, route_decisi
         "route_decision": safe_text(debug.get("route_decision")),
         "resolved_route": debug.get("resolved_route") or {},
     })
+
+
+def runtime_commit_hint() -> str:
+    for key in ("STREAMLIT_GIT_COMMIT", "GIT_COMMIT", "SOURCE_COMMIT", "COMMIT_SHA", "RENDER_GIT_COMMIT"):
+        value = safe_text(os.getenv(key))
+        if value:
+            return value
+    return ""
+
+
+def render_deploy_debug_page() -> None:
+    if query_get("debug_deploy") != "1":
+        return
+    st.title("CogniSweep Deploy Debug")
+    st.success("This build includes the latest shell/auth routing changes.")
+    st.code(DEPLOY_BUILD_ID)
+    st.json(
+        {
+            "app_version": APP_VERSION,
+            "deploy_build_id": DEPLOY_BUILD_ID,
+            "expected_branch": DEPLOY_EXPECTED_BRANCH,
+            "expected_features": list(DEPLOY_EXPECTED_FEATURES),
+            "runtime_commit_hint": runtime_commit_hint(),
+            "editor_shell_marker": "errorsweep-editor-shell-marker",
+            "global_shell_marker": "errorsweep-root-shell-marker",
+        }
+    )
+    st.caption("If this page or build ID is missing on Streamlit Cloud, Cloud is not running the pushed main branch.")
+    st.stop()
 
 
 def restore_user_from_signed_session(token: str) -> bool:
@@ -23127,6 +23163,7 @@ def render_app() -> None:
 
 
 if __name__ == "__main__":
+    render_deploy_debug_page()
     render_global_logout_listener()
 
     if query_get("es_logout") == "1":
