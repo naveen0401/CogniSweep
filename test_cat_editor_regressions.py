@@ -42,7 +42,9 @@ def test_auth_redirect_uses_es_page_login_without_route_param() -> None:
     redirect_start = source.index("def redirect_to_login_with_return_to")
     redirect_end = source.index("def require_auth", redirect_start)
     redirect_body = source[redirect_start:redirect_end]
-    assert "render_auth_restore_bridge(return_url)" in redirect_body
+    assert 'st.query_params["es_page"] = "Login"' in redirect_body
+    assert 'st.query_params["return_to"] = return_url' in redirect_body
+    assert "render_auth_restore_bridge" not in redirect_body
     assert "st.rerun()" not in redirect_body
     assert 'query_set("route", "login")' not in redirect_body
 
@@ -153,32 +155,23 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
 
 
-def test_public_entry_routes_probe_persistent_session_before_rendering() -> None:
+def test_public_entry_routes_use_cookie_provider_not_restore_miss_gate() -> None:
     source = read_app()
-    probe_start = source.index("def session_restore_probe_pending")
-    probe_end = source.index("def sync_browser_session_cookie", probe_start)
-    probe_body = source[probe_start:probe_end]
-    assert "public_route in PUBLIC_ROUTES" in probe_body
-    assert "public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" not in probe_body
-    assert "return False" in probe_body
+    assert "def session_restore_probe_pending" not in source
+    assert "def render_session_restore_bridge" not in source
+    assert "def render_auth_restore_bridge" not in source
     assert "render_session_restore_checkpoint" not in source
     assert "Checking your session" not in source
 
-    restore_start = source.index("def render_session_restore_bridge")
-    restore_end = source.index("def render_auth_restore_bridge", restore_start)
-    restore_body = source[restore_start:restore_end]
-    assert "firstStorage" in restore_body
-    assert "publicEntryRoutes" not in restore_body
-    assert "if (isPublic)" in restore_body
-    assert 'url.searchParams.delete("es_restore_miss")' in restore_body
-    assert 'url.searchParams.set("es_page", "Landing")' in restore_body
-    assert "cookieDomainAttribute" in restore_body
-    assert "Domain=.cognisweep.com" in source
-    assert 'url.searchParams.set("es_restore_miss", "1")' in restore_body
-    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in restore_body
-    assert 'url.searchParams.delete("es_restore")' in restore_body
-    assert 'url.searchParams.delete("es_session")' in restore_body
-    assert 'url.searchParams.set("es_restore", token)' not in restore_body
+    app_start = source.index('if __name__ == "__main__"')
+    app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
+    app_body = source[app_start:app_end]
+    assert "restore_session_from_cookie()" in app_body
+    assert "sync_browser_session_cookie()" in app_body
+    assert "render_session_restore_bridge" not in app_body
+    assert "session_restore_probe_pending" not in app_body
+    assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
+    assert 'url.searchParams.set("es_restore_miss", "1")' not in source
 
 
 def test_authenticated_login_tab_shows_logged_in_state() -> None:
@@ -258,7 +251,8 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "def browser_cookie_controller()" in source
     assert "def component_session_cookie()" in source
     assert "def sync_component_session_cookie" in source
-    assert "def render_session_restore_bridge()" in source
+    assert "def render_browser_session_bootstrap" in source
+    assert "def render_session_restore_bridge()" not in source
     assert "def restore_session_from_cookie()" in source
     assert "token = browser_session_cookie()" in source
     assert "restore_user_from_signed_session(token)" in source
@@ -271,8 +265,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "cookieDomainAttribute" in source
     assert 'url.searchParams.set("es_restore", token)' not in source
     assert 'url.searchParams.set("es_session", token)' not in source
-    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in source
+    assert 'targetDoc.cookie = name + "=" + encodeURIComponent(value)' in source
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
+    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken)' in source
+    assert 'const token = cookieToken || storageToken;' in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
 
@@ -300,6 +296,9 @@ def test_debug_auth_reports_cookie_state_and_route_decision() -> None:
 def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     source = read_app()
     assert "render_session_restore_checkpoint" not in source
+    assert "render_session_restore_bridge" not in source
+    assert "render_auth_restore_bridge" not in source
+    assert "session_restore_probe_pending" not in source
     assert "Checking your session" not in source
     assert "Continue to Login" not in source
     assert "Continue to Landing" not in source
@@ -307,20 +306,12 @@ def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
     app_body = source[app_start:app_end]
-    probe_idx = app_body.index("session_restore_probe_pending")
-    probe_body = app_body[probe_idx:app_body.index("login_handoff_route", probe_idx)]
-    assert "st.stop()" not in probe_body
-    assert 'st.query_params["es_page"] = "Landing"' in probe_body
-    assert 'st.query_params["es_page"] = "Login"' in probe_body
-    assert '"missing_or_invalid_cookie_show_login"' in probe_body
-    assert '"missing_or_invalid_cookie_show_landing"' in probe_body
-    assert '"invalid_cookie_show_landing"' in app_body
-
-    auth_restore_start = source.index("def render_auth_restore_bridge")
-    auth_restore_end = source.index("def render_logout_bridge", auth_restore_start)
-    auth_restore_body = source[auth_restore_start:auth_restore_end]
-    assert 'url.searchParams.set("es_page", "Landing")' in auth_restore_body
-    assert 'url.searchParams.set("es_restore_miss", "1")' in auth_restore_body
+    assert "restore_session_from_cookie()" in app_body
+    assert "sync_browser_session_cookie()" in app_body
+    assert "render_browser_session_bootstrap(route)" in app_body
+    assert 'render_public_app()' in app_body
+    assert '"missing_or_invalid_cookie_show_landing"' in app_body
+    assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
 
 def test_public_login_signup_navigation_ignores_restore_miss() -> None:
@@ -338,8 +329,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     assert 'st.query_params["es_page"] = page_name' in app_body
     assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to")' in app_body
     assert "del st.query_params[stale]" in app_body
-    assert "fallback_public_route in PUBLIC_ROUTES" in app_body
-    assert 'f"invalid_cookie_show_{fallback_public_route}"' in app_body
+    assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
 
 def test_login_session_persists_until_explicit_logout() -> None:
@@ -357,7 +347,7 @@ def test_login_session_persists_until_explicit_logout() -> None:
     assert "\"exp\"" not in sign_body
 
     restore_start = source.index("def restore_user_from_signed_session")
-    restore_end = source.index("def session_restore_probe_pending", restore_start)
+    restore_end = source.index("def sync_browser_session_cookie", restore_start)
     restore_body = source[restore_start:restore_end]
     assert "find_user_by_email" in restore_body
     assert "SESSION_TOKEN_USER_FIELDS" in restore_body
@@ -372,7 +362,7 @@ def test_login_session_persists_until_explicit_logout() -> None:
     assert "data.get(\"exp\"" not in verify_body
 
     sync_start = source.index("def sync_browser_session_cookie")
-    sync_end = source.index("def render_session_restore_bridge", sync_start)
+    sync_end = source.index("def landing_redirect_url_js", sync_start)
     sync_body = source[sync_start:sync_end]
     assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in sync_body
     assert "max_age = SESSION_PERSISTENCE_SECONDS if token else 0" in sync_body
@@ -400,14 +390,13 @@ def test_refresh_restores_last_authenticated_route() -> None:
     assert "storage.setItem(routeStorageKey, JSON.stringify(value))" in source
     assert "storage.removeItem(routeStorageKey)" in source
     assert "url.searchParams.set(key, String(value))" in source
-    assert 'url.searchParams.set("es_page", "Dashboard")' in source
     assert "if (!hasAnyQuery) return;" in source
 
-    restore_start = source.index("def render_session_restore_bridge")
-    restore_end = source.index("def login_user", restore_start)
+    restore_start = source.index("def render_route_restore_bridge")
+    restore_end = source.index("def is_human_review_editor_page", restore_start)
     restore_body = source[restore_start:restore_end]
     assert "storage.getItem(routeStorageKey)" in restore_body
-    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in restore_body
+    assert 'url.searchParams.set(key, String(value))' in restore_body
     assert 'url.searchParams.set("es_restore", token)' not in restore_body
 
     app_start = source.index('if __name__ == "__main__"')
@@ -742,7 +731,7 @@ if __name__ == "__main__":
     test_login_es_page_aliases_are_public_and_normalized()
     test_login_success_opens_target_route_in_current_tab()
     test_public_login_and_authenticated_entry_routes_open_dashboard()
-    test_public_entry_routes_probe_persistent_session_before_rendering()
+    test_public_entry_routes_use_cookie_provider_not_restore_miss_gate()
     test_authenticated_login_tab_shows_logged_in_state()
     test_login_new_tab_bridge_reruns_before_rendering_status()
     test_unknown_and_unauthorized_routes_are_separate()
