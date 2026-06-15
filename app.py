@@ -4656,110 +4656,9 @@ def session_restore_probe_pending(route: Optional[Dict[str, str]] = None, explic
         return False
     if isinstance(route, dict):
         public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
-        if public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES:
-            return True
         if public_route in PUBLIC_ROUTES:
             return False
     return bool(explicit_route_target or protected_route_requested())
-
-
-def render_session_restore_checkpoint(route: Optional[Dict[str, Any]] = None, route_decision: str = "checking_browser_session_before_routing") -> None:
-    set_auth_debug_state(bool(browser_session_cookie()), False, route_decision, route)
-    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
-    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
-    domain_js = browser_cookie_domain_js_function()
-    route_info = route or {}
-    public_route = safe_text(route_info.get("public") or route_info.get("route")).strip().lower()
-    target_page = normalize_es_page(route_info.get("es_page") or route_info.get("page") or "Dashboard")
-    if public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES or public_route_for_es_page(target_page) or target_page not in known_protected_es_pages():
-        target_page = "Dashboard"
-    target_params = route_query_for_page(target_page)
-    if target_page == "Human Review Editor" and safe_text(route_info.get("review_id")):
-        target_params["review_id"] = safe_text((route or {}).get("review_id"))
-    target_query_json = json.dumps(target_params)
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          try {{
-            const cookieName = {cookie_name_json};
-            const storageKey = {storage_key_json};
-            const targetQuery = {target_query_json};
-            const candidateWindows = [window.parent, window.top, window];
-{domain_js}
-            const firstWindow = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.location) return candidate;
-                }} catch (err) {{}}
-              }}
-              return window;
-            }};
-            const firstDocument = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.document) return candidate.document;
-                }} catch (err) {{}}
-              }}
-              return document;
-            }};
-            const firstStorage = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.localStorage) return candidate.localStorage;
-                }} catch (err) {{}}
-              }}
-              try {{ return window.localStorage; }} catch (err) {{}}
-              return null;
-            }};
-            const doc = firstDocument();
-            const cookieToken = (doc.cookie || "").split(";").map((item) => item.trim()).reduce((found, item) => {{
-              if (found) return found;
-              const prefix = cookieName + "=";
-              return item.startsWith(prefix) ? decodeURIComponent(item.slice(prefix.length)) : "";
-            }}, "");
-            const storage = firstStorage();
-            const token = (storage ? storage.getItem(storageKey) : "") || cookieToken;
-            const loc = firstWindow().location;
-            const go = (params) => {{
-              const url = new URL(loc.href);
-              ["route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "es_editor", "job_id", "review_id", "task_id", "tool_tab"].forEach((key) => url.searchParams.delete(key));
-              Object.entries(params || {{}}).forEach(([key, value]) => {{
-                if (value) url.searchParams.set(key, String(value));
-              }});
-              loc.replace(url.toString());
-            }};
-            if (token) {{
-              const secure = loc.protocol === "https:" ? "; Secure" : "";
-              try {{
-                doc.cookie = cookieName + "=" + encodeURIComponent(token) +
-                  "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              }} catch (err) {{}}
-              go(Object.keys(targetQuery || {{}}).length ? targetQuery : {{ es_page: "Dashboard" }});
-              return;
-            }}
-            window.setTimeout(() => go({{ es_page: "Landing", es_restore_miss: "1" }}), 900);
-          }} catch (err) {{}}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
-    st.info("Checking your session")
-    st.markdown("If you are already logged in, Dashboard will open automatically.")
-    c1, c2 = st.columns(2)
-    if c1.button("Continue to Login", key="session_restore_continue_login", use_container_width=True):
-        st.query_params.clear()
-        st.query_params["es_page"] = "Login"
-        st.query_params["es_restore_miss"] = "1"
-        st.rerun()
-    if c2.button("Continue to Landing", key="session_restore_continue_landing", use_container_width=True):
-        st.query_params.clear()
-        st.query_params["es_page"] = "Landing"
-        st.query_params["es_restore_miss"] = "1"
-        st.rerun()
-    st.markdown("[Continue to Login](?es_page=Login&es_restore_miss=1) &nbsp; [Continue to Landing](?es_page=Landing&es_restore_miss=1)", unsafe_allow_html=True)
-    render_auth_debug_panel(route, route_decision)
 
 
 def sync_browser_session_cookie() -> None:
@@ -6383,7 +6282,6 @@ def redirect_to_login_with_return_to(reason: str = "unknown") -> None:
     return_url = encode_return_to()
     st.session_state["post_login_return_to"] = return_url
     st.session_state["_router_redirect_reason"] = reason
-    render_session_restore_checkpoint(get_current_route(), "missing_or_invalid_cookie_redirect_to_login")
     render_auth_restore_bridge(return_url)
     st.stop()
 
@@ -23057,11 +22955,29 @@ if __name__ == "__main__":
         render_route_restore_bridge()
 
     route = get_current_route()
+    route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
+    if route_public in {"login", "signup"}:
+        page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
+        st.query_params["es_page"] = page_name
+        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to"):
+            if stale in st.query_params:
+                del st.query_params[stale]
+        route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}
+
+    explicit_login_fallback = (
+        query_get("es_restore_miss") == "1"
+        and (public_route_for_es_page(query_get("es_page")) == "login" or safe_text(query_get("route") or query_get("public")).strip().lower() == "login")
+    )
     if not is_authenticated() and st.session_state.pop("_session_restore_failed", False):
         fallback_public_route = public_route_for_es_page(query_get("es_page")) or safe_text(query_get("public") or query_get("route")).strip().lower()
-        if query_get("es_restore_miss") == "1" and fallback_public_route == "login":
-            route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
-            set_auth_debug_state(True, False, "invalid_cookie_show_login", route)
+        if fallback_public_route in PUBLIC_ROUTES and fallback_public_route not in {"", "landing"}:
+            page_name = PUBLIC_ROUTE_PAGE_NAMES.get(fallback_public_route, normalize_es_page(fallback_public_route))
+            st.query_params["es_page"] = page_name
+            for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to"):
+                if stale in st.query_params:
+                    del st.query_params[stale]
+            route = {"route": fallback_public_route, "public": fallback_public_route, "page": page_name, "es_page": page_name}
+            set_auth_debug_state(True, False, f"invalid_cookie_show_{fallback_public_route}", route)
         else:
             st.query_params.clear()
             st.query_params["es_page"] = "Landing"
@@ -23075,16 +22991,6 @@ if __name__ == "__main__":
         and not query_get("public")
         and not query_get("route")
     )
-    if (
-        not is_authenticated()
-        and root_entry_without_target
-        and query_get("es_restore_miss") != "1"
-        and not browser_session_cookie()
-    ):
-        probe_route = {"route": "landing", "public": "landing", "page": "Landing"}
-        render_session_restore_checkpoint(probe_route)
-        st.stop()
-
     if (
         not is_authenticated()
         and not explicit_route_target
@@ -23112,8 +23018,17 @@ if __name__ == "__main__":
         set_auth_debug_state(bool(browser_session_cookie()), True, "valid_cookie_root_to_dashboard", route)
 
     if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
-        render_session_restore_checkpoint(route)
-        st.stop()
+        st.query_params.clear()
+        if explicit_login_fallback:
+            st.query_params["es_page"] = "Login"
+            st.query_params["es_restore_miss"] = "1"
+            route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+            set_auth_debug_state(bool(browser_session_cookie()), False, "missing_or_invalid_cookie_show_login", route)
+        else:
+            st.query_params["es_page"] = "Landing"
+            st.query_params["es_restore_miss"] = "1"
+            route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
+            set_auth_debug_state(bool(browser_session_cookie()), False, "missing_or_invalid_cookie_show_landing", route)
 
     login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)
     if is_authenticated() and authenticated_public_entry_route(route) and not login_handoff_route:

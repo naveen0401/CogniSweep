@@ -67,7 +67,7 @@ def test_login_es_page_aliases_are_public_and_normalized() -> None:
 def test_login_success_opens_target_route_in_current_tab() -> None:
     source = read_app()
     start = source.index("def login_user")
-    end = source.index("def restore_session_from_query", start)
+    end = source.index("def logout", start)
     body = source[start:end]
     assert 'st.session_state["authenticated"] = True' in body
     assert 'st.session_state["es_page"] = launch_page' in body
@@ -158,12 +158,11 @@ def test_public_entry_routes_probe_persistent_session_before_rendering() -> None
     probe_start = source.index("def session_restore_probe_pending")
     probe_end = source.index("def sync_browser_session_cookie", probe_start)
     probe_body = source[probe_start:probe_end]
-    assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES" in probe_body
-    assert "public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" in probe_body
-    assert "return True" in probe_body
+    assert "public_route in PUBLIC_ROUTES" in probe_body
+    assert "public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" not in probe_body
     assert "return False" in probe_body
-    assert "def render_session_restore_checkpoint" in probe_body
-    assert "Checking your session" in probe_body
+    assert "render_session_restore_checkpoint" not in source
+    assert "Checking your session" not in source
 
     restore_start = source.index("def render_session_restore_bridge")
     restore_end = source.index("def render_auth_restore_bridge", restore_start)
@@ -285,27 +284,23 @@ def test_debug_auth_reports_cookie_state_and_route_decision() -> None:
     assert '"valid_cookie_public_entry_to_dashboard"' in app_body
 
 
-def test_session_restore_stop_renders_nonblank_checkpoint() -> None:
+def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     source = read_app()
-    assert "def render_session_restore_checkpoint" in source
-    checkpoint_start = source.index("def render_session_restore_checkpoint")
-    checkpoint_end = source.index("def sync_browser_session_cookie", checkpoint_start)
-    checkpoint_body = source[checkpoint_start:checkpoint_end]
-    assert "Checking your session" in checkpoint_body
-    assert "Continue to Login" in checkpoint_body
-    assert "Continue to Landing" in checkpoint_body
-    assert 'button("Continue to Login"' in checkpoint_body
-    assert 'button("Continue to Landing"' in checkpoint_body
-    assert 'go({{ es_page: "Landing", es_restore_miss: "1" }})' in checkpoint_body
-    assert 'target_page = "Dashboard"' in checkpoint_body
-    assert '"tool_tab"' in checkpoint_body
+    assert "render_session_restore_checkpoint" not in source
+    assert "Checking your session" not in source
+    assert "Continue to Login" not in source
+    assert "Continue to Landing" not in source
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
     app_body = source[app_start:app_end]
-    stop_idx = app_body.index("st.stop()", app_body.index("session_restore_probe_pending"))
-    checkpoint_idx = app_body.index("render_session_restore_checkpoint(route)")
-    assert checkpoint_idx < stop_idx
+    probe_idx = app_body.index("session_restore_probe_pending")
+    probe_body = app_body[probe_idx:app_body.index("login_handoff_route", probe_idx)]
+    assert "st.stop()" not in probe_body
+    assert 'st.query_params["es_page"] = "Landing"' in probe_body
+    assert 'st.query_params["es_page"] = "Login"' in probe_body
+    assert '"missing_or_invalid_cookie_show_login"' in probe_body
+    assert '"missing_or_invalid_cookie_show_landing"' in probe_body
     assert '"invalid_cookie_show_landing"' in app_body
 
     auth_restore_start = source.index("def render_auth_restore_bridge")
@@ -313,6 +308,25 @@ def test_session_restore_stop_renders_nonblank_checkpoint() -> None:
     auth_restore_body = source[auth_restore_start:auth_restore_end]
     assert 'url.searchParams.set("es_page", "Landing")' in auth_restore_body
     assert 'url.searchParams.set("es_restore_miss", "1")' in auth_restore_body
+
+
+def test_public_login_signup_navigation_ignores_restore_miss() -> None:
+    source = read_app()
+    link_start = source.index("def public_page_link")
+    link_end = source.index("def public_login_link_target", link_start)
+    link_body = source[link_start:link_end]
+    assert 'return "?" + urlencode({"es_page": page_name})' in link_body
+    assert "es_restore_miss" not in link_body
+
+    app_start = source.index('if __name__ == "__main__"')
+    app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
+    app_body = source[app_start:app_end]
+    assert 'route_public in {"login", "signup"}' in app_body
+    assert 'st.query_params["es_page"] = page_name' in app_body
+    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to")' in app_body
+    assert "del st.query_params[stale]" in app_body
+    assert "fallback_public_route in PUBLIC_ROUTES" in app_body
+    assert 'f"invalid_cookie_show_{fallback_public_route}"' in app_body
 
 
 def test_login_session_persists_until_explicit_logout() -> None:
@@ -722,7 +736,8 @@ if __name__ == "__main__":
     test_editor_urls_are_clean_routes_without_session_tokens()
     test_human_review_editor_uses_es_page_review_id_route()
     test_reload_session_restore_uses_cookie_not_url_only()
-    test_session_restore_stop_renders_nonblank_checkpoint()
+    test_session_check_page_removed_and_protected_routes_resolve()
+    test_public_login_signup_navigation_ignores_restore_miss()
     test_login_session_persists_until_explicit_logout()
     test_refresh_restores_last_authenticated_route()
     test_translation_editor_uses_supplied_html_template()
