@@ -186,7 +186,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-shell-v4"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-login-callback-v5"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -194,6 +194,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "direct_selected_page_navigation",
     "native_streamlit_nav_bridge",
     "full_width_global_app_shell",
+    "pre_render_login_submit_callback",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 # Persistent browser sessions should survive reloads and browser restarts until
@@ -5408,7 +5409,7 @@ def render_post_login_tool_launch_bridge() -> None:
     )
 
 
-def login_user(email: str, role: str, account_type: str, workspace: str = "Demo Workspace") -> None:
+def login_user(email: str, role: str, account_type: str, workspace: str = "Demo Workspace", *, sync_route_storage: bool = True) -> None:
     stored_user = find_user_by_email(email) or {}
     resolved_account_type = "owner" if safe_text(account_type).lower() == "owner" else safe_text(stored_user.get("account_type") or account_type or "workspace")
     user = {
@@ -5443,13 +5444,103 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     for key in ("_post_login_tool_launch_url", "_post_login_tool_launch_id", "_post_login_session_token", "_login_window_stay_open"):
         st.session_state.pop(key, None)
     st.session_state["current_route"] = {"page": st.session_state.page, **launch_params}
-    set_route_query(launch_params)
+    set_route_query(launch_params, sync_storage=sync_route_storage)
     query_clear("public")
     query_clear("return_to")
     query_clear(AUTH_CHECK_QUERY_PARAM)
     query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
+
+
+LOGIN_EMAIL_KEY = "unified_login_email"
+LOGIN_PASSWORD_KEY = "unified_login_password"
+LOGIN_ACCEPT_KEY = "unified_login_compliance_ack"
+LOGIN_FEEDBACK_KEY = "_unified_login_feedback"
+LOGIN_SUCCESS_PENDING_KEY = "_login_success_dashboard_pending"
+
+
+def set_login_feedback(level: str, message: str, caption: str = "") -> None:
+    st.session_state[LOGIN_FEEDBACK_KEY] = {
+        "level": safe_text(level) or "error",
+        "message": safe_text(message),
+        "caption": safe_text(caption),
+    }
+
+
+def handle_unified_login_submit() -> None:
+    """Authenticate before the post-submit script pass renders public Login UI."""
+    st.session_state.pop(LOGIN_FEEDBACK_KEY, None)
+    clean_email = safe_text(st.session_state.get(LOGIN_EMAIL_KEY, "")).strip()
+    password = st.session_state.get(LOGIN_PASSWORD_KEY, "") or ""
+    accepted = bool(st.session_state.get(LOGIN_ACCEPT_KEY, False))
+
+    if not clean_email or not password:
+        set_login_feedback("error", "Please enter your email and password.")
+        return
+    if not accepted:
+        set_login_feedback("error", "Please accept the workspace compliance terms before signing in.")
+        return
+
+    allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", clean_email)
+    if not allowed_attempt:
+        set_login_feedback("error", throttle_message)
+        return
+
+    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
+    owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+    bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@cognisweep.local")
+    bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
+    default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
+    email_key = clean_email.lower()
+
+    if email_key == UNLIMITED_ACCESS_EMAIL.lower() and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
+        clear_abuse_attempts("workspace_login", clean_email)
+        ensure_unlimited_access_account()
+        login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)
+        record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "unified_login")
+        add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        return
+
+    if owner_is_configured and hmac.compare_digest(clean_email, owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
+        clear_abuse_attempts("workspace_login", clean_email)
+        login_user(clean_email, "Platform Owner", "owner", "Platform", sync_route_storage=False)
+        record_consent_acceptance(clean_email, "Platform Owner", "owner", "Platform", "unified_login")
+        add_audit("Unified owner login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        return
+
+    if bootstrap_is_configured and hmac.compare_digest(clean_email, bootstrap_user.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
+        configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
+        clear_abuse_attempts("workspace_login", clean_email)
+        login_user(clean_email, default_role, "workspace", configured_workspace, sync_route_storage=False)
+        record_consent_acceptance(clean_email, default_role, "workspace", configured_workspace, "unified_login")
+        add_audit("Unified workspace login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        return
+
+    matched = find_user_by_email(clean_email)
+    if matched and safe_text(matched.get("status", "Active")).lower() not in {"active", "invited"}:
+        set_login_feedback("error", "This account is not active. Contact your workspace owner or CogniSweep management.")
+        return
+    if matched and verify_password(password, safe_text(matched.get("password_hash", ""))):
+        if is_production_mode() and not bool(matched.get("email_verified")):
+            verify_url = queue_verification_email(clean_email, matched.get("workspace", "Demo Workspace"))
+            caption = f"Local verification link: {verify_url}" if email_provider_label() == "not_configured" else ""
+            set_login_feedback("warning", "Please verify your email before signing in. A verification link was added to the notification outbox.", caption)
+            return
+        matched_role = safe_text(matched.get("role") or default_role or "User")
+        matched_workspace = safe_text(matched.get("workspace") or "Demo Workspace")
+        account_type = safe_text(matched.get("account_type")) or ("owner" if matched_role == "Platform Owner" or matched_workspace == "Platform" else "workspace")
+        clear_abuse_attempts("workspace_login", clean_email)
+        login_user(clean_email, matched_role, account_type, matched_workspace, sync_route_storage=False)
+        record_consent_acceptance(clean_email, matched_role, account_type, matched_workspace, "unified_login")
+        add_audit("Unified login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        return
+
+    set_login_feedback("error", "Invalid email or password.")
 
 
 def logout() -> None:
@@ -5460,6 +5551,7 @@ def logout() -> None:
     st.session_state.pop("_post_login_tool_launch_id", None)
     st.session_state.pop("_post_login_session_token", None)
     st.session_state.pop("_login_window_stay_open", None)
+    st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
     st.session_state["_clear_session_cookie"] = True
     for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
@@ -6223,14 +6315,15 @@ def task_monitor_link(task_id: str) -> str:
     return app_page_link("Jobs", {"task_id": task_id})
 
 
-def set_route_query(params: Dict[str, str]) -> None:
+def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
     for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             query_clear(stale)
     for key, value in params.items():
         query_set(key, value)
-    sync_browser_route_state(params)
+    if sync_storage:
+        sync_browser_route_state(params)
 
 
 def public_route_for_es_page(page: str) -> str:
@@ -17513,76 +17606,23 @@ def render_login() -> None:
     st.markdown("## Login to CogniSweep")
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
-    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
-    owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
-    bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@cognisweep.local")
-    bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
-    default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
-
     with st.form("unified_login", enter_to_submit=True):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        accepted = st.checkbox(compliance_ack_label(), key="unified_login_compliance_ack")
-        submitted = st.form_submit_button("Login", use_container_width=True)
+        st.text_input("Email", key=LOGIN_EMAIL_KEY)
+        st.text_input("Password", type="password", key=LOGIN_PASSWORD_KEY)
+        st.checkbox(compliance_ack_label(), key=LOGIN_ACCEPT_KEY)
+        st.form_submit_button("Login", use_container_width=True, on_click=handle_unified_login_submit)
 
-    if submitted:
-        clean_email = safe_text(email).strip()
-        if not clean_email or not password:
-            st.error("Please enter your email and password.")
-            return
-        if not accepted:
-            st.error("Please accept the workspace compliance terms before signing in.")
-            return
-        allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", clean_email)
-        if not allowed_attempt:
-            st.error(throttle_message)
-            return
-
-        email_key = clean_email.lower()
-        if email_key == UNLIMITED_ACCESS_EMAIL.lower() and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
-            clear_abuse_attempts("workspace_login", clean_email)
-            ensure_unlimited_access_account()
-            login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")
-            record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "unified_login")
-            add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
-            st.rerun()
-
-        if owner_is_configured and hmac.compare_digest(clean_email, owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
-            clear_abuse_attempts("workspace_login", clean_email)
-            login_user(clean_email, "Platform Owner", "owner", "Platform")
-            record_consent_acceptance(clean_email, "Platform Owner", "owner", "Platform", "unified_login")
-            add_audit("Unified owner login", clean_email)
-            st.rerun()
-
-        if bootstrap_is_configured and hmac.compare_digest(clean_email, bootstrap_user.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
-            configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
-            clear_abuse_attempts("workspace_login", clean_email)
-            login_user(clean_email, default_role, "workspace", configured_workspace)
-            record_consent_acceptance(clean_email, default_role, "workspace", configured_workspace, "unified_login")
-            add_audit("Unified workspace login", clean_email)
-            st.rerun()
-
-        matched = find_user_by_email(clean_email)
-        if matched and safe_text(matched.get("status", "Active")).lower() not in {"active", "invited"}:
-            st.error("This account is not active. Contact your workspace owner or CogniSweep management.")
-            return
-        if matched and verify_password(password, safe_text(matched.get("password_hash", ""))):
-            if is_production_mode() and not bool(matched.get("email_verified")):
-                verify_url = queue_verification_email(clean_email, matched.get("workspace", "Demo Workspace"))
-                st.warning("Please verify your email before signing in. A verification link was added to the notification outbox.")
-                if email_provider_label() == "not_configured":
-                    st.caption(f"Local verification link: {verify_url}")
-                return
-            matched_role = safe_text(matched.get("role") or default_role or "User")
-            matched_workspace = safe_text(matched.get("workspace") or "Demo Workspace")
-            account_type = safe_text(matched.get("account_type")) or ("owner" if matched_role == "Platform Owner" or matched_workspace == "Platform" else "workspace")
-            clear_abuse_attempts("workspace_login", clean_email)
-            login_user(clean_email, matched_role, account_type, matched_workspace)
-            record_consent_acceptance(clean_email, matched_role, account_type, matched_workspace, "unified_login")
-            add_audit("Unified login", clean_email)
-            st.rerun()
-
-        st.error("Invalid email or password.")
+    feedback = st.session_state.pop(LOGIN_FEEDBACK_KEY, None)
+    if feedback:
+        level = safe_text(feedback.get("level"))
+        message = safe_text(feedback.get("message"))
+        caption = safe_text(feedback.get("caption"))
+        if level == "warning":
+            st.warning(message)
+        else:
+            st.error(message)
+        if caption:
+            st.caption(caption)
 
     with st.expander("Forgot password?", expanded=False):
         reset_email = st.text_input("Account email", key="password_reset_email")

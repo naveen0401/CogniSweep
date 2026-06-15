@@ -75,12 +75,19 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
     assert 'st.session_state["es_page"] = launch_page' in body
     assert 'launch_params = login_launch_params(return_to, target_page)' in body
     assert 'st.session_state.page = launch_page if launch_page in known_protected_es_pages() else "Dashboard"' in body
-    assert 'set_route_query(launch_params)' in body
+    assert 'set_route_query(launch_params, sync_storage=sync_route_storage)' in body
     assert 'st.session_state["_post_login_tool_launch_url"] = "?" + urlencode(launch_params)' not in body
     assert 'st.session_state["_login_window_stay_open"] = True' not in body
     assert 'st.session_state.page = "Login"' not in body
     assert 'set_route_query({"es_page": "Login"})' not in body
     assert "apply_return_to(return_to)" not in body
+
+    callback_start = source.index("def handle_unified_login_submit")
+    callback_end = source.index("def logout", callback_start)
+    callback_body = source[callback_start:callback_end]
+    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in callback_body
+    assert 'st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True' in callback_body
+    assert "st.rerun()" not in callback_body
 
 
 def test_unknown_and_unauthorized_routes_are_separate() -> None:
@@ -189,19 +196,20 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     assert 'button("Open Dashboard"' in state_body
     assert 'button("Logout"' in state_body
 
-    login_start = source.index("def render_login")
+    login_start = source.index("def render_login()")
     login_end = source.index("def profile_language_defaults", login_start)
     login_body = source[login_start:login_end]
     auth_start = login_body.index("if is_authenticated():")
-    auth_end = login_body.index("owner_user =", auth_start)
-    auth_branch = login_body[auth_start:auth_end]
     auth_header_start = login_body.index("signup_enabled = feature_flag")
+    auth_branch = login_body[auth_start:auth_header_start]
     form_start = login_body.index('with st.form("unified_login"')
     assert auth_start < auth_header_start < form_start
     assert "render_post_login_tool_launch_bridge()" in auth_branch
     assert "render_logged_in_login_state" in auth_branch
     assert "st.rerun()" not in auth_branch
     assert 'st.form("unified_login"' in login_body
+    assert "on_click=handle_unified_login_submit" in login_body
+    assert "st.rerun()" not in login_body
 
 
 def test_login_new_tab_bridge_reruns_before_rendering_status() -> None:
