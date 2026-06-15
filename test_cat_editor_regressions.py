@@ -153,6 +153,23 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
 
 
+def test_public_entry_routes_probe_persistent_session_before_rendering() -> None:
+    source = read_app()
+    probe_start = source.index("def session_restore_probe_pending")
+    probe_end = source.index("def sync_browser_session_cookie", probe_start)
+    probe_body = source[probe_start:probe_end]
+    assert 'if isinstance(route, dict) and route.get("route") in PUBLIC_ROUTES:' in probe_body
+    assert "return False" in probe_body
+
+    restore_start = source.index("def render_session_restore_bridge")
+    restore_end = source.index("def render_auth_restore_bridge", restore_start)
+    restore_body = source[restore_start:restore_end]
+    assert "firstStorage" in restore_body
+    assert "publicEntryRoutes" in restore_body
+    assert 'url.searchParams.set("es_restore_miss", "1")' in restore_body
+    assert 'url.searchParams.set("es_restore", token)' in restore_body
+
+
 def test_authenticated_login_tab_shows_logged_in_state() -> None:
     source = read_app()
     state_start = source.index("def render_logged_in_login_state")
@@ -614,6 +631,7 @@ if __name__ == "__main__":
     test_login_es_page_aliases_are_public_and_normalized()
     test_login_success_opens_target_route_in_current_tab()
     test_public_login_and_authenticated_entry_routes_open_dashboard()
+    test_public_entry_routes_probe_persistent_session_before_rendering()
     test_authenticated_login_tab_shows_logged_in_state()
     test_login_new_tab_bridge_reruns_before_rendering_status()
     test_unknown_and_unauthorized_routes_are_separate()

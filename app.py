@@ -4594,13 +4594,32 @@ def sync_browser_session_cookie() -> None:
           const routeStorageKey = {route_storage_key_json};
           const value = {token_json};
           const secure = window.location.protocol === "https:" ? "; Secure" : "";
+          const candidateWindows = [window.parent, window.top, window];
+          const firstDocument = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.document) return candidate.document;
+              }} catch (err) {{}}
+            }}
+            return document;
+          }};
+          const firstStorage = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.localStorage) return candidate.localStorage;
+              }} catch (err) {{}}
+            }}
+            try {{ return window.localStorage; }} catch (err) {{}}
+            return null;
+          }};
           try {{
-            const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+            const targetDoc = firstDocument();
             targetDoc.cookie = name + "=" + encodeURIComponent(value) +
               "; Max-Age={max_age}; Path=/; SameSite=Lax" + secure;
           }} catch (err) {{}}
           try {{
-            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
+            const storage = firstStorage();
+            if (!storage) return;
             if (value) storage.setItem(storageKey, value);
             else {{
               storage.removeItem(storageKey);
@@ -4639,6 +4658,32 @@ def render_global_logout_listener() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const candidateWindows = [window.parent, window.top, window];
+          const firstWindow = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.location) return candidate;
+              }} catch (err) {{}}
+            }}
+            return window;
+          }};
+          const firstDocument = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.document) return candidate.document;
+              }} catch (err) {{}}
+            }}
+            return document;
+          }};
+          const firstStorage = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.localStorage) return candidate.localStorage;
+              }} catch (err) {{}}
+            }}
+            try {{ return window.localStorage; }} catch (err) {{}}
+            return null;
+          }};
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
           const currentPublicEntryUrl = (url) => {{
@@ -4650,7 +4695,7 @@ def render_global_logout_listener() -> None:
           const restoreAuthAndGoDashboard = (token) => {{
             if (!token) return;
             try {{
-              const loc = window.parent ? window.parent.location : window.location;
+              const loc = firstWindow().location;
               const url = new URL(loc.href);
               if (!currentPublicEntryUrl(url)) return;
               ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss"].forEach((key) => url.searchParams.delete(key));
@@ -4662,24 +4707,31 @@ def render_global_logout_listener() -> None:
           const clearAuthAndGoLanding = () => {{
             try {{
               const secure = window.location.protocol === "https:" ? "; Secure" : "";
-              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
             }} catch (err) {{}}
             try {{
-              const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
-              storage.removeItem(storageKey);
-              storage.removeItem(routeStorageKey);
+              const storage = firstStorage();
+              if (storage) {{
+                storage.removeItem(storageKey);
+                storage.removeItem(routeStorageKey);
+              }}
             }} catch (err) {{}}
             try {{
-              const loc = window.parent ? window.parent.location : window.location;
+              const loc = firstWindow().location;
               {landing_redirect_url_js(include_logout_marker=True)}
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
-          window.addEventListener("storage", (event) => {{
+          const handleStorageEvent = (event) => {{
             if (event.key === logoutKey && event.newValue) clearAuthAndGoLanding();
             if (event.key === storageKey && event.newValue) restoreAuthAndGoDashboard(event.newValue);
-          }});
+          }};
+          window.addEventListener("storage", handleStorageEvent);
+          const hostWindow = firstWindow();
+          if (hostWindow !== window) {{
+            try {{ hostWindow.addEventListener("storage", handleStorageEvent); }} catch (err) {{}}
+          }}
         }})();
         </script>
         """,
@@ -4707,15 +4759,41 @@ def render_session_restore_bridge() -> None:
             const routeParamKeys = {route_param_keys_json};
             const publicRoutes = {public_routes_json};
             const publicEsPageAliases = {public_es_page_aliases_json};
-            const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
-            const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+            const candidateWindows = [window.parent, window.top, window];
+            const firstWindow = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.location) return candidate;
+                }} catch (err) {{}}
+              }}
+              return window;
+            }};
+            const firstDocument = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.document) return candidate.document;
+                }} catch (err) {{}}
+              }}
+              return document;
+            }};
+            const firstStorage = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.localStorage) return candidate.localStorage;
+                }} catch (err) {{}}
+              }}
+              try {{ return window.localStorage; }} catch (err) {{}}
+              return null;
+            }};
+            const storage = firstStorage();
+            const targetDoc = firstDocument();
             const cookieToken = (targetDoc.cookie || "").split(";").map((item) => item.trim()).reduce((found, item) => {{
               if (found) return found;
               const prefix = cookieName + "=";
               return item.startsWith(prefix) ? decodeURIComponent(item.slice(prefix.length)) : "";
             }}, "");
-            const token = storage.getItem(storageKey) || cookieToken;
-            const loc = window.parent ? window.parent.location : window.location;
+            const token = (storage ? storage.getItem(storageKey) : "") || cookieToken;
+            const loc = firstWindow().location;
             const url = new URL(loc.href);
             if (url.searchParams.has("es_restore")) return;
             if (!token) {{
@@ -4724,7 +4802,9 @@ def render_session_restore_bridge() -> None:
               const publicEsRoute = publicEsPageAliases[esPage] || "";
               const isPublic = (route && publicRoutes.includes(route)) || (publicEsRoute && publicRoutes.includes(publicEsRoute));
               const hasRouteTarget = Boolean(route) || routeParamKeys.some((key) => url.searchParams.has(key));
-              if (hasRouteTarget && !isPublic && !url.searchParams.has("es_restore_miss")) {{
+              const publicEntryRoutes = ["", "landing", "login", "signup"];
+              const isPublicEntry = (!hasRouteTarget && !url.searchParams.has("public")) || publicEntryRoutes.includes(route) || publicEntryRoutes.includes(publicEsRoute);
+              if ((isPublicEntry || (hasRouteTarget && !isPublic)) && !url.searchParams.has("es_restore_miss")) {{
                 url.searchParams.set("es_restore_miss", "1");
                 loc.replace(url.toString());
               }}
@@ -4789,14 +4869,32 @@ def render_auth_restore_bridge(return_to: str = "") -> None:
             const storageKey = {storage_key_json};
             const cookieName = {cookie_name_json};
             const returnTo = {return_to_json};
-            const loc = window.parent ? window.parent.location : window.location;
+            const candidateWindows = [window.parent, window.top, window];
+            const firstWindow = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.location) return candidate;
+                }} catch (err) {{}}
+              }}
+              return window;
+            }};
+            const firstStorage = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.localStorage) return candidate.localStorage;
+                }} catch (err) {{}}
+              }}
+              try {{ return window.localStorage; }} catch (err) {{}}
+              return null;
+            }};
+            const loc = firstWindow().location;
             const url = new URL(loc.href);
             const alreadyTriedRestore = url.searchParams.has("es_restore") || url.searchParams.has("es_session");
             let token = "";
             if (!alreadyTriedRestore) {{
               try {{
-                const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
-                token = storage.getItem(storageKey) || "";
+                const storage = firstStorage();
+                token = storage ? (storage.getItem(storageKey) || "") : "";
               }} catch (err) {{}}
               if (!token) token = readCookie(cookieName);
             }}
@@ -4835,17 +4933,45 @@ def render_logout_bridge() -> None:
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
             const secure = window.location.protocol === "https:" ? "; Secure" : "";
+            const candidateWindows = [window.parent, window.top, window];
+            const firstWindow = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.location) return candidate;
+                }} catch (err) {{}}
+              }}
+              return window;
+            }};
+            const firstDocument = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.document) return candidate.document;
+                }} catch (err) {{}}
+              }}
+              return document;
+            }};
+            const firstStorage = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.localStorage) return candidate.localStorage;
+                }} catch (err) {{}}
+              }}
+              try {{ return window.localStorage; }} catch (err) {{}}
+              return null;
+            }};
             try {{
-              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
             }} catch (err) {{}}
             try {{
-              const storage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
-              storage.removeItem(storageKey);
-              storage.removeItem(routeStorageKey);
-              storage.setItem(logoutKey, String(Date.now()));
+              const storage = firstStorage();
+              if (storage) {{
+                storage.removeItem(storageKey);
+                storage.removeItem(routeStorageKey);
+                storage.setItem(logoutKey, String(Date.now()));
+              }}
             }} catch (err) {{}}
-            const loc = window.parent ? window.parent.location : window.location;
+            const loc = firstWindow().location;
             {landing_redirect_url_js()}
             loc.replace(url.toString());
           }} catch (err) {{}}
@@ -4944,18 +5070,44 @@ def render_post_login_tool_launch_bridge() -> None:
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
             const key = "errorsweep_tool_launch_" + launchId;
-            const storage = (window.parent && window.parent.sessionStorage) ? window.parent.sessionStorage : window.sessionStorage;
-            if (storage.getItem(key)) return;
-            storage.setItem(key, "1");
+            const candidateWindows = [window.parent, window.top, window];
+            const firstWindow = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.location) return candidate;
+                }} catch (err) {{}}
+              }}
+              return window;
+            }};
+            const firstDocument = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.document) return candidate.document;
+                }} catch (err) {{}}
+              }}
+              return document;
+            }};
+            const firstStorage = (kind) => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate[kind]) return candidate[kind];
+                }} catch (err) {{}}
+              }}
+              try {{ return window[kind]; }} catch (err) {{}}
+              return null;
+            }};
+            const storage = firstStorage("sessionStorage");
+            if (storage && storage.getItem(key)) return;
+            if (storage) storage.setItem(key, "1");
             if (sessionToken) {{
               const secure = window.location.protocol === "https:" ? "; Secure" : "";
-              const targetDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+              const targetDoc = firstDocument();
               targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
-              const persistentStorage = (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage;
-              persistentStorage.setItem(storageKey, sessionToken);
+              const persistentStorage = firstStorage("localStorage");
+              if (persistentStorage) persistentStorage.setItem(storageKey, sessionToken);
             }}
-            const loc = window.parent ? window.parent.location : window.location;
+            const loc = firstWindow().location;
             const url = new URL(launchUrl, loc.href);
             window.open(url.toString(), "_blank", "noopener");
           }} catch (err) {{}}

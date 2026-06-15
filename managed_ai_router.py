@@ -274,18 +274,47 @@ def _protected_page_session_script(token: str) -> str:
     <script>
     (() => {{
       try {{
-        const parentWindow = window.parent || window;
-        const doc = parentWindow.document;
         const token = {token_json};
         const cookieName = {cookie_name_json};
         const storageKey = {storage_key_json};
         const publicPages = {public_pages_json};
         const protectedKeys = {protected_keys_json};
-        const secure = parentWindow.location.protocol === "https:" ? "; Secure" : "";
+        const candidateWindows = [window.parent, window.top, window];
+        const firstWindow = () => {{
+          for (const candidate of candidateWindows) {{
+            try {{
+              if (candidate && candidate.location) return candidate;
+            }} catch (err) {{}}
+          }}
+          return window;
+        }};
+        const firstDocument = () => {{
+          for (const candidate of candidateWindows) {{
+            try {{
+              if (candidate && candidate.document) return candidate.document;
+            }} catch (err) {{}}
+          }}
+          return document;
+        }};
+        const firstStorage = () => {{
+          for (const candidate of candidateWindows) {{
+            try {{
+              if (candidate && candidate.localStorage) return candidate.localStorage;
+            }} catch (err) {{}}
+          }}
+          try {{ return window.localStorage; }} catch (err) {{}}
+          return null;
+        }};
+        const hostWindow = firstWindow();
+        const doc = firstDocument();
+        const secure = hostWindow.location.protocol === "https:" ? "; Secure" : "";
         try {{
           doc.cookie = cookieName + "=" + encodeURIComponent(token) + "; Max-Age={_SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure;
         }} catch (err) {{}}
-        try {{ parentWindow.localStorage.setItem(storageKey, token); }} catch (err) {{}}
+        try {{
+          const storage = firstStorage();
+          if (storage) storage.setItem(storageKey, token);
+        }} catch (err) {{}}
 
         const normalizePage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
         const repairParams = (url) => {{
@@ -310,9 +339,9 @@ def _protected_page_session_script(token: str) -> str:
         }};
         const patchUrl = () => {{
           try {{
-            const current = repairParams(new URL(parentWindow.location.href));
+            const current = repairParams(new URL(hostWindow.location.href));
             if (isProtected(current) && current.searchParams.get("es_session") !== token) current.searchParams.set("es_session", token);
-            if (current.toString() !== parentWindow.location.href) parentWindow.history.replaceState(null, "", current.toString());
+            if (current.toString() !== hostWindow.location.href) hostWindow.history.replaceState(null, "", current.toString());
           }} catch (err) {{}}
         }};
         const patchLinks = () => {{
@@ -320,8 +349,8 @@ def _protected_page_session_script(token: str) -> str:
             doc.querySelectorAll('a[href]').forEach((anchor) => {{
               const raw = String(anchor.getAttribute('href') || '');
               if (!raw || raw === '#' || raw.includes('es_logout=1') || /^(mailto:|tel:|javascript:)/i.test(raw)) return;
-              const url = repairParams(new URL(raw, parentWindow.location.href));
-              if (url.origin !== parentWindow.location.origin) return;
+              const url = repairParams(new URL(raw, hostWindow.location.href));
+              if (url.origin !== hostWindow.location.origin) return;
               if (!isProtected(url)) return;
               url.searchParams.set('es_session', token);
               anchor.setAttribute('href', url.pathname + url.search + url.hash);
