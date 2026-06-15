@@ -167,7 +167,10 @@ def test_public_entry_routes_probe_persistent_session_before_rendering() -> None
     assert "firstStorage" in restore_body
     assert "publicEntryRoutes" in restore_body
     assert 'url.searchParams.set("es_restore_miss", "1")' in restore_body
-    assert 'url.searchParams.set("es_restore", token)' in restore_body
+    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in restore_body
+    assert 'url.searchParams.delete("es_restore")' in restore_body
+    assert 'url.searchParams.delete("es_session")' in restore_body
+    assert 'url.searchParams.set("es_restore", token)' not in restore_body
 
 
 def test_authenticated_login_tab_shows_logged_in_state() -> None:
@@ -200,7 +203,8 @@ def test_login_new_tab_bridge_reruns_before_rendering_status() -> None:
     start = source.index("def _install_login_new_tab_bridge")
     end = source.index("_install_signup_scroll_fix()", start)
     body = source[start:end]
-    assert 'st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)' in body
+    assert 'st.session_state["_post_login_tool_launch_url"] = _build_launch_url()' in body
+    assert 'params["es_session"]' not in body
     assert 'st.session_state["_login_window_stay_open"] = True' in body
     assert "_leave_current_tab_on_login()" in body
     assert "render_post_login_tool_launch_bridge" not in body
@@ -226,8 +230,8 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "render_global_logout_listener()" in app_body
     assert 'if query_get("es_logout") == "1":' in app_body
     assert "logout()" in app_body
-    assert app_body.index('if query_get("es_logout") == "1":') < app_body.index("restore_session_from_query()")
-    assert app_body.index("restore_session_from_query()") < app_body.index("sync_browser_session_cookie()")
+    assert app_body.index('if query_get("es_logout") == "1":') < app_body.index("restore_session_from_cookie()")
+    assert app_body.index("restore_session_from_cookie()") < app_body.index("sync_browser_session_cookie()")
 
 
 def test_reload_session_restore_uses_cookie_not_url_only() -> None:
@@ -237,13 +241,37 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "SESSION_PERSISTENCE_SECONDS" in source
     assert "def browser_session_cookie()" in source
     assert "def render_session_restore_bridge()" in source
-    assert "restore_user_from_signed_session(cookie_token)" in source
+    assert "def restore_session_from_cookie()" in source
+    assert "token = browser_session_cookie()" in source
     assert "restore_user_from_signed_session(token)" in source
     assert 'st.session_state["_pending_session_cookie"] = token' in source
     assert "sync_browser_session_cookie()" in source
-    assert "url.searchParams.set(\"es_restore\", token)" in source
+    assert 'url.searchParams.set("es_restore", token)' not in source
+    assert 'url.searchParams.set("es_session", token)' not in source
+    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in source
+    assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
+
+
+def test_debug_auth_reports_cookie_state_and_route_decision() -> None:
+    source = read_app()
+    assert "def set_auth_debug_state" in source
+    assert "def render_auth_debug_panel" in source
+    debug_start = source.index("def render_auth_debug_panel")
+    debug_end = source.index("def restore_user_from_signed_session", debug_start)
+    debug_body = source[debug_start:debug_end]
+    for key in ("cookie_found", "session_valid", "authenticated", "route_decision", "resolved_route"):
+        assert f'"{key}"' in debug_body
+    assert 'if query_get("debug_auth") != "1":' in debug_body
+
+    app_start = source.index('if __name__ == "__main__"')
+    app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
+    app_body = source[app_start:app_end]
+    assert "render_auth_debug_panel(route" in app_body
+    assert '"valid_cookie_root_to_dashboard"' in app_body
+    assert '"missing_or_invalid_cookie_show_landing"' in app_body
+    assert '"valid_cookie_public_entry_to_dashboard"' in app_body
 
 
 def test_login_session_persists_until_explicit_logout() -> None:
@@ -308,7 +336,8 @@ def test_refresh_restores_last_authenticated_route() -> None:
     restore_end = source.index("def login_user", restore_start)
     restore_body = source[restore_start:restore_end]
     assert "storage.getItem(routeStorageKey)" in restore_body
-    assert "url.searchParams.set(\"es_restore\", token)" in restore_body
+    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(token)' in restore_body
+    assert 'url.searchParams.set("es_restore", token)' not in restore_body
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)

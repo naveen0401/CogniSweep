@@ -268,8 +268,6 @@ def _protected_page_session_script(token: str) -> str:
     token_json = json.dumps(token)
     cookie_name_json = json.dumps(_SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(_SESSION_STORAGE_KEY)
-    public_pages_json = json.dumps(sorted(_PUBLIC_ES_PAGES))
-    protected_keys_json = json.dumps(sorted(_PROTECTED_LINK_KEYS))
     return f"""
     <script>
     (() => {{
@@ -277,8 +275,6 @@ def _protected_page_session_script(token: str) -> str:
         const token = {token_json};
         const cookieName = {cookie_name_json};
         const storageKey = {storage_key_json};
-        const publicPages = {public_pages_json};
-        const protectedKeys = {protected_keys_json};
         const candidateWindows = [window.parent, window.top, window];
         const firstWindow = () => {{
           for (const candidate of candidateWindows) {{
@@ -315,51 +311,6 @@ def _protected_page_session_script(token: str) -> str:
           const storage = firstStorage();
           if (storage) storage.setItem(storageKey, token);
         }} catch (err) {{}}
-
-        const normalizePage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-        const repairParams = (url) => {{
-          const repairs = [
-            [";review_id", "review_id"], ["amp;review_id", "review_id"], ["%3Breview_id", "review_id"],
-            [";job_id", "job_id"], ["amp;job_id", "job_id"], ["%3Bjob_id", "job_id"],
-            [";es_editor", "es_editor"], ["amp;es_editor", "es_editor"], ["%3Bes_editor", "es_editor"],
-            [";task_id", "task_id"], ["amp;task_id", "task_id"], ["%3Btask_id", "task_id"]
-          ];
-          repairs.forEach(([bad, good]) => {{
-            if (url.searchParams.has(bad) && !url.searchParams.has(good)) {{
-              url.searchParams.set(good, url.searchParams.get(bad) || "");
-              url.searchParams.delete(bad);
-            }}
-          }});
-          return url;
-        }};
-        const isProtected = (url) => {{
-          const page = normalizePage(url.searchParams.get("es_page"));
-          if (page && publicPages.includes(page)) return false;
-          return protectedKeys.some((key) => Boolean(url.searchParams.get(key))) || Boolean(page && !publicPages.includes(page));
-        }};
-        const patchUrl = () => {{
-          try {{
-            const current = repairParams(new URL(hostWindow.location.href));
-            if (isProtected(current) && current.searchParams.get("es_session") !== token) current.searchParams.set("es_session", token);
-            if (current.toString() !== hostWindow.location.href) hostWindow.history.replaceState(null, "", current.toString());
-          }} catch (err) {{}}
-        }};
-        const patchLinks = () => {{
-          try {{
-            doc.querySelectorAll('a[href]').forEach((anchor) => {{
-              const raw = String(anchor.getAttribute('href') || '');
-              if (!raw || raw === '#' || raw.includes('es_logout=1') || /^(mailto:|tel:|javascript:)/i.test(raw)) return;
-              const url = repairParams(new URL(raw, hostWindow.location.href));
-              if (url.origin !== hostWindow.location.origin) return;
-              if (!isProtected(url)) return;
-              url.searchParams.set('es_session', token);
-              anchor.setAttribute('href', url.pathname + url.search + url.hash);
-            }});
-          }} catch (err) {{}}
-        }};
-        patchUrl();
-        patchLinks();
-        try {{ new MutationObserver(patchLinks).observe(doc.body, {{ childList: true, subtree: true }}); }} catch (err) {{}}
       }} catch (err) {{}}
     }})();
     </script>
@@ -634,7 +585,7 @@ def _install_login_new_tab_bridge() -> None:
             except Exception:
                 return False
 
-        def _build_launch_url(session_token: str) -> str:
+        def _build_launch_url() -> str:
             params: Dict[str, str] = {}
             current_route = st.session_state.get("current_route")
             if isinstance(current_route, dict):
@@ -652,7 +603,6 @@ def _install_login_new_tab_bridge() -> None:
             public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
             if not params.get("es_page") or public_page in {"login", "landing", "signup", "register", "registration"}:
                 params["es_page"] = "Dashboard"
-            params["es_session"] = session_token
             params["tool_tab"] = "1"
             return "?" + urlencode(params)
 
@@ -675,7 +625,7 @@ def _install_login_new_tab_bridge() -> None:
                     _patch_owner_unlimited_functions()
                     session_token = _current_signed_session_token()
                     if session_token:
-                        st.session_state["_post_login_tool_launch_url"] = _build_launch_url(session_token)
+                        st.session_state["_post_login_tool_launch_url"] = _build_launch_url()
                         st.session_state["_post_login_session_token"] = session_token
                         st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
                         st.session_state["_login_window_stay_open"] = True
