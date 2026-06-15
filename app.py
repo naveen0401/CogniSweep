@@ -319,6 +319,8 @@ ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
 ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to")
+SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")
+SESSION_COOKIE_MAX_BYTES = 3800
 LANGUAGE_CATALOG = [
     "English",
     "French",
@@ -4525,9 +4527,25 @@ def route_query_has_explicit_target() -> bool:
     return any(query_get(key) for key in ROUTE_RESTORE_BLOCKING_QUERY_KEYS)
 
 
+def compact_session_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        key: user.get(key)
+        for key in SESSION_TOKEN_USER_FIELDS
+        if user.get(key) not in (None, "")
+    }
+    payload["email"] = safe_text(payload.get("email") or user.get("email")).strip().lower()
+    payload["role"] = safe_text(payload.get("role") or "User")
+    payload["account_type"] = safe_text(payload.get("account_type") or "user")
+    payload["workspace"] = safe_text(payload.get("workspace") or "Demo Workspace")
+    return payload
+
+
 def signed_session_token_for_user(user: Dict[str, Any]) -> str:
-    payload = {**user, "iat": int(time.time()), "persistent": True}
-    return sign_payload(payload)
+    payload = {**compact_session_user_payload(user), "iat": int(time.time()), "persistent": True}
+    token = sign_payload(payload)
+    if len(token.encode("utf-8")) > SESSION_COOKIE_MAX_BYTES:
+        LOGGER.warning("Signed session token is larger than the browser cookie budget: %s bytes", len(token.encode("utf-8")))
+    return token
 
 
 def browser_session_cookie() -> str:
@@ -4544,7 +4562,12 @@ def restore_user_from_signed_session(token: str) -> bool:
     data = verify_payload(token)
     if not data:
         return False
-    user = safe_user_session_record({key: value for key, value in data.items() if key not in {"iat", "persistent"}})
+    token_user = safe_user_session_record({key: value for key, value in data.items() if key not in {"iat", "persistent", "v"}})
+    stored_user = find_user_by_email(safe_text(token_user.get("email"))) or {}
+    user = safe_user_session_record(stored_user or token_user)
+    for key in SESSION_TOKEN_USER_FIELDS:
+        if not safe_text(user.get(key)) and safe_text(token_user.get(key)):
+            user[key] = token_user.get(key)
     user.setdefault("email", "")
     user.setdefault("role", "User")
     user.setdefault("account_type", "user")

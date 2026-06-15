@@ -248,12 +248,23 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
 
 def test_login_session_persists_until_explicit_logout() -> None:
     source = read_app()
+    assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")' in source
+    assert "SESSION_COOKIE_MAX_BYTES = 3800" in source
+    assert "def compact_session_user_payload" in source
+
     sign_start = source.index("def signed_session_token_for_user")
     sign_end = source.index("def browser_session_cookie", sign_start)
     sign_body = source[sign_start:sign_end]
+    assert "compact_session_user_payload(user)" in sign_body
     assert "\"persistent\": True" in sign_body
     assert "\"iat\": int(time.time())" in sign_body
     assert "\"exp\"" not in sign_body
+
+    restore_start = source.index("def restore_user_from_signed_session")
+    restore_end = source.index("def session_restore_probe_pending", restore_start)
+    restore_body = source[restore_start:restore_end]
+    assert "find_user_by_email" in restore_body
+    assert "SESSION_TOKEN_USER_FIELDS" in restore_body
 
     verify_start = source.index("def verify_payload")
     verify_end = source.index("def query_get", verify_start)
