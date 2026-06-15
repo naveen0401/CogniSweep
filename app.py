@@ -186,12 +186,14 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-shell-split-v2"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-shell-v3"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
     "editor_css_scoped_to_editor_shell",
     "direct_selected_page_navigation",
+    "native_streamlit_nav_bridge",
+    "full_width_global_app_shell",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 # Persistent browser sessions should survive reloads and browser restarts until
@@ -618,7 +620,7 @@ st.markdown(
   --es-red: #ff4b33;
   --es-amber: #f59e0b;
   --es-shell-frame-padding: 0 18px 0;
-  --es-shell-content-width: min(1760px, calc(100vw - 56px));
+  --es-shell-content-width: calc(100vw - 56px);
 }
 
 html, body, [class*="css"] {
@@ -769,11 +771,11 @@ body:has(#errorsweep-editor-shell-marker) .st-key-errorsweep_editor_shell {
 body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell {
   position: fixed !important;
   inset: 0 !important;
-  width: var(--es-shell-content-width) !important;
-  max-width: var(--es-shell-content-width) !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
   height: 100dvh !important;
   max-height: 100dvh !important;
-  margin: 0 auto !important;
+  margin: 0 !important;
   overflow: hidden !important;
   z-index: 1 !important;
 }
@@ -783,8 +785,8 @@ body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell {
   max-height: 100dvh !important;
   min-height: 0 !important;
   width: 100% !important;
-  max-width: var(--es-shell-content-width) !important;
-  margin: 0 auto !important;
+  max-width: 100vw !important;
+  margin: 0 !important;
   padding: 0 !important;
   display: grid !important;
   grid-template-rows: auto minmax(0, 1fr) !important;
@@ -2922,6 +2924,26 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   box-shadow: 0 24px 58px rgba(52,189,246,.30);
 }
 
+.st-key-topnav_native_nav_targets,
+.st-key-dashboard_native_nav_targets {
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+}
+
+.st-key-topnav_native_nav_targets *,
+.st-key-dashboard_native_nav_targets * {
+  pointer-events: none !important;
+}
+
 .es-task-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4991,7 +5013,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const token = cookieToken || storageToken;
             if (!token) {{
               const originalParams = new URLSearchParams(url.search);
-              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked"].forEach((key) => originalParams.delete(key));
+              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => originalParams.delete(key));
               Array.from(url.searchParams.keys()).forEach((key) => url.searchParams.delete(key));
               if (publicEntry) {{
                 url.searchParams.set("es_page", "Landing");
@@ -5012,9 +5034,9 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             if (publicEntry) {{
-              ["public", "route", "return_to", "tool_tab"].forEach((key) => url.searchParams.delete(key));
+              ["public", "route", "return_to", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
             }}
             const nextUrl = url.toString();
@@ -5073,7 +5095,7 @@ def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
     return f"""
             const url = new URL(loc.href);
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
             {logout_marker_js}
     """
@@ -5139,7 +5161,7 @@ def render_global_logout_listener() -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab"].forEach((key) => url.searchParams.delete(key));
+              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
@@ -5439,7 +5461,7 @@ def logout() -> None:
     st.session_state.pop("_post_login_session_token", None)
     st.session_state.pop("_login_window_stay_open", None)
     st.session_state["_clear_session_cookie"] = True
-    for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"):
+    for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
     query_set("es_page", "Landing")
     render_logout_bridge()
@@ -6095,7 +6117,7 @@ def public_login_link_target() -> str:
 
 
 def route_query_for_page(page: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    params = {"es_page": normalize_es_page(page)}
+    params = {"es_page": normalize_es_page(page), "es_app_nav": "1"}
     for key, value in (extra or {}).items():
         if key != "route" and safe_text(value):
             params[key] = safe_text(value)
@@ -6104,6 +6126,93 @@ def route_query_for_page(page: str, extra: Optional[Dict[str, str]] = None) -> D
 
 def app_page_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:
     return "?" + urlencode(route_query_for_page(page, extra))
+
+
+def native_nav_key(prefix: str, page: str, extra: Optional[Dict[str, str]] = None) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", es_page_alias_key(page)).strip("_") or "page"
+    clean_extra = {key: safe_text(value) for key, value in (extra or {}).items() if safe_text(value)}
+    if clean_extra:
+        payload = urlencode(sorted(clean_extra.items()))
+        slug = f"{slug}_{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:8]}"
+    clean_prefix = re.sub(r"[^a-z0-9_]+", "_", safe_text(prefix).lower()).strip("_") or "nav"
+    return f"{clean_prefix}_native_nav_{slug}"
+
+
+def native_nav_attr(key: str) -> str:
+    return f'data-es-native-nav="{escape(key, quote=True)}"'
+
+
+def render_native_navigation_targets(targets: List[Dict[str, Any]], prefix: str) -> None:
+    """Hidden Streamlit buttons used by visible HTML navigation links.
+
+    Plain query-string links trigger a full document reload on Streamlit Cloud,
+    which can briefly show the public shell. Programmatically clicking a native
+    button keeps navigation inside Streamlit's rerun model.
+    """
+    unique_targets: Dict[str, Dict[str, Any]] = {}
+    for target in targets:
+        key = safe_text(target.get("key"))
+        page = normalize_es_page(target.get("page"))
+        if not key or not page:
+            continue
+        unique_targets[key] = {
+            "key": key,
+            "page": page,
+            "extra": {k: safe_text(v) for k, v in (target.get("extra") or {}).items() if safe_text(v)},
+            "label": safe_text(target.get("label") or page),
+        }
+    if not unique_targets:
+        return
+    with st.container(key=f"{prefix}_native_nav_targets", gap=None):
+        for target in unique_targets.values():
+            if st.button(f"Open {target['label']}", key=target["key"]):
+                navigate_es_page(target["page"], **target["extra"])
+
+
+def render_native_navigation_bridge() -> None:
+    components.html(
+        """
+        <script>
+        (() => {
+          const parentDoc = window.parent && window.parent.document;
+          if (!parentDoc) return;
+          const cssEscape = (value) => {
+            if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
+            return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
+          };
+          const bindNativeNav = () => {
+            parentDoc.querySelectorAll("a[data-es-native-nav]").forEach((anchor) => {
+              if (anchor.dataset.esNativeNavBound === "1") return;
+              anchor.dataset.esNativeNavBound = "1";
+              anchor.addEventListener("click", (event) => {
+                const key = anchor.getAttribute("data-es-native-nav");
+                if (!key) return;
+                const wrapper = parentDoc.querySelector(".st-key-" + cssEscape(key));
+                const button = wrapper && (
+                  wrapper.querySelector('[data-testid="stButton"] button') ||
+                  wrapper.querySelector(".stButton button") ||
+                  wrapper.querySelector("button")
+                );
+                if (!button || button.disabled) return;
+                event.preventDefault();
+                event.stopPropagation();
+                button.click();
+              }, true);
+            });
+          };
+          bindNativeNav();
+          window.setTimeout(bindNativeNav, 250);
+          window.setTimeout(bindNativeNav, 1000);
+          if (!parentDoc.__errorsweepNativeNavObserver) {
+            parentDoc.__errorsweepNativeNavObserver = new MutationObserver(bindNativeNav);
+            parentDoc.__errorsweepNativeNavObserver.observe(parentDoc.body, {childList: true, subtree: true});
+          }
+        })();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
 
 
 def human_review_editor_link(review_id: str) -> str:
@@ -6116,7 +6225,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str]) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_session", "es_restore", "es_restore_miss", AUTH_CHECK_QUERY_PARAM):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             query_clear(stale)
     for key, value in params.items():
@@ -6280,7 +6389,7 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
 
     st.query_params["es_page"] = page_name
-    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", AUTH_CHECK_QUERY_PARAM):
+    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
         
@@ -6842,20 +6951,27 @@ def render_navigation() -> None:
         "Account": "Account",
         "Admin": "Admin",
     }
+    native_targets: List[Dict[str, Any]] = []
+
+    def nav_target_attr(page: str, extra: Optional[Dict[str, str]] = None, label: str = "") -> str:
+        key = native_nav_key("topnav", page, extra)
+        native_targets.append({"key": key, "page": page, "extra": extra or {}, "label": label or page})
+        return native_nav_attr(key)
+
     workspace_links = []
     for page in WORKSPACE_PAGES:
         if page not in pages:
             continue
         active = " active" if st.session_state.get("page") == page else ""
         workspace_links.append(
-            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self" {nav_target_attr(page, label=label_map.get(page, page))}>{escape(label_map.get(page, page))}</a>'
         )
     owner_links = []
     if is_owner():
         for page in OWNER_PAGES:
             active = " active" if st.session_state.get("page") == page else ""
             owner_links.append(
-                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
+                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self" {nav_target_attr(page)}>{escape(page)}</a>'
             )
     open_count = sum(
         1
@@ -6872,29 +6988,35 @@ def render_navigation() -> None:
     ui_language_code, _ = current_ui_language(user)
     notes_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "notes"}))
     language_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "language"}))
+    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
+    jobs_nav_attr = nav_target_attr("Jobs")
+    notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
+    language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
+    account_nav_attr = nav_target_attr("Account")
+    settings_nav_attr = nav_target_attr(settings_page)
+    billing_nav_attr = nav_target_attr("Billing") if "Billing" in pages else ""
     notes_badge = f'<i class="es-topnav-badge">{unread_notes}</i>' if unread_notes else ""
     jobs_tool = (
-        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs">'
+        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs" {jobs_nav_attr}>'
         f'<b>{open_count}</b><span>Jobs</span></a>'
     )
     notes_tool = (
         f'<a class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
-        f'href="{notes_href}" target="_self" title="Open notifications">'
+        f'href="{notes_href}" target="_self" title="Open notifications" {notes_nav_attr}>'
         f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</a>'
         if "notes.view" in permissions
         else ""
     )
     language_tool = (
         f'<a class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
-        f'href="{language_href}" target="_self" title="Change interface language">'
+        f'href="{language_href}" target="_self" title="Change interface language" {language_nav_attr}>'
         f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></a>'
         if "language.select" in permissions
         else ""
     )
     user_avatar = escape(monogram(user_name or user_email or "User"))
-    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
     billing_item = (
-        f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
+        f'<a href="{page_link("Billing")}" target="_self" {billing_nav_attr}>Billing <span>Plan</span></a>'
         if "Billing" in pages
         else ""
     )
@@ -6924,10 +7046,10 @@ def render_navigation() -> None:
               <span class="es-account-caret">v</span>
             </div>
             <div class="es-account-menu">
-              <a href="{page_link('Account')}" target="_self">Profile <span>Account</span></a>
-              <a href="{page_link(settings_page)}" target="_self">Settings <span>{escape(settings_page)}</span></a>
+              <a href="{page_link('Account')}" target="_self" {account_nav_attr}>Profile <span>Account</span></a>
+              <a href="{page_link(settings_page)}" target="_self" {settings_nav_attr}>Settings <span>{escape(settings_page)}</span></a>
               {billing_item}
-              <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
+              <a href="{page_link('Jobs')}" target="_self" {jobs_nav_attr}>Jobs <span>{open_count}</span></a>
               <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
             </div>
           </div>
@@ -6937,6 +7059,8 @@ def render_navigation() -> None:
     </nav>
     """
     st.markdown(topnav, unsafe_allow_html=True)
+    render_native_navigation_targets(native_targets, "topnav")
+    render_native_navigation_bridge()
 
 
 # ==========================================================
@@ -18157,6 +18281,17 @@ def page_dashboard() -> None:
         len(st.session_state.glossary),
         len(st.session_state.dnt),
     ]
+    dashboard_native_targets: List[Dict[str, Any]] = []
+
+    def dashboard_target_attr(page: str, label: str) -> str:
+        key = native_nav_key("dashboard", page)
+        dashboard_native_targets.append({"key": key, "page": page, "label": label})
+        return native_nav_attr(key)
+
+    new_project_attr = dashboard_target_attr("Projects", "New Project")
+    pro_translation_attr = dashboard_target_attr("CogniSweep Pro", "Run Pro Translation")
+    rules_attr = dashboard_target_attr("Memory & Rules", "Upload Rules")
+    qa_attr = dashboard_target_attr("CogniSweep QA", "Run QA")
     st.html(
         dedent(f"""
             <section class="es-personal-hero">
@@ -18168,10 +18303,10 @@ def page_dashboard() -> None:
                     You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
                   </div>
                   <div class="es-fab-row">
-                    <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
-                    <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self">Run Pro Translation</a>
-                    <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
-                    <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self">Run QA</a>
+                    <a class="es-fab-action" href="{page_link('Projects')}" target="_self" {new_project_attr}>New Project</a>
+                    <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self" {pro_translation_attr}>Run Pro Translation</a>
+                    <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self" {rules_attr}>Upload Rules</a>
+                    <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self" {qa_attr}>Run QA</a>
                   </div>
                 </div>
                 <div class="es-hero-orb">CogniSweep<br/>Live</div>
@@ -18245,6 +18380,8 @@ def page_dashboard() -> None:
             </div>
         """).strip(),
     )
+    render_native_navigation_targets(dashboard_native_targets, "dashboard")
+    render_native_navigation_bridge()
 
     st.markdown("")
     jobs_col, activity_col = st.columns([0.66, 0.34], gap="large")
@@ -22834,7 +22971,8 @@ def render_shell_scroll_bridge() -> None:
             const contentWrapper = directChildContaining(appGrid, contentMarker)
               || contentMarker.closest(".st-key-errorsweep_shell_content");
             const contentKey = contentMarker.closest(".st-key-errorsweep_shell_content");
-            const shellFrameWidth = "min(1760px, calc(100vw - 56px))";
+            const shellFrameWidth = "100vw";
+            const contentFrameWidth = "calc(100vw - 56px)";
 
             const fullHeight = (node) => {
               if (!node) return;
@@ -22901,7 +23039,7 @@ def render_shell_scroll_bridge() -> None:
             appShell.style.width = "100%";
             appShell.style.maxWidth = shellFrameWidth;
             appShell.style.minWidth = "0";
-            appShell.style.margin = "0 auto";
+            appShell.style.margin = "0";
             appShell.style.padding = "0";
             appShell.style.display = "grid";
             appShell.style.gridTemplateRows = "auto minmax(0, 1fr)";
@@ -22949,7 +23087,7 @@ def render_shell_scroll_bridge() -> None:
             const centerRail = (node) => {
               if (!node) return;
               node.style.width = "100%";
-              node.style.maxWidth = shellFrameWidth;
+              node.style.maxWidth = contentFrameWidth;
               node.style.minWidth = "0";
               node.style.marginLeft = "auto";
               node.style.marginRight = "auto";
@@ -23185,7 +23323,7 @@ if __name__ == "__main__":
     if route_public in {"login", "signup"}:
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
-        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
+        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
             if stale in st.query_params:
                 del st.query_params[stale]
         route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}

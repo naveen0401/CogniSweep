@@ -347,7 +347,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     app_body = source[app_start:app_end]
     assert 'route_public in {"login", "signup"}' in app_body
     assert 'st.query_params["es_page"] = page_name' in app_body
-    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
+    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
     assert "del st.query_params[stale]" in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
@@ -713,7 +713,7 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert 'contentKey.style.overscrollBehavior = "contain"' in source
     assert "editorMode" not in source[source.index("def render_shell_scroll_bridge"):source.index("def render_editor_shell_bridge")]
     assert "--es-shell-frame-padding: 0 18px 0;" in source
-    assert "--es-shell-content-width: min(1760px, calc(100vw - 56px));" in source
+    assert "--es-shell-content-width: calc(100vw - 56px);" in source
     assert "body:has(#errorsweep-root-shell-marker) [data-testid=\"stAppViewContainer\"] .main .block-container" in source
     assert "body:has(#errorsweep-root-shell-marker):not(:has(#human-review-editor-page-marker)):not(:has(#media-editor-page-marker))" not in source
     assert "max-width: var(--es-shell-content-width) !important" in source
@@ -724,10 +724,11 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True)" in source
     assert "render_editor_app_shell(lambda: render_external_editor_router())" in source
     assert "render_root_app_shell(lambda: render_external_editor_router()" not in source
-    assert 'const shellFrameWidth = "min(1760px, calc(100vw - 56px))";' in source
+    assert 'const shellFrameWidth = "100vw";' in source
+    assert 'const contentFrameWidth = "calc(100vw - 56px)";' in source
     assert "const fullBleedEditor = !!(" not in source
     assert "node.style.width = \"100%\"" in source
-    assert "node.style.maxWidth = shellFrameWidth" in source
+    assert "node.style.maxWidth = contentFrameWidth" in source
     assert 'appShell.style.maxWidth = shellFrameWidth' in source
     assert 'node.style.maxWidth = "100%"' in source
     assert "node.style.minWidth = \"0\"" in source
@@ -748,6 +749,11 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "overflow: hidden;" in source
     assert ".es-topnav-link {" in source
     assert "padding: 0 8px;" in source
+    assert "def render_native_navigation_bridge()" in source
+    assert "new_project_attr = dashboard_target_attr(\"Projects\", \"New Project\")" in dashboard_body
+    assert "{new_project_attr}>New Project</a>" in dashboard_body
+    assert "render_native_navigation_targets(dashboard_native_targets, \"dashboard\")" in dashboard_body
+    assert "render_native_navigation_targets(native_targets, \"topnav\")" in source
     assert ".st-key-errorsweep_app_shell" in source
     assert ".st-key-errorsweep_shell_top" in source
     assert ".st-key-errorsweep_shell_content" in source
