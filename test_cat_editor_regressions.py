@@ -142,12 +142,36 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
     assert "url.searchParams.set(\"es_page\", \"Login\")" not in source[source.index("def render_logout_bridge"):source.index("def login_launch_params")]
-    assert 'if is_authenticated() and authenticated_public_entry_route(route):' in source
     assert 'return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")' in source
     assert 'set_route_query({"es_page": "Dashboard"})' in source
     assert "def authenticated_shell_route_from_session(default_page: str = \"Dashboard\") -> Dict[str, str]:" in source
+    assert "def authenticated_login_handoff_route(route: Dict[str, Any]) -> bool:" in source
+    assert "login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)" in source
+    assert "authenticated_public_entry_route(route) and not login_handoff_route" in source
     assert 'if route.get("route") in PUBLIC_ROUTES:\n            route = authenticated_shell_route_from_session()' in source
+    assert 'route = {"route": "dashboard", "page": "Dashboard", "es_page": "Dashboard"}' in source
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
+
+
+def test_authenticated_login_tab_shows_logged_in_state() -> None:
+    source = read_app()
+    state_start = source.index("def render_logged_in_login_state")
+    state_end = source.index("def render_post_login_tool_launch_bridge", state_start)
+    state_body = source[state_start:state_end]
+    assert "You are logged in" in state_body
+    assert "ErrorSweep is open in another tab" in state_body
+    assert "Open Dashboard" in state_body
+    assert "?es_logout=1" in state_body
+
+    login_start = source.index("def render_login")
+    login_end = source.index("def profile_language_defaults", login_start)
+    login_body = source[login_start:login_end]
+    auth_start = login_body.index("if is_authenticated():")
+    auth_end = login_body.index("owner_user =", auth_start)
+    auth_branch = login_body[auth_start:auth_end]
+    assert "render_logged_in_login_state" in auth_branch
+    assert "st.rerun()" not in auth_branch
+    assert 'st.form("unified_login"' in login_body
 
 
 def test_logout_routes_every_window_to_landing() -> None:
@@ -156,6 +180,8 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "def render_global_logout_listener() -> None" in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
+    assert "restoreAuthAndGoDashboard" in source
+    assert "event.key === storageKey && event.newValue" in source
     assert "storage.setItem(logoutKey, String(Date.now()))" in source
     assert "landing_redirect_url_js(include_logout_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
@@ -231,6 +257,8 @@ def test_refresh_restores_last_authenticated_route() -> None:
     assert "storage.setItem(routeStorageKey, JSON.stringify(value))" in source
     assert "storage.removeItem(routeStorageKey)" in source
     assert "url.searchParams.set(key, String(value))" in source
+    assert 'url.searchParams.set("es_page", "Dashboard")' in source
+    assert "if (!hasAnyQuery) return;" in source
 
     restore_start = source.index("def render_session_restore_bridge")
     restore_end = source.index("def login_user", restore_start)
@@ -570,6 +598,7 @@ if __name__ == "__main__":
     test_login_es_page_aliases_are_public_and_normalized()
     test_login_success_opens_target_route_in_current_tab()
     test_public_login_and_authenticated_entry_routes_open_dashboard()
+    test_authenticated_login_tab_shows_logged_in_state()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()

@@ -4639,6 +4639,26 @@ def render_global_logout_listener() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
+          const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
+          const currentPublicEntryUrl = (url) => {{
+            const route = normalizedPage(url.searchParams.get("route") || url.searchParams.get("public"));
+            const page = normalizedPage(url.searchParams.get("es_page"));
+            const hasAnyRouteTarget = ["es_page", "es_editor", "job_id", "review_id", "route", "public", "return_to"].some((key) => url.searchParams.has(key));
+            return !hasAnyRouteTarget || publicEntryPages.has(route) || publicEntryPages.has(page);
+          }};
+          const restoreAuthAndGoDashboard = (token) => {{
+            if (!token) return;
+            try {{
+              const loc = window.parent ? window.parent.location : window.location;
+              const url = new URL(loc.href);
+              if (!currentPublicEntryUrl(url)) return;
+              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss"].forEach((key) => url.searchParams.delete(key));
+              url.searchParams.set("es_page", "Dashboard");
+              url.searchParams.set("es_restore", token);
+              if (loc.href !== url.toString()) loc.replace(url.toString());
+            }} catch (err) {{}}
+          }};
           const clearAuthAndGoLanding = () => {{
             try {{
               const secure = window.location.protocol === "https:" ? "; Secure" : "";
@@ -4658,6 +4678,7 @@ def render_global_logout_listener() -> None:
           }};
           window.addEventListener("storage", (event) => {{
             if (event.key === logoutKey && event.newValue) clearAuthAndGoLanding();
+            if (event.key === storageKey && event.newValue) restoreAuthAndGoDashboard(event.newValue);
           }});
         }})();
         </script>
@@ -4711,7 +4732,11 @@ def render_session_restore_bridge() -> None:
             }}
             url.searchParams.delete("es_restore_miss");
             url.searchParams.delete("public");
-            if (!routeBlockingKeys.some((key) => url.searchParams.has(key))) {{
+            const hasRouteTarget = routeBlockingKeys.some((key) => url.searchParams.has(key));
+            const hasAnyQuery = Array.from(url.searchParams.keys()).length > 0;
+            if (!hasRouteTarget && !hasAnyQuery) {{
+              url.searchParams.set("es_page", "Dashboard");
+            }} else if (!hasRouteTarget) {{
               const savedRoute = storage.getItem(routeStorageKey);
               if (savedRoute) {{
                 try {{
@@ -4861,6 +4886,27 @@ def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dic
     return fallback
 
 
+def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
+    status_line = "ErrorSweep is open in another tab" if opened_elsewhere else "Your ErrorSweep session is active."
+    st.html(
+        dedent(f"""
+        <section class="es-auth-shell" aria-label="Logged in">
+          <div class="es-lp-brand">
+            <div class="es-lp-logo" aria-hidden="true"></div>
+            <div>
+              <div class="es-lp-brand-name">You are logged in</div>
+              <div style="color:rgba(255,255,255,.68);font-weight:700;margin-top:4px;">{escape(status_line)}</div>
+            </div>
+          </div>
+          <div class="es-auth-links">
+            <a class="es-lp-btn primary" href="{escape(app_page_link('Dashboard'))}" target="_self">Open Dashboard</a>
+            <a class="es-lp-btn" href="?es_logout=1" target="_self">Logout</a>
+          </div>
+        </section>
+        """).strip(),
+    )
+
+
 def render_post_login_tool_launch_bridge() -> None:
     launch_url = safe_text(st.session_state.get("_post_login_tool_launch_url", ""))
     if not launch_url:
@@ -4873,11 +4919,7 @@ def render_post_login_tool_launch_bridge() -> None:
     session_token_json = json.dumps(session_token)
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
-    st.success("Signed in. CogniSweep is opening the tool in a new tab.")
-    st.markdown(
-        f'<a class="es-lp-btn primary" href="{escape(launch_url)}" target="_blank" rel="noopener">Open CogniSweep Tool</a>',
-        unsafe_allow_html=True,
-    )
+    render_logged_in_login_state(opened_elsewhere=True)
     components.html(
         f"""
         <script>
@@ -5687,6 +5729,12 @@ def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:
     return public_route in AUTHENTICATED_PUBLIC_ENTRY_ROUTES
 
 
+def authenticated_login_handoff_route(route: Dict[str, Any]) -> bool:
+    """Keep only the original post-login tab on the Login status screen."""
+    public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
+    return bool(st.session_state.get("_login_window_stay_open")) and public_route == "login"
+
+
 def authenticated_shell_route_from_session(default_page: str = "Dashboard") -> Dict[str, str]:
     """Build a protected route from session state when query params are stale."""
     current = st.session_state.get("current_route")
@@ -5783,6 +5831,8 @@ def render_route_restore_bridge() -> None:
             if (!savedRoute) return;
             const loc = window.parent ? window.parent.location : window.location;
             const url = new URL(loc.href);
+            const hasAnyQuery = Array.from(url.searchParams.keys()).length > 0;
+            if (!hasAnyQuery) return;
             if (routeBlockingKeys.some((key) => url.searchParams.has(key))) return;
             const params = JSON.parse(savedRoute);
             if (!params || (!params.es_page && !params.es_editor)) return;
@@ -16922,9 +16972,7 @@ def render_login() -> None:
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
     if is_authenticated():
-        st.info("You are signed in. Opening your dashboard.")
-        set_route_query({"es_page": "Dashboard"})
-        st.rerun()
+        render_logged_in_login_state(opened_elsewhere=bool(st.session_state.get("_login_window_stay_open", False)))
         return
 
     owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
@@ -22634,10 +22682,21 @@ if __name__ == "__main__":
     ):
         route = {"route": "landing", "public": "landing", "page": "Landing"}
 
+    if (
+        is_authenticated()
+        and not explicit_route_target
+        and not query_get("public")
+        and not query_get("route")
+    ):
+        st.session_state.page = "Dashboard"
+        st.session_state["es_page"] = "Dashboard"
+        route = {"route": "dashboard", "page": "Dashboard", "es_page": "Dashboard"}
+
     if not is_authenticated() and session_restore_probe_pending(route, explicit_route_target):
         st.stop()
 
-    if is_authenticated() and authenticated_public_entry_route(route):
+    login_handoff_route = is_authenticated() and authenticated_login_handoff_route(route)
+    if is_authenticated() and authenticated_public_entry_route(route) and not login_handoff_route:
         return_to = safe_text(st.session_state.pop("post_login_return_to", "")) or query_get("return_to")
         if return_to and apply_return_to(return_to):
             route = get_current_route()
