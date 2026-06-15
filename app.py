@@ -712,7 +712,8 @@ body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVe
   max-height: 100dvh !important;
   min-height: 0 !important;
   width: 100% !important;
-  margin: 0 !important;
+  max-width: var(--es-shell-content-width) !important;
+  margin: 0 auto !important;
   padding: 0 !important;
   display: grid !important;
   grid-template-rows: auto minmax(0, 1fr) !important;
@@ -778,9 +779,9 @@ body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .
   min-height: 0 !important;
   margin: 0 !important;
   overflow-x: hidden !important;
-  overflow-y: scroll !important;
-  overscroll-behavior: contain !important;
-  scrollbar-gutter: stable both-edges !important;
+  overflow-y: hidden !important;
+  overscroll-behavior: none !important;
+  scrollbar-gutter: auto !important;
 }
 
 .st-key-errorsweep_shell_top {
@@ -822,6 +823,7 @@ body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell div:has(> .
 
 .st-key-errorsweep_shell_content[data-testid="stVerticalBlock"] {
   height: 100% !important;
+  max-height: 100% !important;
   min-height: 0 !important;
   width: 100% !important;
   max-width: var(--es-shell-content-width) !important;
@@ -882,9 +884,9 @@ body:has(#errorsweep-root-shell-marker) [data-testid="stAppViewContainer"] .main
 body:has(#errorsweep-root-shell-marker) [data-testid="stMainBlockContainer"],
 body:has(#errorsweep-root-shell-marker) .block-container {
   width: 100% !important;
-  max-width: var(--es-shell-content-width) !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
 }
 
 .es-shell {
@@ -4933,6 +4935,12 @@ def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
     public_es_route = public_route_for_es_page(query_get("es_page"))
     if public_es_route in PUBLIC_ROUTES:
         return False
+    route_page = normalize_es_page(route.get("page") or route.get("es_page"))
+    if route_page in known_protected_es_pages():
+        return True
+    route_alias_page = normalize_es_page(ROUTE_PAGE_ALIASES.get(route_name, ""))
+    if route_alias_page in known_protected_es_pages():
+        return True
     if protected_route_requested():
         return True
     return (
@@ -6009,7 +6017,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str]) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_session", "es_restore", "es_restore_miss"):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_session", "es_restore", "es_restore_miss", AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             query_clear(stale)
     for key, value in params.items():
@@ -6173,7 +6181,7 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
 
     st.query_params["es_page"] = page_name
-    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab"):
+    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
         
@@ -22758,11 +22766,11 @@ def render_shell_scroll_bridge() -> None:
               node.style.maxHeight = "100dvh";
               node.style.minHeight = "0";
               node.style.width = "100%";
-              node.style.maxWidth = shellFrameWidth;
+              node.style.maxWidth = "100%";
               node.style.minWidth = "0";
-              node.style.margin = "0 auto";
-              node.style.marginLeft = "auto";
-              node.style.marginRight = "auto";
+              node.style.margin = "0";
+              node.style.marginLeft = "0";
+              node.style.marginRight = "0";
               node.style.padding = "0";
               node.style.overflow = "hidden";
             });
@@ -22799,9 +22807,9 @@ def render_shell_scroll_bridge() -> None:
             appShell.style.maxHeight = "100dvh";
             appShell.style.minHeight = "0";
             appShell.style.width = "100%";
-            appShell.style.maxWidth = "100%";
+            appShell.style.maxWidth = shellFrameWidth;
             appShell.style.minWidth = "0";
-            appShell.style.margin = "0";
+            appShell.style.margin = "0 auto";
             appShell.style.padding = "0";
             appShell.style.display = "grid";
             appShell.style.gridTemplateRows = "auto minmax(0, 1fr)";
@@ -22837,9 +22845,9 @@ def render_shell_scroll_bridge() -> None:
               scrollTarget.style.minHeight = "0";
               scrollTarget.style.margin = "0";
               scrollTarget.style.overflowX = "hidden";
-              scrollTarget.style.overflowY = editorMode ? "hidden" : "scroll";
-              scrollTarget.style.overscrollBehavior = editorMode ? "none" : "contain";
-              scrollTarget.style.scrollbarGutter = editorMode ? "auto" : "stable both-edges";
+              scrollTarget.style.overflowY = "hidden";
+              scrollTarget.style.overscrollBehavior = "none";
+              scrollTarget.style.scrollbarGutter = "auto";
             }
 
             const centerRail = (node) => {
@@ -22853,6 +22861,13 @@ def render_shell_scroll_bridge() -> None:
 
             if (contentKey) {
               centerRail(contentKey);
+              contentKey.style.height = "100%";
+              contentKey.style.maxHeight = "100%";
+              contentKey.style.minHeight = "0";
+              contentKey.style.overflowX = "hidden";
+              contentKey.style.overflowY = editorMode ? "hidden" : "auto";
+              contentKey.style.overscrollBehavior = editorMode ? "none" : "contain";
+              contentKey.style.scrollbarGutter = editorMode ? "auto" : "stable both-edges";
             } else if (scrollTarget) {
               centerRail(scrollTarget);
             }
@@ -22867,10 +22882,11 @@ def render_shell_scroll_bridge() -> None:
             });
 
             if (contentKey && contentKey !== scrollTarget) {
-              contentKey.style.height = editorMode ? "100%" : "auto";
-              contentKey.style.maxHeight = editorMode ? "100%" : "none";
+              contentKey.style.height = "100%";
+              contentKey.style.maxHeight = "100%";
               contentKey.style.minHeight = "0";
-              contentKey.style.overflow = editorMode ? "hidden" : "visible";
+              contentKey.style.overflowX = "hidden";
+              contentKey.style.overflowY = editorMode ? "hidden" : "auto";
             }
           };
 
@@ -22977,6 +22993,8 @@ if __name__ == "__main__":
     auth_state = current_auth_state(route)
     if auth_state == AUTH_STATE_UNKNOWN:
         render_auth_unknown_state(route)
+    if auth_state == AUTH_STATE_AUTHENTICATED:
+        query_clear(AUTH_CHECK_QUERY_PARAM)
 
     if auth_state == AUTH_STATE_AUTHENTICATED:
         render_route_restore_bridge()
@@ -22986,7 +23004,7 @@ if __name__ == "__main__":
     if route_public in {"login", "signup"}:
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
-        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to"):
+        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
             if stale in st.query_params:
                 del st.query_params[stale]
         route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}
@@ -22996,6 +23014,8 @@ if __name__ == "__main__":
     auth_state = current_auth_state(route)
     if auth_state == AUTH_STATE_UNKNOWN:
         render_auth_unknown_state(route)
+    if auth_state == AUTH_STATE_AUTHENTICATED:
+        query_clear(AUTH_CHECK_QUERY_PARAM)
 
     if (
         auth_state == AUTH_STATE_UNAUTHENTICATED

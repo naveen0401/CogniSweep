@@ -341,7 +341,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     app_body = source[app_start:app_end]
     assert 'route_public in {"login", "signup"}' in app_body
     assert 'st.query_params["es_page"] = page_name' in app_body
-    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to")' in app_body
+    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
     assert "del st.query_params[stale]" in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
@@ -350,8 +350,16 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     pending_body = source[pending_start:pending_end]
     assert "if route_name in PUBLIC_ROUTES:" in pending_body
     assert "public_es_route = public_route_for_es_page(query_get(\"es_page\"))" in pending_body
+    assert 'route_page = normalize_es_page(route.get("page") or route.get("es_page"))' in pending_body
+    assert "if route_page in known_protected_es_pages():" in pending_body
+    assert 'route_alias_page = normalize_es_page(ROUTE_PAGE_ALIASES.get(route_name, ""))' in pending_body
     assert "return False" in pending_body
     assert "route_name in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" not in pending_body
+
+    set_route_start = source.index("def set_route_query")
+    set_route_end = source.index("def public_route_for_es_page", set_route_start)
+    set_route_body = source[set_route_start:set_route_end]
+    assert "AUTH_CHECK_QUERY_PARAM" in set_route_body
 
 
 def test_login_session_persists_until_explicit_logout() -> None:
@@ -692,13 +700,16 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "def render_shell_scroll_bridge()" in source
     assert "MutationObserver(applyShellScroll)" in source
     assert "const editorMode = !!editorMarker;" in source
-    assert 'scrollTarget.style.overflowY = editorMode ? "hidden" : "scroll"' in source
-    assert 'scrollTarget.style.overscrollBehavior = editorMode ? "none" : "contain"' in source
+    assert 'scrollTarget.style.overflowY = "hidden"' in source
+    assert 'contentKey.style.overflowY = editorMode ? "hidden" : "auto"' in source
+    assert 'contentKey.style.overscrollBehavior = editorMode ? "none" : "contain"' in source
     assert "--es-shell-frame-padding: 0 18px 0;" in source
     assert "--es-shell-content-width: min(1760px, calc(100vw - 56px));" in source
     assert "body:has(#errorsweep-root-shell-marker) [data-testid=\"stAppViewContainer\"] .main .block-container" in source
     assert "body:has(#errorsweep-root-shell-marker):not(:has(#human-review-editor-page-marker)):not(:has(#media-editor-page-marker))" not in source
     assert "max-width: var(--es-shell-content-width) !important" in source
+    assert ".st-key-errorsweep_app_shell {\n  height: 100dvh !important" in source
+    assert "overflow-y: hidden !important;\n  overscroll-behavior: none !important;" in source
     assert ".st-key-errorsweep_page_frame" in source
     assert 'key="errorsweep_page_frame"' in source
     assert "def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True)" in source
@@ -708,6 +719,8 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "const fullBleedEditor = !!(" not in source
     assert "node.style.width = \"100%\"" in source
     assert "node.style.maxWidth = shellFrameWidth" in source
+    assert 'appShell.style.maxWidth = shellFrameWidth' in source
+    assert 'node.style.maxWidth = "100%"' in source
     assert "node.style.minWidth = \"0\"" in source
     assert "100vw\" : shellFrameWidth" not in source
     assert 'parentDoc.querySelectorAll(".st-key-errorsweep_page_frame")' in source
