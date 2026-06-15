@@ -277,7 +277,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
     assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken)' in source
     assert 'const token = cookieToken || storageToken;' in source
-    assert 'url.searchParams.set(authCheckedKey, "1")' in source
+    assert 'url.searchParams.set("es_auth_checked"' not in source
+    assert 'url.searchParams.set(authCheckedKey' not in source
+    assert 'query_get(AUTH_CHECK_QUERY_PARAM) == "1"' not in source
+    assert 'query_set(AUTH_CHECK_QUERY_PARAM' not in source
     assert 'st.caption("Loading...")' in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source

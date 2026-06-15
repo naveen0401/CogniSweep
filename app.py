@@ -707,6 +707,18 @@ body:has(#errorsweep-root-shell-marker) .block-container > div[data-testid="stVe
   overflow: hidden !important;
 }
 
+body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell {
+  position: fixed !important;
+  inset: 0 !important;
+  width: var(--es-shell-content-width) !important;
+  max-width: var(--es-shell-content-width) !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 auto !important;
+  overflow: hidden !important;
+  z-index: 1 !important;
+}
+
 .st-key-errorsweep_app_shell {
   height: 100dvh !important;
   max-height: 100dvh !important;
@@ -4816,7 +4828,6 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
-    auth_checked_key_json = json.dumps(AUTH_CHECK_QUERY_PARAM)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
     domain_js = browser_cookie_domain_js_function()
@@ -4827,7 +4838,6 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
           try {{
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
-            const authCheckedKey = {auth_checked_key_json};
             const routeParamKeys = {route_param_keys_json};
             const publicEntryPages = new Set({public_entry_pages_json});
             const candidateWindows = [window.parent, window.top, window];
@@ -4892,10 +4902,17 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const token = cookieToken || storageToken;
             if (!token) {{
-              if (!url.searchParams.has(authCheckedKey)) {{
-                url.searchParams.set(authCheckedKey, "1");
-                loc.replace(url.toString());
+              const originalParams = new URLSearchParams(url.search);
+              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked"].forEach((key) => originalParams.delete(key));
+              Array.from(url.searchParams.keys()).forEach((key) => url.searchParams.delete(key));
+              if (publicEntry) {{
+                url.searchParams.set("es_page", "Landing");
+              }} else {{
+                url.searchParams.set("es_page", "Login");
+                const returnTo = originalParams.toString();
+                if (returnTo) url.searchParams.set("return_to", returnTo);
               }}
+              loc.replace(url.toString());
               return;
             }}
             const attemptKey = storageKey + "_bootstrap_attempted";
@@ -4907,7 +4924,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss", authCheckedKey].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked"].forEach((key) => url.searchParams.delete(key));
             if (publicEntry) {{
               ["public", "route", "return_to", "tool_tab"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
@@ -4925,8 +4942,6 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
 def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
     if st.session_state.get("authenticated") and st.session_state.get("user"):
-        return False
-    if query_get(AUTH_CHECK_QUERY_PARAM) == "1":
         return False
     route = route or {}
     route_name = safe_text(route.get("public") or route.get("route")).strip().lower()
@@ -4968,13 +4983,10 @@ def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
 
 def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
-    auth_checked_key_json = json.dumps(AUTH_CHECK_QUERY_PARAM)
     return f"""
-            const authCheckedKey = {auth_checked_key_json};
             const url = new URL(loc.href);
-            ["es_session", "es_restore", "es_restore_miss", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
-            url.searchParams.set(authCheckedKey, "1");
             {logout_marker_js}
     """
 
@@ -5342,7 +5354,6 @@ def logout() -> None:
     for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "route", "public", "return_to", "es_logout"):
         query_clear(key)
     query_set("es_page", "Landing")
-    query_set(AUTH_CHECK_QUERY_PARAM, "1")
     render_logout_bridge()
     render_landing_page("logout")
     st.stop()
@@ -22806,6 +22817,8 @@ def render_shell_scroll_bridge() -> None:
             appShell.style.height = "100dvh";
             appShell.style.maxHeight = "100dvh";
             appShell.style.minHeight = "0";
+            appShell.style.position = "fixed";
+            appShell.style.inset = "0";
             appShell.style.width = "100%";
             appShell.style.maxWidth = shellFrameWidth;
             appShell.style.minWidth = "0";
@@ -22837,11 +22850,15 @@ def render_shell_scroll_bridge() -> None:
               topWrapper.style.zIndex = "900";
             }
 
+            const topHeight = topWrapper && !editorMode
+              ? Math.ceil(topWrapper.getBoundingClientRect().height)
+              : 0;
+            const contentHeight = editorMode ? "100dvh" : `calc(100dvh - ${topHeight}px)`;
             const scrollTarget = contentWrapper || contentKey;
             if (scrollTarget) {
               scrollTarget.style.gridRow = "2";
-              scrollTarget.style.height = "100%";
-              scrollTarget.style.maxHeight = "100%";
+              scrollTarget.style.height = contentHeight;
+              scrollTarget.style.maxHeight = contentHeight;
               scrollTarget.style.minHeight = "0";
               scrollTarget.style.margin = "0";
               scrollTarget.style.overflowX = "hidden";
@@ -22861,8 +22878,8 @@ def render_shell_scroll_bridge() -> None:
 
             if (contentKey) {
               centerRail(contentKey);
-              contentKey.style.height = "100%";
-              contentKey.style.maxHeight = "100%";
+              contentKey.style.height = contentHeight;
+              contentKey.style.maxHeight = contentHeight;
               contentKey.style.minHeight = "0";
               contentKey.style.overflowX = "hidden";
               contentKey.style.overflowY = editorMode ? "hidden" : "auto";
@@ -22882,8 +22899,8 @@ def render_shell_scroll_bridge() -> None:
             });
 
             if (contentKey && contentKey !== scrollTarget) {
-              contentKey.style.height = "100%";
-              contentKey.style.maxHeight = "100%";
+              contentKey.style.height = contentHeight;
+              contentKey.style.maxHeight = contentHeight;
               contentKey.style.minHeight = "0";
               contentKey.style.overflowX = "hidden";
               contentKey.style.overflowY = editorMode ? "hidden" : "auto";
