@@ -23067,9 +23067,15 @@ if __name__ == "__main__":
         render_public_app()
     else:
         if auth_state == AUTH_STATE_UNAUTHENTICATED:
-            landing_route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
-            render_auth_debug_panel(landing_route, "missing_or_invalid_cookie_show_landing")
-            render_public_app()
+            if route.get("route") not in PUBLIC_ROUTES and protected_route_requested():
+                login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+                st.session_state["auth_return_to"] = encode_return_to()
+                render_auth_debug_panel(login_route, "missing_or_invalid_cookie_show_login")
+                render_login()
+            else:
+                landing_route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
+                render_auth_debug_panel(landing_route, "missing_or_invalid_cookie_show_landing")
+                render_public_app()
         else:
             current_route = route
             render_auth_debug_panel(route, safe_text((st.session_state.get("_auth_debug") or {}).get("route_decision")) or f"authenticated:{route.get('route')}")

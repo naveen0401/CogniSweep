@@ -323,6 +323,9 @@ def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     unknown_idx = app_body.index("render_auth_unknown_state(route)")
     first_public_idx = app_body.index("render_public_app()")
     assert unknown_idx < first_public_idx
+    assert '"missing_or_invalid_cookie_show_login"' in app_body
+    assert "render_login()" in app_body
+    assert "st.session_state[\"auth_return_to\"] = encode_return_to()" in app_body
     assert 'render_public_app()' in app_body
     assert '"missing_or_invalid_cookie_show_landing"' in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
