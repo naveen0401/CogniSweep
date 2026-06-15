@@ -186,7 +186,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-shell-v3"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-shell-v4"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
