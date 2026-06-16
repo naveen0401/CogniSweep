@@ -6519,6 +6519,19 @@ def authenticated_shell_route_from_session(default_page: str = "Dashboard") -> D
     return {"route": PAGE_ROUTE_SLUGS.get(page) or es_page_alias_key(page) or "dashboard", "page": page, "es_page": page}
 
 
+def protected_query_params_from_route(route: Dict[str, Any]) -> Dict[str, str]:
+    params = {
+        key: safe_text(route.get(key))
+        for key in ROUTE_STORAGE_PARAM_KEYS
+        if safe_text(route.get(key))
+    }
+    page = normalize_es_page(params.get("es_page") or route.get("page") or "Dashboard")
+    if not page or public_route_for_es_page(page):
+        page = "Dashboard"
+    params["es_page"] = page
+    return params
+
+
 def browser_route_storage_params(params: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     params = params or {}
     stored: Dict[str, str] = {}
@@ -24056,6 +24069,12 @@ if __name__ == "__main__":
         render_auth_unknown_state(route)
     if auth_state == AUTH_STATE_AUTHENTICATED:
         query_clear(AUTH_CHECK_QUERY_PARAM)
+        if st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
+            target_route = authenticated_shell_route_from_session()
+            target_params = protected_query_params_from_route(target_route)
+            set_route_query(target_params)
+            set_auth_debug_state(bool(browser_session_cookie()), True, "login_success_to_dashboard", target_route)
+            st.rerun()
 
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
@@ -24119,6 +24138,7 @@ if __name__ == "__main__":
         if route.get("route") in PUBLIC_ROUTES:
             route = authenticated_shell_route_from_session()
         set_auth_debug_state(bool(browser_session_cookie()), True, "valid_cookie_public_entry_to_dashboard", route)
+        st.rerun()
 
     if route.get("route") in PUBLIC_ROUTES:
         render_auth_debug_panel(route, safe_text((st.session_state.get("_auth_debug") or {}).get("route_decision")) or f"public:{route.get('route')}")
