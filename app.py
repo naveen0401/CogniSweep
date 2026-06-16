@@ -4843,6 +4843,10 @@ def render_auth_debug_panel(route: Optional[Dict[str, Any]] = None, route_decisi
         "authenticated": bool(debug.get("authenticated")),
         "route_decision": safe_text(debug.get("route_decision")),
         "resolved_route": debug.get("resolved_route") or {},
+        "owner_username_configured": bool(configured_owner_username()),
+        "owner_password_hash_configured": bool(configured_owner_password_hash()),
+        "unlimited_owner_email_configured": bool(secret(UNLIMITED_ACCESS_EMAIL_SECRET, "")),
+        "unlimited_owner_password_hash_configured": bool(secret(UNLIMITED_ACCESS_PASSWORD_HASH_SECRET, "")),
     })
 
 
@@ -5491,13 +5495,32 @@ def handle_unified_login_submit() -> None:
 
     owner_user = unlimited_access_email() or configured_owner_username(local_default=True)
     owner_password_hash = unlimited_access_password_hash()
-    owner_is_configured = bool(owner_user) and bool(owner_password_hash or password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"))
+    owner_secret_available = bool(owner_password_hash or password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"))
+    owner_is_configured = bool(owner_user) and owner_secret_available
     bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@cognisweep.local")
     bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
     default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
     email_key = clean_email.lower()
 
-    owner_password_ok = verify_password(password, owner_password_hash) if owner_password_hash else verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+    owner_email_matches = bool(owner_user) and hmac.compare_digest(email_key, owner_user)
+    owner_password_ok = False
+    if owner_password_hash:
+        owner_password_ok = verify_password(password, owner_password_hash)
+    elif owner_secret_available:
+        owner_password_ok = verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+
+    if owner_email_matches and not owner_secret_available:
+        LOGGER.error("Platform owner login attempted but ERRORSWEEP_OWNER_PASSWORD_HASH is not configured.")
+        set_login_feedback("error", "Platform owner login is not configured. Set ERRORSWEEP_OWNER_PASSWORD_HASH in Streamlit secrets.")
+        return
+    if owner_email_matches and owner_secret_available and not owner_password_ok:
+        LOGGER.warning("Platform owner login password mismatch for the configured owner account.")
+        set_login_feedback(
+            "error",
+            "Platform owner password does not match the configured owner hash. Regenerate ERRORSWEEP_OWNER_PASSWORD_HASH in Streamlit secrets for the current password.",
+        )
+        return
+
     if owner_is_configured and hmac.compare_digest(email_key, owner_user) and owner_password_ok:
         clear_abuse_attempts("workspace_login", clean_email)
         st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True

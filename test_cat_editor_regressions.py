@@ -96,6 +96,8 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
     ]
     assert owner_branch.index('st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True') < owner_branch.index('login_user(owner_user')
     assert "st.rerun()" in callback_body
+    assert "Platform owner login is not configured." in callback_body
+    assert "Platform owner password does not match the configured owner hash." in callback_body
 
 
 def test_unknown_and_unauthorized_routes_are_separate() -> None:
@@ -328,7 +330,17 @@ def test_debug_auth_reports_cookie_state_and_route_decision() -> None:
     debug_start = source.index("def render_auth_debug_panel")
     debug_end = source.index("def restore_user_from_signed_session", debug_start)
     debug_body = source[debug_start:debug_end]
-    for key in ("cookie_found", "session_valid", "authenticated", "route_decision", "resolved_route"):
+    for key in (
+        "cookie_found",
+        "session_valid",
+        "authenticated",
+        "route_decision",
+        "resolved_route",
+        "owner_username_configured",
+        "owner_password_hash_configured",
+        "unlimited_owner_email_configured",
+        "unlimited_owner_password_hash_configured",
+    ):
         assert f'"{key}"' in debug_body
     assert 'if query_get("debug_auth") != "1":' in debug_body
 
