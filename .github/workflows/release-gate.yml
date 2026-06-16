@@ -73,6 +73,7 @@ jobs:
           python test_billing_check.py
           python test_email_check.py
           python test_legal_check.py
+          python test_persistence_tenant_scope.py
           python test_release_gate_workflow.py
           python test_cat_editor_regressions.py
           python test_media_editor_reference.py

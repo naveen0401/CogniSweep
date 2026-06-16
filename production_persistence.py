@@ -46,6 +46,7 @@ SUPABASE_TIMEOUT = 25
 LOCAL_USAGE_MAX_BYTES = int(os.getenv("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
 LOCAL_USAGE_KEEP_LINES = int(os.getenv("ERRORSWEEP_USAGE_LOG_KEEP_LINES", "2000"))
 _LOCAL_WRITE_LOCK = threading.Lock()
+PLATFORM_SCOPE_VALUES = {"platform", "all", "global", "service", "system"}
 
 SAAS_TABLES = {
     "users": "errorsweep_users",
@@ -198,6 +199,54 @@ def _current_user_email(user: Optional[Dict[str, Any]] = None) -> str:
 def _current_workspace(user: Optional[Dict[str, Any]] = None) -> str:
     user = user or {}
     return str(user.get("workspace") or "Demo Workspace").strip()
+
+
+def _scope_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _is_platform_scope(workspace: str = "", reason: str = "") -> bool:
+    workspace_key = _scope_text(workspace).lower()
+    return bool(_scope_text(reason)) or workspace_key in PLATFORM_SCOPE_VALUES
+
+
+def _tenant_filters(
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> List[str]:
+    """Build PostgREST filters and fail closed for accidental service-role broad reads."""
+    scoped_workspace = _scope_text(workspace)
+    scoped_user = _scope_text(user_email).lower()
+    reason = _scope_text(platform_scope_reason)
+    if include_all_workspaces:
+        if not reason:
+            raise ValueError("include_all_workspaces requires platform_scope_reason for service-role persistence reads.")
+        return []
+
+    filters: List[str] = []
+    if scoped_workspace:
+        filters.append(f"workspace=eq.{quote(scoped_workspace)}")
+    if scoped_user:
+        filters.append(f"user_email=eq.{quote(scoped_user)}")
+    if not filters and not reason:
+        raise ValueError("Service-role persistence read requires workspace, user_email, or platform_scope_reason.")
+    return filters
+
+
+def _scope_from_user(
+    user: Optional[Dict[str, Any]] = None,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+) -> Dict[str, str]:
+    candidate = user or {}
+    return {
+        "workspace": _scope_text(workspace or (candidate.get("workspace") if candidate else "")),
+        "user_email": _scope_text(user_email or (candidate.get("email") or candidate.get("username") if candidate else "")).lower(),
+    }
 
 
 # ==========================================================
@@ -359,6 +408,8 @@ def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
     for path in _local_root().glob("*.json"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
             updated = float(payload.get("updated_at_epoch") or payload.get("created_at_epoch") or 0)
             if updated and now - updated > ttl_seconds:
                 path.unlink(missing_ok=True)
@@ -453,12 +504,31 @@ def save_persistent_editor_job(
     return jid
 
 
-def load_persistent_editor_job(job_id: str) -> Optional[Dict[str, Any]]:
+def load_persistent_editor_job(
+    job_id: str,
+    user: Optional[Dict[str, Any]] = None,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> Optional[Dict[str, Any]]:
     jid = _safe_job_id(job_id)
+    scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
 
     if supabase_configured():
         try:
-            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?id=eq.{quote(jid)}&select=*"
+            filters = [
+                f"id=eq.{quote(jid)}",
+                *_tenant_filters(
+                    workspace=scope["workspace"],
+                    user_email=scope["user_email"],
+                    include_all_workspaces=include_all_workspaces,
+                    platform_scope_reason=platform_scope_reason,
+                ),
+                "select=*",
+            ]
+            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?{'&'.join(filters)}"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             res.raise_for_status()
             data = res.json()
@@ -487,8 +557,14 @@ def update_persistent_editor_job(
     rows: Optional[List[Dict[str, Any]]] = None,
     metadata: Optional[Dict[str, Any]] = None,
     status: Optional[str] = None,
+    user: Optional[Dict[str, Any]] = None,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
 ) -> bool:
     jid = _safe_job_id(job_id)
+    scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
     local_payload = _read_local_job(jid) or {
         "job_id": jid,
         "id": jid,
@@ -528,7 +604,16 @@ def update_persistent_editor_job(
             patch_payload["metadata"] = local_payload.get("metadata") or {}
         if status:
             patch_payload["status"] = status
-        url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?id=eq.{quote(jid)}"
+        filters = [
+            f"id=eq.{quote(jid)}",
+            *_tenant_filters(
+                workspace=scope["workspace"],
+                user_email=scope["user_email"],
+                include_all_workspaces=include_all_workspaces,
+                platform_scope_reason=platform_scope_reason,
+            ),
+        ]
+        url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?{'&'.join(filters)}"
         res = requests.patch(url, headers=_headers({"Prefer": "return=minimal"}), json=patch_payload, timeout=SUPABASE_TIMEOUT)
         res.raise_for_status()
         return True
@@ -589,11 +674,27 @@ def log_persistent_usage_event(
         LOGGER.error("Failed to save usage event to Supabase: %s", exc)
 
 
-def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
+def fetch_persistent_usage_events(
+    limit: int = 200,
+    user: Optional[Dict[str, Any]] = None,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> List[Dict[str, Any]]:
+    scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
+    tenant_filters = _tenant_filters(
+        workspace=scope["workspace"],
+        user_email=scope["user_email"],
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
     if supabase_configured():
         try:
             lim = max(1, min(int(limit), 1000))
-            url = f"{_supabase_url()}/rest/v1/errorsweep_usage_events?select=*&order=created_at.desc&limit={lim}"
+            filters = ["select=*", *tenant_filters, "order=created_at.desc", f"limit={lim}"]
+            url = f"{_supabase_url()}/rest/v1/errorsweep_usage_events?{'&'.join(filters)}"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             res.raise_for_status()
             data = res.json()
@@ -607,7 +708,13 @@ def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
         lines = _local_usage_path().read_text(encoding="utf-8").splitlines()
         for line in reversed(lines[-int(limit):]):
             try:
-                events.append(json.loads(line))
+                item = json.loads(line)
+                if not include_all_workspaces:
+                    if scope["workspace"] and str(item.get("workspace") or "") != scope["workspace"]:
+                        continue
+                    if scope["user_email"] and str(item.get("user_email") or "").strip().lower() != scope["user_email"]:
+                        continue
+                events.append(item)
             except Exception as exc:
                 LOGGER.warning("Failed to parse local usage event: %s", exc)
     except Exception as exc:
@@ -615,11 +722,32 @@ def fetch_persistent_usage_events(limit: int = 200) -> List[Dict[str, Any]]:
     return events
 
 
-def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
+def fetch_persistent_editor_jobs(
+    limit: int = 100,
+    user: Optional[Dict[str, Any]] = None,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> List[Dict[str, Any]]:
+    scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
+    tenant_filters = _tenant_filters(
+        workspace=scope["workspace"],
+        user_email=scope["user_email"],
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
     if supabase_configured():
         try:
             lim = max(1, min(int(limit), 1000))
-            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?select=id,job_type,user_email,workspace,file_name,target_language,status,row_count,metadata,created_at,updated_at&order=updated_at.desc&limit={lim}"
+            filters = [
+                "select=id,job_type,user_email,workspace,file_name,target_language,status,row_count,metadata,created_at,updated_at",
+                *tenant_filters,
+                "order=updated_at.desc",
+                f"limit={lim}",
+            ]
+            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?{'&'.join(filters)}"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             res.raise_for_status()
             data = res.json()
@@ -632,6 +760,15 @@ def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
     for path in sorted(_local_root().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[: int(limit)]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            if not include_all_workspaces:
+                payload_workspace = (payload.get("metadata") or {}).get("workspace") or payload.get("workspace")
+                payload_user = (payload.get("metadata") or {}).get("user_email") or payload.get("user_email")
+                if scope["workspace"] and str(payload_workspace or "") != scope["workspace"]:
+                    continue
+                if scope["user_email"] and str(payload_user or "").strip().lower() != scope["user_email"]:
+                    continue
             jobs.append({
                 "id": payload.get("job_id") or path.stem,
                 "job_type": payload.get("job_type"),
@@ -694,19 +831,26 @@ def save_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dic
 def fetch_saas_records(
     collection: str,
     workspace: str = "",
+    user_email: str = "",
     limit: int = 500,
     include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
 ) -> List[Dict[str, Any]]:
     if collection not in SAAS_TABLES:
         raise ValueError(f"Unsupported SaaS collection: {collection}")
 
     lim = max(1, min(int(limit), 1000))
+    tenant_filters = _tenant_filters(
+        workspace=workspace,
+        user_email=user_email,
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
     if supabase_configured():
         try:
             table = SAAS_TABLES[collection]
             filters = [f"select=*", f"order=updated_at.desc", f"limit={lim}"]
-            if workspace and not include_all_workspaces:
-                filters.append(f"workspace=eq.{quote(workspace)}")
+            filters.extend(tenant_filters)
             url = f"{_supabase_url()}/rest/v1/{table}?{'&'.join(filters)}"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             res.raise_for_status()
@@ -719,10 +863,21 @@ def fetch_saas_records(
     records = _read_local_collection(collection)
     if workspace and not include_all_workspaces:
         records = [r for r in records if str(r.get("workspace") or "") == workspace]
+    if user_email and not include_all_workspaces:
+        user_key = user_email.strip().lower()
+        records = [r for r in records if str(r.get("user_email") or "").strip().lower() == user_key]
     return records[:lim]
 
 
-def delete_saas_record(collection: str, record_id: str) -> bool:
+def delete_saas_record(
+    collection: str,
+    record_id: str,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> bool:
     """Delete a SaaS record from local fallback and Supabase when configured."""
     if collection not in SAAS_TABLES:
         raise ValueError(f"Unsupported SaaS collection: {collection}")
@@ -730,11 +885,26 @@ def delete_saas_record(collection: str, record_id: str) -> bool:
     rid = str(record_id or "").strip()
     if not rid:
         return False
+    tenant_filters = _tenant_filters(
+        workspace=workspace,
+        user_email=user_email,
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
 
     deleted = False
     try:
         records = _read_local_collection(collection)
-        retained = [item for item in records if str(item.get("id") or "") != rid]
+        def in_scope(item: Dict[str, Any]) -> bool:
+            if include_all_workspaces:
+                return True
+            if workspace and str(item.get("workspace") or "") != workspace:
+                return False
+            if user_email and str(item.get("user_email") or "").strip().lower() != user_email.strip().lower():
+                return False
+            return True
+
+        retained = [item for item in records if not (str(item.get("id") or "") == rid and in_scope(item))]
         if len(retained) != len(records):
             _write_local_collection(collection, retained)
             deleted = True
@@ -746,7 +916,8 @@ def delete_saas_record(collection: str, record_id: str) -> bool:
 
     try:
         table = SAAS_TABLES[collection]
-        url = f"{_supabase_url()}/rest/v1/{table}?id=eq.{quote(rid)}"
+        filters = [f"id=eq.{quote(rid)}", *tenant_filters]
+        url = f"{_supabase_url()}/rest/v1/{table}?{'&'.join(filters)}"
         requests.delete(
             url,
             headers=_headers({"Prefer": "return=minimal"}),
@@ -779,7 +950,7 @@ def persistence_health() -> Dict[str, Any]:
         return health
 
     try:
-        url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?select=id&limit=1"
+        url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?select=id&workspace=eq.Platform&limit=1"
         res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
         health["editor_jobs_table"] = "ok" if res.status_code < 400 else f"error_{res.status_code}"
     except Exception as exc:
@@ -787,7 +958,7 @@ def persistence_health() -> Dict[str, Any]:
         health["error"] = str(exc)[:300]
 
     try:
-        url = f"{_supabase_url()}/rest/v1/errorsweep_usage_events?select=id&limit=1"
+        url = f"{_supabase_url()}/rest/v1/errorsweep_usage_events?select=id&workspace=eq.Platform&limit=1"
         res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
         health["usage_events_table"] = "ok" if res.status_code < 400 else f"error_{res.status_code}"
     except Exception as exc:
@@ -797,7 +968,7 @@ def persistence_health() -> Dict[str, Any]:
 
     for table in SAAS_TABLES.values():
         try:
-            url = f"{_supabase_url()}/rest/v1/{table}?select=id&limit=1"
+            url = f"{_supabase_url()}/rest/v1/{table}?select=id&workspace=eq.Platform&limit=1"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             health["saas_tables"][table] = "ok" if res.status_code < 400 else f"error_{res.status_code}"
         except Exception as exc:

@@ -3914,21 +3914,42 @@ def persist_saas_record(collection: str, record: Dict[str, Any]) -> Dict[str, An
         return record
 
 
-def load_saas_records(collection: str, workspace: str = "", include_all_workspaces: bool = False, limit: int = 500) -> List[Dict[str, Any]]:
+def load_saas_records(
+    collection: str,
+    workspace: str = "",
+    include_all_workspaces: bool = False,
+    limit: int = 500,
+    user_email: str = "",
+    platform_scope_reason: str = "",
+) -> List[Dict[str, Any]]:
     if fetch_saas_records is None:
         return []
     try:
-        return fetch_saas_records(collection, workspace=workspace, include_all_workspaces=include_all_workspaces, limit=limit)
+        return fetch_saas_records(
+            collection,
+            workspace=workspace,
+            user_email=user_email,
+            include_all_workspaces=include_all_workspaces,
+            platform_scope_reason=platform_scope_reason,
+            limit=limit,
+        )
     except Exception as exc:
         LOGGER.warning("Unable to load SaaS records %s: %s", collection, exc)
         return []
+
+
+def persistence_read_scope(user: Optional[Dict[str, Any]] = None, platform_scope_reason: str = "") -> Dict[str, Any]:
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return {"include_all_workspaces": True, "platform_scope_reason": platform_scope_reason or "platform_owner_read"}
+    return {"workspace": safe_text(candidate.get("workspace"))}
 
 
 def all_user_records(limit: int = 1000) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     seen: Set[str] = set()
     for source_rows in (
-        load_saas_records("users", include_all_workspaces=True, limit=limit),
+        load_saas_records("users", include_all_workspaces=True, platform_scope_reason="login_user_lookup", limit=limit),
         st.session_state.get("users", []),
     ):
         for row in source_rows or []:
@@ -4074,7 +4095,7 @@ def remove_saas_record(collection: str, record_id: str) -> bool:
     removed = False
     if delete_saas_record is not None:
         try:
-            removed = bool(delete_saas_record(collection, record_id))
+            removed = bool(delete_saas_record(collection, record_id, **persistence_read_scope(platform_scope_reason="record_delete")))
         except Exception as exc:
             LOGGER.warning("Unable to delete SaaS record %s/%s: %s", collection, record_id, exc)
     rows = st.session_state.get(collection)
@@ -4312,6 +4333,7 @@ def hydrate_platform_settings(force: bool = False) -> None:
         "platform_settings",
         workspace="Platform",
         include_all_workspaces=True,
+        platform_scope_reason="platform_settings_hydration",
         limit=SESSION_COLLECTION_LIMITS.get("platform_settings", 100),
     )
     if records:
@@ -4437,7 +4459,12 @@ def create_auth_token(email: str, token_type: str, workspace: str = "", metadata
 
 def auth_token_records() -> List[Dict[str, Any]]:
     records = list(st.session_state.get("auth_tokens", []))
-    for record in load_saas_records("auth_tokens", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("auth_tokens", 500)):
+    for record in load_saas_records(
+        "auth_tokens",
+        include_all_workspaces=True,
+        platform_scope_reason="auth_token_lookup",
+        limit=SESSION_COLLECTION_LIMITS.get("auth_tokens", 500),
+    ):
         if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in records):
             records.append(record)
     return records
@@ -4477,7 +4504,12 @@ def consume_auth_token(record: Dict[str, Any]) -> Dict[str, Any]:
 def update_stored_user(email: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     email_key = safe_text(email).lower()
     users = list(st.session_state.get("users", []))
-    for record in load_saas_records("users", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("users", 1000)):
+    for record in load_saas_records(
+        "users",
+        include_all_workspaces=True,
+        platform_scope_reason="user_profile_lookup",
+        limit=SESSION_COLLECTION_LIMITS.get("users", 1000),
+    ):
         if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in users):
             users.append(record)
     matched = None
@@ -4647,13 +4679,25 @@ def hydrate_saas_state_for_user() -> None:
         "consent_records",
     ]:
         collection_include_all = include_all or key in {"status_incidents"}
-        records = load_saas_records(key, workspace=workspace, include_all_workspaces=collection_include_all, limit=SESSION_COLLECTION_LIMITS.get(key, 500))
+        platform_reason = ""
+        if collection_include_all:
+            platform_reason = "owner_state_hydration" if include_all else "status_incident_hydration"
+        records = load_saas_records(
+            key,
+            workspace="" if collection_include_all else workspace,
+            include_all_workspaces=collection_include_all,
+            platform_scope_reason=platform_reason,
+            limit=SESSION_COLLECTION_LIMITS.get(key, 500),
+        )
         if records:
             st.session_state[key] = records
     hydrate_platform_settings(force=True)
     if fetch_persistent_usage_events is not None:
         try:
-            usage_records = fetch_persistent_usage_events(SESSION_COLLECTION_LIMITS.get("ai_usage_events", 500))
+            usage_records = fetch_persistent_usage_events(
+                SESSION_COLLECTION_LIMITS.get("ai_usage_events", 500),
+                **persistence_read_scope(user, "owner_usage_hydration"),
+            )
             if usage_records:
                 st.session_state["ai_usage_events"] = usage_records
         except Exception as exc:
@@ -8436,7 +8480,12 @@ def verify_sso_handoff_token(token: str) -> Tuple[Optional[Dict[str, Any]], str]
 def sso_handoff_token_used(token: str) -> bool:
     token_hash = auth_token_hash(token)
     records = list(st.session_state.get("auth_tokens", []))
-    for record in load_saas_records("auth_tokens", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("auth_tokens", 500)):
+    for record in load_saas_records(
+        "auth_tokens",
+        include_all_workspaces=True,
+        platform_scope_reason="sso_handoff_token_lookup",
+        limit=SESSION_COLLECTION_LIMITS.get("auth_tokens", 500),
+    ):
         if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in records):
             records.append(record)
     return any(
@@ -8504,7 +8553,12 @@ def safe_sso_role(payload: Dict[str, Any], connection: Dict[str, str]) -> str:
 def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     email_key = safe_text(email).lower()
     users = list(st.session_state.get("users", []))
-    for record in load_saas_records("users", include_all_workspaces=True, limit=SESSION_COLLECTION_LIMITS.get("users", 1000)):
+    for record in load_saas_records(
+        "users",
+        include_all_workspaces=True,
+        platform_scope_reason="login_user_lookup",
+        limit=SESSION_COLLECTION_LIMITS.get("users", 1000),
+    ):
         if not any(safe_text(item.get("id")) == safe_text(record.get("id")) for item in users):
             users.append(record)
     for item in users:
@@ -15172,7 +15226,11 @@ def load_review_session_from_store(session_id: str) -> bool:
 
     if not payload and load_persistent_editor_job is not None:
         try:
-            payload = load_persistent_editor_job(session_id)
+            payload = load_persistent_editor_job(
+                session_id,
+                current_user() or {},
+                **persistence_read_scope(platform_scope_reason="editor_job_load"),
+            )
         except Exception as exc:
             LOGGER.warning("Unable to load job %s from persistent store: %s", session_id, exc)
             payload = None
@@ -15335,7 +15393,11 @@ def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
     # v42 production persistence first, so new browser tabs survive Streamlit restarts.
     if load_persistent_editor_job is not None:
         try:
-            payload = load_persistent_editor_job(job_id)
+            payload = load_persistent_editor_job(
+                job_id,
+                current_user() or {},
+                **persistence_read_scope(platform_scope_reason="external_editor_load"),
+            )
             if payload:
                 return payload
         except Exception as exc:
@@ -15383,7 +15445,14 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
     # v42 persistent save/update.
     if update_persistent_editor_job is not None:
         try:
-            update_persistent_editor_job(job_id, rows=rows, metadata=metadata, status=metadata.get("status", "draft"))
+            update_persistent_editor_job(
+                job_id,
+                rows=rows,
+                metadata=metadata,
+                status=metadata.get("status", "draft"),
+                user=current_user() or {},
+                **persistence_read_scope(platform_scope_reason="external_editor_update"),
+            )
         except Exception as exc:
             LOGGER.warning("Unable to update external editor job %s in persistent store: %s", job_id, exc)
 
@@ -19170,7 +19239,7 @@ def job_history_editor_jobs_for_user(user: Dict[str, Any], limit: int = 250) -> 
     seen: Set[str] = set()
     if fetch_persistent_editor_jobs is not None:
         try:
-            combined.extend(fetch_persistent_editor_jobs(limit))
+            combined.extend(fetch_persistent_editor_jobs(limit, user=user, **persistence_read_scope(user, "job_history_editor_jobs")))
         except Exception as exc:
             LOGGER.warning("Unable to fetch editor jobs for job history: %s", exc)
     combined.extend(st.session_state.get("owner_recent_editor_jobs", []))
@@ -22820,7 +22889,11 @@ def page_owner_console() -> None:
             persistent_usage = []
             if fetch_persistent_usage_events is not None:
                 try:
-                    persistent_usage = fetch_persistent_usage_events(300)
+                    persistent_usage = fetch_persistent_usage_events(
+                        300,
+                        user=current_user() or {},
+                        **persistence_read_scope(platform_scope_reason="owner_usage_audit"),
+                    )
                 except Exception as exc:
                     LOGGER.error("Unable to fetch persistent usage events: %s", exc)
                     persistent_usage = []
@@ -22848,7 +22921,11 @@ def page_owner_console() -> None:
             editor_jobs = []
             if fetch_persistent_editor_jobs is not None:
                 try:
-                    editor_jobs = fetch_persistent_editor_jobs(100)
+                    editor_jobs = fetch_persistent_editor_jobs(
+                        100,
+                        user=current_user() or {},
+                        **persistence_read_scope(platform_scope_reason="owner_recent_editor_jobs"),
+                    )
                 except Exception as exc:
                     LOGGER.error("Unable to fetch persistent editor jobs: %s", exc)
                     editor_jobs = []
@@ -22938,7 +23015,11 @@ def page_owner_console() -> None:
     persistent_usage = []
     if fetch_persistent_usage_events is not None:
         try:
-            persistent_usage = fetch_persistent_usage_events(300)
+            persistent_usage = fetch_persistent_usage_events(
+                300,
+                user=current_user() or {},
+                **persistence_read_scope(platform_scope_reason="owner_usage_audit"),
+            )
         except Exception as exc:
             LOGGER.error("Unable to fetch persistent usage events: %s", exc)
             persistent_usage = []
@@ -22968,7 +23049,11 @@ def page_owner_console() -> None:
     editor_jobs = []
     if fetch_persistent_editor_jobs is not None:
         try:
-            editor_jobs = fetch_persistent_editor_jobs(100)
+            editor_jobs = fetch_persistent_editor_jobs(
+                100,
+                user=current_user() or {},
+                **persistence_read_scope(platform_scope_reason="owner_recent_editor_jobs"),
+            )
         except Exception as exc:
             LOGGER.error("Unable to fetch persistent editor jobs: %s", exc)
             editor_jobs = []

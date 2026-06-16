@@ -162,7 +162,13 @@ def billing_workspace(normalized: Dict[str, Any], checkout: Optional[Dict[str, A
 
 
 def fetch_collection(collection: str, workspace: str = "") -> List[Dict[str, Any]]:
-    return fetch_saas_records(collection, workspace=workspace, limit=1000, include_all_workspaces=not bool(workspace))
+    return fetch_saas_records(
+        collection,
+        workspace=workspace,
+        limit=1000,
+        include_all_workspaces=not bool(workspace),
+        platform_scope_reason="billing_webhook_reconciliation" if not workspace else "",
+    )
 
 
 def persist(collection: str, record: Dict[str, Any], workspace: str = "", user_email: str = "") -> Dict[str, Any]:
