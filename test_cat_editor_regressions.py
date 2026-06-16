@@ -118,8 +118,16 @@ def test_navigation_uses_central_route_helpers() -> None:
     body = source[start:end]
     assert "navigate_es_page(page, **clean_extra)" in source
     assert "es-topnav-link" in body
-    assert "page_link(page)" in body
+    assert "nav_href(page, clean_extra)" in body
     assert 'target="_self"' in body
+    assert "render_app_navigation_targets(nav_targets, \"topnav\")" in body
+    assert "render_app_navigation_bridge()" in body
+    assert "data-es-app-nav" in source
+    assert "data-es-app-href" in source
+    assert "window.__errorsweepAppNavigate" in source
+    assert "parentWin.eval(runtime)" in source
+    assert "__errorsweepAppNavParentRuntime" in source
+    assert '<button type="button" class="es-topnav-link{active}"' in body
     assert "render_native_navigation_bridge" not in source
     assert "data-es-native-nav" not in source
     assert "topnav_quick_" not in body
@@ -773,9 +781,19 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert ".st-key-topnav_workspace_controls button" not in source
     assert "def render_native_navigation_bridge()" not in source
     assert "def render_native_navigation_targets(" not in source
-    assert 'href="{page_link(\'Projects\')}" target="_self">New Project</a>' in dashboard_body
+    assert ".st-key-topnav_app_nav_targets" in source
+    assert ".st-key-dashboard_app_nav_targets" in source
+    assert "def render_app_navigation_bridge()" in source
+    assert "parentWin.eval(runtime)" in source
+    assert "window.__errorsweepAppNavParentRuntime = true" in source
+    assert "window.history.pushState" not in source
+    assert "window.addEventListener(\"popstate\", handlePopState)" in source
+    assert 'new_project_attr = dashboard_nav_attr("Projects", "New Project")' in dashboard_body
+    assert '<button type="button" class="es-fab-action" {new_project_attr}>New Project</button>' in dashboard_body
+    assert "render_app_navigation_targets(dashboard_nav_targets, \"dashboard\")" in dashboard_body
     assert "dashboard_target_attr" not in dashboard_body
-    assert '<a class="es-fab-action"' in dashboard_body
+    assert '<button type="button" class="es-fab-action"' in dashboard_body
+    assert 'data-es-app-nav' in source
     assert 'data-es-native-nav' not in source
     assert ".st-key-errorsweep_app_shell" in source
     assert ".st-key-errorsweep_shell_top" in source

@@ -186,14 +186,14 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-stable-shell-v8"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-parent-runtime-nav-v9"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
     "editor_css_scoped_to_editor_shell",
     "direct_selected_page_navigation",
     "stable_html_app_topbar",
-    "same_tab_query_navigation",
+    "parent_runtime_no_reload_navigation",
     "same_session_public_auth_routes",
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
@@ -2434,12 +2434,16 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   justify-content: center;
   position: relative;
   padding: 0 8px;
+  border: 0;
+  background: transparent;
   color: #dce8ff !important;
   text-decoration: none !important;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 950;
   text-transform: uppercase;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .es-topnav-owner-row {
@@ -2483,6 +2487,8 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   font-weight: 900;
   padding: 0 10px;
   white-space: nowrap;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .es-topnav-owner-link:hover,
@@ -2525,12 +2531,16 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   padding: 0 9px;
   display: grid;
   place-items: center;
+  border: 0;
   border-right: 1px solid rgba(84,105,180,.24);
+  background: transparent;
   color: #dce8ff !important;
   font-size: 12px;
   font-weight: 900;
+  font-family: inherit;
   text-decoration: none !important;
   position: relative;
+  cursor: pointer;
 }
 
 .es-topnav-tool:hover,
@@ -2612,25 +2622,33 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   z-index: 1200;
 }
 
-.es-account-menu a {
+.es-account-menu a,
+.es-account-menu button {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  width: 100%;
+  border: 0;
+  background: transparent;
   color: #dce8ff !important;
   text-decoration: none !important;
+  font-family: inherit;
   font-size: 13px;
   font-weight: 850;
   padding: 10px 11px;
   border-radius: 8px;
+  cursor: pointer;
 }
 
-.es-account-menu a span {
+.es-account-menu a span,
+.es-account-menu button span {
   color: #75f7c4;
   font-size: 11px;
 }
 
-.es-account-menu a:hover {
+.es-account-menu a:hover,
+.es-account-menu button:hover {
   background: rgba(52,189,246,.12);
   color: #75f7c4 !important;
 }
@@ -2907,13 +2925,16 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   gap:8px;
   min-height:44px;
   padding: 0 16px;
+  border: 0;
   border-radius: 999px;
   text-decoration:none !important;
   color:#06121f !important;
+  font-family: inherit;
   font-weight:900;
   background: linear-gradient(90deg, #00d985, #34bdf6);
   box-shadow: 0 16px 40px rgba(52,189,246,.22);
   transition: transform .18s ease, box-shadow .18s ease;
+  cursor: pointer;
 }
 
 .es-fab-action.secondary {
@@ -2925,6 +2946,26 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
 .es-fab-action:hover {
   transform: translateY(-2px) scale(1.015);
   box-shadow: 0 24px 58px rgba(52,189,246,.30);
+}
+
+.st-key-topnav_app_nav_targets,
+.st-key-dashboard_app_nav_targets {
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+}
+
+.st-key-topnav_app_nav_targets *,
+.st-key-dashboard_app_nav_targets * {
+  pointer-events: none !important;
 }
 
 .es-task-actions {
@@ -6136,6 +6177,166 @@ def native_nav_key(prefix: str, page: str, extra: Optional[Dict[str, str]] = Non
     return f"{clean_prefix}_native_nav_{slug}"
 
 
+def app_nav_attr(key: str, href: str = "") -> str:
+    attrs = f'data-es-app-nav="{escape(key, quote=True)}"'
+    if safe_text(href):
+        attrs += f' data-es-app-href="{escape(href, quote=True)}"'
+    return attrs
+
+
+def render_app_navigation_targets(targets: List[Dict[str, Any]], prefix: str) -> None:
+    """Hidden callbacks used by the HTML shell to navigate without a full app reload."""
+    unique_targets: Dict[str, Dict[str, Any]] = {}
+    for target in targets:
+        key = safe_text(target.get("key"))
+        page = normalize_es_page(target.get("page"))
+        if not key or not page:
+            continue
+        unique_targets[key] = {
+            "key": key,
+            "page": page,
+            "extra": {k: safe_text(v) for k, v in (target.get("extra") or {}).items() if safe_text(v)},
+            "label": safe_text(target.get("label") or page),
+        }
+    if not unique_targets:
+        return
+    with st.container(key=f"{prefix}_app_nav_targets", gap=None):
+        for target in unique_targets.values():
+            if st.button(f"Route {target['label']}", key=target["key"]):
+                navigate_es_page(target["page"], **target["extra"])
+
+
+def render_app_navigation_bridge() -> None:
+    components.html(
+        """
+        <script>
+        (() => {
+          const parentWin = window.parent || window;
+          const parentDoc = parentWin.document || document;
+          if (!parentDoc || !parentDoc.body) return;
+          const runtime = `
+          (() => {
+            if (!document || !document.body) return;
+            const cssEscape = (value) => {
+              if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
+              return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
+            };
+            const clickTarget = (key) => {
+              if (!key) return false;
+              const wrapper = document.querySelector(".st-key-" + cssEscape(key));
+              const button = wrapper && (
+                wrapper.querySelector('[data-testid="stButton"] button') ||
+                wrapper.querySelector(".stButton button") ||
+                wrapper.querySelector("button")
+              );
+              if (!button || button.disabled) return false;
+              window.setTimeout(() => button.click(), 0);
+              return true;
+            };
+            const sameOriginUrl = (href) => {
+              try {
+                const url = new URL(href, window.location.href);
+                if (url.origin !== window.location.origin) return null;
+                return url;
+              } catch (err) {
+                return null;
+              }
+            };
+            const handleClick = (event) => {
+              const trigger = event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
+              if (!trigger) return;
+              const target = String(trigger.getAttribute("target") || "_self").toLowerCase();
+              if (target && target !== "_self") return;
+              const key = trigger.getAttribute("data-es-app-nav");
+              const href = trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "";
+              return window.__errorsweepAppNavigate(event, key, href);
+            };
+            window.__errorsweepAppNavigate = (event, key, href) => {
+              const url = sameOriginUrl(href || "");
+              if (!url || !key) return true;
+              const trigger = event && event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
+              const target = trigger ? String(trigger.getAttribute("target") || "_self").toLowerCase() : "_self";
+              if (target && target !== "_self") return true;
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+              const handled = clickTarget(key);
+              window.__errorsweepLastAppNav = {
+                key,
+                href: url.toString(),
+                handled,
+                at: Date.now()
+              };
+              if (!handled) {
+                window.location.href = url.toString();
+              }
+              return false;
+            };
+            const bindTriggerListeners = () => {
+              Array.from(document.querySelectorAll("[data-es-app-nav]")).forEach((trigger) => {
+                if (trigger.__errorsweepAppNavHandler) {
+                  trigger.removeEventListener("click", trigger.__errorsweepAppNavHandler, true);
+                }
+                trigger.__errorsweepAppNavHandler = handleClick;
+                trigger.addEventListener("click", handleClick, true);
+              });
+              window.__errorsweepAppNavBoundAt = Date.now();
+              window.__errorsweepAppNavParentRuntime = true;
+            };
+            const findCurrentTarget = () => {
+              const current = new URL(window.location.href);
+              const currentSearch = current.searchParams.toString();
+              const triggers = Array.from(document.querySelectorAll("[data-es-app-nav]"));
+              return triggers.find((trigger) => {
+                const url = sameOriginUrl(trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "");
+                return url && url.searchParams.toString() === currentSearch;
+              });
+            };
+            const handlePopState = () => {
+              const anchor = findCurrentTarget();
+              const key = anchor && anchor.getAttribute("data-es-app-nav");
+              const handled = key ? clickTarget(key) : false;
+              window.__errorsweepLastAppNav = {
+                key: key || "",
+                href: window.location.href,
+                handled,
+                popstate: true,
+                at: Date.now()
+              };
+              if (handled) return;
+              window.location.reload();
+            };
+            if (document.__errorsweepAppNavClick) {
+              document.removeEventListener("click", document.__errorsweepAppNavClick, true);
+            }
+            document.__errorsweepAppNavClick = handleClick;
+            document.addEventListener("click", handleClick, true);
+            if (document.__errorsweepAppNavObserver) {
+              document.__errorsweepAppNavObserver.disconnect();
+            }
+            let bindTimer = null;
+            document.__errorsweepAppNavObserver = new MutationObserver(() => {
+              if (bindTimer) window.clearTimeout(bindTimer);
+              bindTimer = window.setTimeout(bindTriggerListeners, 0);
+            });
+            document.__errorsweepAppNavObserver.observe(document.body, { childList: true, subtree: true });
+            [0, 50, 250, 1000].forEach((delay) => window.setTimeout(bindTriggerListeners, delay));
+            if (window.__errorsweepAppNavPopState) {
+              window.removeEventListener("popstate", window.__errorsweepAppNavPopState);
+            }
+            window.__errorsweepAppNavPopState = handlePopState;
+            window.addEventListener("popstate", handlePopState);
+          })();
+          `;
+          parentWin.eval(runtime);
+        })();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
 def human_review_editor_link(review_id: str) -> str:
     return app_page_link("Human Review Editor", {"review_id": review_id})
 
@@ -6892,20 +7093,35 @@ def render_navigation() -> None:
         "Account": "Account",
         "Admin": "Admin",
     }
+    nav_targets: List[Dict[str, Any]] = []
+
+    def nav_href(page: str, extra: Optional[Dict[str, str]] = None) -> str:
+        params = {"es_page": normalize_es_page(page)}
+        for key, value in (extra or {}).items():
+            if key != "route" and safe_text(value):
+                params[key] = safe_text(value)
+        return "?" + urlencode(params)
+
+    def nav_target_attr(page: str, extra: Optional[Dict[str, str]] = None, label: str = "") -> str:
+        clean_extra = {key: safe_text(value) for key, value in (extra or {}).items() if safe_text(value)}
+        key = native_nav_key("topnav_app", page, clean_extra)
+        nav_targets.append({"key": key, "page": page, "extra": clean_extra, "label": label or page})
+        return app_nav_attr(key, nav_href(page, clean_extra))
+
     workspace_links = []
     for page in WORKSPACE_PAGES:
         if page not in pages:
             continue
         active = " active" if st.session_state.get("page") == page else ""
         workspace_links.append(
-            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+            f'<button type="button" class="es-topnav-link{active}" {nav_target_attr(page, label=label_map.get(page, page))}>{escape(label_map.get(page, page))}</button>'
         )
     owner_links = []
     if is_owner():
         for page in OWNER_PAGES:
             active = " active" if st.session_state.get("page") == page else ""
             owner_links.append(
-                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
+                f'<button type="button" class="es-owner-link{active}" {nav_target_attr(page)}>{escape(page)}</button>'
             )
     open_count = sum(
         1
@@ -6921,31 +7137,37 @@ def render_navigation() -> None:
     notifications = st.session_state.get("notifications", [])
     unread_notes = notification_badge_count(normalized_notification_notes(st.session_state.get("notifications", []), user, current_page))
     ui_language_code, _ = current_ui_language(user)
-    notes_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "notes"}))
-    language_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "language"}))
+    notes_href = nav_href(current_page, {"es_panel": "notes"})
+    language_href = nav_href(current_page, {"es_panel": "language"})
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
+    jobs_nav_attr = nav_target_attr("Jobs")
+    notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
+    language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
+    account_nav_attr = nav_target_attr("Account")
+    settings_nav_attr = nav_target_attr(settings_page)
+    billing_nav_attr = nav_target_attr("Billing") if "Billing" in pages else ""
     notes_badge = f'<i class="es-topnav-badge">{unread_notes}</i>' if unread_notes else ""
     jobs_tool = (
-        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs">'
-        f'<b>{open_count}</b><span>Jobs</span></a>'
+        f'<button type="button" class="es-topnav-tool" title="Open jobs" {jobs_nav_attr}>'
+        f'<b>{open_count}</b><span>Jobs</span></button>'
     )
     notes_tool = (
-        f'<a class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
-        f'href="{notes_href}" target="_self" title="Open notifications">'
-        f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</a>'
+        f'<button type="button" class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
+        f'title="Open notifications" {notes_nav_attr}>'
+        f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</button>'
         if "notes.view" in permissions
         else ""
     )
     language_tool = (
-        f'<a class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
-        f'href="{language_href}" target="_self" title="Change interface language">'
-        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></a>'
+        f'<button type="button" class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
+        f'title="Change interface language" {language_nav_attr}>'
+        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></button>'
         if "language.select" in permissions
         else ""
     )
     user_avatar = escape(monogram(user_name or user_email or "User"))
     billing_item = (
-        f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
+        f'<button type="button" {billing_nav_attr}>Billing <span>Plan</span></button>'
         if "Billing" in pages
         else ""
     )
@@ -6975,10 +7197,10 @@ def render_navigation() -> None:
               <span class="es-account-caret">v</span>
             </div>
             <div class="es-account-menu">
-              <a href="{page_link('Account')}" target="_self">Profile <span>Account</span></a>
-              <a href="{page_link(settings_page)}" target="_self">Settings <span>{escape(settings_page)}</span></a>
+              <button type="button" {account_nav_attr}>Profile <span>Account</span></button>
+              <button type="button" {settings_nav_attr}>Settings <span>{escape(settings_page)}</span></button>
               {billing_item}
-              <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
+              <button type="button" {jobs_nav_attr}>Jobs <span>{open_count}</span></button>
               <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
             </div>
           </div>
@@ -6988,6 +7210,8 @@ def render_navigation() -> None:
     </nav>
     """
     st.markdown(topnav, unsafe_allow_html=True)
+    render_app_navigation_targets(nav_targets, "topnav")
+    render_app_navigation_bridge()
     render_topnav_panel(current_page, user, notifications)
 
 
@@ -18281,6 +18505,17 @@ def page_dashboard() -> None:
         len(st.session_state.glossary),
         len(st.session_state.dnt),
     ]
+    dashboard_nav_targets: List[Dict[str, Any]] = []
+
+    def dashboard_nav_attr(page: str, label: str) -> str:
+        key = native_nav_key("dashboard_app", page)
+        dashboard_nav_targets.append({"key": key, "page": page, "label": label})
+        return app_nav_attr(key, page_link(page))
+
+    new_project_attr = dashboard_nav_attr("Projects", "New Project")
+    pro_translation_attr = dashboard_nav_attr("CogniSweep Pro", "Run Pro Translation")
+    rules_attr = dashboard_nav_attr("Memory & Rules", "Upload Rules")
+    qa_attr = dashboard_nav_attr("CogniSweep QA", "Run QA")
     st.html(
         dedent(f"""
             <section class="es-personal-hero">
@@ -18295,14 +18530,16 @@ def page_dashboard() -> None:
                 <div class="es-hero-orb">CogniSweep<br/>Live</div>
               </div>
               <div class="es-fab-row">
-                <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
-                <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self">Run Pro Translation</a>
-                <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
-                <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self">Run QA</a>
+                <button type="button" class="es-fab-action" {new_project_attr}>New Project</button>
+                <button type="button" class="es-fab-action" {pro_translation_attr}>Run Pro Translation</button>
+                <button type="button" class="es-fab-action secondary" {rules_attr}>Upload Rules</button>
+                <button type="button" class="es-fab-action secondary" {qa_attr}>Run QA</button>
               </div>
             </section>
         """).strip(),
     )
+    render_app_navigation_targets(dashboard_nav_targets, "dashboard")
+    render_app_navigation_bridge()
     st.html(
         dedent(f"""
 
