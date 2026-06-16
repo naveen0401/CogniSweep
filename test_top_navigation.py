@@ -52,12 +52,12 @@ def test_notes_and_language_tools_are_clickable_panels():
     assert "def normalized_notification_note" in text
     assert "def notification_badge_count" in text
     assert "def render_topnav_language_panel" in text
-    assert 'topnav_panel_link(active_page, "notes")' in body
-    assert 'topnav_panel_link(active_page, "language")' in body
-    assert 'href="{escape(notes_href)}"' in body
-    assert 'href="{escape(language_href)}"' in body
-    assert '>NOTES<span class="es-topnav-badge">{notification_count}</span></a>' in body
-    assert '>{escape(language_code)}</a>' in body
+    assert 'notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")' in body
+    assert 'language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")' in body
+    assert 'title="Open notifications" {notes_nav_attr}' in body
+    assert 'title="Change interface language" {language_nav_attr}' in body
+    assert '<b>{unread_notes}</b><span>Notes</span>{notes_badge}</button>' in body
+    assert '<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></button>' in body
     assert "notification_badge_count(normalized_notification_notes" in body
 
 
@@ -66,8 +66,10 @@ def test_team_billing_admin_visibility_comes_from_allowed_pages():
     text = source()
     allowed_pages = function_body("allowed_pages", "is_owner")
 
-    assert 'account_menu_pages = ["Jobs", "Team & Roles", "Billing", "Admin"' in body
-    assert "if page in pages:" in body
+    assert "nav_pages = topnav_page_order(pages)" in body
+    assert "primary_nav_pages = [page for page in nav_pages if page in WORKSPACE_PAGES]" in body
+    assert 'settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")' in body
+    assert 'billing_nav_attr = nav_target_attr("Billing") if "Billing" in pages else ""' in body
     assert "Team & Roles" in body
     assert "Billing" in body
     assert "Admin" in body

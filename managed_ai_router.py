@@ -51,7 +51,7 @@ _SESSION_COOKIE_NAME = "errorsweep_session"
 _SESSION_STORAGE_KEY = "errorsweep_session"
 _SESSION_PERSISTENCE_SECONDS = 60 * 60 * 24 * 365 * 10
 
-_MAIN_PLATFORM_OWNER_EMAIL = "adapalanaveen401@gmail.com"
+_OWNER_EMAIL_SECRET_NAMES = ("ERRORSWEEP_UNLIMITED_ACCESS_EMAIL", "ERRORSWEEP_OWNER_USERNAME")
 _UNLIMITED_WORKSPACES = {"platform", "naveen unlimited workspace"}
 _UNLIMITED_SEATS = 1_000_000
 _UNLIMITED_SEGMENTS = 1_000_000_000
@@ -66,6 +66,28 @@ def _safe_text(value: Any) -> str:
         return str(value).replace("\u00A0", " ").strip()
     except Exception:
         return ""
+
+
+def _secret(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if st is not None:
+        try:
+            value = st.secrets.get(name)
+            if value:
+                return value
+        except Exception:
+            return default
+    return default
+
+
+def _main_platform_owner_email() -> str:
+    for name in _OWNER_EMAIL_SECRET_NAMES:
+        value = _safe_text(_secret(name, "")).lower()
+        if value:
+            return value
+    return ""
 
 
 def _main_module() -> Any:
@@ -336,14 +358,16 @@ def _protected_page_session_script(token: str) -> str:
 
 def _is_main_owner_user(user: Optional[Dict[str, Any]] = None) -> bool:
     candidate = user if isinstance(user, dict) else _current_user()
-    return _safe_text(candidate.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL
+    owner_email = _main_platform_owner_email()
+    return bool(owner_email) and _safe_text(candidate.get("email")).lower() == owner_email
 
 
 def _unlimited_subscription(workspace: str = "Platform") -> Dict[str, Any]:
     workspace_name = _safe_text(workspace) or "Platform"
+    owner_email = _main_platform_owner_email()
     return {
         "workspace": workspace_name,
-        "user_email": _MAIN_PLATFORM_OWNER_EMAIL,
+        "user_email": owner_email,
         "plan": "Unlimited",
         "status": "Active",
         "billing_cycle": "internal",
@@ -379,8 +403,11 @@ def _ensure_owner_entitlements() -> None:
         user = st.session_state.get("user")
         if not isinstance(user, dict) or not _is_main_owner_user(user):
             return
+        owner_email = _main_platform_owner_email()
+        if not owner_email:
+            return
         user.update({
-            "email": _MAIN_PLATFORM_OWNER_EMAIL,
+            "email": owner_email,
             "role": "Platform Owner",
             "account_type": "owner",
             "workspace": _safe_text(user.get("workspace") or "Platform"),
@@ -394,7 +421,7 @@ def _ensure_owner_entitlements() -> None:
         users = st.session_state.setdefault("users", [])
         owner_record = {k: user.get(k) for k in ("email", "workspace", "role", "account_type", "plan", "status", "email_verified")}
         for idx, item in enumerate(list(users)):
-            if isinstance(item, dict) and _safe_text(item.get("email")).lower() == _MAIN_PLATFORM_OWNER_EMAIL:
+            if isinstance(item, dict) and _safe_text(item.get("email")).lower() == owner_email:
                 users[idx] = {**item, **owner_record}
                 break
         else:
@@ -405,7 +432,7 @@ def _ensure_owner_entitlements() -> None:
         for workspace_name in {"Platform", "Naveen Unlimited Workspace", _safe_text(user.get("workspace") or "Platform")}:
             if not workspace_name:
                 continue
-            workspace_record = {"workspace": workspace_name, "owner": _MAIN_PLATFORM_OWNER_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
+            workspace_record = {"workspace": workspace_name, "owner": owner_email, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
             for idx, item in enumerate(list(workspaces)):
                 if isinstance(item, dict) and _safe_text(item.get("workspace")).lower() == workspace_name.lower():
                     workspaces[idx] = {**item, **workspace_record}

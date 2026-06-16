@@ -88,7 +88,7 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
     callback_start = source.index("def handle_unified_login_submit")
     callback_end = source.index("def logout", callback_start)
     callback_body = source[callback_start:callback_end]
-    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in callback_body
+    assert 'login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in callback_body
     assert 'st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True' in callback_body
     assert "st.rerun()" not in callback_body
 
@@ -676,21 +676,36 @@ def test_human_review_workspace_uses_reference_template() -> None:
 
 def test_unlimited_access_account_bypasses_usage_allowance() -> None:
     source = read_app()
-    assert "UNLIMITED_ACCESS_EMAIL = \"adapalanaveen401@gmail.com\"" in source
-    assert "UNLIMITED_ACCESS_PASSWORD_HASH" in source
+    assert "UNLIMITED_ACCESS_EMAIL_SECRET" in source
+    assert "UNLIMITED_ACCESS_PASSWORD_HASH_SECRET" in source
     assert "def is_platform_owner_identity(" in source
-    assert "UNLIMITED_ACCESS_EMAIL.lower()" in source
+    assert "def unlimited_access_email()" in source
+    assert "def unlimited_access_password_hash()" in source
     assert '"workspace": "Platform",' in source
     assert '"role": "Platform Owner",' in source
-    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in source
-    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Workspace Owner", "workspace", UNLIMITED_ACCESS_WORKSPACE)' not in source
-    assert 'class="es-owner-strip"><span>Owner only</span>' in source
+    assert 'login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in source
+    assert 'login_user(owner_user, "Workspace Owner", "workspace", UNLIMITED_ACCESS_WORKSPACE)' not in source
+    assert 'class="es-topnav-owner-row"><span class="es-topnav-owner-tag">Owner tools</span>' in source
     assert "owner_links" in source
     assert "\"name\": \"Unlimited\"" in source
-    assert "def ensure_unlimited_access_account()" in source
-    assert "Unlimited platform owner sign-in" in source
+    assert "def ensure_unlimited_access_account(owner_email: str = \"\", password_hash: str = \"\")" in source
+    assert "Unified owner login" in source
     assert "plan_name.lower() == \"unlimited\"" in source
     assert "return True, \"\", details" in source
+
+
+def test_owner_credentials_are_not_committed() -> None:
+    app_source = read_app()
+    router_source = Path(__file__).with_name("managed_ai_router.py").read_text(encoding="utf-8")
+    combined = app_source + "\n" + router_source
+    gmail_pattern = r"[A-Za-z0-9._%+-]+@" + r"gmail\.com"
+    assert not re.search(gmail_pattern, combined)
+    committed_hashes = [
+        match.group(0)
+        for match in re.finditer(r"""["']pbkdf2_sha256\$[0-9]+\$[^$"']+\$[^"']+["']""", combined)
+    ]
+    assert committed_hashes == []
+    assert "errorsweep" + "_unlimited" not in combined
 
 
 def test_qa_findings_are_rendered_as_readable_labels() -> None:

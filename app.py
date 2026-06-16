@@ -512,9 +512,9 @@ PLAN_CATALOG = [
 EMAIL_DISPATCH_BATCH_LIMIT = int(os.getenv("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
 AUTH_TOKEN_TTL_SECONDS = int(os.getenv("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
 COMPLIANCE_ACK_LABEL = "I accept the Terms of Service, Privacy Policy, and NDA/confidentiality obligations for this workspace."
-UNLIMITED_ACCESS_EMAIL = "adapalanaveen401@gmail.com"
 UNLIMITED_ACCESS_WORKSPACE = "Naveen Unlimited Workspace"
-UNLIMITED_ACCESS_PASSWORD_HASH = "pbkdf2_sha256$260000$errorsweep_unlimited_adapa_2026$9xazluJn72GZoDsE2OAbeXefqvQY02foAQbjh_5gfrk"
+UNLIMITED_ACCESS_EMAIL_SECRET = "ERRORSWEEP_UNLIMITED_ACCESS_EMAIL"
+UNLIMITED_ACCESS_PASSWORD_HASH_SECRET = "ERRORSWEEP_UNLIMITED_ACCESS_PASSWORD_HASH"
 SENSITIVE_TEXT_RE = re.compile(
     r"("
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
@@ -3859,6 +3859,27 @@ def verify_login_password(password: str, hash_secret_name: str, legacy_secret_na
     return hmac.compare_digest(password, legacy_password)
 
 
+def configured_owner_username(local_default: bool = False) -> str:
+    default = "owner@cognisweep.local" if local_default and not is_production_mode() else ""
+    return safe_text(secret("ERRORSWEEP_OWNER_USERNAME", default)).strip().lower()
+
+
+def configured_owner_password_hash() -> str:
+    return safe_text(secret("ERRORSWEEP_OWNER_PASSWORD_HASH", "")).strip()
+
+
+def unlimited_access_email() -> str:
+    return safe_text(secret(UNLIMITED_ACCESS_EMAIL_SECRET, configured_owner_username())).strip().lower()
+
+
+def unlimited_access_password_hash() -> str:
+    return safe_text(secret(UNLIMITED_ACCESS_PASSWORD_HASH_SECRET, configured_owner_password_hash())).strip()
+
+
+def unlimited_access_configured() -> bool:
+    return bool(unlimited_access_email() and unlimited_access_password_hash().startswith("pbkdf2_sha256$"))
+
+
 def password_configured(hash_secret_name: str, legacy_secret_name: str) -> bool:
     return bool(secret(hash_secret_name, "") or secret(legacy_secret_name, ""))
 
@@ -5459,27 +5480,21 @@ def handle_unified_login_submit() -> None:
         set_login_feedback("error", throttle_message)
         return
 
-    owner_user = secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")
-    owner_is_configured = password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+    owner_user = unlimited_access_email() or configured_owner_username(local_default=True)
+    owner_password_hash = unlimited_access_password_hash()
+    owner_is_configured = bool(owner_user) and bool(owner_password_hash or password_configured("ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"))
     bootstrap_user = secret("ERRORSWEEP_USER_USERNAME", "user@cognisweep.local")
     bootstrap_is_configured = password_configured("ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD")
     default_role = secret("ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
     email_key = clean_email.lower()
 
-    if email_key == UNLIMITED_ACCESS_EMAIL.lower() and verify_password(password, UNLIMITED_ACCESS_PASSWORD_HASH):
+    owner_password_ok = verify_password(password, owner_password_hash) if owner_password_hash else verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
+    if owner_is_configured and hmac.compare_digest(email_key, owner_user) and owner_password_ok:
         clear_abuse_attempts("workspace_login", clean_email)
-        ensure_unlimited_access_account()
-        login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)
-        record_consent_acceptance(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", "unified_login")
-        add_audit("Unlimited platform owner sign-in", UNLIMITED_ACCESS_EMAIL)
-        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
-        return
-
-    if owner_is_configured and hmac.compare_digest(clean_email, owner_user.strip()) and verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD"):
-        clear_abuse_attempts("workspace_login", clean_email)
-        login_user(clean_email, "Platform Owner", "owner", "Platform", sync_route_storage=False)
-        record_consent_acceptance(clean_email, "Platform Owner", "owner", "Platform", "unified_login")
-        add_audit("Unified owner login", clean_email)
+        ensure_unlimited_access_account(owner_user, owner_password_hash)
+        login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)
+        record_consent_acceptance(owner_user, "Platform Owner", "owner", "Platform", "unified_login")
+        add_audit("Unified owner login", owner_user)
         st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
         return
 
@@ -5534,6 +5549,48 @@ def logout() -> None:
 # ==========================================================
 
 def init_state() -> None:
+    unlimited_email = unlimited_access_email()
+    unlimited_password_hash = unlimited_access_password_hash()
+    unlimited_records_configured = bool(unlimited_email and unlimited_password_hash)
+    default_workspaces = [
+        {"workspace": "Demo Workspace", "owner": "demo@cognisweep.local", "plan": "Trial", "status": "Active", "users": 3, "jobs": 0}
+    ]
+    default_users = [
+        {"email": "owner@cognisweep.local", "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Owner", "status": "Active"},
+        {"email": "demo@cognisweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "account_type": "company", "plan": "Trial", "status": "Active"},
+        {"email": "reviewer@cognisweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "account_type": "company", "plan": "Trial", "status": "Active"},
+    ]
+    default_subscriptions: List[Dict[str, Any]] = []
+    if unlimited_records_configured:
+        default_workspaces.append(
+            {"workspace": UNLIMITED_ACCESS_WORKSPACE, "owner": unlimited_email, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
+        )
+        default_users.append(
+            {
+                "email": unlimited_email,
+                "workspace": "Platform",
+                "role": "Platform Owner",
+                "account_type": "platform",
+                "plan": "Unlimited",
+                "status": "Active",
+                "password_hash": unlimited_password_hash,
+                "email_verified": True,
+            }
+        )
+        default_subscriptions.append(
+            {
+                "workspace": UNLIMITED_ACCESS_WORKSPACE,
+                "plan": "Unlimited",
+                "status": "Active",
+                "billing_cycle": "internal",
+                "currency": "INR",
+                "base_amount": 0,
+                "included_segments": 1_000_000_000,
+                "included_characters": 1_000_000_000_000,
+                "included_seats": 1_000_000,
+                "provider": "internal",
+            }
+        )
     defaults = {
         "page": "Dashboard",
         "projects": [],
@@ -5553,36 +5610,14 @@ def init_state() -> None:
             {"date": "2026-05-01", "workspace": "Demo Workspace", "user": "demo@cognisweep.local", "plan": "Trial", "amount": 0, "currency": "INR", "status": "Demo"}
         ],
         "invoices": [],
-        "workspaces": [
-            {"workspace": "Demo Workspace", "owner": "demo@cognisweep.local", "plan": "Trial", "status": "Active", "users": 3, "jobs": 0}
-            ,
-            {"workspace": UNLIMITED_ACCESS_WORKSPACE, "owner": UNLIMITED_ACCESS_EMAIL, "plan": "Unlimited", "status": "Active", "users": 1, "jobs": 0}
-        ],
-        "users": [
-            {"email": "owner@cognisweep.local", "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Owner", "status": "Active"},
-            {"email": "demo@cognisweep.local", "workspace": "Demo Workspace", "role": "Workspace Owner", "account_type": "company", "plan": "Trial", "status": "Active"},
-            {"email": "reviewer@cognisweep.local", "workspace": "Demo Workspace", "role": "Reviewer", "account_type": "company", "plan": "Trial", "status": "Active"},
-            {"email": UNLIMITED_ACCESS_EMAIL, "workspace": "Platform", "role": "Platform Owner", "account_type": "platform", "plan": "Unlimited", "status": "Active", "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH, "email_verified": True},
-        ],
+        "workspaces": default_workspaces,
+        "users": default_users,
         "audit_logs": [],
         "ai_usage_events": [],
         "files": [],
         "notifications": [],
         "task_queue": [],
-        "subscriptions": [
-            {
-                "workspace": UNLIMITED_ACCESS_WORKSPACE,
-                "plan": "Unlimited",
-                "status": "Active",
-                "billing_cycle": "internal",
-                "currency": "INR",
-                "base_amount": 0,
-                "included_segments": 1_000_000_000,
-                "included_characters": 1_000_000_000_000,
-                "included_seats": 1_000_000,
-                "provider": "internal",
-            }
-        ],
+        "subscriptions": default_subscriptions,
         "checkout_sessions": [],
         "billing_events": [],
         "auth_tokens": [],
@@ -5614,20 +5649,26 @@ def init_state() -> None:
             st.session_state[key] = val
 
 
-def ensure_unlimited_access_account() -> None:
+def ensure_unlimited_access_account(owner_email: str = "", password_hash: str = "") -> None:
+    owner_email = safe_text(owner_email or unlimited_access_email()).strip().lower()
+    if not owner_email:
+        LOGGER.warning("Unlimited owner account is not configured; set ERRORSWEEP_OWNER_USERNAME and ERRORSWEEP_OWNER_PASSWORD_HASH.")
+        return
+    password_hash = safe_text(password_hash or unlimited_access_password_hash()).strip()
     user_record = {
-        "email": UNLIMITED_ACCESS_EMAIL,
+        "email": owner_email,
         "workspace": "Platform",
         "role": "Platform Owner",
         "account_type": "platform",
         "plan": "Unlimited",
         "status": "Active",
-        "password_hash": UNLIMITED_ACCESS_PASSWORD_HASH,
         "email_verified": True,
     }
+    if password_hash:
+        user_record["password_hash"] = password_hash
     workspace_record = {
         "workspace": UNLIMITED_ACCESS_WORKSPACE,
-        "owner": UNLIMITED_ACCESS_EMAIL,
+        "owner": owner_email,
         "plan": "Unlimited",
         "status": "Active",
         "users": 1,
@@ -5662,7 +5703,8 @@ def ensure_unlimited_access_account() -> None:
 
 
 init_state()
-ensure_unlimited_access_account()
+if unlimited_access_configured():
+    ensure_unlimited_access_account()
 trim_session_collections()
 
 
@@ -6129,8 +6171,9 @@ def can_access_talent_database(user: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def platform_owner_emails() -> set:
-    owner_user = safe_text(secret("ERRORSWEEP_OWNER_USERNAME", "owner@cognisweep.local")).strip().lower()
-    return {email for email in {owner_user, UNLIMITED_ACCESS_EMAIL.lower()} if email}
+    owner_user = configured_owner_username(local_default=True)
+    unlimited_user = unlimited_access_email()
+    return {email for email in {owner_user, unlimited_user} if email}
 
 
 def is_platform_owner_identity(user: Optional[Dict[str, Any]] = None) -> bool:
@@ -7172,6 +7215,9 @@ def render_navigation() -> None:
         "Admin": "Admin",
     }
     nav_targets: List[Dict[str, Any]] = []
+    nav_pages = topnav_page_order(pages)
+    primary_nav_pages = [page for page in nav_pages if page in WORKSPACE_PAGES]
+    owner_nav_pages = [page for page in OWNER_PAGES if page in pages] if is_owner() else []
 
     def nav_href(page: str, extra: Optional[Dict[str, str]] = None) -> str:
         params = {"es_page": normalize_es_page(page)}
@@ -7187,20 +7233,17 @@ def render_navigation() -> None:
         return app_nav_attr(key, nav_href(page, clean_extra))
 
     workspace_links = []
-    for page in WORKSPACE_PAGES:
-        if page not in pages:
-            continue
+    for page in primary_nav_pages:
         active = " active" if st.session_state.get("page") == page else ""
         workspace_links.append(
             f'<button type="button" class="es-topnav-link{active}" {nav_target_attr(page, label=label_map.get(page, page))}>{escape(label_map.get(page, page))}</button>'
         )
     owner_links = []
-    if is_owner():
-        for page in OWNER_PAGES:
-            active = " active" if st.session_state.get("page") == page else ""
-            owner_links.append(
-                f'<button type="button" class="es-owner-link{active}" {nav_target_attr(page)}>{escape(page)}</button>'
-            )
+    for page in owner_nav_pages:
+        active = " active" if st.session_state.get("page") == page else ""
+        owner_links.append(
+            f'<button type="button" class="es-topnav-owner-link{active}" {nav_target_attr(page)}>{escape(page)}</button>'
+        )
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
@@ -7208,7 +7251,7 @@ def render_navigation() -> None:
     )
     notification_count = len(st.session_state.get("notifications", []))
     user_email = safe_text(user.get("email", "user@errorsweep.local"))
-    user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
+    user_name = display_name_from_user(user)
     role = current_role()
     active_panel = safe_text(query_get("es_panel")).lower()
     current_page = safe_text(st.session_state.get("page") or "Dashboard")
@@ -7218,7 +7261,7 @@ def render_navigation() -> None:
     notes_href = nav_href(current_page, {"es_panel": "notes"})
     language_href = nav_href(current_page, {"es_panel": "language"})
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
-    jobs_nav_attr = nav_target_attr("Jobs")
+    jobs_nav_attr = nav_target_attr("Jobs") if "Jobs" in pages else ""
     notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
     language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
     account_nav_attr = nav_target_attr("Account")
@@ -7228,6 +7271,7 @@ def render_navigation() -> None:
     jobs_tool = (
         f'<button type="button" class="es-topnav-tool" title="Open jobs" {jobs_nav_attr}>'
         f'<b>{open_count}</b><span>Jobs</span></button>'
+        if "Jobs" in pages else ""
     )
     notes_tool = (
         f'<button type="button" class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
@@ -7247,6 +7291,11 @@ def render_navigation() -> None:
     billing_item = (
         f'<button type="button" {billing_nav_attr}>Billing <span>Plan</span></button>'
         if "Billing" in pages
+        else ""
+    )
+    jobs_menu_item = (
+        f'<button type="button" {jobs_nav_attr}>Jobs <span>{open_count}</span></button>'
+        if "Jobs" in pages
         else ""
     )
     topnav = f"""
@@ -7278,13 +7327,13 @@ def render_navigation() -> None:
               <button type="button" {account_nav_attr}>Profile <span>Account</span></button>
               <button type="button" {settings_nav_attr}>Settings <span>{escape(settings_page)}</span></button>
               {billing_item}
-              <button type="button" {jobs_nav_attr}>Jobs <span>{open_count}</span></button>
+              {jobs_menu_item}
               <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
             </div>
           </div>
         </div>
       </div>
-      {f'<div class="es-owner-strip"><span>Owner only</span>{"".join(owner_links)}</div>' if owner_links else ''}
+      {f'<div class="es-topnav-owner-row"><span class="es-topnav-owner-tag">Owner tools</span><div class="es-topnav-owner-links">{"".join(owner_links)}</div></div>' if owner_links else ''}
     </nav>
     """
     st.markdown(topnav, unsafe_allow_html=True)
