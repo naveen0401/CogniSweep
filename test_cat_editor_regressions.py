@@ -152,7 +152,18 @@ def test_human_review_editor_uses_es_page_review_id_route() -> None:
 def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     source = read_app()
     assert "def public_login_link_target() -> str" in source
-    assert "target=\"_blank\" rel=\"noopener\"" in source
+    public_target_start = source.index("def public_login_link_target")
+    public_target_end = source.index("def route_query_for_page", public_target_start)
+    public_target_body = source[public_target_start:public_target_end]
+    assert 'return \'target="_self"\'' in public_target_body
+    assert "target=\"_blank\" rel=\"noopener\"" not in public_target_body
+    assert "window.open" not in source
+    editor_link_start = source.index("def render_external_editor_link")
+    editor_link_end = source.index("def load_external_editor_payload", editor_link_start)
+    assert 'target="_blank"' in source[editor_link_start:editor_link_end]
+    editor_open_start = source.index("def render_editor_open_link")
+    editor_open_end = source.index("def render_task_result_actions", editor_open_start)
+    assert 'target="_blank" rel="noopener"' in source[editor_open_start:editor_open_end]
     assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {\"landing\", \"login\", \"signup\"}" in source
     assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
@@ -192,10 +203,11 @@ def test_public_entry_routes_use_cookie_provider_not_restore_miss_gate() -> None
 def test_authenticated_login_tab_shows_logged_in_state() -> None:
     source = read_app()
     state_start = source.index("def render_logged_in_login_state")
-    state_end = source.index("def render_post_login_tool_launch_bridge", state_start)
+    state_end = source.index("def login_user", state_start)
     state_body = source[state_start:state_end]
     assert "You are logged in" in state_body
-    assert "ErrorSweep is open in another tab" in state_body
+    assert "Your CogniSweep session is active." in state_body
+    assert "ErrorSweep is open in another tab" not in state_body
     assert "Open Dashboard" in state_body
     assert "?es_logout=1" in state_body
     assert 'st.success("You are logged in")' in state_body
@@ -210,7 +222,7 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     auth_branch = login_body[auth_start:auth_header_start]
     form_start = login_body.index('with st.form("unified_login"')
     assert auth_start < auth_header_start < form_start
-    assert "render_post_login_tool_launch_bridge()" in auth_branch
+    assert "render_post_login_tool_launch_bridge" not in source
     assert "render_logged_in_login_state" in auth_branch
     assert "st.rerun()" not in auth_branch
     assert 'st.form("unified_login"' in login_body
@@ -218,17 +230,13 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     assert "st.rerun()" not in login_body
 
 
-def test_login_new_tab_bridge_reruns_before_rendering_status() -> None:
+def test_login_stays_in_current_streamlit_session() -> None:
     source = Path(__file__).with_name("managed_ai_router.py").read_text(encoding="utf-8")
-    start = source.index("def _install_login_new_tab_bridge")
-    end = source.index("_install_signup_scroll_fix()", start)
-    body = source[start:end]
-    assert 'st.session_state["_post_login_tool_launch_url"] = _build_launch_url()' in body
-    assert 'params["es_session"]' not in body
-    assert 'st.session_state["_login_window_stay_open"] = True' in body
-    assert "_leave_current_tab_on_login()" in body
-    assert "render_post_login_tool_launch_bridge" not in body
-    assert "return original_rerun(*args, **kwargs)" in body
+    assert "_install_login_new_tab_bridge" not in source
+    assert "_post_login_tool_launch_url" not in source
+    assert "_login_window_stay_open" not in source
+    assert "window.open" not in source
+    assert "keep public/auth navigation in the current Streamlit session" in source
 
 
 def test_logout_routes_every_window_to_landing() -> None:
@@ -279,9 +287,9 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "token = browser_session_cookie()" in source
     assert "restore_user_from_signed_session(token)" in source
     assert 'st.session_state["_pending_session_cookie"] = token' in source
+    assert 'st.session_state["_pending_session_cookie"] = session_token' in source
     assert "sync_browser_session_cookie()" in source
     assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in source
-    assert "sync_component_session_cookie(session_token)" in source
     assert "return component_session_cookie()" in source
     assert "def browser_cookie_domain_js_function()" in source
     assert "cookieDomainAttribute" in source
@@ -289,7 +297,6 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'url.searchParams.set("es_session", token)' not in source
     assert 'targetDoc.cookie = name + "=" + encodeURIComponent(value)' in source
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
-    assert 'targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken)' in source
     assert 'const token = cookieToken || storageToken;' in source
     assert 'url.searchParams.set("es_auth_checked"' not in source
     assert 'url.searchParams.set(authCheckedKey' not in source
@@ -803,7 +810,7 @@ if __name__ == "__main__":
     test_public_login_and_authenticated_entry_routes_open_dashboard()
     test_public_entry_routes_use_cookie_provider_not_restore_miss_gate()
     test_authenticated_login_tab_shows_logged_in_state()
-    test_login_new_tab_bridge_reruns_before_rendering_status()
+    test_login_stays_in_current_streamlit_session()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()

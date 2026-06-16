@@ -10,24 +10,22 @@ This module also installs small runtime compatibility helpers for Streamlit Clou
 - normalize malformed editor query keys like ;review_id -> review_id before app.py reads them
 - keep protected pages reload-safe without rewriting visible HTML markup
 - keep the signup page scrollable
-- keep the login page open while launching the authenticated tool tab
+- keep public/auth navigation in the current Streamlit session
 - ensure the main platform owner keeps Unlimited access
 """
 
 from __future__ import annotations
 
 import functools
-import inspect
 import ipaddress
 import json
 import os
 import re
 import socket
 import sys
-import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlparse, urlsplit, urlunsplit
 
 try:
     import streamlit as st
@@ -576,88 +574,8 @@ def _install_authenticated_reload_bridge() -> None:
         pass
 
 
-def _install_login_new_tab_bridge() -> None:
-    if st is None:
-        return
-    try:
-        original_rerun = getattr(st, "rerun", None)
-        if not callable(original_rerun) or getattr(original_rerun, "_errorsweep_login_new_tab_bridge", False):
-            return
-
-        def _query_value_for_launch(key: str) -> str:
-            try:
-                value = st.query_params.get(key, "")
-                if isinstance(value, list):
-                    return _safe_text(value[0] if value else "")
-                return _safe_text(value)
-            except Exception:
-                return ""
-
-        def _called_from_login_flow() -> bool:
-            try:
-                names = {frame.function for frame in inspect.stack(context=0)[:18]}
-                return bool(names & {"render_login", "render_sso_handoff"})
-            except Exception:
-                return False
-
-        def _build_launch_url() -> str:
-            params: Dict[str, str] = {}
-            current_route = st.session_state.get("current_route")
-            if isinstance(current_route, dict):
-                page = _safe_text(current_route.get("es_page") or current_route.get("page"))
-                if page:
-                    params["es_page"] = page
-                for key in ("es_editor", "job_id", "review_id", "task_id"):
-                    value = _safe_text(current_route.get(key))
-                    if value:
-                        params[key] = value
-            for key in ("es_page", "es_editor", "job_id", "review_id", "task_id"):
-                value = _query_value_for_launch(key)
-                if value:
-                    params[key] = value
-            public_page = re.sub(r"[^a-z0-9]+", "", params.get("es_page", "").lower())
-            if not params.get("es_page") or public_page in {"login", "landing", "signup", "register", "registration"}:
-                params["es_page"] = "Dashboard"
-            params["tool_tab"] = "1"
-            return "?" + urlencode(params)
-
-        def _leave_current_tab_on_login() -> None:
-            try:
-                for key in list(st.query_params.keys()):
-                    try:
-                        del st.query_params[key]
-                    except Exception:
-                        pass
-                st.query_params["es_page"] = "Login"
-            except Exception:
-                pass
-
-        @functools.wraps(original_rerun)
-        def rerun_with_login_new_tab(*args: Any, **kwargs: Any) -> Any:
-            try:
-                _normalize_query_params()
-                if _called_from_login_flow() and st.session_state.get("authenticated") and st.session_state.get("user"):
-                    _patch_owner_unlimited_functions()
-                    session_token = _current_signed_session_token()
-                    if session_token:
-                        st.session_state["_post_login_tool_launch_url"] = _build_launch_url()
-                        st.session_state["_post_login_session_token"] = session_token
-                        st.session_state["_post_login_tool_launch_id"] = uuid.uuid4().hex
-                        st.session_state["_login_window_stay_open"] = True
-                        _leave_current_tab_on_login()
-            except Exception:
-                pass
-            return original_rerun(*args, **kwargs)
-
-        setattr(rerun_with_login_new_tab, "_errorsweep_login_new_tab_bridge", True)
-        st.rerun = rerun_with_login_new_tab
-    except Exception:
-        pass
-
-
 _install_signup_scroll_fix()
 _install_authenticated_reload_bridge()
-_install_login_new_tab_bridge()
 
 # -----------------------------------------------------------------------------
 # Managed AI routing

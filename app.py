@@ -186,13 +186,14 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-buttons-v6"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-same-session-nav-v7"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
     "editor_css_scoped_to_editor_shell",
     "direct_selected_page_navigation",
-    "native_streamlit_nav_bridge",
+    "native_streamlit_nav_buttons",
+    "same_session_public_auth_routes",
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
 )
@@ -5500,7 +5501,7 @@ def render_logout_bridge() -> None:
 
 
 def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dict[str, str]:
-    """Build the route opened in the separate authenticated tool tab."""
+    """Build the same-session route that should render after successful login."""
     fallback_page = normalize_es_page(fallback_page or "Dashboard")
     if public_route_for_es_page(fallback_page):
         fallback_page = "Dashboard"
@@ -5529,8 +5530,8 @@ def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dic
     return fallback
 
 
-def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
-    status_line = "ErrorSweep is open in another tab" if opened_elsewhere else "Your ErrorSweep session is active."
+def render_logged_in_login_state(opened_elsewhere: bool = False) -> None:
+    status_line = "Your CogniSweep session is active."
     st.success("You are logged in")
     st.markdown(f"**{status_line}**")
     c1, c2 = st.columns(2)
@@ -5555,84 +5556,6 @@ def render_logged_in_login_state(opened_elsewhere: bool = True) -> None:
         </section>
         """).strip(),
         unsafe_allow_html=True,
-    )
-
-
-def render_post_login_tool_launch_bridge() -> None:
-    launch_url = safe_text(st.session_state.get("_post_login_tool_launch_url", ""))
-    if not launch_url:
-        return
-    launch_id = safe_text(st.session_state.get("_post_login_tool_launch_id", "")) or uuid.uuid4().hex
-    st.session_state["_post_login_tool_launch_id"] = launch_id
-    session_token = safe_text(st.session_state.get("_post_login_session_token", ""))
-    launch_url_json = json.dumps(launch_url)
-    launch_id_json = json.dumps(launch_id)
-    session_token_json = json.dumps(session_token)
-    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
-    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
-    domain_js = browser_cookie_domain_js_function()
-    render_logged_in_login_state(opened_elsewhere=True)
-    if session_token:
-        st.session_state["_pending_session_cookie"] = session_token
-        sync_component_session_cookie(session_token)
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          try {{
-            const launchUrl = {launch_url_json};
-            const launchId = {launch_id_json};
-            const sessionToken = {session_token_json};
-            const cookieName = {cookie_name_json};
-            const storageKey = {storage_key_json};
-            const key = "errorsweep_tool_launch_" + launchId;
-            const candidateWindows = [window.parent, window.top, window];
-{domain_js}
-            const firstWindow = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.location) return candidate;
-                }} catch (err) {{}}
-              }}
-              return window;
-            }};
-            const firstDocument = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.document) return candidate.document;
-                }} catch (err) {{}}
-              }}
-              return document;
-            }};
-            const firstStorage = (kind) => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate[kind]) return candidate[kind];
-                }} catch (err) {{}}
-              }}
-              try {{ return window[kind]; }} catch (err) {{}}
-              return null;
-            }};
-            const storage = firstStorage("sessionStorage");
-            if (storage && storage.getItem(key)) return;
-            if (storage) storage.setItem(key, "1");
-            if (sessionToken) {{
-              const loc = firstWindow().location;
-              const secure = loc.protocol === "https:" ? "; Secure" : "";
-              const targetDoc = firstDocument();
-              targetDoc.cookie = cookieName + "=" + encodeURIComponent(sessionToken) +
-                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              const persistentStorage = firstStorage("localStorage");
-              if (persistentStorage) persistentStorage.setItem(storageKey, sessionToken);
-            }}
-            const loc = firstWindow().location;
-            const url = new URL(launchUrl, loc.href);
-            window.open(url.toString(), "_blank", "noopener");
-          }} catch (err) {{}}
-        }})();
-        </script>
-        """,
-        height=0,
     )
 
 
@@ -5668,8 +5591,6 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     st.session_state.page = launch_page if launch_page in known_protected_es_pages() else "Dashboard"
     if launch_params.get("review_id"):
         st.session_state["active_review_session_id"] = launch_params["review_id"]
-    for key in ("_post_login_tool_launch_url", "_post_login_tool_launch_id", "_post_login_session_token", "_login_window_stay_open"):
-        st.session_state.pop(key, None)
     st.session_state["current_route"] = {"page": st.session_state.page, **launch_params}
     set_route_query(launch_params, sync_storage=sync_route_storage)
     query_clear("public")
@@ -5774,10 +5695,6 @@ def logout() -> None:
     st.session_state.pop("user", None)
     st.session_state.pop("authenticated", None)
     st.session_state.pop("_saas_state_hydrated", None)
-    st.session_state.pop("_post_login_tool_launch_url", None)
-    st.session_state.pop("_post_login_tool_launch_id", None)
-    st.session_state.pop("_post_login_session_token", None)
-    st.session_state.pop("_login_window_stay_open", None)
     st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
     st.session_state["_clear_session_cookie"] = True
     for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
@@ -6440,7 +6357,7 @@ def public_page_link(page: str) -> str:
 
 
 def public_login_link_target() -> str:
-    return 'target="_blank" rel="noopener"'
+    return 'target="_self"'
 
 
 def route_query_for_page(page: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -6501,9 +6418,8 @@ def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:
 
 
 def authenticated_login_handoff_route(route: Dict[str, Any]) -> bool:
-    """Keep only the original post-login tab on the Login status screen."""
-    public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
-    return bool(st.session_state.get("_login_window_stay_open")) and public_route == "login"
+    """Login no longer launches a separate dashboard tab, so there is no handoff route."""
+    return False
 
 
 def authenticated_shell_route_from_session(default_page: str = "Dashboard") -> Dict[str, str]:
@@ -17872,10 +17788,7 @@ def render_login_submit_handoff_mask_bridge() -> None:
 def render_login() -> None:
     render_login_submit_mask_clear_bridge()
     if is_authenticated():
-        if safe_text(st.session_state.get("_post_login_tool_launch_url", "")):
-            render_post_login_tool_launch_bridge()
-        else:
-            render_logged_in_login_state(opened_elsewhere=bool(st.session_state.get("_login_window_stay_open", False)))
+        render_logged_in_login_state()
         return
     render_login_submit_handoff_mask_bridge()
 
