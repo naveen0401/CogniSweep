@@ -90,7 +90,12 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
     callback_body = source[callback_start:callback_end]
     assert 'login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in callback_body
     assert 'st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True' in callback_body
-    assert "st.rerun()" not in callback_body
+    owner_branch = callback_body[
+        callback_body.index("if owner_is_configured")
+        : callback_body.index("if bootstrap_is_configured")
+    ]
+    assert owner_branch.index('st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True') < owner_branch.index('login_user(owner_user')
+    assert "st.rerun()" in callback_body
 
 
 def test_unknown_and_unauthorized_routes_are_separate() -> None:

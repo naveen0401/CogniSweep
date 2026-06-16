@@ -5500,20 +5500,22 @@ def handle_unified_login_submit() -> None:
     owner_password_ok = verify_password(password, owner_password_hash) if owner_password_hash else verify_login_password(password, "ERRORSWEEP_OWNER_PASSWORD_HASH", "ERRORSWEEP_OWNER_PASSWORD")
     if owner_is_configured and hmac.compare_digest(email_key, owner_user) and owner_password_ok:
         clear_abuse_attempts("workspace_login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
         ensure_unlimited_access_account(owner_user, owner_password_hash)
         login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)
         record_consent_acceptance(owner_user, "Platform Owner", "owner", "Platform", "unified_login")
         add_audit("Unified owner login", owner_user)
-        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        st.rerun()
         return
 
     if bootstrap_is_configured and hmac.compare_digest(clean_email, bootstrap_user.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
         configured_workspace = secret("ERRORSWEEP_ORG_NAME", "Demo Workspace")
         clear_abuse_attempts("workspace_login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
         login_user(clean_email, default_role, "workspace", configured_workspace, sync_route_storage=False)
         record_consent_acceptance(clean_email, default_role, "workspace", configured_workspace, "unified_login")
         add_audit("Unified workspace login", clean_email)
-        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        st.rerun()
         return
 
     matched = find_user_by_email(clean_email)
@@ -5530,10 +5532,11 @@ def handle_unified_login_submit() -> None:
         matched_workspace = safe_text(matched.get("workspace") or "Demo Workspace")
         account_type = safe_text(matched.get("account_type")) or ("owner" if matched_role == "Platform Owner" or matched_workspace == "Platform" else "workspace")
         clear_abuse_attempts("workspace_login", clean_email)
+        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
         login_user(clean_email, matched_role, account_type, matched_workspace, sync_route_storage=False)
         record_consent_acceptance(clean_email, matched_role, account_type, matched_workspace, "unified_login")
         add_audit("Unified login", clean_email)
-        st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True
+        st.rerun()
         return
 
     set_login_feedback("error", "Invalid email or password.")
@@ -17889,6 +17892,14 @@ def render_login_submit_handoff_mask_bridge() -> None:
           const showMask = () => {{
             ensureMask();
             parentDoc.body.classList.add(maskClass);
+            window.clearTimeout(parentDoc.__errorsweepLoginSubmitMaskTimeout);
+            parentDoc.__errorsweepLoginSubmitMaskTimeout = window.setTimeout(() => {{
+              try {{
+                parentDoc.body.classList.remove(maskClass);
+                const staleMask = parentDoc.getElementById(maskId);
+                if (staleMask) staleMask.remove();
+              }} catch (err) {{}}
+            }}, 12000);
           }};
           parentDoc.body.classList.remove(maskClass);
           const maybeShowMask = (event) => {{
