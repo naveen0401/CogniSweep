@@ -115,7 +115,11 @@ SAAS_COLUMNS = {
     },
     "workspaces": {"id", "workspace", "owner", "plan", "status", "users", "jobs", "user_email", "created_at", "updated_at"},
     "projects": {"id", "workspace", "user_email", "created", "project", "client", "source", "targets", "domain", "status", "job_count", "created_at", "updated_at"},
-    "jobs": {"id", "workspace", "user_email", "created", "type", "language", "assignee", "status", "note", "segments", "project_id", "project", "attachment_count", "attachments_json", "created_at", "updated_at"},
+    "jobs": {
+        "id", "workspace", "user_email", "created", "type", "language", "assignee", "status", "note", "segments",
+        "project_id", "project", "file_name", "review_job_id", "editor_job_id", "metadata_json",
+        "attachment_count", "attachments_json", "created_at", "updated_at",
+    },
     "payments": {"id", "workspace", "user_email", "date", "user", "plan", "amount", "currency", "status", "created_at", "updated_at"},
     "invoices": {"id", "workspace", "user_email", "invoice_number", "customer_email", "customer_gstin", "plan", "billing_period", "currency", "subtotal", "tax_rate_percent", "tax_amount", "total", "status", "source_payment_id", "notes", "metadata_json", "created_at", "updated_at"},
     "subscriptions": {"id", "workspace", "user_email", "plan", "status", "billing_cycle", "currency", "base_amount", "included_segments", "included_characters", "included_seats", "provider", "provider_customer_id", "provider_subscription_id", "current_period_start", "current_period_end", "cancel_at_period_end", "cancelled_at", "cancellation_reason", "metadata_json", "created_at", "updated_at"},
@@ -615,7 +619,7 @@ def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
     if supabase_configured():
         try:
             lim = max(1, min(int(limit), 1000))
-            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?select=id,job_type,user_email,workspace,file_name,target_language,status,row_count,created_at,updated_at&order=updated_at.desc&limit={lim}"
+            url = f"{_supabase_url()}/rest/v1/errorsweep_editor_jobs?select=id,job_type,user_email,workspace,file_name,target_language,status,row_count,metadata,created_at,updated_at&order=updated_at.desc&limit={lim}"
             res = requests.get(url, headers=_headers(), timeout=SUPABASE_TIMEOUT)
             res.raise_for_status()
             data = res.json()
@@ -631,10 +635,14 @@ def fetch_persistent_editor_jobs(limit: int = 100) -> List[Dict[str, Any]]:
             jobs.append({
                 "id": payload.get("job_id") or path.stem,
                 "job_type": payload.get("job_type"),
+                "user_email": (payload.get("metadata") or {}).get("user_email") or payload.get("user_email"),
+                "workspace": (payload.get("metadata") or {}).get("workspace") or payload.get("workspace"),
                 "file_name": (payload.get("metadata") or {}).get("file_name") or payload.get("file_name"),
                 "target_language": (payload.get("metadata") or {}).get("target_language") or payload.get("target_language"),
                 "status": (payload.get("metadata") or {}).get("status") or payload.get("status", "draft"),
                 "row_count": len(payload.get("rows") or []),
+                "metadata": payload.get("metadata") or {},
+                "created_at": payload.get("created_at") or payload.get("created"),
                 "updated_at": payload.get("updated_at"),
             })
         except Exception as exc:

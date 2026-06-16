@@ -90,6 +90,24 @@ def test_jobs_tool_is_hidden_without_permission():
     assert 'href="#"' not in body
 
 
+def test_job_history_page_is_registered_with_renderer_and_schema():
+    text = source()
+    persistence = Path("production_persistence.py").read_text(encoding="utf-8")
+    schema = Path("supabase_v42_release_schema.sql").read_text(encoding="utf-8")
+
+    assert '"Job History"' in text[text.index("WORKSPACE_PAGES"):text.index("ALL_APP_PAGES")]
+    assert '"Job History": "page.jobs"' in text
+    assert '"job-history": "Job History"' in text
+    assert '"Job History": page_job_history' in text
+    assert "def page_job_history()" in text
+    assert "job_history_rows_for_user(user)" in text
+    assert "render_job_history_table" in text
+    assert "human_review_editor_link(editor_job_id)" in text
+    for column in ["file_name", "review_job_id", "editor_job_id", "metadata_json"]:
+        assert f'"{column}"' in persistence
+        assert column in schema
+
+
 def test_notes_drawer_has_professional_actions_and_sanitizer():
     text = source()
     start = text.index("def notification_time_value")
@@ -142,6 +160,7 @@ if __name__ == "__main__":
     test_notes_and_language_tools_are_clickable_panels()
     test_team_billing_admin_visibility_comes_from_allowed_pages()
     test_jobs_tool_is_hidden_without_permission()
+    test_job_history_page_is_registered_with_renderer_and_schema()
     test_notes_drawer_has_professional_actions_and_sanitizer()
     test_notification_read_dismiss_columns_are_persisted()
     test_permission_matrix_models_company_and_individual_access()

@@ -5716,6 +5716,7 @@ WORKSPACE_PAGES = [
     "Dashboard",
     "Projects",
     "Jobs",
+    "Job History",
     "CogniSweep QA",
     "CogniSweep Pro",
     "Subtitle / Transcription Editor",
@@ -5749,6 +5750,7 @@ PAGE_PERMISSIONS = {
     "Dashboard": "page.dashboard",
     "Projects": "page.projects",
     "Jobs": "page.jobs",
+    "Job History": "page.jobs",
     "CogniSweep QA": "page.qa",
     "CogniSweep Pro": "page.pro",
     "Subtitle / Transcription Editor": "page.media",
@@ -5868,6 +5870,9 @@ ROUTE_PAGE_ALIASES = {
     "errorsweep_pro": "CogniSweep Pro",
     "projects": "Projects",
     "jobs": "Jobs",
+    "job-history": "Job History",
+    "job_history": "Job History",
+    "history": "Job History",
     "pro": "CogniSweep Pro",
     "quality": "CogniSweep QA",
     "quality-checks": "CogniSweep QA",
@@ -5987,6 +5992,9 @@ def normalize_es_page(raw_page: Any) -> str:
         "pro": "CogniSweep Pro",
         "projects": "Projects",
         "jobs": "Jobs",
+        "job history": "Job History",
+        "jobhistory": "Job History",
+        "history": "Job History",
         "qa tasks": "CogniSweep QA",
         "qa": "CogniSweep QA",
         "quality": "CogniSweep QA",
@@ -7034,6 +7042,7 @@ def render_navigation() -> None:
         "Dashboard": "Dashboard",
         "Projects": "Projects",
         "Jobs": "Jobs",
+        "Job History": "History",
         "CogniSweep QA": "QA Tasks",
         "CogniSweep Pro": "Pro",
         "Subtitle / Transcription Editor": "Subtitles",
@@ -18630,6 +18639,286 @@ def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
                 st.caption(f"{file_label}: stored, but no direct download route is available in this deployment.")
 
 
+def job_context_link(job_id: str, project_id: str = "") -> str:
+    extra = {"job_id": safe_text(job_id)}
+    if safe_text(project_id):
+        extra["project_id"] = safe_text(project_id)
+    return app_page_link("Jobs", extra)
+
+
+def job_history_metadata(record: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = record.get("metadata_json")
+    if not metadata:
+        metadata = record.get("metadata")
+    return coerce_json_dict(metadata)
+
+
+def job_history_workspace_matches(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
+    if is_owner():
+        return True
+    metadata = job_history_metadata(record)
+    user_workspace = safe_text(user.get("workspace")).strip().lower()
+    record_workspace = safe_text(record.get("workspace") or metadata.get("workspace")).strip().lower()
+    return not user_workspace or not record_workspace or record_workspace == user_workspace
+
+
+def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
+    if is_owner():
+        return True
+    if not job_history_workspace_matches(record, user):
+        return False
+    metadata = job_history_metadata(record)
+    email = safe_text(user.get("email")).strip().lower()
+    if not email:
+        return True
+    candidates = [
+        record.get("user_email"),
+        record.get("email"),
+        record.get("assignee"),
+        metadata.get("user_email"),
+        metadata.get("email"),
+        metadata.get("assignee"),
+        metadata.get("owner_email"),
+    ]
+    if any(safe_text(candidate).strip().lower() == email for candidate in candidates):
+        return True
+    if account_type_for_user(user) == "individual":
+        has_explicit_user = any(safe_text(candidate).strip() for candidate in candidates)
+        return not has_explicit_user
+    return False
+
+
+def job_history_projects_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    projects: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for project in st.session_state.get("projects", []):
+        if not isinstance(project, dict):
+            continue
+        if not job_history_record_matches_user(project, user):
+            continue
+        key = project_identity(project)
+        if key in seen:
+            continue
+        projects.append(project)
+        seen.add(key)
+    return projects
+
+
+def job_history_project_keys(projects: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_name: Dict[str, str] = {}
+    for project in projects:
+        key = project_identity(project)
+        by_id[key] = project
+        name_key = safe_text(project.get("project")).strip().lower()
+        if name_key:
+            by_name[name_key] = key
+    return by_id, by_name
+
+
+def job_history_editor_jobs_for_user(user: Dict[str, Any], limit: int = 250) -> List[Dict[str, Any]]:
+    combined: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    if fetch_persistent_editor_jobs is not None:
+        try:
+            combined.extend(fetch_persistent_editor_jobs(limit))
+        except Exception as exc:
+            LOGGER.warning("Unable to fetch editor jobs for job history: %s", exc)
+    combined.extend(st.session_state.get("owner_recent_editor_jobs", []))
+
+    filtered: List[Dict[str, Any]] = []
+    for record in combined:
+        if not isinstance(record, dict):
+            continue
+        job_id = safe_text(record.get("id") or record.get("job_id"))
+        if not job_id or job_id in seen:
+            continue
+        if not job_history_record_matches_user(record, user):
+            continue
+        item = dict(record)
+        item["id"] = job_id
+        filtered.append(item)
+        seen.add(job_id)
+    return filtered
+
+
+def job_history_editor_url(record: Dict[str, Any]) -> str:
+    metadata = job_history_metadata(record)
+    job_id = safe_text(
+        record.get("editor_job_id")
+        or record.get("review_job_id")
+        or record.get("id")
+        or record.get("job_id")
+        or metadata.get("editor_job_id")
+        or metadata.get("review_job_id")
+        or metadata.get("job_id")
+    )
+    if not job_id:
+        return ""
+    job_type = safe_text(record.get("job_type") or metadata.get("job_type")).strip().lower()
+    workflow = safe_text(metadata.get("workflow")).strip().lower()
+    if job_type == "media" or workflow in {"subtitling", "transcription"}:
+        return external_editor_url("media", job_id)
+    return human_review_editor_link(job_id)
+
+
+def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = job_history_metadata(job)
+    job_id = safe_text(job.get("id"))
+    review_job_id = safe_text(job.get("review_job_id") or metadata.get("review_job_id"))
+    editor_job_id = safe_text(job.get("editor_job_id") or metadata.get("editor_job_id") or review_job_id)
+    project_id = safe_text(job.get("project_id") or metadata.get("project_id"))
+    editor_url = human_review_editor_link(editor_job_id) if editor_job_id else job_context_link(job_id, project_id)
+    return {
+        "history_id": job_id,
+        "job_id": job_id,
+        "task_id": safe_text(metadata.get("task_id")),
+        "review_job_id": review_job_id,
+        "editor_job_id": editor_job_id,
+        "record_type": "Project job" if project_id or safe_text(job.get("project")) else "Individual task",
+        "type": safe_text(job.get("type") or metadata.get("workflow") or "Job"),
+        "label": safe_text(job.get("type") or metadata.get("label") or "Job"),
+        "workspace": safe_text(job.get("workspace") or metadata.get("workspace")),
+        "user_email": safe_text(job.get("user_email") or metadata.get("user_email")),
+        "project_id": project_id,
+        "project": safe_text(job.get("project") or metadata.get("project")),
+        "file_name": safe_text(job.get("file_name") or metadata.get("file_name")),
+        "language": safe_text(job.get("language") or metadata.get("target_language")),
+        "status": safe_text(job.get("status") or metadata.get("status") or "Draft"),
+        "segments": int(job.get("segments") or metadata.get("segments") or metadata.get("row_count") or 0),
+        "assignee": safe_text(job.get("assignee") or metadata.get("assignee")),
+        "created": safe_text(job.get("created") or job.get("created_at") or metadata.get("created")),
+        "updated_at": safe_text(job.get("updated_at") or job.get("created_at") or job.get("created")),
+        "editor_url": editor_url,
+    }
+
+
+def job_history_row_from_editor_job(record: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = job_history_metadata(record)
+    job_id = safe_text(record.get("id") or record.get("job_id"))
+    workflow = safe_text(metadata.get("workflow"))
+    job_type = safe_text(record.get("job_type") or metadata.get("job_type") or "cat")
+    type_label = workflow or ("Human Review" if job_type == "cat" else job_type.title())
+    project_id = safe_text(metadata.get("project_id"))
+    return {
+        "history_id": job_id,
+        "job_id": job_id,
+        "task_id": safe_text(metadata.get("task_id")),
+        "review_job_id": job_id if job_type != "media" else "",
+        "editor_job_id": job_id,
+        "record_type": "Project editor job" if project_id or safe_text(metadata.get("project")) else "Individual task",
+        "type": type_label,
+        "label": safe_text(metadata.get("title") or type_label),
+        "workspace": safe_text(record.get("workspace") or metadata.get("workspace")),
+        "user_email": safe_text(record.get("user_email") or metadata.get("user_email")),
+        "project_id": project_id,
+        "project": safe_text(metadata.get("project")),
+        "file_name": safe_text(record.get("file_name") or metadata.get("file_name")),
+        "language": safe_text(record.get("target_language") or metadata.get("target_language")),
+        "status": safe_text(record.get("status") or metadata.get("status") or "draft"),
+        "segments": int(record.get("row_count") or metadata.get("row_count") or 0),
+        "assignee": safe_text(metadata.get("assignee")),
+        "created": safe_text(record.get("created_at") or record.get("created") or metadata.get("created")),
+        "updated_at": safe_text(record.get("updated_at") or record.get("created_at") or metadata.get("created")),
+        "editor_url": job_history_editor_url(record),
+    }
+
+
+def job_history_row_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = job_history_metadata(task)
+    task_id = safe_text(task.get("id"))
+    review_job_id = task_review_job_id(task)
+    project_id = safe_text(metadata.get("project_id"))
+    editor_url = human_review_editor_link(review_job_id) if review_job_id else task_monitor_link(task_id)
+    return {
+        "history_id": task_id,
+        "job_id": safe_text(task.get("result_ref")),
+        "task_id": task_id,
+        "review_job_id": review_job_id,
+        "editor_job_id": review_job_id,
+        "record_type": "Workflow task",
+        "type": safe_text(task.get("task_type") or "Workflow"),
+        "label": safe_text(task.get("label") or task.get("task_type") or "Workflow task"),
+        "workspace": safe_text(task.get("workspace") or metadata.get("workspace")),
+        "user_email": safe_text(task.get("user_email") or metadata.get("user_email")),
+        "project_id": project_id,
+        "project": safe_text(metadata.get("project")),
+        "file_name": safe_text(metadata.get("file_name")),
+        "language": safe_text(metadata.get("target_language") or metadata.get("language")),
+        "status": safe_text(task.get("status") or "queued"),
+        "segments": int(task.get("total_units") or metadata.get("segments") or 0),
+        "assignee": safe_text(metadata.get("assignee")),
+        "created": safe_text(task.get("created_at")),
+        "updated_at": safe_text(task.get("updated_at") or task.get("created_at")),
+        "editor_url": editor_url,
+    }
+
+
+def job_history_dedupe_key(row: Dict[str, Any]) -> str:
+    for key in ("review_job_id", "editor_job_id", "task_id", "job_id", "history_id"):
+        value = safe_text(row.get(key))
+        if value:
+            return f"{key}:{value}"
+    return uuid.uuid4().hex
+
+
+def job_history_sort_value(row: Dict[str, Any]) -> datetime:
+    dt = parse_record_datetime(row.get("updated_at") or row.get("created"))
+    return dt or datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def job_history_rows_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for job in st.session_state.get("jobs", []):
+        if isinstance(job, dict) and job_history_record_matches_user(job, user):
+            rows.append(job_history_row_from_job(job))
+    for editor_job in job_history_editor_jobs_for_user(user):
+        rows.append(job_history_row_from_editor_job(editor_job))
+    for task in st.session_state.get("task_queue", []):
+        if isinstance(task, dict) and job_history_record_matches_user(task, user):
+            rows.append(job_history_row_from_task(task))
+
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for row in rows:
+        key = job_history_dedupe_key(row)
+        if key in seen:
+            continue
+        deduped.append(row)
+        seen.add(key)
+    return sorted(deduped, key=job_history_sort_value, reverse=True)
+
+
+def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
+    if not rows:
+        st.info("No tasks found in this section yet.")
+        return
+    table_rows = []
+    for row in rows:
+        table_rows.append({
+            "Task": safe_text(row.get("label") or row.get("type") or "Task"),
+            "Type": safe_text(row.get("type")),
+            "File": safe_text(row.get("file_name")) or "-",
+            "Language": safe_text(row.get("language")) or "-",
+            "Status": safe_text(row.get("status")) or "-",
+            "Segments": int(row.get("segments") or 0),
+            "Assignee": safe_text(row.get("assignee")) or "-",
+            "Updated": format_local_time(row.get("updated_at") or row.get("created")),
+            "Open": safe_text(row.get("editor_url")),
+        })
+    st.dataframe(
+        pd.DataFrame(table_rows),
+        use_container_width=True,
+        hide_index=True,
+        key=key,
+        column_config={
+            "Open": st.column_config.LinkColumn("Open", display_text="Open"),
+            "Task": st.column_config.TextColumn("Task", width="medium"),
+            "File": st.column_config.TextColumn("File", width="medium"),
+        },
+    )
+
+
 def page_projects() -> None:
     hero("Projects", "Project-based production work", "Create projects, open project workspaces, and add jobs directly inside each project.")
     user = current_user() or {}
@@ -18759,7 +19048,7 @@ def page_jobs() -> None:
             st.markdown("### Projects")
             st.caption("Project name - client name")
             labels, lookup = project_select_options()
-            selected_id = safe_text(st.session_state.get("selected_jobs_project_id"))
+            selected_id = safe_text(query_get("project_id") or st.session_state.get("selected_jobs_project_id"))
             default_index = 0
             if selected_id:
                 for idx, label in enumerate(labels):
@@ -18789,6 +19078,11 @@ def page_jobs() -> None:
             if jobs:
                 render_jobs_kanban(jobs)
                 st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+                focused_job_id = safe_text(query_get("job_id") or st.session_state.get("job_id", ""))
+                focused_job = next((job for job in jobs if safe_text(job.get("id")) == focused_job_id), None) if focused_job_id else None
+                if focused_job:
+                    with st.expander("Focused job", expanded=True):
+                        render_project_job_details(focused_job, "focused_project_job")
                 labels_for_jobs = [
                     f"{idx + 1}. {safe_text(job.get('type', 'Job'))} - {safe_text(job.get('status', ''))} - {safe_text(job.get('language', ''))}"
                     for idx, job in enumerate(jobs)
@@ -18806,6 +19100,57 @@ def page_jobs() -> None:
                 with st.expander("Workflow task monitor", expanded=bool(focused_task_id)):
                     render_task_queue_panel()
     return
+
+
+def page_job_history() -> None:
+    hero("Job History", "Account task history", "Review project tasks and direct Pro uploads for this account with links back to the editor.")
+    user = current_user() or {}
+    rows = job_history_rows_for_user(user)
+    projects = job_history_projects_for_user(user)
+    project_by_id, project_by_name = job_history_project_keys(projects)
+
+    project_groups: Dict[str, Dict[str, Any]] = {}
+    for project in projects:
+        key = project_identity(project)
+        project_groups[key] = {"label": project_display_name(project), "rows": []}
+
+    direct_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        project_key = safe_text(row.get("project_id"))
+        if project_key not in project_by_id:
+            project_name_key = safe_text(row.get("project")).strip().lower()
+            project_key = project_by_name.get(project_name_key, project_key)
+        if project_key:
+            if project_key not in project_groups:
+                project_groups[project_key] = {
+                    "label": safe_text(row.get("project")) or f"Project {project_key[-6:]}",
+                    "rows": [],
+                }
+            project_groups[project_key]["rows"].append(row)
+        else:
+            direct_rows.append(row)
+
+    project_task_count = sum(len(group["rows"]) for group in project_groups.values())
+    metrics([
+        ("Total tasks", len(rows), "visible to this account"),
+        ("Project tasks", project_task_count, "grouped by project"),
+        ("Individual tasks", len(direct_rows), "direct uploads and workflow tasks"),
+    ])
+
+    st.markdown("### Project tasks")
+    populated_groups = [group for group in project_groups.values() if group["rows"]]
+    if populated_groups:
+        for idx, group in enumerate(populated_groups):
+            with st.expander(f"{group['label']} ({len(group['rows'])})", expanded=idx == 0):
+                render_job_history_table(group["rows"], f"job_history_project_{idx}")
+    else:
+        st.info("No project-owned tasks are recorded for this account yet.")
+
+    st.markdown("### Individual tasks")
+    if direct_rows:
+        st.caption("Direct Pro uploads and standalone editor jobs appear here when they are not attached to a project.")
+    render_job_history_table(direct_rows, "job_history_individual_tasks")
+
 
 def page_qa() -> None:
     hero("CogniSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
@@ -19208,14 +19553,29 @@ def page_pro() -> None:
             export_source=pro_export_source,
         )
         status = "Completed" if missing == 0 else ("Needs Human Review" if missing_rate <= threshold / 100 else "Blocked")
+        review_session_id = safe_text(st.session_state.get("active_review_session_id", ""))
         pro_job = persist_saas_record("jobs", {
             "created": now_stamp(),
             "workspace": (current_user() or {}).get("workspace", "Demo Workspace"),
             "type": "Pro Translation",
+            "file_name": getattr(uploaded, "name", "uploaded_file"),
             "language": target_language,
             "status": status,
             "segments": len(review_rows),
             "missing": missing,
+            "review_job_id": review_session_id,
+            "editor_job_id": review_session_id,
+            "metadata_json": {
+                "source": "CogniSweep Pro",
+                "file_name": getattr(uploaded, "name", "uploaded_file"),
+                "target_language": target_language,
+                "review_job_id": review_session_id,
+                "editor_job_id": review_session_id,
+                "task_id": safe_text(task.get("id")),
+                "status": status,
+                "missing": missing,
+                "segments": len(review_rows),
+            },
         })
         st.session_state.jobs.insert(0, pro_job)
         trim_session_list("jobs")
@@ -22953,6 +23313,7 @@ PAGE_RENDERERS = {
     "Dashboard": page_dashboard,
     "Projects": page_projects,
     "Jobs": page_jobs,
+    "Job History": page_job_history,
     "CogniSweep QA": page_qa,
     "CogniSweep Pro": page_pro,
     "Subtitle / Transcription Editor": page_subtitle_transcription_editor,

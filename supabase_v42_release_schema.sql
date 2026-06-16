@@ -180,6 +180,10 @@ create table if not exists public.errorsweep_jobs (
     segments integer,
     project_id text,
     project text,
+    file_name text,
+    review_job_id text,
+    editor_job_id text,
+    metadata_json jsonb,
     attachment_count integer,
     attachments_json jsonb,
     created_at timestamptz not null default now(),
@@ -189,10 +193,16 @@ create table if not exists public.errorsweep_jobs (
 alter table public.errorsweep_projects add column if not exists job_count integer;
 alter table public.errorsweep_jobs add column if not exists project_id text;
 alter table public.errorsweep_jobs add column if not exists project text;
+alter table public.errorsweep_jobs add column if not exists file_name text;
+alter table public.errorsweep_jobs add column if not exists review_job_id text;
+alter table public.errorsweep_jobs add column if not exists editor_job_id text;
+alter table public.errorsweep_jobs add column if not exists metadata_json jsonb;
 alter table public.errorsweep_jobs add column if not exists attachment_count integer;
 alter table public.errorsweep_jobs add column if not exists attachments_json jsonb;
 
 create index if not exists idx_errorsweep_jobs_workspace on public.errorsweep_jobs(workspace);
+create index if not exists idx_errorsweep_jobs_user_email on public.errorsweep_jobs(user_email);
+create index if not exists idx_errorsweep_jobs_project_id on public.errorsweep_jobs(project_id);
 create index if not exists idx_errorsweep_jobs_status on public.errorsweep_jobs(status);
 create index if not exists idx_errorsweep_jobs_updated_at on public.errorsweep_jobs(updated_at desc);
 
