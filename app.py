@@ -186,7 +186,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-parent-runtime-nav-v9"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-17-parent-runtime-nav-v10"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -194,6 +194,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "direct_selected_page_navigation",
     "stable_html_app_topbar",
     "parent_runtime_no_reload_navigation",
+    "secondary_internal_links_no_reload",
     "same_session_public_auth_routes",
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
@@ -2691,10 +2692,14 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
 }
 
 .es-topnav-panel-close {
+  border: 0;
+  background: transparent;
   color: #8ea1dc !important;
   text-decoration: none !important;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 900;
+  cursor: pointer;
 }
 
 .es-note-list {
@@ -2772,9 +2777,11 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   color: #dce8ff !important;
   background: rgba(255,255,255,.04);
   text-decoration: none !important;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 900;
   padding: 7px 9px;
+  cursor: pointer;
 }
 
 .es-note-action.primary {
@@ -2968,6 +2975,24 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   pointer-events: none !important;
 }
 
+div[class*="st-key-"][class*="_app_nav_targets"] {
+  position: fixed !important;
+  left: -10000px !important;
+  top: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+}
+
+div[class*="st-key-"][class*="_app_nav_targets"] * {
+  pointer-events: none !important;
+}
+
 .es-task-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2987,7 +3012,9 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   color: #dff7ff !important;
   font-size: 12px;
   font-weight: 900;
+  font-family: inherit;
   text-decoration: none !important;
+  cursor: pointer;
 }
 
 .es-task-action-link.primary {
@@ -3134,11 +3161,17 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   grid-template-columns: 54px 1fr;
   gap: 10px;
   align-items: center;
+  width: 100%;
   border: 1px solid rgba(255,255,255,.08);
   background: rgba(255,255,255,.035);
   border-radius: 10px;
   padding: 9px;
   margin-top: 8px;
+  color: #dff7ff !important;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none !important;
+  cursor: pointer;
 }
 
 .es-kanban {
@@ -5344,10 +5377,6 @@ def render_logged_in_login_state(opened_elsewhere: bool = False) -> None:
               <div style="color:rgba(255,255,255,.68);font-weight:700;margin-top:4px;">{escape(status_line)}</div>
             </div>
           </div>
-          <div class="es-auth-links">
-            <a class="es-lp-btn primary" href="{escape(app_page_link('Dashboard'))}" target="_self">Open Dashboard</a>
-            <a class="es-lp-btn" href="?es_logout=1" target="_self">Logout</a>
-          </div>
         </section>
         """).strip(),
         unsafe_allow_html=True,
@@ -6184,6 +6213,30 @@ def app_nav_attr(key: str, href: str = "") -> str:
     return attrs
 
 
+def app_nav_target_from_href(
+    targets: List[Dict[str, Any]],
+    prefix: str,
+    href: str,
+    label: str = "",
+) -> str:
+    """Register a same-app protected href for no-reload navigation."""
+    href = safe_text(href)
+    if not href.startswith("?"):
+        return ""
+    parsed = parse_qs(href.lstrip("?"), keep_blank_values=False)
+    page = normalize_es_page((parsed.get("es_page") or [""])[0])
+    if page not in known_protected_es_pages():
+        return ""
+    extra = {
+        key: safe_text(values[0])
+        for key, values in parsed.items()
+        if key != "es_page" and values and safe_text(values[0])
+    }
+    key = native_nav_key(prefix, page, extra)
+    targets.append({"key": key, "page": page, "extra": extra, "label": label or page})
+    return app_nav_attr(key, href)
+
+
 def render_app_navigation_targets(targets: List[Dict[str, Any]], prefix: str) -> None:
     """Hidden callbacks used by the HTML shell to navigate without a full app reload."""
     unique_targets: Dict[str, Dict[str, Any]] = {}
@@ -6970,12 +7023,26 @@ def render_topnav_notes_panel(active_page: str, notifications: List[Dict[str, An
     notes = normalized_notification_notes(notifications, user, active_page)
     unread_count = notification_badge_count(notes)
     close_href = page_link(active_page)
+    nav_targets: List[Dict[str, Any]] = []
+    close_attr = app_nav_target_from_href(nav_targets, "topnav_panel", close_href, "Close notifications")
+    close_control = (
+        f'<button type="button" class="es-topnav-panel-close" {close_attr}>Close</button>'
+        if close_attr
+        else f'<a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>'
+    )
     rows = []
     for note in notes[:12]:
-        action_html = "".join(
-            f'<a class="es-note-action {escape(action.get("kind", ""))}" href="{escape(action.get("href", "#"))}" target="_self">{escape(action.get("label", ""))}</a>'
-            for action in note.get("actions", [])
-        )
+        action_parts: List[str] = []
+        for action in note.get("actions", []):
+            label = safe_text(action.get("label", ""))
+            href = safe_text(action.get("href", "#"))
+            kind = escape(action.get("kind", ""))
+            action_attr = app_nav_target_from_href(nav_targets, "topnav_panel", href, label)
+            if action_attr:
+                action_parts.append(f'<button type="button" class="es-note-action {kind}" {action_attr}>{escape(label)}</button>')
+            else:
+                action_parts.append(f'<a class="es-note-action {kind}" href="{escape(href)}" target="_self">{escape(label)}</a>')
+        action_html = "".join(action_parts)
         unread_cls = " unread" if (not note.get("is_read") or note.get("action_required")) else ""
         dot_html = '<span class="es-note-dot"></span>' if unread_cls else ''
         rows.append(
@@ -6999,17 +7066,26 @@ def render_topnav_notes_panel(active_page: str, notifications: List[Dict[str, An
               <div class="es-topnav-panel-title">Notifications</div>
               <div class="es-note-meta">{unread_count} unread or action-required</div>
             </div>
-            <a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>
+            {close_control}
           </div>
           <div class="es-note-list">{notes_html}</div>
         </section>
         """).strip(),
         unsafe_allow_html=True,
     )
+    render_app_navigation_targets(nav_targets, "topnav_panel")
+    render_app_navigation_bridge()
 
 
 def render_topnav_language_panel(active_page: str, user: Dict[str, Any]) -> None:
     close_href = page_link(active_page)
+    nav_targets: List[Dict[str, Any]] = []
+    close_attr = app_nav_target_from_href(nav_targets, "topnav_language_panel", close_href, "Close language")
+    close_control = (
+        f'<button type="button" class="es-topnav-panel-close" {close_attr}>Close</button>'
+        if close_attr
+        else f'<a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>'
+    )
     current_code, _ = current_ui_language(user)
     option_labels = [f"{code} - {label}" for code, label in UI_LANGUAGE_OPTIONS]
     default_index = next((idx for idx, (code, _) in enumerate(UI_LANGUAGE_OPTIONS) if code == current_code), 0)
@@ -7018,12 +7094,14 @@ def render_topnav_language_panel(active_page: str, user: Dict[str, Any]) -> None
         <section class="es-topnav-panel" aria-label="UI language selector">
           <div class="es-topnav-panel-head">
             <div class="es-topnav-panel-title">UI language</div>
-            <a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>
+            {close_control}
           </div>
         </section>
         """).strip(),
         unsafe_allow_html=True,
     )
+    render_app_navigation_targets(nav_targets, "topnav_language_panel")
+    render_app_navigation_bridge()
     with st.container(key="topnav_language_selector"):
         selected = st.selectbox("Interface language", option_labels, index=default_index, key="topnav_ui_language_select")
         if st.button("Apply language", use_container_width=False, key="topnav_apply_language"):
@@ -10348,15 +10426,25 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
 
     rendered = []
     seen_urls: Set[str] = set()
+    nav_targets: List[Dict[str, Any]] = []
+    target_prefix = f"task_action_{re.sub(r'[^a-z0-9_]+', '_', (task_id or review_job_id or hashlib.sha1(str(links).encode('utf-8')).hexdigest()[:8]).lower()).strip('_') or 'link'}"
     for label, url, primary in links:
         if not url or url in seen_urls:
             continue
         seen_urls.add(url)
         cls = "es-task-action-link primary" if primary else "es-task-action-link"
-        target_attr = 'target="_blank" rel="noopener"' if primary else 'target="_self"'
-        rendered.append(f'<a class="{cls}" href="{escape(url)}" {target_attr}>{escape(label)}</a>')
+        if primary:
+            rendered.append(f'<a class="{cls}" href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>')
+            continue
+        action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
+        if action_attr:
+            rendered.append(f'<button type="button" class="{cls}" {action_attr}>{escape(label)}</button>')
+        else:
+            rendered.append(f'<a class="{cls}" href="{escape(url)}" target="_self">{escape(label)}</a>')
     if rendered:
         st.markdown(f'<div class="es-task-actions">{"".join(rendered)}</div>', unsafe_allow_html=True)
+        render_app_navigation_targets(nav_targets, target_prefix)
+        render_app_navigation_bridge()
 
 
 def render_editor_open_link(label: str, url: str) -> None:
@@ -10726,11 +10814,22 @@ def render_command_palette() -> None:
             label = f"{safe_text(tm.get('source', ''))} -> {safe_text(tm.get('target', ''))}"
             if q in label.lower():
                 results.append(("TM", label[:90], page_link("Memory & Rules")))
-        result_html = "".join(
-            f'<a class="es-search-result" href="{href}" target="_self"><span class="es-code-chip">{escape(kind)}</span><span>{escape(label)}</span></a>'
-            for kind, label, href in results[:6]
-        ) or '<div class="es-small">No matches yet.</div>'
+        nav_targets: List[Dict[str, Any]] = []
+        result_parts: List[str] = []
+        for kind, label, href in results[:6]:
+            action_attr = app_nav_target_from_href(nav_targets, "command_palette", href, label)
+            if action_attr:
+                result_parts.append(
+                    f'<button type="button" class="es-search-result" {action_attr}><span class="es-code-chip">{escape(kind)}</span><span>{escape(label)}</span></button>'
+                )
+            else:
+                result_parts.append(
+                    f'<a class="es-search-result" href="{href}" target="_self"><span class="es-code-chip">{escape(kind)}</span><span>{escape(label)}</span></a>'
+                )
+        result_html = "".join(result_parts) or '<div class="es-small">No matches yet.</div>'
         st.html(f'<div class="es-global-search">{result_html}</div>')
+        render_app_navigation_targets(nav_targets, "command_palette")
+        render_app_navigation_bridge()
 
 
 def highlight_localization_text(text: str) -> str:
@@ -19217,7 +19316,8 @@ def page_jobs() -> None:
             </div>
             """
         )
-        st.link_button("Open Projects", page_link("Projects"), use_container_width=True)
+        if st.button("Open Projects", use_container_width=True, key="jobs_empty_open_projects"):
+            navigate_es_page("Projects")
         return
 
     left, main = st.columns([0.20, 0.80], gap="large")
@@ -22805,7 +22905,8 @@ def render_talent_premium_required_page() -> None:
         ("Permission", "Talent database", "required after upgrade"),
     ])
     if has_permission("billing.access", user):
-        st.link_button("Open Billing to upgrade", page_link("Billing"), use_container_width=False)
+        if st.button("Open Billing to upgrade", use_container_width=False, key="talent_premium_open_billing"):
+            navigate_es_page("Billing")
     else:
         st.info("Ask your workspace owner or billing admin to upgrade this workspace and grant Talent Database access.")
 

@@ -218,7 +218,7 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     assert "Your CogniSweep session is active." in state_body
     assert "ErrorSweep is open in another tab" not in state_body
     assert "Open Dashboard" in state_body
-    assert "?es_logout=1" in state_body
+    assert "?es_logout=1" not in state_body
     assert 'st.success("You are logged in")' in state_body
     assert 'button("Open Dashboard"' in state_body
     assert 'button("Logout"' in state_body
