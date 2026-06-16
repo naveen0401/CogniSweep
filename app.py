@@ -1389,7 +1389,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   z-index: 2;
   max-width: 1280px;
   margin: 0 auto;
-  padding: 34px 20px 0;
+  padding: 18px 20px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1553,7 +1553,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 .es-lp-hero-content {
   position: relative;
   max-width: 1120px;
-  margin: 100px auto 0;
+  margin: 54px auto 0;
 }
 
 .es-lp-title {
@@ -2083,7 +2083,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-auth-shell {
   max-width: 920px;
-  margin: 40px auto 24px;
+  margin: 8px auto 22px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -17542,10 +17542,25 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           max-height: none !important;
           min-height: 100dvh !important;
           overflow: visible !important;
+          gap: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          align-content: start !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .block-container > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-landing-page-marker) {
+          display: none !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .block-container > div[data-testid="stVerticalBlock"] > div {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp {
           overflow: visible !important;
+          min-height: 100dvh !important;
+          margin-top: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
@@ -17835,6 +17850,56 @@ LOGIN_SUBMIT_MASK_ID = "errorsweep-login-submit-mask"
 LOGIN_SUBMIT_MASK_CLASS = "es-login-submit-pending"
 
 
+def render_public_auth_page_marker() -> None:
+    st.html(
+        dedent("""
+        <div id="errorsweep-public-auth-page-marker"></div>
+        <style>
+        #errorsweep-public-auth-page-marker {
+          display: none !important;
+        }
+
+        body:has(#errorsweep-public-auth-page-marker) [data-testid="stMainBlockContainer"],
+        body:has(#errorsweep-public-auth-page-marker) [data-testid="stAppViewContainer"] .main .block-container,
+        body:has(#errorsweep-public-auth-page-marker) .block-container {
+          height: 100dvh !important;
+          max-height: 100dvh !important;
+          min-height: 0 !important;
+          overflow-x: hidden !important;
+          overflow-y: auto !important;
+          padding-top: 0 !important;
+          scroll-behavior: smooth !important;
+        }
+
+        body:has(#errorsweep-public-auth-page-marker) [data-testid="stMainBlockContainer"] > div[data-testid="stVerticalBlock"],
+        body:has(#errorsweep-public-auth-page-marker) .block-container > div[data-testid="stVerticalBlock"] {
+          height: auto !important;
+          max-height: none !important;
+          min-height: 100dvh !important;
+          overflow: visible !important;
+          gap: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          align-content: start !important;
+        }
+
+        body:has(#errorsweep-public-auth-page-marker) .block-container > div[data-testid="stVerticalBlock"] > div:has(#errorsweep-public-auth-page-marker) {
+          display: none !important;
+        }
+
+        body:has(#errorsweep-public-auth-page-marker) .block-container > div[data-testid="stVerticalBlock"] > div {
+          margin-top: 0 !important;
+          padding-top: 0 !important;
+        }
+
+        body:has(#errorsweep-public-auth-page-marker) .es-auth-shell {
+          margin-top: 8px !important;
+        }
+        </style>
+        """).strip(),
+    )
+
+
 def render_login_submit_mask_clear_bridge() -> None:
     components.html(
         f"""
@@ -17966,6 +18031,7 @@ def render_login_submit_handoff_mask_bridge() -> None:
 
 
 def render_login() -> None:
+    render_public_auth_page_marker()
     render_login_submit_mask_clear_bridge()
     if is_authenticated():
         render_logged_in_login_state()
@@ -18220,6 +18286,7 @@ def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
 
 
 def render_signup() -> None:
+    render_public_auth_page_marker()
     launch_gate = public_signup_launch_gate()
     if launch_gate.get("locked"):
         render_public_signup_launch_locked(launch_gate)

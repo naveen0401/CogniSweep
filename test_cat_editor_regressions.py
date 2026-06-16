@@ -195,6 +195,19 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "render_editor_open_link(\"Open Human Review workspace\"" in source
 
 
+def test_public_pages_are_lifted_to_top_without_global_shell_changes() -> None:
+    source = read_app()
+    assert "def render_public_auth_page_marker" in source
+    assert "errorsweep-public-auth-page-marker" in source
+    assert 'body:has(#errorsweep-public-auth-page-marker) .es-auth-shell' in source
+    assert "render_public_auth_page_marker()\n    render_login_submit_mask_clear_bridge()" in source
+    assert "errorsweep-landing-page-marker" in source
+    assert 'body:has(#errorsweep-landing-page-marker) .block-container > div[data-testid="stVerticalBlock"] > div' in source
+    assert "gap: 0 !important;" in source
+    assert "margin: 54px auto 0;" in source
+    assert "margin: 100px auto 0;" not in source
+
+
 def test_public_entry_routes_use_cookie_provider_not_restore_miss_gate() -> None:
     source = read_app()
     assert "def session_restore_probe_pending" not in source
