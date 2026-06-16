@@ -186,13 +186,14 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-same-session-nav-v7"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-stable-shell-v8"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
     "editor_css_scoped_to_editor_shell",
     "direct_selected_page_navigation",
-    "native_streamlit_nav_buttons",
+    "stable_html_app_topbar",
+    "same_tab_query_navigation",
     "same_session_public_auth_routes",
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
@@ -2512,233 +2513,6 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   box-shadow: 0 0 22px rgba(52,189,246,.48);
 }
 
-.st-key-topnav_native_shell {
-  position: relative !important;
-  z-index: 900;
-  width: 100%;
-  margin: 0;
-  border: 1px solid rgba(84,105,180,.34);
-  border-radius: 0;
-  background:
-    linear-gradient(135deg, rgba(16,22,43,.96), rgba(11,15,31,.94)),
-    radial-gradient(circle at 12% 0%, rgba(0,217,133,.18), transparent 38%),
-    radial-gradient(circle at 90% 12%, rgba(52,189,246,.16), transparent 36%);
-  color: #f7fbff;
-  box-shadow: 0 24px 68px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
-  backdrop-filter: blur(16px);
-  overflow: visible;
-}
-
-.st-key-topnav_native_shell > div[data-testid="stVerticalBlock"] {
-  gap: 0 !important;
-}
-
-.st-key-topnav_native_main_row > div[data-testid="stVerticalBlock"] {
-  min-height: 62px;
-  display: flex !important;
-  align-items: stretch !important;
-  gap: 8px !important;
-  padding: 0 14px !important;
-}
-
-.st-key-topnav_native_brand {
-  flex: 0 0 218px !important;
-  min-width: 218px !important;
-}
-
-.st-key-topnav_native_brand .es-topnav-brand {
-  min-height: 62px;
-}
-
-.st-key-topnav_workspace_controls {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-}
-
-.st-key-topnav_workspace_controls > div[data-testid="stVerticalBlock"] {
-  height: 62px;
-  display: flex !important;
-  align-items: stretch !important;
-  justify-content: center !important;
-  flex-wrap: nowrap !important;
-  gap: 2px !important;
-  overflow: visible !important;
-}
-
-.st-key-topnav_tool_controls {
-  flex: 0 0 auto !important;
-  min-width: 0 !important;
-  border-left: 1px solid rgba(84,105,180,.26);
-}
-
-.st-key-topnav_tool_controls > div[data-testid="stVerticalBlock"] {
-  min-height: 62px;
-  display: flex !important;
-  align-items: stretch !important;
-  gap: 0 !important;
-}
-
-.st-key-topnav_user_summary {
-  display: flex !important;
-  align-items: center !important;
-  min-height: 62px !important;
-  padding: 0 12px !important;
-  border-right: 1px solid rgba(84,105,180,.24);
-}
-
-.st-key-topnav_user_summary .es-topnav-user {
-  min-width: 0;
-}
-
-.st-key-topnav_workspace_controls [data-testid="stButton"],
-.st-key-topnav_tool_controls [data-testid="stButton"],
-.st-key-topnav_owner_buttons [data-testid="stButton"],
-.st-key-dashboard_hero_actions [data-testid="stButton"] {
-  height: 100%;
-  display: flex;
-}
-
-.st-key-topnav_workspace_controls button {
-  min-height: 62px !important;
-  height: 62px !important;
-  padding: 0 8px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  color: #dce8ff !important;
-  box-shadow: none !important;
-  font-size: 12px !important;
-  font-weight: 950 !important;
-  text-transform: uppercase !important;
-  white-space: nowrap !important;
-}
-
-.st-key-topnav_workspace_controls button:hover,
-.st-key-topnav_tool_controls button:hover,
-.st-key-topnav_owner_buttons button:hover {
-  color: #75f7c4 !important;
-  background: rgba(52,189,246,.08) !important;
-  border-color: rgba(52,189,246,.18) !important;
-}
-
-[class*="st-key-topnav_workspace_native_nav_"][class*="_active"] button {
-  color: #75f7c4 !important;
-  background:
-    linear-gradient(to bottom, rgba(52,189,246,.08), rgba(52,189,246,.02)) !important;
-  box-shadow: inset 0 -3px 0 var(--es-cyan) !important;
-}
-
-.st-key-topnav_tool_controls button {
-  min-height: 62px !important;
-  height: 62px !important;
-  min-width: 52px !important;
-  padding: 0 9px !important;
-  border: 0 !important;
-  border-right: 1px solid rgba(84,105,180,.24) !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  color: #dce8ff !important;
-  box-shadow: none !important;
-  font-size: 12px !important;
-  font-weight: 900 !important;
-  white-space: nowrap !important;
-}
-
-[class*="st-key-topnav_tool_native_nav_"][class*="_active"] button {
-  color: #75f7c4 !important;
-  background: rgba(52,189,246,.10) !important;
-}
-
-.st-key-topnav_owner_strip {
-  border-top: 1px solid rgba(84,105,180,.22);
-  background: rgba(6,10,22,.18);
-  padding: 0 14px 10px;
-}
-
-.st-key-topnav_owner_strip > div[data-testid="stVerticalBlock"] {
-  min-height: 42px;
-  display: flex !important;
-  align-items: center !important;
-  gap: 10px !important;
-}
-
-.st-key-topnav_owner_label {
-  flex: 0 0 auto !important;
-  margin-left: 52px;
-}
-
-.st-key-topnav_owner_buttons {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-}
-
-.st-key-topnav_owner_buttons > div[data-testid="stVerticalBlock"] {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  gap: 6px !important;
-  flex-wrap: wrap !important;
-}
-
-.st-key-topnav_owner_buttons button {
-  min-height: 30px !important;
-  height: 30px !important;
-  padding: 0 10px !important;
-  border: 1px solid rgba(84,105,180,.24) !important;
-  border-radius: 8px !important;
-  background: rgba(255,255,255,.035) !important;
-  color: #dce8ff !important;
-  box-shadow: none !important;
-  font-size: 11px !important;
-  font-weight: 900 !important;
-  white-space: nowrap !important;
-}
-
-[class*="st-key-topnav_owner_native_nav_"][class*="_active"] button {
-  border-color: rgba(0,217,133,.36) !important;
-  color: #75f7c4 !important;
-  background: rgba(0,217,133,.08) !important;
-}
-
-.st-key-dashboard_hero_actions {
-  position: relative !important;
-  z-index: 5 !important;
-  width: fit-content !important;
-  max-width: calc(100% - 72px) !important;
-  margin: -78px 0 32px 36px !important;
-}
-
-.st-key-dashboard_hero_actions > div[data-testid="stVerticalBlock"] {
-  display: flex !important;
-  align-items: center !important;
-  flex-wrap: wrap !important;
-  gap: 10px !important;
-}
-
-.st-key-dashboard_hero_actions button {
-  min-height: 44px !important;
-  height: 44px !important;
-  padding: 0 16px !important;
-  border: 0 !important;
-  border-radius: 999px !important;
-  color: #06121f !important;
-  background: linear-gradient(90deg, #00d985, #34bdf6) !important;
-  box-shadow: 0 16px 40px rgba(52,189,246,.22) !important;
-  font-weight: 900 !important;
-  white-space: nowrap !important;
-}
-
-[class*="st-key-dashboard_native_nav_"][class*="_secondary"] button {
-  color: #f8fbff !important;
-  background: rgba(255,255,255,.075) !important;
-  border: 1px solid rgba(255,255,255,.12) !important;
-}
-
-.st-key-dashboard_hero_actions button:hover {
-  transform: translateY(-2px) scale(1.015);
-  box-shadow: 0 24px 58px rgba(52,189,246,.30) !important;
-}
-
 .es-topnav-tools {
   display: flex;
   align-items: stretch;
@@ -3051,8 +2825,8 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   overflow: hidden;
   border: 1px solid rgba(88,113,190,.30);
   border-radius: 16px;
-  padding: 28px 28px 98px;
-  margin-bottom: 0;
+  padding: 28px;
+  margin-bottom: 16px;
   background:
     radial-gradient(circle at 18% 18%, rgba(0,217,133,.30), transparent 30%),
     radial-gradient(circle at 78% 8%, rgba(52,189,246,.24), transparent 28%),
@@ -3151,26 +2925,6 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
 .es-fab-action:hover {
   transform: translateY(-2px) scale(1.015);
   box-shadow: 0 24px 58px rgba(52,189,246,.30);
-}
-
-.st-key-topnav_native_nav_targets,
-.st-key-dashboard_native_nav_targets {
-  position: fixed !important;
-  left: -10000px !important;
-  top: -10000px !important;
-  width: 1px !important;
-  height: 1px !important;
-  min-width: 1px !important;
-  min-height: 1px !important;
-  opacity: 0 !important;
-  overflow: hidden !important;
-  pointer-events: none !important;
-  z-index: -1 !important;
-}
-
-.st-key-topnav_native_nav_targets *,
-.st-key-dashboard_native_nav_targets * {
-  pointer-events: none !important;
 }
 
 .es-task-actions {
@@ -7122,6 +6876,7 @@ def render_navigation() -> None:
     permissions = effective_permissions(user)
     pages = allowed_pages()
 
+    # Page label display names
     label_map = {
         "Dashboard": "Dashboard",
         "Projects": "Projects",
@@ -7137,103 +6892,102 @@ def render_navigation() -> None:
         "Account": "Account",
         "Admin": "Admin",
     }
-    workspace_pages = [page for page in WORKSPACE_PAGES if page in pages]
-    owner_pages = [page for page in OWNER_PAGES if page in pages] if is_owner() else []
+    workspace_links = []
+    for page in WORKSPACE_PAGES:
+        if page not in pages:
+            continue
+        active = " active" if st.session_state.get("page") == page else ""
+        workspace_links.append(
+            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self">{escape(label_map.get(page, page))}</a>'
+        )
+    owner_links = []
+    if is_owner():
+        for page in OWNER_PAGES:
+            active = " active" if st.session_state.get("page") == page else ""
+            owner_links.append(
+                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self">{escape(page)}</a>'
+            )
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
         if safe_text(job.get("status", "")).lower() in {"draft", "needs human review", "needs_review", "running"}
     )
+    notification_count = len(st.session_state.get("notifications", []))
     user_email = safe_text(user.get("email", "user@errorsweep.local"))
     user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
     role = current_role()
-    current_page = safe_text(st.session_state.get("page") or "Dashboard")
     active_panel = safe_text(query_get("es_panel")).lower()
+    current_page = safe_text(st.session_state.get("page") or "Dashboard")
     notifications = st.session_state.get("notifications", [])
-    unread_notes = notification_badge_count(normalized_notification_notes(notifications, user, current_page))
+    unread_notes = notification_badge_count(normalized_notification_notes(st.session_state.get("notifications", []), user, current_page))
     ui_language_code, _ = current_ui_language(user)
+    notes_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "notes"}))
+    language_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "language"}))
+    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
+    notes_badge = f'<i class="es-topnav-badge">{unread_notes}</i>' if unread_notes else ""
+    jobs_tool = (
+        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs">'
+        f'<b>{open_count}</b><span>Jobs</span></a>'
+    )
+    notes_tool = (
+        f'<a class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
+        f'href="{notes_href}" target="_self" title="Open notifications">'
+        f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</a>'
+        if "notes.view" in permissions
+        else ""
+    )
+    language_tool = (
+        f'<a class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
+        f'href="{language_href}" target="_self" title="Change interface language">'
+        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></a>'
+        if "language.select" in permissions
+        else ""
+    )
     user_avatar = escape(monogram(user_name or user_email or "User"))
-
-    with st.container(key="topnav_native_shell", gap=None):
-        with st.container(key="topnav_native_main_row", gap=None):
-            with st.container(key="topnav_native_brand", gap=None):
-                st.markdown(
-                    """
-                    <div class="es-topnav-brand">
-                      <div class="es-topnav-mark" aria-hidden="true"></div>
-                      <div class="es-topnav-brand-copy">
-                        <div class="es-topnav-name">Cogni<span>Sweep</span></div>
-                      </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with st.container(key="topnav_workspace_controls", gap=None):
-                for page in workspace_pages:
-                    render_native_route_button(
-                        page,
-                        label_map.get(page, page),
-                        "topnav_workspace",
-                        active=current_page == page and not active_panel,
-                        help_text=f"Open {label_map.get(page, page)}",
-                    )
-            with st.container(key="topnav_tool_controls", gap=None):
-                if "Jobs" in pages:
-                    render_native_route_button(
-                        "Jobs",
-                        f"{open_count} Jobs",
-                        "topnav_tool",
-                        active=current_page == "Jobs" and not active_panel,
-                        help_text="Open jobs",
-                    )
-                if "notes.view" in permissions:
-                    render_native_route_button(
-                        current_page,
-                        f"{unread_notes} Notes",
-                        "topnav_tool",
-                        active=active_panel == "notes",
-                        extra={"es_panel": "notes"},
-                        help_text="Open notifications",
-                    )
-                if "language.select" in permissions:
-                    render_native_route_button(
-                        current_page,
-                        f"{ui_language_code or 'EN'} Lang",
-                        "topnav_tool",
-                        active=active_panel in {"language", "lang"},
-                        extra={"es_panel": "language"},
-                        help_text="Change interface language",
-                    )
-                with st.container(key="topnav_user_summary", gap=None):
-                    st.markdown(
-                        f"""
-                        <div class="es-topnav-user" title="Signed in user">
-                          <div>
-                            <div style="font-weight:900;white-space:nowrap;">{escape(user_name)}</div>
-                            <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{escape(role)}</div>
-                          </div>
-                          <div class="es-topnav-avatar">{user_avatar}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                if st.button("Logout", key="topnav_logout_button", use_container_width=True, help="Logout"):
-                    logout()
-
-        if owner_pages:
-            with st.container(key="topnav_owner_strip", gap=None):
-                with st.container(key="topnav_owner_label", gap=None):
-                    st.markdown('<span class="es-topnav-owner-tag">Owner only</span>', unsafe_allow_html=True)
-                with st.container(key="topnav_owner_buttons", gap=None):
-                    for page in owner_pages:
-                        render_native_route_button(
-                            page,
-                            page,
-                            "topnav_owner",
-                            active=current_page == page and not active_panel,
-                            help_text=f"Open {page}",
-                        )
-
+    billing_item = (
+        f'<a href="{page_link("Billing")}" target="_self">Billing <span>Plan</span></a>'
+        if "Billing" in pages
+        else ""
+    )
+    topnav = f"""
+    <nav class="es-topnav">
+      <div class="es-topnav-row">
+        <div class="es-topnav-brand">
+          <div class="es-topnav-mark" aria-hidden="true"></div>
+          <div class="es-topnav-brand-copy">
+            <div class="es-topnav-name">Cogni<span>Sweep</span></div>
+          </div>
+        </div>
+        <div class="es-topnav-links">
+          {''.join(workspace_links)}
+        </div>
+        <div class="es-topnav-tools">
+          {jobs_tool}
+          {notes_tool}
+          {language_tool}
+          <div class="es-topnav-user-wrap">
+            <div class="es-topnav-user" tabindex="0" title="Account menu">
+              <div>
+                <div style="font-weight:900;white-space:nowrap;">{escape(user_name)}</div>
+                <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{escape(role)}</div>
+              </div>
+              <div class="es-topnav-avatar">{user_avatar}</div>
+              <span class="es-account-caret">v</span>
+            </div>
+            <div class="es-account-menu">
+              <a href="{page_link('Account')}" target="_self">Profile <span>Account</span></a>
+              <a href="{page_link(settings_page)}" target="_self">Settings <span>{escape(settings_page)}</span></a>
+              {billing_item}
+              <a href="{page_link('Jobs')}" target="_self">Jobs <span>{open_count}</span></a>
+              <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+      {f'<div class="es-owner-strip"><span>Owner only</span>{"".join(owner_links)}</div>' if owner_links else ''}
+    </nav>
+    """
+    st.markdown(topnav, unsafe_allow_html=True)
     render_topnav_panel(current_page, user, notifications)
 
 
@@ -17748,26 +17502,24 @@ def render_login_submit_handoff_mask_bridge() -> None:
               if (!button || button.disabled || button.textContent.trim() !== "Login") return;
               const pageText = parentDoc.body.innerText || "";
               if (!pageText.includes("Login to CogniSweep")) return;
-              const email = parentDoc.querySelector('input[aria-label="Email"]');
-              const password = parentDoc.querySelector('input[aria-label="Password"]');
-              const accepted = parentDoc.querySelector('input[type="checkbox"][aria-label*="I accept"]');
-              const acceptedValue = !!(accepted && (accepted.checked || accepted.getAttribute("aria-checked") === "true"));
-              if (!email || !email.value.trim() || !password || !password.value || !acceptedValue) return;
-              window.setTimeout(showMask, 0);
+              showMask();
           }};
           const attachToButtons = () => {{
             parentDoc.querySelectorAll("button").forEach((button) => {{
               if (button.dataset.esLoginSubmitMaskButtonBound === "1") return;
               if (button.textContent.trim() !== "Login") return;
               button.dataset.esLoginSubmitMaskButtonBound = "1";
-              button.addEventListener("click", maybeShowMask, true);
             }});
           }};
           const bind = () => {{
-            if (parentDoc.body.dataset.esLoginSubmitMaskBound !== "1") {{
-              parentDoc.body.dataset.esLoginSubmitMaskBound = "1";
-              parentDoc.addEventListener("click", maybeShowMask, true);
-            }}
+            try {{
+              if (parentDoc.__errorsweepLoginSubmitMaskClick) {{
+                parentDoc.removeEventListener("click", parentDoc.__errorsweepLoginSubmitMaskClick);
+              }}
+            }} catch (err) {{}}
+            parentDoc.__errorsweepLoginSubmitMaskClick = maybeShowMask;
+            parentDoc.addEventListener("click", maybeShowMask);
+            parentDoc.body.dataset.esLoginSubmitMaskBound = "1";
             attachToButtons();
             window.setTimeout(attachToButtons, 250);
             window.setTimeout(attachToButtons, 1000);
@@ -18542,14 +18294,15 @@ def page_dashboard() -> None:
                 </div>
                 <div class="es-hero-orb">CogniSweep<br/>Live</div>
               </div>
+              <div class="es-fab-row">
+                <a class="es-fab-action" href="{page_link('Projects')}" target="_self">New Project</a>
+                <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self">Run Pro Translation</a>
+                <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self">Upload Rules</a>
+                <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self">Run QA</a>
+              </div>
             </section>
         """).strip(),
     )
-    with st.container(key="dashboard_hero_actions", gap=None):
-        render_native_route_button("Projects", "New Project", "dashboard", help_text="Create a project")
-        render_native_route_button("CogniSweep Pro", "Run Pro Translation", "dashboard", help_text="Run Pro Translation")
-        render_native_route_button("Memory & Rules", "Upload Rules", "dashboard", help_text="Open Memory & Rules", kind="secondary")
-        render_native_route_button("CogniSweep QA", "Run QA", "dashboard", help_text="Run QA", kind="secondary")
     st.html(
         dedent(f"""
 
