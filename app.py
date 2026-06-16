@@ -186,7 +186,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-login-callback-v5"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-16-native-nav-buttons-v6"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -2511,6 +2511,233 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   box-shadow: 0 0 22px rgba(52,189,246,.48);
 }
 
+.st-key-topnav_native_shell {
+  position: relative !important;
+  z-index: 900;
+  width: 100%;
+  margin: 0;
+  border: 1px solid rgba(84,105,180,.34);
+  border-radius: 0;
+  background:
+    linear-gradient(135deg, rgba(16,22,43,.96), rgba(11,15,31,.94)),
+    radial-gradient(circle at 12% 0%, rgba(0,217,133,.18), transparent 38%),
+    radial-gradient(circle at 90% 12%, rgba(52,189,246,.16), transparent 36%);
+  color: #f7fbff;
+  box-shadow: 0 24px 68px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
+  backdrop-filter: blur(16px);
+  overflow: visible;
+}
+
+.st-key-topnav_native_shell > div[data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+.st-key-topnav_native_main_row > div[data-testid="stVerticalBlock"] {
+  min-height: 62px;
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+  padding: 0 14px !important;
+}
+
+.st-key-topnav_native_brand {
+  flex: 0 0 218px !important;
+  min-width: 218px !important;
+}
+
+.st-key-topnav_native_brand .es-topnav-brand {
+  min-height: 62px;
+}
+
+.st-key-topnav_workspace_controls {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.st-key-topnav_workspace_controls > div[data-testid="stVerticalBlock"] {
+  height: 62px;
+  display: flex !important;
+  align-items: stretch !important;
+  justify-content: center !important;
+  flex-wrap: nowrap !important;
+  gap: 2px !important;
+  overflow: visible !important;
+}
+
+.st-key-topnav_tool_controls {
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  border-left: 1px solid rgba(84,105,180,.26);
+}
+
+.st-key-topnav_tool_controls > div[data-testid="stVerticalBlock"] {
+  min-height: 62px;
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 0 !important;
+}
+
+.st-key-topnav_user_summary {
+  display: flex !important;
+  align-items: center !important;
+  min-height: 62px !important;
+  padding: 0 12px !important;
+  border-right: 1px solid rgba(84,105,180,.24);
+}
+
+.st-key-topnav_user_summary .es-topnav-user {
+  min-width: 0;
+}
+
+.st-key-topnav_workspace_controls [data-testid="stButton"],
+.st-key-topnav_tool_controls [data-testid="stButton"],
+.st-key-topnav_owner_buttons [data-testid="stButton"],
+.st-key-dashboard_hero_actions [data-testid="stButton"] {
+  height: 100%;
+  display: flex;
+}
+
+.st-key-topnav_workspace_controls button {
+  min-height: 62px !important;
+  height: 62px !important;
+  padding: 0 8px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #dce8ff !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 950 !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+.st-key-topnav_workspace_controls button:hover,
+.st-key-topnav_tool_controls button:hover,
+.st-key-topnav_owner_buttons button:hover {
+  color: #75f7c4 !important;
+  background: rgba(52,189,246,.08) !important;
+  border-color: rgba(52,189,246,.18) !important;
+}
+
+[class*="st-key-topnav_workspace_native_nav_"][class*="_active"] button {
+  color: #75f7c4 !important;
+  background:
+    linear-gradient(to bottom, rgba(52,189,246,.08), rgba(52,189,246,.02)) !important;
+  box-shadow: inset 0 -3px 0 var(--es-cyan) !important;
+}
+
+.st-key-topnav_tool_controls button {
+  min-height: 62px !important;
+  height: 62px !important;
+  min-width: 52px !important;
+  padding: 0 9px !important;
+  border: 0 !important;
+  border-right: 1px solid rgba(84,105,180,.24) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #dce8ff !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  white-space: nowrap !important;
+}
+
+[class*="st-key-topnav_tool_native_nav_"][class*="_active"] button {
+  color: #75f7c4 !important;
+  background: rgba(52,189,246,.10) !important;
+}
+
+.st-key-topnav_owner_strip {
+  border-top: 1px solid rgba(84,105,180,.22);
+  background: rgba(6,10,22,.18);
+  padding: 0 14px 10px;
+}
+
+.st-key-topnav_owner_strip > div[data-testid="stVerticalBlock"] {
+  min-height: 42px;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.st-key-topnav_owner_label {
+  flex: 0 0 auto !important;
+  margin-left: 52px;
+}
+
+.st-key-topnav_owner_buttons {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.st-key-topnav_owner_buttons > div[data-testid="stVerticalBlock"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+
+.st-key-topnav_owner_buttons button {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 10px !important;
+  border: 1px solid rgba(84,105,180,.24) !important;
+  border-radius: 8px !important;
+  background: rgba(255,255,255,.035) !important;
+  color: #dce8ff !important;
+  box-shadow: none !important;
+  font-size: 11px !important;
+  font-weight: 900 !important;
+  white-space: nowrap !important;
+}
+
+[class*="st-key-topnav_owner_native_nav_"][class*="_active"] button {
+  border-color: rgba(0,217,133,.36) !important;
+  color: #75f7c4 !important;
+  background: rgba(0,217,133,.08) !important;
+}
+
+.st-key-dashboard_hero_actions {
+  position: relative !important;
+  z-index: 5 !important;
+  width: fit-content !important;
+  max-width: calc(100% - 72px) !important;
+  margin: -78px 0 32px 36px !important;
+}
+
+.st-key-dashboard_hero_actions > div[data-testid="stVerticalBlock"] {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+}
+
+.st-key-dashboard_hero_actions button {
+  min-height: 44px !important;
+  height: 44px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  color: #06121f !important;
+  background: linear-gradient(90deg, #00d985, #34bdf6) !important;
+  box-shadow: 0 16px 40px rgba(52,189,246,.22) !important;
+  font-weight: 900 !important;
+  white-space: nowrap !important;
+}
+
+[class*="st-key-dashboard_native_nav_"][class*="_secondary"] button {
+  color: #f8fbff !important;
+  background: rgba(255,255,255,.075) !important;
+  border: 1px solid rgba(255,255,255,.12) !important;
+}
+
+.st-key-dashboard_hero_actions button:hover {
+  transform: translateY(-2px) scale(1.015);
+  box-shadow: 0 24px 58px rgba(52,189,246,.30) !important;
+}
+
 .es-topnav-tools {
   display: flex;
   align-items: stretch;
@@ -2823,8 +3050,8 @@ body:has(#errorsweep-dashboard-page-marker) .stDownloadButton > button:hover {
   overflow: hidden;
   border: 1px solid rgba(88,113,190,.30);
   border-radius: 16px;
-  padding: 28px;
-  margin-bottom: 16px;
+  padding: 28px 28px 98px;
+  margin-bottom: 0;
   background:
     radial-gradient(circle at 18% 18%, rgba(0,217,133,.30), transparent 30%),
     radial-gradient(circle at 78% 8%, rgba(52,189,246,.24), transparent 28%),
@@ -6238,83 +6465,6 @@ def native_nav_key(prefix: str, page: str, extra: Optional[Dict[str, str]] = Non
     return f"{clean_prefix}_native_nav_{slug}"
 
 
-def native_nav_attr(key: str) -> str:
-    return f'data-es-native-nav="{escape(key, quote=True)}"'
-
-
-def render_native_navigation_targets(targets: List[Dict[str, Any]], prefix: str) -> None:
-    """Hidden Streamlit buttons used by visible HTML navigation links.
-
-    Plain query-string links trigger a full document reload on Streamlit Cloud,
-    which can briefly show the public shell. Programmatically clicking a native
-    button keeps navigation inside Streamlit's rerun model.
-    """
-    unique_targets: Dict[str, Dict[str, Any]] = {}
-    for target in targets:
-        key = safe_text(target.get("key"))
-        page = normalize_es_page(target.get("page"))
-        if not key or not page:
-            continue
-        unique_targets[key] = {
-            "key": key,
-            "page": page,
-            "extra": {k: safe_text(v) for k, v in (target.get("extra") or {}).items() if safe_text(v)},
-            "label": safe_text(target.get("label") or page),
-        }
-    if not unique_targets:
-        return
-    with st.container(key=f"{prefix}_native_nav_targets", gap=None):
-        for target in unique_targets.values():
-            if st.button(f"Open {target['label']}", key=target["key"]):
-                navigate_es_page(target["page"], **target["extra"])
-
-
-def render_native_navigation_bridge() -> None:
-    components.html(
-        """
-        <script>
-        (() => {
-          const parentDoc = window.parent && window.parent.document;
-          if (!parentDoc) return;
-          const cssEscape = (value) => {
-            if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
-            return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
-          };
-          const bindNativeNav = () => {
-            parentDoc.querySelectorAll("a[data-es-native-nav]").forEach((anchor) => {
-              if (anchor.dataset.esNativeNavBound === "1") return;
-              anchor.dataset.esNativeNavBound = "1";
-              anchor.addEventListener("click", (event) => {
-                const key = anchor.getAttribute("data-es-native-nav");
-                if (!key) return;
-                const wrapper = parentDoc.querySelector(".st-key-" + cssEscape(key));
-                const button = wrapper && (
-                  wrapper.querySelector('[data-testid="stButton"] button') ||
-                  wrapper.querySelector(".stButton button") ||
-                  wrapper.querySelector("button")
-                );
-                if (!button || button.disabled) return;
-                event.preventDefault();
-                event.stopPropagation();
-                button.click();
-              }, true);
-            });
-          };
-          bindNativeNav();
-          window.setTimeout(bindNativeNav, 250);
-          window.setTimeout(bindNativeNav, 1000);
-          if (!parentDoc.__errorsweepNativeNavObserver) {
-            parentDoc.__errorsweepNativeNavObserver = new MutationObserver(bindNativeNav);
-            parentDoc.__errorsweepNativeNavObserver.observe(parentDoc.body, {childList: true, subtree: true});
-          }
-        })();
-        </script>
-        """,
-        height=0,
-        scrolling=False,
-    )
-
-
 def human_review_editor_link(review_id: str) -> str:
     return app_page_link("Human Review Editor", {"review_id": review_id})
 
@@ -6711,15 +6861,14 @@ def open_page(page: str) -> None:
 
 
 def nav_button(page: str, key_prefix: str = "nav") -> None:
-    active = st.session_state.get("page") == page
-    cls = "es-nav-link active" if active else "es-nav-link"
     label = page
     if st.session_state.get("nav_compact"):
         label = "".join(part[:1] for part in re.split(r"[\s/&]+", page) if part)[:4].upper() or page[:3].upper()
-    st.markdown(
-        f'<a class="{cls}" href="{page_link(page)}" target="_self" title="{escape(page)}">{escape(label)}</a>',
-        unsafe_allow_html=True,
-    )
+    key = native_nav_key(key_prefix, page)
+    state = "active" if st.session_state.get("page") == page else "idle"
+    with st.container(key=f"{key}_legacy_{state}", gap=None):
+        if st.button(label, key=key, use_container_width=True, help=f"Open {page}"):
+            navigate_es_page(page)
 
 
 def topnav_page_order(pages: List[str]) -> List[str]:
@@ -7031,13 +7180,32 @@ def render_topnav_panel(active_page: str, user: Dict[str, Any], notifications: L
         render_topnav_language_panel(active_page, user)
 
 
+def render_native_route_button(
+    page: str,
+    label: str,
+    prefix: str,
+    *,
+    active: bool = False,
+    extra: Optional[Dict[str, str]] = None,
+    help_text: str = "",
+    kind: str = "nav",
+) -> None:
+    """Render internal app navigation as a real Streamlit callback, not a browser link."""
+    clean_extra = {key: safe_text(value) for key, value in (extra or {}).items() if safe_text(value)}
+    key = native_nav_key(prefix, page, clean_extra)
+    state = "active" if active else "idle"
+    clean_kind = re.sub(r"[^a-z0-9_]+", "_", safe_text(kind).lower()).strip("_") or "nav"
+    with st.container(key=f"{key}_{clean_kind}_{state}", gap=None):
+        if st.button(label, key=key, use_container_width=True, help=help_text or None):
+            navigate_es_page(page, **clean_extra)
+
+
 def render_navigation() -> None:
     """Render the shared top navigation bar for all roles. Hides unauthorized menu items based on role."""
     user = current_user() or {}
     permissions = effective_permissions(user)
     pages = allowed_pages()
-    
-    # Page label display names
+
     label_map = {
         "Dashboard": "Dashboard",
         "Projects": "Projects",
@@ -7053,116 +7221,104 @@ def render_navigation() -> None:
         "Account": "Account",
         "Admin": "Admin",
     }
-    native_targets: List[Dict[str, Any]] = []
-
-    def nav_target_attr(page: str, extra: Optional[Dict[str, str]] = None, label: str = "") -> str:
-        key = native_nav_key("topnav", page, extra)
-        native_targets.append({"key": key, "page": page, "extra": extra or {}, "label": label or page})
-        return native_nav_attr(key)
-
-    workspace_links = []
-    for page in WORKSPACE_PAGES:
-        if page not in pages:
-            continue
-        active = " active" if st.session_state.get("page") == page else ""
-        workspace_links.append(
-            f'<a class="es-topnav-link{active}" href="{page_link(page)}" target="_self" {nav_target_attr(page, label=label_map.get(page, page))}>{escape(label_map.get(page, page))}</a>'
-        )
-    owner_links = []
-    if is_owner():
-        for page in OWNER_PAGES:
-            active = " active" if st.session_state.get("page") == page else ""
-            owner_links.append(
-                f'<a class="es-owner-link{active}" href="{page_link(page)}" target="_self" {nav_target_attr(page)}>{escape(page)}</a>'
-            )
+    workspace_pages = [page for page in WORKSPACE_PAGES if page in pages]
+    owner_pages = [page for page in OWNER_PAGES if page in pages] if is_owner() else []
     open_count = sum(
         1
         for job in st.session_state.get("jobs", [])
         if safe_text(job.get("status", "")).lower() in {"draft", "needs human review", "needs_review", "running"}
     )
-    notification_count = len(st.session_state.get("notifications", []))
     user_email = safe_text(user.get("email", "user@errorsweep.local"))
     user_name = user_email.split("@", 1)[0].replace("_", " ").replace(".", " ").title() or "User"
     role = current_role()
-    active_panel = safe_text(query_get("es_panel")).lower()
     current_page = safe_text(st.session_state.get("page") or "Dashboard")
-    unread_notes = notification_badge_count(normalized_notification_notes(st.session_state.get("notifications", []), user, current_page))
+    active_panel = safe_text(query_get("es_panel")).lower()
+    notifications = st.session_state.get("notifications", [])
+    unread_notes = notification_badge_count(normalized_notification_notes(notifications, user, current_page))
     ui_language_code, _ = current_ui_language(user)
-    notes_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "notes"}))
-    language_href = "?" + urlencode(route_query_for_page(current_page, {"es_panel": "language"}))
-    settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
-    jobs_nav_attr = nav_target_attr("Jobs")
-    notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
-    language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
-    account_nav_attr = nav_target_attr("Account")
-    settings_nav_attr = nav_target_attr(settings_page)
-    billing_nav_attr = nav_target_attr("Billing") if "Billing" in pages else ""
-    notes_badge = f'<i class="es-topnav-badge">{unread_notes}</i>' if unread_notes else ""
-    jobs_tool = (
-        f'<a class="es-topnav-tool" href="{page_link("Jobs")}" target="_self" title="Open jobs" {jobs_nav_attr}>'
-        f'<b>{open_count}</b><span>Jobs</span></a>'
-    )
-    notes_tool = (
-        f'<a class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
-        f'href="{notes_href}" target="_self" title="Open notifications" {notes_nav_attr}>'
-        f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</a>'
-        if "notes.view" in permissions
-        else ""
-    )
-    language_tool = (
-        f'<a class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
-        f'href="{language_href}" target="_self" title="Change interface language" {language_nav_attr}>'
-        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></a>'
-        if "language.select" in permissions
-        else ""
-    )
     user_avatar = escape(monogram(user_name or user_email or "User"))
-    billing_item = (
-        f'<a href="{page_link("Billing")}" target="_self" {billing_nav_attr}>Billing <span>Plan</span></a>'
-        if "Billing" in pages
-        else ""
-    )
-    topnav = f"""
-    <nav class="es-topnav">
-      <div class="es-topnav-row">
-        <div class="es-topnav-brand">
-          <div class="es-topnav-mark" aria-hidden="true"></div>
-          <div class="es-topnav-brand-copy">
-            <div class="es-topnav-name">Cogni<span>Sweep</span></div>
-          </div>
-        </div>
-        <div class="es-topnav-links">
-          {''.join(workspace_links)}
-        </div>
-        <div class="es-topnav-tools">
-          {jobs_tool}
-          {notes_tool}
-          {language_tool}
-          <div class="es-topnav-user-wrap">
-            <div class="es-topnav-user" tabindex="0" title="Account menu">
-              <div>
-                <div style="font-weight:900;white-space:nowrap;">{user_name}</div>
-                <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{role}</div>
-              </div>
-              <div class="es-topnav-avatar">{user_avatar}</div>
-              <span class="es-account-caret">v</span>
-            </div>
-            <div class="es-account-menu">
-              <a href="{page_link('Account')}" target="_self" {account_nav_attr}>Profile <span>Account</span></a>
-              <a href="{page_link(settings_page)}" target="_self" {settings_nav_attr}>Settings <span>{escape(settings_page)}</span></a>
-              {billing_item}
-              <a href="{page_link('Jobs')}" target="_self" {jobs_nav_attr}>Jobs <span>{open_count}</span></a>
-              <a class="logout" href="?es_logout=1" target="_self">Logout <span>Exit</span></a>
-            </div>
-          </div>
-        </div>
-      </div>
-      {f'<div class="es-owner-strip"><span>Owner only</span>{"".join(owner_links)}</div>' if owner_links else ''}
-    </nav>
-    """
-    st.markdown(topnav, unsafe_allow_html=True)
-    render_native_navigation_targets(native_targets, "topnav")
-    render_native_navigation_bridge()
+
+    with st.container(key="topnav_native_shell", gap=None):
+        with st.container(key="topnav_native_main_row", gap=None):
+            with st.container(key="topnav_native_brand", gap=None):
+                st.markdown(
+                    """
+                    <div class="es-topnav-brand">
+                      <div class="es-topnav-mark" aria-hidden="true"></div>
+                      <div class="es-topnav-brand-copy">
+                        <div class="es-topnav-name">Cogni<span>Sweep</span></div>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with st.container(key="topnav_workspace_controls", gap=None):
+                for page in workspace_pages:
+                    render_native_route_button(
+                        page,
+                        label_map.get(page, page),
+                        "topnav_workspace",
+                        active=current_page == page and not active_panel,
+                        help_text=f"Open {label_map.get(page, page)}",
+                    )
+            with st.container(key="topnav_tool_controls", gap=None):
+                if "Jobs" in pages:
+                    render_native_route_button(
+                        "Jobs",
+                        f"{open_count} Jobs",
+                        "topnav_tool",
+                        active=current_page == "Jobs" and not active_panel,
+                        help_text="Open jobs",
+                    )
+                if "notes.view" in permissions:
+                    render_native_route_button(
+                        current_page,
+                        f"{unread_notes} Notes",
+                        "topnav_tool",
+                        active=active_panel == "notes",
+                        extra={"es_panel": "notes"},
+                        help_text="Open notifications",
+                    )
+                if "language.select" in permissions:
+                    render_native_route_button(
+                        current_page,
+                        f"{ui_language_code or 'EN'} Lang",
+                        "topnav_tool",
+                        active=active_panel in {"language", "lang"},
+                        extra={"es_panel": "language"},
+                        help_text="Change interface language",
+                    )
+                with st.container(key="topnav_user_summary", gap=None):
+                    st.markdown(
+                        f"""
+                        <div class="es-topnav-user" title="Signed in user">
+                          <div>
+                            <div style="font-weight:900;white-space:nowrap;">{escape(user_name)}</div>
+                            <div style="font-size:11px;color:#8ea1dc;font-weight:800;">{escape(role)}</div>
+                          </div>
+                          <div class="es-topnav-avatar">{user_avatar}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                if st.button("Logout", key="topnav_logout_button", use_container_width=True, help="Logout"):
+                    logout()
+
+        if owner_pages:
+            with st.container(key="topnav_owner_strip", gap=None):
+                with st.container(key="topnav_owner_label", gap=None):
+                    st.markdown('<span class="es-topnav-owner-tag">Owner only</span>', unsafe_allow_html=True)
+                with st.container(key="topnav_owner_buttons", gap=None):
+                    for page in owner_pages:
+                        render_native_route_button(
+                            page,
+                            page,
+                            "topnav_owner",
+                            active=current_page == page and not active_panel,
+                            help_text=f"Open {page}",
+                        )
+
+    render_topnav_panel(current_page, user, notifications)
 
 
 # ==========================================================
@@ -17585,13 +17741,143 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
     )
 
 
+LOGIN_SUBMIT_MASK_ID = "errorsweep-login-submit-mask"
+LOGIN_SUBMIT_MASK_CLASS = "es-login-submit-pending"
+
+
+def render_login_submit_mask_clear_bridge() -> None:
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          try {{
+            const doc = window.parent && window.parent.document ? window.parent.document : document;
+            doc.body.classList.remove({json.dumps(LOGIN_SUBMIT_MASK_CLASS)});
+            const mask = doc.getElementById({json.dumps(LOGIN_SUBMIT_MASK_ID)});
+            if (mask) mask.remove();
+          }} catch (err) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
+def render_login_submit_handoff_mask_bridge() -> None:
+    mask_id_json = json.dumps(LOGIN_SUBMIT_MASK_ID)
+    mask_class_json = json.dumps(LOGIN_SUBMIT_MASK_CLASS)
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const parentDoc = window.parent && window.parent.document ? window.parent.document : document;
+          const maskId = {mask_id_json};
+          const maskClass = {mask_class_json};
+          const ensureMask = () => {{
+            if (!parentDoc.getElementById("errorsweep-login-submit-mask-style")) {{
+              const style = parentDoc.createElement("style");
+              style.id = "errorsweep-login-submit-mask-style";
+              style.textContent = `
+                body.${{maskClass}} [data-testid="stAppViewContainer"],
+                body.${{maskClass}} [data-testid="stMain"],
+                body.${{maskClass}} .stApp {{
+                  visibility: hidden !important;
+                }}
+                body.${{maskClass}} #${{maskId}} {{
+                  visibility: visible !important;
+                  display: grid !important;
+                }}
+                #${{maskId}} {{
+                  position: fixed;
+                  inset: 0;
+                  z-index: 2147483647;
+                  display: none;
+                  place-items: center;
+                  background:
+                    radial-gradient(circle at 12% 14%, rgba(0,217,133,.18), transparent 32%),
+                    radial-gradient(circle at 88% 10%, rgba(52,189,246,.16), transparent 30%),
+                    #070914;
+                  color: #f7fbff;
+                  font: 800 16px Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                }}
+                #${{maskId}} > div {{
+                  border: 1px solid rgba(84,105,180,.35);
+                  border-radius: 12px;
+                  background: rgba(18,21,38,.92);
+                  box-shadow: 0 24px 68px rgba(0,0,0,.34);
+                  padding: 18px 22px;
+                }}
+              `;
+              parentDoc.head.appendChild(style);
+            }}
+            let mask = parentDoc.getElementById(maskId);
+            if (!mask) {{
+              mask = parentDoc.createElement("div");
+              mask.id = maskId;
+              mask.setAttribute("role", "status");
+              mask.setAttribute("aria-live", "polite");
+              mask.innerHTML = "<div>Opening Dashboard...</div>";
+              parentDoc.body.appendChild(mask);
+            }}
+            return mask;
+          }};
+          const showMask = () => {{
+            ensureMask();
+            parentDoc.body.classList.add(maskClass);
+          }};
+          parentDoc.body.classList.remove(maskClass);
+          const maybeShowMask = (event) => {{
+              const button = event.target && event.target.closest ? event.target.closest("button") : null;
+              if (!button || button.disabled || button.textContent.trim() !== "Login") return;
+              const pageText = parentDoc.body.innerText || "";
+              if (!pageText.includes("Login to CogniSweep")) return;
+              const email = parentDoc.querySelector('input[aria-label="Email"]');
+              const password = parentDoc.querySelector('input[aria-label="Password"]');
+              const accepted = parentDoc.querySelector('input[type="checkbox"][aria-label*="I accept"]');
+              const acceptedValue = !!(accepted && (accepted.checked || accepted.getAttribute("aria-checked") === "true"));
+              if (!email || !email.value.trim() || !password || !password.value || !acceptedValue) return;
+              window.setTimeout(showMask, 0);
+          }};
+          const attachToButtons = () => {{
+            parentDoc.querySelectorAll("button").forEach((button) => {{
+              if (button.dataset.esLoginSubmitMaskButtonBound === "1") return;
+              if (button.textContent.trim() !== "Login") return;
+              button.dataset.esLoginSubmitMaskButtonBound = "1";
+              button.addEventListener("click", maybeShowMask, true);
+            }});
+          }};
+          const bind = () => {{
+            if (parentDoc.body.dataset.esLoginSubmitMaskBound !== "1") {{
+              parentDoc.body.dataset.esLoginSubmitMaskBound = "1";
+              parentDoc.addEventListener("click", maybeShowMask, true);
+            }}
+            attachToButtons();
+            window.setTimeout(attachToButtons, 250);
+            window.setTimeout(attachToButtons, 1000);
+            if (!parentDoc.__errorsweepLoginSubmitMaskObserver) {{
+              parentDoc.__errorsweepLoginSubmitMaskObserver = new MutationObserver(attachToButtons);
+              parentDoc.__errorsweepLoginSubmitMaskObserver.observe(parentDoc.body, {{ childList: true, subtree: true }});
+            }}
+          }};
+          bind();
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
 def render_login() -> None:
+    render_login_submit_mask_clear_bridge()
     if is_authenticated():
         if safe_text(st.session_state.get("_post_login_tool_launch_url", "")):
             render_post_login_tool_launch_bridge()
         else:
             render_logged_in_login_state(opened_elsewhere=bool(st.session_state.get("_login_window_stay_open", False)))
         return
+    render_login_submit_handoff_mask_bridge()
 
     signup_enabled = feature_flag("public_registration")
     signup_href = public_page_link("signup") if signup_enabled else public_page_link("landing")
@@ -18330,17 +18616,6 @@ def page_dashboard() -> None:
         len(st.session_state.glossary),
         len(st.session_state.dnt),
     ]
-    dashboard_native_targets: List[Dict[str, Any]] = []
-
-    def dashboard_target_attr(page: str, label: str) -> str:
-        key = native_nav_key("dashboard", page)
-        dashboard_native_targets.append({"key": key, "page": page, "label": label})
-        return native_nav_attr(key)
-
-    new_project_attr = dashboard_target_attr("Projects", "New Project")
-    pro_translation_attr = dashboard_target_attr("CogniSweep Pro", "Run Pro Translation")
-    rules_attr = dashboard_target_attr("Memory & Rules", "Upload Rules")
-    qa_attr = dashboard_target_attr("CogniSweep QA", "Run QA")
     st.html(
         dedent(f"""
             <section class="es-personal-hero">
@@ -18351,16 +18626,19 @@ def page_dashboard() -> None:
                   <div class="es-hero-summary">
                     You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
                   </div>
-                  <div class="es-fab-row">
-                    <a class="es-fab-action" href="{page_link('Projects')}" target="_self" {new_project_attr}>New Project</a>
-                    <a class="es-fab-action" href="{page_link('CogniSweep Pro')}" target="_self" {pro_translation_attr}>Run Pro Translation</a>
-                    <a class="es-fab-action secondary" href="{page_link('Memory & Rules')}" target="_self" {rules_attr}>Upload Rules</a>
-                    <a class="es-fab-action secondary" href="{page_link('CogniSweep QA')}" target="_self" {qa_attr}>Run QA</a>
-                  </div>
                 </div>
                 <div class="es-hero-orb">CogniSweep<br/>Live</div>
               </div>
             </section>
+        """).strip(),
+    )
+    with st.container(key="dashboard_hero_actions", gap=None):
+        render_native_route_button("Projects", "New Project", "dashboard", help_text="Create a project")
+        render_native_route_button("CogniSweep Pro", "Run Pro Translation", "dashboard", help_text="Run Pro Translation")
+        render_native_route_button("Memory & Rules", "Upload Rules", "dashboard", help_text="Open Memory & Rules", kind="secondary")
+        render_native_route_button("CogniSweep QA", "Run QA", "dashboard", help_text="Run QA", kind="secondary")
+    st.html(
+        dedent(f"""
 
             <div class="es-bento">
               <div class="es-bento-card wide">
@@ -18429,9 +18707,6 @@ def page_dashboard() -> None:
             </div>
         """).strip(),
     )
-    render_native_navigation_targets(dashboard_native_targets, "dashboard")
-    render_native_navigation_bridge()
-
     st.markdown("")
     jobs_col, activity_col = st.columns([0.66, 0.34], gap="large")
     with jobs_col:
@@ -23631,6 +23906,7 @@ def render_editor_app_shell(content_renderer) -> None:
 
 def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
     """Render the authenticated app as a fixed two-row shell."""
+    render_login_submit_mask_clear_bridge()
     st.markdown('<div id="errorsweep-root-shell-marker" class="errorsweep_root_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
     with st.container(key="errorsweep_app_shell", gap=None):
         with st.container(key="errorsweep_shell_top", gap=None):

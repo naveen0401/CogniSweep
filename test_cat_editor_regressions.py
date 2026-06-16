@@ -81,6 +81,9 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
     assert 'st.session_state.page = "Login"' not in body
     assert 'set_route_query({"es_page": "Login"})' not in body
     assert "apply_return_to(return_to)" not in body
+    assert "def render_login_submit_handoff_mask_bridge()" in source
+    assert "Opening Dashboard..." in source
+    assert "render_login_submit_mask_clear_bridge()" in source
 
     callback_start = source.index("def handle_unified_login_submit")
     callback_end = source.index("def logout", callback_start)
@@ -110,11 +113,14 @@ def test_navigation_uses_central_route_helpers() -> None:
     assert "def get_current_route()" in source
     assert "def require_auth(" in source
     assert "def navigate(" in source
+    assert "def render_native_route_button(" in source
     start = source.index("def render_navigation")
     end = source.index("# ==========================================================\n# General helpers", start)
     body = source[start:end]
-    assert "es-topnav-link" in body
-    assert "page_link(page)" in body
+    assert "render_native_route_button(" in body
+    assert "navigate_es_page(page, **clean_extra)" in source
+    assert "href=\"{page_link" not in body
+    assert "data-es-native-nav" not in body
     assert "topnav_quick_" not in body
 
 
@@ -660,10 +666,10 @@ def test_unlimited_access_account_bypasses_usage_allowance() -> None:
     assert "UNLIMITED_ACCESS_EMAIL.lower()" in source
     assert '"workspace": "Platform",' in source
     assert '"role": "Platform Owner",' in source
-    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform")' in source
+    assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Platform Owner", "owner", "Platform", sync_route_storage=False)' in source
     assert 'login_user(UNLIMITED_ACCESS_EMAIL, "Workspace Owner", "workspace", UNLIMITED_ACCESS_WORKSPACE)' not in source
-    assert 'class="es-topnav-owner-tag">Owner tools</div>' in source
-    assert "es-topnav-owner-row" in source
+    assert 'class="es-topnav-owner-tag">Owner only</span>' in source
+    assert "topnav_owner_strip" in source
     assert "\"name\": \"Unlimited\"" in source
     assert "def ensure_unlimited_access_account()" in source
     assert "Unlimited platform owner sign-in" in source
@@ -751,17 +757,19 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert 'key="errorsweep_editor_shell"' in source
     assert 'key="errorsweep_editor_content"' in source
     assert 'key="errorsweep_editor_frame"' in source
-    assert ".es-topnav-row {" in source
+    assert ".st-key-topnav_native_shell" in source
+    assert ".st-key-topnav_native_main_row" in source
     assert "min-height: 62px;" in source
     assert "flex-wrap: nowrap;" in source
     assert "overflow: hidden;" in source
-    assert ".es-topnav-link {" in source
-    assert "padding: 0 8px;" in source
-    assert "def render_native_navigation_bridge()" in source
-    assert "new_project_attr = dashboard_target_attr(\"Projects\", \"New Project\")" in dashboard_body
-    assert "{new_project_attr}>New Project</a>" in dashboard_body
-    assert "render_native_navigation_targets(dashboard_native_targets, \"dashboard\")" in dashboard_body
-    assert "render_native_navigation_targets(native_targets, \"topnav\")" in source
+    assert ".st-key-topnav_workspace_controls button" in source
+    assert "padding: 0 8px !important;" in source
+    assert "def render_native_route_button(" in source
+    assert "render_native_navigation_bridge" not in source
+    assert "render_native_navigation_targets" not in source
+    assert 'render_native_route_button("Projects", "New Project", "dashboard"' in dashboard_body
+    assert '<a class="es-fab-action"' not in dashboard_body
+    assert 'data-es-native-nav' not in source
     assert ".st-key-errorsweep_app_shell" in source
     assert ".st-key-errorsweep_shell_top" in source
     assert ".st-key-errorsweep_shell_content" in source
