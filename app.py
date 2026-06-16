@@ -3859,21 +3859,30 @@ def verify_login_password(password: str, hash_secret_name: str, legacy_secret_na
     return hmac.compare_digest(password, legacy_password)
 
 
+def early_safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value).replace("\u00A0", " ").strip()
+    except Exception:
+        return ""
+
+
 def configured_owner_username(local_default: bool = False) -> str:
     default = "owner@cognisweep.local" if local_default and not is_production_mode() else ""
-    return safe_text(secret("ERRORSWEEP_OWNER_USERNAME", default)).strip().lower()
+    return early_safe_text(secret("ERRORSWEEP_OWNER_USERNAME", default)).lower()
 
 
 def configured_owner_password_hash() -> str:
-    return safe_text(secret("ERRORSWEEP_OWNER_PASSWORD_HASH", "")).strip()
+    return early_safe_text(secret("ERRORSWEEP_OWNER_PASSWORD_HASH", ""))
 
 
 def unlimited_access_email() -> str:
-    return safe_text(secret(UNLIMITED_ACCESS_EMAIL_SECRET, configured_owner_username())).strip().lower()
+    return early_safe_text(secret(UNLIMITED_ACCESS_EMAIL_SECRET, configured_owner_username())).lower()
 
 
 def unlimited_access_password_hash() -> str:
-    return safe_text(secret(UNLIMITED_ACCESS_PASSWORD_HASH_SECRET, configured_owner_password_hash())).strip()
+    return early_safe_text(secret(UNLIMITED_ACCESS_PASSWORD_HASH_SECRET, configured_owner_password_hash()))
 
 
 def unlimited_access_configured() -> bool:
@@ -5650,11 +5659,11 @@ def init_state() -> None:
 
 
 def ensure_unlimited_access_account(owner_email: str = "", password_hash: str = "") -> None:
-    owner_email = safe_text(owner_email or unlimited_access_email()).strip().lower()
+    owner_email = early_safe_text(owner_email or unlimited_access_email()).lower()
     if not owner_email:
         LOGGER.warning("Unlimited owner account is not configured; set ERRORSWEEP_OWNER_USERNAME and ERRORSWEEP_OWNER_PASSWORD_HASH.")
         return
-    password_hash = safe_text(password_hash or unlimited_access_password_hash()).strip()
+    password_hash = early_safe_text(password_hash or unlimited_access_password_hash())
     user_record = {
         "email": owner_email,
         "workspace": "Platform",
