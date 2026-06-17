@@ -51,6 +51,20 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled", "needs_review"}
 MAX_DOCX_BYTES = 50 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
 MAX_DOCX_XML_BYTES = 25 * 1024 * 1024
+MAX_MANIFEST_BYTES = 50 * 1024 * 1024
+ALLOWED_MANIFEST_SUFFIXES = {
+    ".csv",
+    ".docx",
+    ".json",
+    ".md",
+    ".srt",
+    ".tsv",
+    ".txt",
+    ".vtt",
+    ".xlsm",
+    ".xlsx",
+    ".zip",
+}
 
 
 def safe_text(value: Any) -> str:
@@ -180,29 +194,88 @@ def manifest_file_name(manifest: Dict[str, Any]) -> str:
     return safe_text(manifest.get("file_name") or Path(safe_text(manifest.get("storage_key"))).name or "uploaded_file")
 
 
+def manifest_max_bytes() -> int:
+    return env_int("ERRORSWEEP_ASYNC_MAX_MANIFEST_BYTES", MAX_MANIFEST_BYTES, minimum=1024)
+
+
+def validate_manifest_for_read(manifest: Dict[str, Any]) -> None:
+    if not isinstance(manifest, dict):
+        raise ValueError("Queued file manifest is invalid.")
+    file_name = manifest_file_name(manifest)
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in ALLOWED_MANIFEST_SUFFIXES:
+        raise ValueError(f"Queued file manifest uses an unsupported file type: {suffix or 'missing extension'}.")
+    declared_size = safe_text(manifest.get("size_bytes") or manifest.get("content_length") or manifest.get("bytes"))
+    if declared_size:
+        try:
+            if int(float(declared_size)) > manifest_max_bytes():
+                raise ValueError("Queued file manifest exceeds async worker file limits.")
+        except ValueError:
+            raise
+        except Exception:
+            LOGGER.warning("Queued file manifest has invalid size metadata for %s: %s", file_name, declared_size)
+
+
+def checked_local_manifest_bytes(path: Path, file_name: str) -> bytes:
+    max_bytes = manifest_max_bytes()
+    if path.stat().st_size > max_bytes:
+        raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
+    data = path.read_bytes()
+    if len(data) > max_bytes:
+        raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
+    return data
+
+
+def checked_remote_manifest_bytes(url: str, file_name: str) -> bytes:
+    max_bytes = manifest_max_bytes()
+    timeout = int(os.getenv("ERRORSWEEP_ASYNC_FILE_TIMEOUT", "120"))
+    response = requests.get(url, timeout=timeout, stream=True)
+    try:
+        response.raise_for_status()
+        declared_length = safe_text(response.headers.get("Content-Length") if hasattr(response, "headers") else "")
+        if declared_length:
+            try:
+                if int(declared_length) > max_bytes:
+                    raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
+            except ValueError:
+                raise
+            except Exception:
+                LOGGER.warning("Queued file %s has invalid Content-Length: %s", file_name, declared_length)
+        chunks: List[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=1024 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        response.close()
+
+
 def manifest_bytes(manifest: Dict[str, Any]) -> bytes:
     """Read a queued input/rules file from local fallback, public URL, or signed URL."""
+    validate_manifest_for_read(manifest)
+    file_name = manifest_file_name(manifest)
     local_candidates = [
         safe_text(manifest.get("local_path")),
         safe_text(manifest.get("storage_key")) if safe_text(manifest.get("storage_provider")).lower() in {"", "local"} else "",
     ]
     for candidate in local_candidates:
         if candidate and Path(candidate).exists():
-            return Path(candidate).read_bytes()
+            return checked_local_manifest_bytes(Path(candidate), file_name)
 
     public_url = safe_text(manifest.get("public_url"))
     if public_url:
-        response = requests.get(public_url, timeout=int(os.getenv("ERRORSWEEP_ASYNC_FILE_TIMEOUT", "120")))
-        response.raise_for_status()
-        return response.content
+        return checked_remote_manifest_bytes(public_url, file_name)
 
     storage_key = safe_text(manifest.get("storage_key"))
     if storage_key:
         url = signed_url_for_key(storage_key, expires_in=900)
         if url and url != storage_key:
-            response = requests.get(url, timeout=int(os.getenv("ERRORSWEEP_ASYNC_FILE_TIMEOUT", "120")))
-            response.raise_for_status()
-            return response.content
+            return checked_remote_manifest_bytes(url, file_name)
     raise FileNotFoundError(f"Unable to read queued file manifest: {manifest_file_name(manifest)}")
 
 

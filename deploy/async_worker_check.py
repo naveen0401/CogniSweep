@@ -70,6 +70,10 @@ REQUIRED_PROCESSOR_SECURITY_TOKENS = [
     "DOCTYPE",
     "ENTITY",
     "ERRORSWEEP_ASYNC_MAX_DOCX_BYTES",
+    "ERRORSWEEP_ASYNC_MAX_MANIFEST_BYTES",
+    "validate_manifest_for_read",
+    "checked_remote_manifest_bytes",
+    "iter_content",
 ]
 REQUIRED_SUPERVISOR_SYMBOLS = [
     "service_specs",
