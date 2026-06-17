@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
+import defusedxml.ElementTree as ET
 import requests
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -39,11 +40,6 @@ from production_persistence import (
 )
 
 try:
-    from docx import Document
-except Exception:  # pragma: no cover - optional in some worker builds
-    Document = None
-
-try:
     from translator_router import translate_batch
 except Exception as exc:  # pragma: no cover
     translate_batch = None
@@ -52,10 +48,21 @@ except Exception as exc:  # pragma: no cover
 LOGGER = logging.getLogger("errorsweep.async_workflow_processor")
 SERVICE_NAME = "errorsweep-async-workflow-processor"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "needs_review"}
+MAX_DOCX_BYTES = 50 * 1024 * 1024
+MAX_DOCX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
+MAX_DOCX_XML_BYTES = 25 * 1024 * 1024
 
 
 def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        value = int(safe_text(os.getenv(name)))
+    except Exception:
+        value = default
+    return max(minimum, value)
 
 
 def now_iso() -> str:
@@ -269,14 +276,49 @@ def parse_srt_or_vtt(text: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def safe_docx_document_xml(data: bytes) -> bytes:
+    max_bytes = env_int("ERRORSWEEP_ASYNC_MAX_DOCX_BYTES", MAX_DOCX_BYTES)
+    max_uncompressed = env_int("ERRORSWEEP_ASYNC_MAX_DOCX_UNCOMPRESSED_BYTES", MAX_DOCX_UNCOMPRESSED_BYTES)
+    max_xml = env_int("ERRORSWEEP_ASYNC_MAX_DOCX_XML_BYTES", MAX_DOCX_XML_BYTES)
+    if len(data or b"") > max_bytes:
+        raise ValueError("DOCX file is too large for async worker parsing.")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        total_uncompressed = sum(max(0, info.file_size) for info in archive.infolist())
+        if total_uncompressed > max_uncompressed:
+            raise ValueError("DOCX expanded size exceeds async worker limits.")
+        try:
+            info = archive.getinfo("word/document.xml")
+        except KeyError as exc:
+            raise ValueError("DOCX is missing word/document.xml.") from exc
+        if info.file_size > max_xml:
+            raise ValueError("DOCX document XML exceeds async worker limits.")
+        document_xml = archive.read(info)
+    upper = document_xml.upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+        raise ValueError("DOCX XML contains prohibited DTD/entity declarations.")
+    return document_xml
+
+
+def docx_text_from_element(element: Any, ns: Dict[str, str]) -> str:
+    pieces: List[str] = []
+    for node in element.iter():
+        if node.tag == f"{{{ns['w']}}}t" and node.text:
+            pieces.append(node.text)
+        elif node.tag == f"{{{ns['w']}}}tab":
+            pieces.append("\t")
+        elif node.tag in {f"{{{ns['w']}}}br", f"{{{ns['w']}}}cr"}:
+            pieces.append("\n")
+    return safe_text("".join(pieces))
+
+
 def parse_docx(data: bytes) -> List[Dict[str, Any]]:
-    if Document is None:
-        raise RuntimeError("python-docx is required to parse DOCX files.")
-    doc = Document(io.BytesIO(data))
+    document_xml = safe_docx_document_xml(data)
+    root = ET.fromstring(document_xml, forbid_dtd=True, forbid_entities=True)
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     rows: List[Dict[str, Any]] = []
-    for table_idx, table in enumerate(doc.tables, start=1):
-        for row_idx, table_row in enumerate(table.rows, start=1):
-            cells = [safe_text(cell.text) for cell in table_row.cells]
+    for table_idx, table in enumerate(root.findall(".//w:tbl", ns), start=1):
+        for row_idx, table_row in enumerate(table.findall("./w:tr", ns), start=1):
+            cells = [docx_text_from_element(cell, ns) for cell in table_row.findall("./w:tc", ns)]
             filled = [cell for cell in cells if cell]
             if not filled:
                 continue
@@ -288,8 +330,8 @@ def parse_docx(data: bytes) -> List[Dict[str, Any]]:
                 "status": "Existing" if len(filled) > 1 else "Untranslated",
                 "match": "Existing" if len(filled) > 1 else "Untranslated",
             })
-    for para_idx, para in enumerate(doc.paragraphs, start=1):
-        text = safe_text(para.text)
+    for para_idx, para in enumerate(root.findall("./w:body/w:p", ns), start=1):
+        text = docx_text_from_element(para, ns)
         if text:
             rows.append({"id": str(len(rows) + 1), "location": f"Paragraph {para_idx}", "source": text, "target": "", "status": "Untranslated", "match": "Untranslated"})
     return rows

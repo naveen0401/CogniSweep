@@ -53,7 +53,17 @@ REQUIRED_RECEIVER_SYMBOLS = [
 REQUIRED_PROCESSOR_SYMBOLS = [
     "process_task_payload",
     "process_next_queued_task",
+    "safe_docx_document_xml",
     "smoke_check",
+]
+REQUIRED_PROCESSOR_SECURITY_TOKENS = [
+    "defusedxml.ElementTree",
+    "safe_docx_document_xml",
+    "forbid_dtd=True",
+    "forbid_entities=True",
+    "DOCTYPE",
+    "ENTITY",
+    "ERRORSWEEP_ASYNC_MAX_DOCX_BYTES",
 ]
 REQUIRED_SUPERVISOR_SYMBOLS = [
     "service_specs",
@@ -260,6 +270,16 @@ def validate_symbols(results: List[Dict[str, str]]) -> None:
         "production fallback blocks local inline" if not missing_security else ", ".join(missing_security),
         "Keep production async handoff fail-closed when no HTTP or Redis backend is configured.",
     )
+    processor_text = read_text(ROOT / "async_workflow_processor.py")
+    missing_processor_security = missing_items(REQUIRED_PROCESSOR_SECURITY_TOKENS, processor_text)
+    add(
+        results,
+        "Async",
+        "Workflow processor DOCX XML hardening",
+        "Pass" if not missing_processor_security else "Blocker",
+        "DOCX XML is size-capped and parsed with defusedxml DTD/entity guards" if not missing_processor_security else ", ".join(missing_processor_security),
+        "Keep async DOCX parsing protected from DTD/entity payloads and oversized archive expansion.",
+    )
 
 
 def validate_templates(results: List[Dict[str, str]]) -> None:
@@ -297,14 +317,14 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
 def validate_requirements(results: List[Dict[str, str]]) -> None:
     packages = {requirement_name(line) for line in read_text(REQUIREMENTS_PATH).splitlines()}
     packages.discard("")
-    missing = [package for package in ["requests", "redis", "pandas", "openpyxl"] if package not in packages]
+    missing = [package for package in ["requests", "redis", "pandas", "openpyxl", "defusedxml"] if package not in packages]
     add(
         results,
         "Async",
         "Worker dependencies",
         "Pass" if not missing else "Blocker",
-        "requests, redis, pandas, openpyxl present" if not missing else ", ".join(missing),
-        "Keep HTTP, Redis, dataframe, and Excel dependencies available to worker services.",
+        "requests, redis, pandas, openpyxl, defusedxml present" if not missing else ", ".join(missing),
+        "Keep HTTP, Redis, dataframe, Excel, and safe XML dependencies available to worker services.",
     )
 
 
