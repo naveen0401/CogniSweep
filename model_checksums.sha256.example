@@ -1,0 +1,9 @@
+# Copy this file to model_checksums.sha256 and replace the placeholder hashes
+# with SHA-256 checksums from trusted model artifacts before running
+# download_models.ps1 without -SkipChecksumVerification.
+#
+# Format:
+# <sha256>  <path relative to the models directory>
+#
+# Example:
+# 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  indictrans2-en-indic-dist-200M/config.json

@@ -22,6 +22,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 16. Excel Backlog Production Hardening
 17. Transactional Email Template HTML Safety
+18. Model Download Integrity Verification
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -58,6 +59,7 @@ None currently tracked.
 29. Heavy Workflow Request Blocking
 30. Excel Backlog Production Hardening
 31. Transactional Email Template HTML Safety
+32. Model Download Integrity Verification
 
 ## Resolved in Latest Pass
 
@@ -128,6 +130,10 @@ None currently tracked.
 ### 17. Transactional Email Template HTML Safety
 *   **The Issue:** Transactional email templates escaped body/headline/fact HTML, but metadata-supplied CTA URLs were not explicitly restricted to safe web schemes.
 *   **The Fix:** Email CTA links now accept only `http` and `https` URLs with a host, while script/data-style URLs are dropped. Regression coverage verifies HTML escaping and unsafe CTA rejection. *(Verified fixed)*.
+
+### 18. Model Download Integrity Verification
+*   **The Issue:** The local model download helper fetched Hugging Face model artifacts without verifying trusted checksums.
+*   **The Fix:** `download_models.ps1` now requires a SHA-256 checksum manifest by default, verifies every downloaded non-cache file with `Get-FileHash`, and exposes `-SkipChecksumVerification` only for explicit local experiments. A manifest example and release-gate regression coverage were added. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -260,3 +266,7 @@ None currently tracked.
 ### 31. Transactional Email Template HTML Safety
 *   **The Issue:** User-controlled notification metadata could provide unsafe CTA URL schemes even though email text fields were escaped.
 *   **The Fix:** CTA URLs are filtered through a strict web-link allowlist and release-gate coverage now includes `test_email_template_security.py`. *(Verified fixed)*.
+
+### 32. Model Download Integrity Verification
+*   **The Issue:** Downloaded self-hosted MT model files were not checked against expected hashes before local use.
+*   **The Fix:** Added default SHA-256 manifest enforcement to the model downloader, an example manifest format, and `test_model_download_integrity.py` in the release gate. *(Verified fixed)*.
