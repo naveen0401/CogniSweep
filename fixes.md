@@ -14,14 +14,14 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 7. Duplicate Imports (`app.py`)
 8. Unimplemented QA Rule (`qa_engine_global_v15.py`)
 9. Missing UI Refresh in Admin Data Clear (`app.py`)
+10. Performance Regression in QA Regex Compilation
+11. Potential XML Vulnerability in Async Worker
+12. Brittle JSON Parsing in AI Router
+13. LibreTranslate Code Residuals
+14. Thread Lock vs Process Lock Discrepancy
 
 **Unresolved & New Issues:**
-1. Performance Regression in QA Regex Compilation
-2. Potential XML Vulnerability in Async Worker
-3. Brittle JSON Parsing in AI Router
-4. LibreTranslate Code Residuals
-5. Thread Lock vs Process Lock Discrepancy
-6. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+1. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 
 **Corrected Issues:**
 1. Landing Page Legal Links
@@ -92,27 +92,29 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 *   **The Issue:** Clicking "Clear all demo workspace data" cleared session state but did not rerun the page immediately.
 *   **The Fix:** The clear-all action now sets a success flag and calls `st.rerun()`, so the refreshed admin UI immediately reflects the cleared data. *(Verified fixed)*.
 
+### 10. Performance Regression in QA Regex Compilation
+*   **The Issue:** The `rule_offline_correction_dictionary` function in `qa_engine_global_v15.py` re-parses and re-compiles correction rules for every segment.
+*   **The Fix:** Correction dictionaries are now cached by content for the duration of the run, with regression coverage in `test_qa_correction_cache.py`. *(Verified fixed)*.
+
+### 11. Potential XML Vulnerability in Async Worker
+*   **The Issue:** The `async_workflow_processor.py` uses the `python-docx` library to parse DOCX files, which is inconsistent with the main application's use of `defusedxml` for security hardening.
+*   **The Fix:** Async DOCX parsing now rejects DTD/entity declarations and parses DOCX XML through `defusedxml`, with size limits and regression coverage in `test_async_docx_security.py`. *(Verified fixed)*.
+
+### 12. Brittle JSON Parsing in AI Router
+*   **The Issue:** The `_extract_json_object` function in `managed_ai_router.py` uses a simple string search for `{` and `}` to find JSON in LLM responses.
+*   **The Fix:** AI response extraction now scans with `json.JSONDecoder().raw_decode` and prefers structured payloads with findings/items, with regression coverage in `test_ai_json_extraction.py`. *(Verified fixed)*.
+
+### 13. LibreTranslate Code Residuals
+*   **The Issue:** Despite being marked as resolved (Corrected Issue #15), `local_translation_engine.py` still contains and defaults to `translate_with_libretranslate`.
+*   **The Fix:** Unsupported LibreTranslate code paths were removed; the local translation router now defaults to supported self-hosted/generic routes and refuses unsupported providers without network calls. *(Verified fixed)*.
+
+### 14. Thread Lock vs Process Lock Discrepancy
+*   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not the "process lock" claimed in Corrected Issue #18. This leaves a race condition vulnerability if deployed with multiple worker processes.
+*   **The Fix:** Local JSON fallback storage now uses a stdlib OS file lock (`msvcrt.locking` on Windows, `fcntl.flock` on Unix) plus re-entrant thread locks. Editor job updates, SaaS collection upserts/deletes, and usage-log appends lock the whole read-modify-write operation. *(Verified fixed)*.
+
 ## Unresolved & New Issues
 
-### 1. Performance Regression in QA Regex Compilation
-*   **The Issue:** The `rule_offline_correction_dictionary` function in `qa_engine_global_v15.py` re-parses and re-compiles correction rules for every segment.
-*   **Impact:** This negates the performance fix for "Corrected Issue #13" and will cause significant slowdowns on large QA jobs with custom rule dictionaries. The compiled rule patterns should be cached for the duration of a QA run.
-
-### 2. Potential XML Vulnerability in Async Worker
-*   **The Issue:** The `async_workflow_processor.py` uses the `python-docx` library to parse DOCX files, which is inconsistent with the main application's use of `defusedxml` for security hardening.
-*   **Impact:** If `python-docx` is not configured to safely handle external entities and DTDs, the async worker may be vulnerable to XML bombs (e.g., Billion Laughs attack), reintroducing the risk described in "Resolved Issue #1" on a different service.
-
-### 3. Brittle JSON Parsing in AI Router
-*   **The Issue:** The `_extract_json_object` function in `managed_ai_router.py` uses a simple string search for `{` and `}` to find JSON in LLM responses.
-*   **Impact:** This can fail if the LLM includes curly braces in its explanatory text, causing the JSON to be parsed incorrectly or not at all, leading to silent data loss from the AI.
-
-### 4. LibreTranslate Code Residuals
-*   **The Issue:** Despite being marked as resolved (Corrected Issue #15), `local_translation_engine.py` still contains and defaults to `translate_with_libretranslate`.
-
-### 5. Thread Lock vs Process Lock Discrepancy
-*   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not the "process lock" claimed in Corrected Issue #18. This leaves a race condition vulnerability if deployed with multiple worker processes.
-
-### 6. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+### 1. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 *   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
 
 ---

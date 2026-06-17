@@ -16,12 +16,15 @@ import base64
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from local_file_lock import process_file_lock
+
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 2  # 48 hours
 LOGGER = logging.getLogger(__name__)
-_WRITE_LOCK = threading.Lock()
+_WRITE_LOCK = threading.RLock()
 
 
 def _job_dir() -> Path:
@@ -98,6 +101,18 @@ def _path_for(job_id: str) -> Path:
     return _job_dir() / f"{_safe_job_id(job_id)}.json"
 
 
+def _process_lock_path(scope: str = "editor_jobs") -> Path:
+    safe = "".join(ch for ch in str(scope or "") if ch.isalnum() or ch in {"-", "_"})
+    return _job_dir() / f".{safe or 'editor_jobs'}.lock"
+
+
+@contextmanager
+def _write_guard(scope: str = "editor_jobs"):
+    with process_file_lock(_process_lock_path(scope)):
+        with _WRITE_LOCK:
+            yield
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
@@ -116,9 +131,9 @@ def save_editor_job(job_type: str, rows: List[Dict[str, Any]], metadata: Optiona
         "created_at": time.time(),
         "updated_at": time.time(),
     }
-    with _WRITE_LOCK:
+    with _write_guard("editor_jobs"):
         _atomic_write_text(_path_for(job_id), json.dumps(payload, ensure_ascii=False, indent=2))
-        cleanup_old_jobs()
+        _cleanup_old_jobs_unlocked()
     return job_id
 
 
@@ -152,22 +167,22 @@ def update_editor_job(
     user_email: str = "",
     allow_platform: bool = False,
 ) -> bool:
-    payload = load_editor_job(job_id, workspace=workspace, user_email=user_email, allow_platform=allow_platform)
-    if not payload:
-        return False
-    if rows is not None:
-        payload["rows"] = rows
-    if metadata is not None:
-        merged = dict(payload.get("metadata") or {})
-        merged.update(metadata)
-        payload["metadata"] = merged
-    payload["updated_at"] = time.time()
-    with _WRITE_LOCK:
+    with _write_guard("editor_jobs"):
+        payload = load_editor_job(job_id, workspace=workspace, user_email=user_email, allow_platform=allow_platform)
+        if not payload:
+            return False
+        if rows is not None:
+            payload["rows"] = rows
+        if metadata is not None:
+            merged = dict(payload.get("metadata") or {})
+            merged.update(metadata)
+            payload["metadata"] = merged
+        payload["updated_at"] = time.time()
         _atomic_write_text(_path_for(job_id), json.dumps(payload, ensure_ascii=False, indent=2))
     return True
 
 
-def cleanup_old_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
+def _cleanup_old_jobs_unlocked(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
     now = time.time()
     for path in _job_dir().glob("*.json"):
         try:
@@ -181,4 +196,9 @@ def cleanup_old_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
                 path.unlink(missing_ok=True)
             except Exception as unlink_exc:
                 LOGGER.warning("Unable to remove editor job %s: %s", path, unlink_exc)
+
+
+def cleanup_old_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
+    with _write_guard("editor_jobs"):
+        _cleanup_old_jobs_unlocked(ttl_seconds=ttl_seconds)
 

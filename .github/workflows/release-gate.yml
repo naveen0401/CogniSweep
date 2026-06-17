@@ -60,7 +60,8 @@ jobs:
             worker_supervisor.py \
             billing_webhook_receiver.py \
             email_dispatch_worker.py \
-            operational_backup_worker.py
+            operational_backup_worker.py \
+            local_file_lock.py
 
       - name: Run launch-safe regression tests
         run: |
@@ -79,6 +80,7 @@ jobs:
           python test_supabase_rls_policies.py
           python test_production_persistence_fail_closed.py
           python test_editor_job_security.py
+          python test_process_file_locks.py
           python test_async_docx_security.py
           python test_mt_server_hardening.py
           python test_local_translation_engine_routes.py

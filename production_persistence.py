@@ -29,12 +29,15 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import requests
+
+from local_file_lock import process_file_lock
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +50,7 @@ DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days local fallback retention
 SUPABASE_TIMEOUT = 25
 LOCAL_USAGE_MAX_BYTES = int(os.getenv("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
 LOCAL_USAGE_KEEP_LINES = int(os.getenv("ERRORSWEEP_USAGE_LOG_KEEP_LINES", "2000"))
-_LOCAL_WRITE_LOCK = threading.Lock()
+_LOCAL_WRITE_LOCK = threading.RLock()
 PLATFORM_SCOPE_VALUES = {"platform", "all", "global", "service", "system"}
 
 SAAS_TABLES = {
@@ -338,6 +341,18 @@ def _local_collection_path(collection: str) -> Path:
     return _local_root() / f"saas_{safe or 'records'}.json"
 
 
+def _local_process_lock_path(scope: str) -> Path:
+    safe = "".join(ch for ch in str(scope or "") if ch.isalnum() or ch in {"-", "_"})
+    return _local_root() / f".{safe or 'storage'}.lock"
+
+
+@contextmanager
+def _local_write_guard(scope: str = "storage"):
+    with process_file_lock(_local_process_lock_path(scope)):
+        with _LOCAL_WRITE_LOCK:
+            yield
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
@@ -346,10 +361,14 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp_path, path)
 
 
+def _write_local_job_unlocked(payload: Dict[str, Any]) -> None:
+    _atomic_write_text(_local_path(payload["job_id"]), json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def _write_local_job(payload: Dict[str, Any]) -> None:
-    with _LOCAL_WRITE_LOCK:
-        _atomic_write_text(_local_path(payload["job_id"]), json.dumps(payload, ensure_ascii=False, indent=2))
-        cleanup_local_jobs()
+    with _local_write_guard("editor_jobs"):
+        _write_local_job_unlocked(payload)
+        _cleanup_local_jobs_unlocked()
 
 
 def _rotate_local_usage_events() -> None:
@@ -402,8 +421,12 @@ def _read_local_collection(collection: str) -> List[Dict[str, Any]]:
 
 
 def _write_local_collection(collection: str, records: List[Dict[str, Any]]) -> None:
-    with _LOCAL_WRITE_LOCK:
-        _atomic_write_text(_local_collection_path(collection), json.dumps(records, ensure_ascii=False, indent=2))
+    with _local_write_guard(f"collection_{collection}"):
+        _write_local_collection_unlocked(collection, records)
+
+
+def _write_local_collection_unlocked(collection: str, records: List[Dict[str, Any]]) -> None:
+    _atomic_write_text(_local_collection_path(collection), json.dumps(records, ensure_ascii=False, indent=2))
 
 
 def _record_id(collection: str, record: Dict[str, Any]) -> str:
@@ -471,21 +494,22 @@ def _normalise_saas_record(collection: str, record: Dict[str, Any], user: Option
 
 
 def _upsert_local_saas_record(collection: str, record: Dict[str, Any]) -> Dict[str, Any]:
-    records = _read_local_collection(collection)
-    rid = str(record.get("id"))
-    replaced = False
-    for idx, existing in enumerate(records):
-        if str(existing.get("id")) == rid:
-            records[idx] = {**existing, **record}
-            replaced = True
-            break
-    if not replaced:
-        records.insert(0, record)
-    _write_local_collection(collection, records[:1000])
+    with _local_write_guard(f"collection_{collection}"):
+        records = _read_local_collection(collection)
+        rid = str(record.get("id"))
+        replaced = False
+        for idx, existing in enumerate(records):
+            if str(existing.get("id")) == rid:
+                records[idx] = {**existing, **record}
+                replaced = True
+                break
+        if not replaced:
+            records.insert(0, record)
+        _write_local_collection_unlocked(collection, records[:1000])
     return record
 
 
-def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
+def _cleanup_local_jobs_unlocked(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
     now = time.time()
     for path in _local_root().glob("*.json"):
         try:
@@ -501,6 +525,11 @@ def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
                 path.unlink(missing_ok=True)
             except Exception as unlink_exc:
                 LOGGER.warning("Unable to remove local editor job %s: %s", path, unlink_exc)
+
+
+def cleanup_local_jobs(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
+    with _local_write_guard("editor_jobs"):
+        _cleanup_local_jobs_unlocked(ttl_seconds=ttl_seconds)
 
 
 # ==========================================================
@@ -663,49 +692,59 @@ def update_persistent_editor_job(
     require_supabase_for_production()
     jid = _safe_job_id(job_id)
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
-    local_payload = None
-    if local_json_fallback_allowed():
-        local_payload = _read_local_job(
-            jid,
-            workspace=scope["workspace"],
-            user_email=scope["user_email"],
-            include_all_workspaces=include_all_workspaces,
-            platform_scope_reason=platform_scope_reason,
-        )
-        if local_payload is None and _local_path(jid).exists():
-            LOGGER.warning("Denied local editor job update outside caller scope: %s", jid)
-            return False
-    local_payload = local_payload or {
-        "job_id": jid,
-        "id": jid,
-        "job_type": "cat",
-        "rows": [],
-        "metadata": {},
-        "created_at": _now_iso(),
-        "created_at_epoch": time.time(),
-    }
-    if rows is not None:
-        local_payload["rows"] = rows
-        local_payload["row_count"] = len(rows)
-    if metadata is not None:
-        merged = dict(local_payload.get("metadata") or {})
-        merged.update(metadata)
-        local_payload["metadata"] = merged
-        local_payload["workspace"] = merged.get("workspace") or local_payload.get("workspace") or scope["workspace"]
-        local_payload["user_email"] = merged.get("user_email") or local_payload.get("user_email") or scope["user_email"]
-    if status:
-        local_payload["status"] = status
-        local_payload.setdefault("metadata", {})["status"] = status
-    local_payload.setdefault("workspace", scope["workspace"])
-    local_payload.setdefault("user_email", scope["user_email"])
-    local_payload["updated_at"] = _now_iso()
-    local_payload["updated_at_epoch"] = time.time()
+    local_payload: Optional[Dict[str, Any]] = None
+
+    def _new_local_payload() -> Dict[str, Any]:
+        return {
+            "job_id": jid,
+            "id": jid,
+            "job_type": "cat",
+            "rows": [],
+            "metadata": {},
+            "created_at": _now_iso(),
+            "created_at_epoch": time.time(),
+        }
+
+    def _apply_update(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if rows is not None:
+            payload["rows"] = rows
+            payload["row_count"] = len(rows)
+        if metadata is not None:
+            merged = dict(payload.get("metadata") or {})
+            merged.update(metadata)
+            payload["metadata"] = merged
+            payload["workspace"] = merged.get("workspace") or payload.get("workspace") or scope["workspace"]
+            payload["user_email"] = merged.get("user_email") or payload.get("user_email") or scope["user_email"]
+        if status:
+            payload["status"] = status
+            payload.setdefault("metadata", {})["status"] = status
+        payload.setdefault("workspace", scope["workspace"])
+        payload.setdefault("user_email", scope["user_email"])
+        payload["updated_at"] = _now_iso()
+        payload["updated_at_epoch"] = time.time()
+        return payload
 
     if local_json_fallback_allowed():
         try:
-            _write_local_job(local_payload)
+            with _local_write_guard("editor_jobs"):
+                local_payload = _read_local_job(
+                    jid,
+                    workspace=scope["workspace"],
+                    user_email=scope["user_email"],
+                    include_all_workspaces=include_all_workspaces,
+                    platform_scope_reason=platform_scope_reason,
+                )
+                if local_payload is None and _local_path(jid).exists():
+                    LOGGER.warning("Denied local editor job update outside caller scope: %s", jid)
+                    return False
+                local_payload = _apply_update(local_payload or _new_local_payload())
+                _write_local_job_unlocked(local_payload)
+                _cleanup_local_jobs_unlocked()
         except Exception as exc:
             LOGGER.error("Failed to update local editor job fallback %s: %s", jid, exc)
+            local_payload = _apply_update(local_payload or _new_local_payload())
+    else:
+        local_payload = _apply_update(_new_local_payload())
 
     if not supabase_configured():
         return True
@@ -774,7 +813,7 @@ def log_persistent_usage_event(
 
     if local_json_fallback_allowed():
         try:
-            with _LOCAL_WRITE_LOCK:
+            with _local_write_guard("usage_events"):
                 _rotate_local_usage_events()
                 with _local_usage_path().open("a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -1035,20 +1074,22 @@ def delete_saas_record(
     deleted = False
     if local_json_fallback_allowed():
         try:
-            records = _read_local_collection(collection)
-            def in_scope(item: Dict[str, Any]) -> bool:
-                if include_all_workspaces:
-                    return True
-                if workspace and str(item.get("workspace") or "") != workspace:
-                    return False
-                if user_email and str(item.get("user_email") or "").strip().lower() != user_email.strip().lower():
-                    return False
-                return True
+            with _local_write_guard(f"collection_{collection}"):
+                records = _read_local_collection(collection)
 
-            retained = [item for item in records if not (str(item.get("id") or "") == rid and in_scope(item))]
-            if len(retained) != len(records):
-                _write_local_collection(collection, retained)
-                deleted = True
+                def in_scope(item: Dict[str, Any]) -> bool:
+                    if include_all_workspaces:
+                        return True
+                    if workspace and str(item.get("workspace") or "") != workspace:
+                        return False
+                    if user_email and str(item.get("user_email") or "").strip().lower() != user_email.strip().lower():
+                        return False
+                    return True
+
+                retained = [item for item in records if not (str(item.get("id") or "") == rid and in_scope(item))]
+                if len(retained) != len(records):
+                    _write_local_collection_unlocked(collection, retained)
+                    deleted = True
         except Exception as exc:
             LOGGER.error("Failed to delete local SaaS record %s/%s: %s", collection, rid, exc)
 
