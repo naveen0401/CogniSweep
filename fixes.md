@@ -16,7 +16,12 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 9. Missing UI Refresh in Admin Data Clear (`app.py`)
 
 **Unresolved & New Issues:**
-None currently tracked.
+1. Performance Regression in QA Regex Compilation
+2. Potential XML Vulnerability in Async Worker
+3. Brittle JSON Parsing in AI Router
+4. LibreTranslate Code Residuals
+5. Thread Lock vs Process Lock Discrepancy
+6. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 
 **Corrected Issues:**
 1. Landing Page Legal Links
@@ -89,13 +94,25 @@ None currently tracked.
 
 ## Unresolved & New Issues
 
-### 1. LibreTranslate Code Residuals
+### 1. Performance Regression in QA Regex Compilation
+*   **The Issue:** The `rule_offline_correction_dictionary` function in `qa_engine_global_v15.py` re-parses and re-compiles correction rules for every segment.
+*   **Impact:** This negates the performance fix for "Corrected Issue #13" and will cause significant slowdowns on large QA jobs with custom rule dictionaries. The compiled rule patterns should be cached for the duration of a QA run.
+
+### 2. Potential XML Vulnerability in Async Worker
+*   **The Issue:** The `async_workflow_processor.py` uses the `python-docx` library to parse DOCX files, which is inconsistent with the main application's use of `defusedxml` for security hardening.
+*   **Impact:** If `python-docx` is not configured to safely handle external entities and DTDs, the async worker may be vulnerable to XML bombs (e.g., Billion Laughs attack), reintroducing the risk described in "Resolved Issue #1" on a different service.
+
+### 3. Brittle JSON Parsing in AI Router
+*   **The Issue:** The `_extract_json_object` function in `managed_ai_router.py` uses a simple string search for `{` and `}` to find JSON in LLM responses.
+*   **Impact:** This can fail if the LLM includes curly braces in its explanatory text, causing the JSON to be parsed incorrectly or not at all, leading to silent data loss from the AI.
+
+### 4. LibreTranslate Code Residuals
 *   **The Issue:** Despite being marked as resolved (Corrected Issue #15), `local_translation_engine.py` still contains and defaults to `translate_with_libretranslate`.
 
-### 2. Thread Lock vs Process Lock Discrepancy
+### 5. Thread Lock vs Process Lock Discrepancy
 *   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not the "process lock" claimed in Corrected Issue #18. This leaves a race condition vulnerability if deployed with multiple worker processes.
 
-### 3. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+### 6. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 *   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
 
 ---
