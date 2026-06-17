@@ -2,6 +2,10 @@ import json
 import os
 import requests
 
+if os.environ.get("RUN_LIVE_MT_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    print("Skipped live IndicTrans2 endpoint test. Set RUN_LIVE_MT_TESTS=1 to run it.")
+    raise SystemExit(0)
+
 URL = "http://localhost:8000/translate"
 API_KEY = os.environ.get("INDICTRANS2_API_KEY", "")
 

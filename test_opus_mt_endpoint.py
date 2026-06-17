@@ -1,6 +1,10 @@
 import os
 import requests
 
+if os.environ.get("RUN_LIVE_MT_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    print("Skipped live OPUS-MT endpoint test. Set RUN_LIVE_MT_TESTS=1 to run it.")
+    raise SystemExit(0)
+
 ENDPOINT = os.environ.get("OPUS_MT_ENDPOINT", "http://127.0.0.1:8100/translate")
 API_KEY = os.environ.get("OPUS_MT_API_KEY", "")
 

@@ -8,6 +8,11 @@ WORKERS = [
 ]
 WORKFLOW = Path(".github/workflows/release-gate.yml")
 MT_CHECK = Path("deploy/mt_endpoint_check.py")
+LIVE_ENDPOINT_TESTS = [
+    Path("test_indictrans2_worker.py"),
+    Path("test_madlad_endpoint.py"),
+    Path("test_opus_mt_endpoint.py"),
+]
 
 
 def source(path: Path) -> str:
@@ -57,8 +62,16 @@ def test_release_gate_includes_mt_hardening_check():
     assert "RATE_LIMIT_REQUESTS" in mt_check
 
 
+def test_live_endpoint_probes_are_opt_in():
+    for path in LIVE_ENDPOINT_TESTS:
+        text = source(path)
+        assert "RUN_LIVE_MT_TESTS" in text
+        assert "raise SystemExit(0)" in text
+
+
 if __name__ == "__main__":
     test_mt_workers_fail_closed_without_api_keys()
     test_mt_workers_cap_request_size_and_generation()
     test_release_gate_includes_mt_hardening_check()
+    test_live_endpoint_probes_are_opt_in()
     print("MT server hardening checks passed.")
