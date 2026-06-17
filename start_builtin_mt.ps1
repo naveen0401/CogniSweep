@@ -22,6 +22,15 @@ if (Test-Path $IndicIndicEn) { $env:INDICTRANS2_INDIC_EN_MODEL = $IndicIndicEn }
 if (Test-Path $IndicIndicIndic) { $env:INDICTRANS2_INDIC_INDIC_MODEL = $IndicIndicIndic }
 if (Test-Path $Madlad) { $env:MADLAD_MODEL_NAME = $Madlad }
 
+function Require-WorkerApiKey {
+    param([string]$Name)
+
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        throw "$Name must be set before starting the self-hosted MT worker."
+    }
+}
+
 function Start-MTWorker {
     param(
         [string]$Name,
@@ -45,16 +54,19 @@ function Start-MTWorker {
 if ($WithoutOpus) {
     Write-Host "Skipping OPUS-MT because -WithoutOpus was passed."
 } else {
+    Require-WorkerApiKey -Name "OPUS_MT_API_KEY"
     Start-MTWorker -Name "OPUS-MT" -Module "opus_mt_server_v45" -Port 8100
 }
 
 if ($WithoutIndicTrans2) {
     Write-Host "Skipping IndicTrans2 because -WithoutIndicTrans2 was passed."
 } else {
+    Require-WorkerApiKey -Name "INDICTRANS2_API_KEY"
     Start-MTWorker -Name "IndicTrans2" -Module "indictrans2_worker" -Port 8000
 }
 
 if ($WithMadlad) {
+    Require-WorkerApiKey -Name "MADLAD_API_KEY"
     Start-MTWorker -Name "MADLAD-400" -Module "madlad_mt_server" -Port 8200
 } else {
     Write-Host "Skipping MADLAD-400. Pass -WithMadlad to start it."
@@ -66,6 +78,7 @@ Write-Host "Default endpoints:"
 Write-Host "  INDICTRANS2_ENDPOINT=http://127.0.0.1:8000/translate"
 Write-Host "  OPUS_MT_ENDPOINT=http://127.0.0.1:8100/translate"
 Write-Host "  MADLAD_ENDPOINT=http://127.0.0.1:8200/translate (optional: -WithMadlad)"
+Write-Host "Set OPUS_MT_API_KEY, INDICTRANS2_API_KEY, and MADLAD_API_KEY before starting selected workers."
 Write-Host ""
 Write-Host "To make the app use only IndicTrans2 + OPUS-MT:"
 Write-Host "  `$env:SELF_HOSTED_MT_ACTIVE_ENGINES='indictrans2,opus'"

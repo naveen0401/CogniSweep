@@ -57,9 +57,9 @@ REQUIRED_CLIENT_SYMBOLS = [
     "restore_text",
 ]
 SERVER_CONTRACT_TOKENS = {
-    "opus_mt_server_v45.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY"],
-    "indictrans2_worker.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY"],
-    "madlad_mt_server.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY"],
+    "opus_mt_server_v45.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
+    "indictrans2_worker.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
+    "madlad_mt_server.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
 }
 REQUIREMENT_FILES = {
     "OPUS-MT": "requirements_opus_mt_server.txt",
@@ -68,8 +68,11 @@ REQUIREMENT_FILES = {
 }
 REQUIRED_TEMPLATE_KEYS = [
     "INDICTRANS2_ENDPOINT",
+    "INDICTRANS2_API_KEY",
     "MADLAD_ENDPOINT",
+    "MADLAD_API_KEY",
     "OPUS_MT_ENDPOINT",
+    "OPUS_MT_API_KEY",
     "SELF_HOSTED_MT_TIMEOUT",
 ]
 PLACEHOLDER_MARKERS = (
@@ -259,8 +262,8 @@ def validate_contracts(results: List[Dict[str, str]]) -> None:
             "MT",
             f"{rel_path} HTTP contract",
             "Pass" if not missing else "Blocker",
-            "/health + /translate + auth support" if not missing else ", ".join(missing),
-            "Keep every self-hosted MT worker exposing /health and /translate with optional bearer auth.",
+            "/health + /translate + required auth + request caps" if not missing else ", ".join(missing),
+            "Keep every self-hosted MT worker exposing /health and /translate with required bearer auth, startup API-key enforcement, and request/generation caps.",
         )
 
 
@@ -317,7 +320,9 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_m
     env = parse_env_file(env_path)
     for engine, config in ENGINE_ENV.items():
         endpoint_key = config["endpoint"]
+        api_key = config["api_key"]
         endpoint = safe_text(env.get(endpoint_key))
+        key_value = safe_text(env.get(api_key))
         required = bool(config["required"]) or (engine == "MADLAD-400" and require_madlad)
         status_when_missing = "Blocker" if required else "Warn"
         add(
@@ -328,6 +333,15 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_m
             nonsecret_evidence(endpoint_key, endpoint),
             f"Set {endpoint_key} to a live HTTPS /translate endpoint.",
         )
+        if endpoint and not is_placeholder(endpoint):
+            add(
+                results,
+                "MT Config",
+                f"{engine} API key",
+                "Pass" if key_value and not is_placeholder(key_value) else status_when_missing,
+                nonsecret_evidence(api_key, key_value),
+                f"Set {api_key}; self-hosted MT workers refuse to start with an empty API key.",
+            )
     timeout_value = safe_text(env.get("SELF_HOSTED_MT_TIMEOUT"))
     try:
         timeout_ok = int(timeout_value or "0") >= 120

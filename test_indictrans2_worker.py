@@ -1,7 +1,9 @@
 import json
+import os
 import requests
 
 URL = "http://localhost:8000/translate"
+API_KEY = os.environ.get("INDICTRANS2_API_KEY", "")
 
 payload = {
     "texts": [
@@ -15,6 +17,7 @@ payload = {
     "domain": "Software UI",
 }
 
-r = requests.post(URL, json=payload, timeout=300)
+headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
+r = requests.post(URL, json=payload, headers=headers, timeout=300)
 print("Status:", r.status_code)
 print(json.dumps(r.json(), indent=2, ensure_ascii=False))

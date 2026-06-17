@@ -37,6 +37,23 @@ SERVER_API_KEY = os.getenv("INDICTRANS2_API_KEY", "").strip()
 DEVICE = "cuda" if torch.cuda.is_available() and os.getenv("INDICTRANS2_FORCE_CPU", "false").lower() != "true" else "cpu"
 PRELOAD_MODELS = os.getenv("INDICTRANS2_PRELOAD", "false").lower() in {"1", "true", "yes", "on"}
 
+
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+MAX_SEGMENTS = _bounded_int_env("INDICTRANS2_MAX_SEGMENTS", 96, 1, 256)
+MAX_CHARS_PER_TEXT = _bounded_int_env("INDICTRANS2_MAX_CHARS_PER_TEXT", 3000, 1, 8000)
+MAX_TOTAL_CHARS = _bounded_int_env("INDICTRANS2_MAX_TOTAL_CHARS", 60000, 1, 120000)
+MAX_INPUT_LENGTH = _bounded_int_env("INDICTRANS2_MAX_INPUT_LENGTH", 256, 32, 512)
+MAX_NEW_TOKENS = _bounded_int_env("INDICTRANS2_MAX_NEW_TOKENS", 256, 8, 512)
+MAX_BATCH_SIZE = _bounded_int_env("INDICTRANS2_BATCH_SIZE", 8, 1, 32)
+MAX_NUM_BEAMS = _bounded_int_env("INDICTRANS2_NUM_BEAMS", 1, 1, 8)
+
 ROOT_DIR = Path(__file__).resolve().parent
 LOCAL_MODELS_DIR = ROOT_DIR / "models"
 
@@ -142,13 +159,31 @@ def model_status(model_name: str) -> Dict[str, object]:
 
 def verify_api_key(authorization: Optional[str], request_key: Optional[str]) -> None:
     if not SERVER_API_KEY:
-        return
+        raise HTTPException(status_code=503, detail="INDICTRANS2_API_KEY is not configured.")
     header_key = ""
     if authorization and authorization.lower().startswith("bearer "):
         header_key = authorization.split(" ", 1)[1].strip()
     supplied = (request_key or header_key or "").strip()
     if not hmac.compare_digest(supplied, SERVER_API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized IndicTrans2 request.")
+
+
+def require_server_api_key_configured() -> None:
+    if not SERVER_API_KEY:
+        raise RuntimeError("INDICTRANS2_API_KEY must be set before starting the IndicTrans2 server.")
+
+
+def validate_translate_request(req: TranslateRequest) -> List[str]:
+    texts = [str(text or "") for text in (req.texts or [])]
+    if len(texts) > MAX_SEGMENTS:
+        raise HTTPException(status_code=413, detail=f"IndicTrans2 request exceeds {MAX_SEGMENTS} segments.")
+    total_chars = sum(len(text) for text in texts)
+    if total_chars > MAX_TOTAL_CHARS:
+        raise HTTPException(status_code=413, detail=f"IndicTrans2 request exceeds {MAX_TOTAL_CHARS} characters.")
+    too_long = next((len(text) for text in texts if len(text) > MAX_CHARS_PER_TEXT), 0)
+    if too_long:
+        raise HTTPException(status_code=413, detail=f"IndicTrans2 segment exceeds {MAX_CHARS_PER_TEXT} characters.")
+    return texts
 
 
 def protect_text(text: str) -> Tuple[str, Dict[str, str]]:
@@ -201,12 +236,9 @@ def translate_texts(texts: List[str], src: str, tgt: str) -> Tuple[List[str], st
 
     model_name = model_for_pair(src, tgt)
     tokenizer, model, processor = load_model(model_name)
-    batch_size = int(os.getenv("INDICTRANS2_BATCH_SIZE", "8"))
-    max_length = int(os.getenv("INDICTRANS2_MAX_LENGTH", "256"))
-
     outputs: List[str] = []
-    for i in range(0, len(texts), max(1, batch_size)):
-        batch = texts[i : i + batch_size]
+    for i in range(0, len(texts), MAX_BATCH_SIZE):
+        batch = texts[i : i + MAX_BATCH_SIZE]
         protected_batch: List[str] = []
         mappings: List[Dict[str, str]] = []
         for text in batch:
@@ -220,14 +252,14 @@ def translate_texts(texts: List[str], src: str, tgt: str) -> Tuple[List[str], st
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=max_length,
+            max_length=MAX_INPUT_LENGTH,
         ).to(DEVICE)
 
         with torch.no_grad():
             generated = model.generate(
                 **encoded,
-                max_length=max_length,
-                num_beams=int(os.getenv("INDICTRANS2_NUM_BEAMS", "1")),
+                max_new_tokens=MAX_NEW_TOKENS,
+                num_beams=MAX_NUM_BEAMS,
                 use_cache=False,
             )
 
@@ -245,6 +277,7 @@ app = FastAPI(title="CogniSweep IndicTrans2 Server", version=APP_VERSION)
 
 @app.on_event("startup")
 def preload_models() -> None:
+    require_server_api_key_configured()
     if not PRELOAD_MODELS:
         return
     load_model(MODEL_EN_INDIC)
@@ -275,11 +308,12 @@ def health():
 @app.post("/translate")
 def translate(req: TranslateRequest, authorization: Optional[str] = Header(default=None)):
     verify_api_key(authorization, req.api_key)
+    texts = validate_translate_request(req)
     src = normalize_language(req.source_language)
     tgt = normalize_language(req.target_language)
 
     started = time.time()
-    translations, model_name = translate_texts(req.texts, src, tgt)
+    translations, model_name = translate_texts(texts, src, tgt)
     elapsed_ms = int((time.time() - started) * 1000)
 
     return {
@@ -288,7 +322,7 @@ def translate(req: TranslateRequest, authorization: Optional[str] = Header(defau
         "model": model_name,
         "source_language": src,
         "target_language": tgt,
-        "characters": sum(len(t or "") for t in req.texts),
-        "segments": len(req.texts),
+        "characters": sum(len(t or "") for t in texts),
+        "segments": len(texts),
         "elapsed_ms": elapsed_ms,
     }

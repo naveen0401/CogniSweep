@@ -5,7 +5,7 @@ Purpose:
 - First practical self-hosted MT endpoint for CogniSweep without Azure/NLLB.
 - Starts with English -> French/Spanish/German/Italian/Portuguese.
 - Uses Helsinki-NLP OPUS-MT models from Hugging Face.
-- OpenAI/API key is not required.
+- A worker API key is required; the server refuses to start without OPUS_MT_API_KEY.
 
 API:
 - GET  /health
@@ -17,7 +17,7 @@ POST /translate body:
   "texts": ["Welcome to Docflow"],
   "source_language": "English",
   "target_language": "French",
-  "api_key": ""      # optional if you enable SERVER_API_KEY
+  "api_key": "..."   # or send Authorization: Bearer <OPUS_MT_API_KEY>
 }
 
 Response:
@@ -48,6 +48,23 @@ from transformers import MarianMTModel, MarianTokenizer
 APP_VERSION = "v45-opus-mt"
 SERVER_API_KEY = os.getenv("OPUS_MT_API_KEY", "").strip()
 DEVICE = "cuda" if torch.cuda.is_available() and os.getenv("OPUS_MT_FORCE_CPU", "false").lower() != "true" else "cpu"
+
+
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+MAX_SEGMENTS = _bounded_int_env("OPUS_MT_MAX_SEGMENTS", 96, 1, 256)
+MAX_CHARS_PER_TEXT = _bounded_int_env("OPUS_MT_MAX_CHARS_PER_TEXT", 3000, 1, 8000)
+MAX_TOTAL_CHARS = _bounded_int_env("OPUS_MT_MAX_TOTAL_CHARS", 60000, 1, 120000)
+MAX_INPUT_LENGTH = _bounded_int_env("OPUS_MT_MAX_INPUT_LENGTH", 256, 32, 512)
+MAX_NEW_TOKENS = _bounded_int_env("OPUS_MT_MAX_NEW_TOKENS", 256, 8, 512)
+MAX_BATCH_SIZE = _bounded_int_env("OPUS_MT_BATCH_SIZE", 8, 1, 32)
+MAX_NUM_BEAMS = _bounded_int_env("OPUS_MT_NUM_BEAMS", 4, 1, 8)
 
 # Keep first release narrow. Add more pairs only after testing quality and model availability.
 SUPPORTED_PAIRS: Dict[Tuple[str, str], str] = {
@@ -109,13 +126,31 @@ def normalize_language(value: str) -> str:
 
 def verify_api_key(authorization: Optional[str], request_key: Optional[str]) -> None:
     if not SERVER_API_KEY:
-        return
+        raise HTTPException(status_code=503, detail="OPUS_MT_API_KEY is not configured.")
     header_key = ""
     if authorization and authorization.lower().startswith("bearer "):
         header_key = authorization.split(" ", 1)[1].strip()
     supplied = (request_key or header_key or "").strip()
     if not hmac.compare_digest(supplied, SERVER_API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized OPUS-MT request.")
+
+
+def require_server_api_key_configured() -> None:
+    if not SERVER_API_KEY:
+        raise RuntimeError("OPUS_MT_API_KEY must be set before starting the OPUS-MT server.")
+
+
+def validate_translate_request(req: TranslateRequest) -> List[str]:
+    texts = [str(text or "") for text in (req.texts or [])]
+    if len(texts) > MAX_SEGMENTS:
+        raise HTTPException(status_code=413, detail=f"OPUS-MT request exceeds {MAX_SEGMENTS} segments.")
+    total_chars = sum(len(text) for text in texts)
+    if total_chars > MAX_TOTAL_CHARS:
+        raise HTTPException(status_code=413, detail=f"OPUS-MT request exceeds {MAX_TOTAL_CHARS} characters.")
+    too_long = next((len(text) for text in texts if len(text) > MAX_CHARS_PER_TEXT), 0)
+    if too_long:
+        raise HTTPException(status_code=413, detail=f"OPUS-MT segment exceeds {MAX_CHARS_PER_TEXT} characters.")
+    return texts
 
 
 def protect_text(text: str) -> Tuple[str, Dict[str, str]]:
@@ -178,11 +213,8 @@ def translate_texts(texts: List[str], src_code: str, tgt_code: str) -> Tuple[Lis
     model_name, tokenizer, model = load_pair_model(src_code, tgt_code)
 
     outputs: List[str] = []
-    batch_size = int(os.getenv("OPUS_MT_BATCH_SIZE", "8"))
-    max_length = int(os.getenv("OPUS_MT_MAX_LENGTH", "256"))
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
+    for i in range(0, len(texts), MAX_BATCH_SIZE):
+        batch = texts[i : i + MAX_BATCH_SIZE]
         protected_batch = []
         mappings = []
         for text in batch:
@@ -195,14 +227,14 @@ def translate_texts(texts: List[str], src_code: str, tgt_code: str) -> Tuple[Lis
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=max_length,
+            max_length=MAX_INPUT_LENGTH,
         ).to(DEVICE)
 
         with torch.no_grad():
             generated = model.generate(
                 **encoded,
-                max_length=max_length,
-                num_beams=4,
+                max_new_tokens=MAX_NEW_TOKENS,
+                num_beams=MAX_NUM_BEAMS,
                 early_stopping=True,
             )
 
@@ -215,6 +247,11 @@ def translate_texts(texts: List[str], src_code: str, tgt_code: str) -> Tuple[Lis
 
 
 app = FastAPI(title="CogniSweep OPUS-MT Server", version=APP_VERSION)
+
+
+@app.on_event("startup")
+def enforce_startup_security() -> None:
+    require_server_api_key_configured()
 
 
 @app.get("/health")
@@ -242,12 +279,13 @@ def models():
 @app.post("/translate")
 def translate(req: TranslateRequest, authorization: Optional[str] = Header(default=None)):
     verify_api_key(authorization, req.api_key)
+    texts = validate_translate_request(req)
 
     src = normalize_language(req.source_language)
     tgt = normalize_language(req.target_language)
 
     started = time.time()
-    translations, model_name = translate_texts(req.texts, src, tgt)
+    translations, model_name = translate_texts(texts, src, tgt)
     elapsed_ms = int((time.time() - started) * 1000)
 
     return {
@@ -256,8 +294,8 @@ def translate(req: TranslateRequest, authorization: Optional[str] = Header(defau
         "model": model_name,
         "source_language": src,
         "target_language": tgt,
-        "characters": sum(len(t or "") for t in req.texts),
-        "segments": len(req.texts),
+        "characters": sum(len(t or "") for t in texts),
+        "segments": len(texts),
         "elapsed_ms": elapsed_ms,
     }
 

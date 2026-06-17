@@ -37,8 +37,11 @@ powershell -ExecutionPolicy Bypass -File .\download_models.ps1 -SkipIndicTrans2
 
 ```toml
 MADLAD_ENDPOINT = "http://127.0.0.1:8200/translate"
-MADLAD_API_KEY = ""
+MADLAD_API_KEY = "your-private-token"
 ```
+
+`MADLAD_API_KEY` is required for the worker process. The server fails closed at
+startup if the key is empty.
 
 The router order is:
 
@@ -53,7 +56,7 @@ OPUS-MT fallback for tested lightweight pairs
 ```text
 MADLAD_MODEL_NAME=google/madlad400-3b-mt
 MADLAD_ENDPOINT=http://127.0.0.1:8200/translate
-MADLAD_API_KEY=
+MADLAD_API_KEY=your-private-token
 MADLAD_FORCE_CPU=false
 MADLAD_BATCH_SIZE=4
 MADLAD_MAX_INPUT_LENGTH=256

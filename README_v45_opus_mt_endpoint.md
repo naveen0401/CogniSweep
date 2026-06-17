@@ -75,7 +75,7 @@ For local testing:
 
 ```toml
 OPUS_MT_ENDPOINT = "http://127.0.0.1:8100/translate"
-OPUS_MT_API_KEY = ""
+OPUS_MT_API_KEY = "your-private-token"
 ```
 
 For Streamlit Cloud, localhost will not work. You need a public endpoint:
@@ -84,6 +84,9 @@ For Streamlit Cloud, localhost will not work. You need a public endpoint:
 OPUS_MT_ENDPOINT = "https://opus.yourdomain.com/translate"
 OPUS_MT_API_KEY = "your-private-token"
 ```
+
+`OPUS_MT_API_KEY` is required for the worker process. The server fails closed
+at startup if the key is empty.
 
 ## Recommended rollout
 

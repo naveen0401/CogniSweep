@@ -65,8 +65,11 @@ $env:INDICTRANS2_INDIC_INDIC_MODEL=".\models\indictrans2-indic-indic-dist-320M"
 
 ```toml
 INDICTRANS2_ENDPOINT = "http://127.0.0.1:8000/translate"
-INDICTRANS2_API_KEY = ""
+INDICTRANS2_API_KEY = "your-private-token"
 ```
+
+`INDICTRANS2_API_KEY` is required for the worker process. The server fails
+closed at startup if the key is empty.
 
 ## Test
 
