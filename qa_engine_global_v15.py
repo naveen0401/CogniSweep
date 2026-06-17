@@ -29,6 +29,7 @@ Client rules contract:
 
 from __future__ import annotations
 
+import json
 import re
 import logging
 import unicodedata
@@ -2477,7 +2478,48 @@ def _compile_correction_pattern(wrong: str) -> Optional[Pattern[str]]:
     return re.compile(re.escape(wrong))
 
 
+@lru_cache(maxsize=32)
+def _builtin_correction_entries(module: str) -> Tuple[Dict[str, Any], ...]:
+    entries: List[Dict[str, Any]] = []
+    for item in BUILTIN_CORRECTIONS.get(module, []):
+        wrong = normalize_for_qa(item.get("wrong", ""))
+        pattern = _compile_correction_pattern(wrong)
+        if pattern is None:
+            continue
+        entries.append({**item, "wrong": wrong, "pattern": pattern})
+    return tuple(entries)
+
+
+def _client_correction_cache_key(rules: Dict[str, Any]) -> str:
+    relevant = {
+        "corrections": (rules or {}).get("corrections", []),
+        "chunks": [
+            {
+                "source": (chunk or {}).get("source", "Client Rules"),
+                "text": (chunk or {}).get("text", ""),
+            }
+            for chunk in (rules or {}).get("chunks", [])
+            if isinstance(chunk, dict)
+        ],
+    }
+    return json.dumps(relevant, ensure_ascii=False, sort_keys=True, default=str)
+
+
+@lru_cache(maxsize=64)
+def _parse_client_correction_lines_cached(rules_key: str) -> Tuple[Dict[str, Any], ...]:
+    try:
+        rules = json.loads(rules_key)
+    except Exception as exc:
+        LOGGER.warning("Unable to parse cached client correction rules: %s", exc)
+        return tuple()
+    return tuple(_parse_client_correction_lines_uncached(rules))
+
+
 def _parse_client_correction_lines(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [dict(item) for item in _parse_client_correction_lines_cached(_client_correction_cache_key(rules or {}))]
+
+
+def _parse_client_correction_lines_uncached(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract client correction dictionary entries from Rules ZIP chunks.
 
     Supported high-precision formats inside txt/csv/docx/xlsx rule files:
@@ -2602,8 +2644,8 @@ def rule_offline_correction_dictionary(segment, rules, target_language, domain):
 
     module = infer_language_module(target_language, source, target)
     dictionary_entries = []
-    dictionary_entries.extend(BUILTIN_CORRECTIONS.get("global", []))
-    dictionary_entries.extend(BUILTIN_CORRECTIONS.get(module, []))
+    dictionary_entries.extend(_builtin_correction_entries("global"))
+    dictionary_entries.extend(_builtin_correction_entries(module))
     dictionary_entries.extend(_parse_client_correction_lines(rules))
 
     findings: List[QAFinding] = []

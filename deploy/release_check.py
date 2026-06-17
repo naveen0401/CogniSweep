@@ -716,6 +716,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_launch_public_lock.py",
         "python test_dependency_locking.py",
         "python test_persistence_cache_hardening.py",
+        "python test_qa_correction_cache.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",
