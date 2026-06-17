@@ -583,6 +583,201 @@ alter table public.errorsweep_support_tickets enable row level security;
 alter table public.errorsweep_status_incidents enable row level security;
 alter table public.errorsweep_consent_records enable row level security;
 
+create or replace function public.errorsweep_jwt_workspace()
+returns text
+language sql
+stable
+as $$
+    select lower(nullif(trim(coalesce(
+        auth.jwt() ->> 'workspace',
+        auth.jwt() #>> '{app_metadata,workspace}',
+        auth.jwt() #>> '{user_metadata,workspace}',
+        ''
+    )), ''));
+$$;
+
+create or replace function public.errorsweep_jwt_email()
+returns text
+language sql
+stable
+as $$
+    select lower(nullif(trim(coalesce(
+        auth.jwt() ->> 'email',
+        auth.jwt() #>> '{app_metadata,email}',
+        auth.jwt() #>> '{user_metadata,email}',
+        ''
+    )), ''));
+$$;
+
+create or replace function public.errorsweep_is_platform_owner()
+returns boolean
+language sql
+stable
+as $$
+    select lower(trim(coalesce(
+        auth.jwt() ->> 'role',
+        auth.jwt() #>> '{app_metadata,role}',
+        auth.jwt() #>> '{user_metadata,role}',
+        ''
+    ))) in ('platform owner', 'platform_owner')
+    or lower(trim(coalesce(
+        auth.jwt() ->> 'account_type',
+        auth.jwt() #>> '{app_metadata,account_type}',
+        auth.jwt() #>> '{user_metadata,account_type}',
+        ''
+    ))) in ('platform owner', 'platform_owner');
+$$;
+
+create or replace function public.errorsweep_workspace_matches(row_workspace text)
+returns boolean
+language sql
+stable
+as $$
+    select public.errorsweep_is_platform_owner()
+        or (
+            public.errorsweep_jwt_workspace() is not null
+            and lower(trim(coalesce(row_workspace, ''))) = public.errorsweep_jwt_workspace()
+        );
+$$;
+
+create or replace function public.errorsweep_email_matches(row_email text)
+returns boolean
+language sql
+stable
+as $$
+    select public.errorsweep_is_platform_owner()
+        or (
+            public.errorsweep_jwt_email() is not null
+            and lower(trim(coalesce(row_email, ''))) = public.errorsweep_jwt_email()
+        );
+$$;
+
+drop policy if exists errorsweep_editor_jobs_tenant_access on public.errorsweep_editor_jobs;
+create policy errorsweep_editor_jobs_tenant_access on public.errorsweep_editor_jobs
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_usage_events_tenant_access on public.errorsweep_usage_events;
+create policy errorsweep_usage_events_tenant_access on public.errorsweep_usage_events
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_users_tenant_access on public.errorsweep_users;
+create policy errorsweep_users_tenant_access on public.errorsweep_users
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email));
+
+drop policy if exists errorsweep_workspaces_tenant_access on public.errorsweep_workspaces;
+create policy errorsweep_workspaces_tenant_access on public.errorsweep_workspaces
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(owner))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(owner));
+
+drop policy if exists errorsweep_projects_tenant_access on public.errorsweep_projects;
+create policy errorsweep_projects_tenant_access on public.errorsweep_projects
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_jobs_tenant_access on public.errorsweep_jobs;
+create policy errorsweep_jobs_tenant_access on public.errorsweep_jobs
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_payments_tenant_access on public.errorsweep_payments;
+create policy errorsweep_payments_tenant_access on public.errorsweep_payments
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_invoices_tenant_access on public.errorsweep_invoices;
+create policy errorsweep_invoices_tenant_access on public.errorsweep_invoices
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(customer_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(customer_email));
+
+drop policy if exists errorsweep_subscriptions_tenant_access on public.errorsweep_subscriptions;
+create policy errorsweep_subscriptions_tenant_access on public.errorsweep_subscriptions
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_checkout_sessions_tenant_access on public.errorsweep_checkout_sessions;
+create policy errorsweep_checkout_sessions_tenant_access on public.errorsweep_checkout_sessions
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_billing_events_tenant_access on public.errorsweep_billing_events;
+create policy errorsweep_billing_events_tenant_access on public.errorsweep_billing_events
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_auth_tokens_tenant_access on public.errorsweep_auth_tokens;
+create policy errorsweep_auth_tokens_tenant_access on public.errorsweep_auth_tokens
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email));
+
+drop policy if exists errorsweep_audit_logs_tenant_access on public.errorsweep_audit_logs;
+create policy errorsweep_audit_logs_tenant_access on public.errorsweep_audit_logs
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(actor))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(actor));
+
+drop policy if exists errorsweep_files_tenant_access on public.errorsweep_files;
+create policy errorsweep_files_tenant_access on public.errorsweep_files
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_notifications_tenant_access on public.errorsweep_notifications;
+create policy errorsweep_notifications_tenant_access on public.errorsweep_notifications
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(recipient))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(recipient));
+
+drop policy if exists errorsweep_task_queue_tenant_access on public.errorsweep_task_queue;
+create policy errorsweep_task_queue_tenant_access on public.errorsweep_task_queue
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_platform_settings_tenant_access on public.errorsweep_platform_settings;
+create policy errorsweep_platform_settings_tenant_access on public.errorsweep_platform_settings
+for all to authenticated
+using (public.errorsweep_is_platform_owner())
+with check (public.errorsweep_is_platform_owner());
+
+drop policy if exists errorsweep_privacy_requests_tenant_access on public.errorsweep_privacy_requests;
+create policy errorsweep_privacy_requests_tenant_access on public.errorsweep_privacy_requests
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(requester_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(requester_email));
+
+drop policy if exists errorsweep_support_tickets_tenant_access on public.errorsweep_support_tickets;
+create policy errorsweep_support_tickets_tenant_access on public.errorsweep_support_tickets
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(requester_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(requester_email));
+
+drop policy if exists errorsweep_status_incidents_tenant_access on public.errorsweep_status_incidents;
+create policy errorsweep_status_incidents_tenant_access on public.errorsweep_status_incidents
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_consent_records_tenant_access on public.errorsweep_consent_records;
+create policy errorsweep_consent_records_tenant_access on public.errorsweep_consent_records
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email));
+
 create or replace view public.errorsweep_usage_daily as
 select
     date_trunc('day', created_at) as day,

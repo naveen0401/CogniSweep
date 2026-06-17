@@ -84,6 +84,10 @@ ENABLE_RLS_RE = re.compile(
     r"alter\s+table\s+public\.([a-zA-Z_][\w]*)\s+enable\s+row\s+level\s+security",
     re.IGNORECASE,
 )
+CREATE_POLICY_RE = re.compile(
+    r"create\s+policy\s+([a-zA-Z_][\w]*)\s+on\s+public\.([a-zA-Z_][\w]*)",
+    re.IGNORECASE,
+)
 
 
 def safe_text(value: Any) -> str:
@@ -214,7 +218,7 @@ def column_name_from_line(line: str) -> Optional[str]:
     return bare.group(1) if bare else None
 
 
-def parse_schema(sql: str) -> Tuple[Dict[str, Set[str]], Set[str]]:
+def parse_schema(sql: str) -> Tuple[Dict[str, Set[str]], Set[str], Dict[str, Set[str]]]:
     sql_without_comments = remove_sql_comments(sql)
     table_columns: Dict[str, Set[str]] = {}
     for match in CREATE_TABLE_RE.finditer(sql_without_comments):
@@ -231,7 +235,12 @@ def parse_schema(sql: str) -> Tuple[Dict[str, Set[str]], Set[str]]:
         if column:
             table_columns.setdefault(table, set()).add(column)
     rls_tables = {match.group(1) for match in ENABLE_RLS_RE.finditer(sql_without_comments)}
-    return table_columns, rls_tables
+    table_policies: Dict[str, Set[str]] = {}
+    for match in CREATE_POLICY_RE.finditer(sql_without_comments):
+        policy = match.group(1)
+        table = match.group(2)
+        table_policies.setdefault(table, set()).add(policy)
+    return table_columns, rls_tables, table_policies
 
 
 def strip_env_value(raw_value: str) -> str:
@@ -313,7 +322,7 @@ def collect_results(
         return results
 
     sql = schema_path.read_text(encoding="utf-8", errors="ignore")
-    schema_columns, rls_tables = parse_schema(sql)
+    schema_columns, rls_tables, table_policies = parse_schema(sql)
     expected_columns: Dict[str, Set[str]] = {table: set(columns) for table, columns in CORE_TABLE_COLUMNS.items()}
     for collection, table in saas_tables.items():
         expected_columns[table] = set(saas_columns.get(collection, set()))
@@ -354,6 +363,25 @@ def collect_results(
         "Pass" if not rls_missing else "Blocker",
         "RLS enabled for expected tables" if not rls_missing else truncate_items(rls_missing),
         "Enable row level security for every production table before public launch.",
+    )
+
+    policy_missing = [table for table in expected_tables if table not in table_policies]
+    sql_lower = sql.lower()
+    helper_tokens = [
+        "create or replace function public.errorsweep_jwt_workspace()",
+        "create or replace function public.errorsweep_jwt_email()",
+        "create or replace function public.errorsweep_is_platform_owner()",
+        "create or replace function public.errorsweep_workspace_matches(row_workspace text)",
+        "create or replace function public.errorsweep_email_matches(row_email text)",
+    ]
+    missing_helpers = [token for token in helper_tokens if token not in sql_lower]
+    add(
+        results,
+        "Persistence",
+        "Supabase tenant RLS policies",
+        "Pass" if not policy_missing and not missing_helpers else "Blocker",
+        f"{sum(len(policies) for policies in table_policies.values())} policy statement(s)" if not policy_missing and not missing_helpers else f"missing policies={truncate_items(policy_missing)}; missing helpers={len(missing_helpers)}",
+        "Create explicit workspace/user RLS policies for every production table; do not rely on ENABLE RLS alone.",
     )
 
     if probe_rest:

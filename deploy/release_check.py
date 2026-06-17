@@ -356,6 +356,18 @@ def check_supabase_schema(results: List[Dict[str, str]]) -> None:
         table for table in REQUIRED_SUPABASE_TABLES
         if f"alter table public.{table} enable row level security".lower() not in schema
     ]
+    rls_policy_tables = set(
+        re.findall(r"create\s+policy\s+[a-zA-Z_][\w]*\s+on\s+public\.([a-zA-Z_][\w]*)", schema, flags=re.IGNORECASE)
+    )
+    policy_missing = [table for table in REQUIRED_SUPABASE_TABLES if table not in rls_policy_tables]
+    helper_tokens = [
+        "create or replace function public.errorsweep_jwt_workspace()",
+        "create or replace function public.errorsweep_jwt_email()",
+        "create or replace function public.errorsweep_is_platform_owner()",
+        "create or replace function public.errorsweep_workspace_matches(row_workspace text)",
+        "create or replace function public.errorsweep_email_matches(row_email text)",
+    ]
+    missing_helpers = [token for token in helper_tokens if token not in schema]
     add(
         results,
         "Persistence",
@@ -371,6 +383,14 @@ def check_supabase_schema(results: List[Dict[str, str]]) -> None:
         "Pass" if not rls_missing else "Warn",
         "RLS enabled for required tables" if not rls_missing else ", ".join(rls_missing),
         "Enable row-level security for production SaaS tables; service-role workers can still use server-side access.",
+    )
+    add(
+        results,
+        "Persistence",
+        "Supabase tenant RLS policy coverage",
+        "Pass" if not policy_missing and not missing_helpers else "Blocker",
+        f"{len(rls_policy_tables)} table policy target(s)" if not policy_missing and not missing_helpers else f"missing_policies={policy_missing}; missing_helpers={len(missing_helpers)}",
+        "Keep explicit workspace/user RLS policies for every production table; ENABLE RLS alone is not enough.",
     )
 
 
