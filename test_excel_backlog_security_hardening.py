@@ -116,8 +116,10 @@ def test_compose_binds_internal_services_to_localhost():
 
 def test_placeholders_and_release_checks_are_aligned():
     persistence = source(PERSISTENCE)
+    app = source(Path("app.py"))
     assert 'SUPABASE_URL = "https://your-project.supabase.co"' not in persistence
     assert 'SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"' not in persistence
+    assert "eval(" not in app
 
     for path in [WORKFLOW, RELEASE_CHECK, ASYNC_CHECK, BILLING_CHECK, OBJECT_STORAGE_CHECK]:
         text = source(path)

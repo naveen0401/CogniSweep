@@ -4973,6 +4973,37 @@ def browser_cookie_domain_js_function() -> str:
     """.rstrip()
 
 
+def render_parent_script(runtime: str, *, height: int = 0, scrolling: bool = False) -> None:
+    """Install app-owned JavaScript in the parent Streamlit document without eval."""
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const runtime = {json.dumps(runtime)};
+          const install = (targetWindow) => {{
+            const targetDoc = targetWindow && targetWindow.document ? targetWindow.document : document;
+            const host = targetDoc.head || targetDoc.documentElement || targetDoc.body;
+            if (!host) return false;
+            const script = targetDoc.createElement("script");
+            script.type = "text/javascript";
+            script.textContent = runtime;
+            host.appendChild(script);
+            script.remove();
+            return true;
+          }};
+          try {{
+            if (!install(window.parent || window)) install(window);
+          }} catch (err) {{
+            try {{ install(window); }} catch (fallbackErr) {{}}
+          }}
+        }})();
+        </script>
+        """,
+        height=height,
+        scrolling=scrolling,
+    )
+
+
 def set_auth_debug_state(cookie_found: bool, session_valid: bool, route_decision: str = "", route: Optional[Dict[str, Any]] = None) -> None:
     st.session_state["_auth_debug"] = {
         "cookie_found": bool(cookie_found),
@@ -5420,23 +5451,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
           }} catch (err) {{}}
         }})();
     """
-    components.html(
-        f"""
-        <script>
-        (() => {{
-          const runtime = {json.dumps(bootstrap_runtime)};
-          const parentWin = window.parent || window;
-          try {{
-            if (parentWin && parentWin.eval) parentWin.eval(runtime);
-            else window.eval(runtime);
-          }} catch (err) {{
-            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
-          }}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
+    render_parent_script(bootstrap_runtime)
 
 
 def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
@@ -6793,130 +6808,120 @@ def render_app_navigation_targets(targets: List[Dict[str, Any]], prefix: str) ->
 
 
 def render_app_navigation_bridge() -> None:
-    components.html(
+    render_parent_script(
         """
-        <script>
         (() => {
-          const parentWin = window.parent || window;
-          const parentDoc = parentWin.document || document;
-          if (!parentDoc || !parentDoc.body) return;
-          const runtime = `
-          (() => {
-            if (!document || !document.body) return;
-            const cssEscape = (value) => {
-              if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
-              return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
-            };
-            const clickTarget = (key) => {
-              if (!key) return false;
-              const wrapper = document.querySelector(".st-key-" + cssEscape(key));
-              const button = wrapper && (
-                wrapper.querySelector('[data-testid="stButton"] button') ||
-                wrapper.querySelector(".stButton button") ||
-                wrapper.querySelector("button")
-              );
-              if (!button || button.disabled) return false;
-              window.setTimeout(() => button.click(), 0);
-              return true;
-            };
-            const sameOriginUrl = (href) => {
-              try {
-                const url = new URL(href, window.location.href);
-                if (url.origin !== window.location.origin) return null;
-                return url;
-              } catch (err) {
-                return null;
-              }
-            };
-            const handleClick = (event) => {
-              const trigger = event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
-              if (!trigger) return;
-              const target = String(trigger.getAttribute("target") || "_self").toLowerCase();
-              if (target && target !== "_self") return;
-              const key = trigger.getAttribute("data-es-app-nav");
-              const href = trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "";
-              return window.__errorsweepAppNavigate(event, key, href);
-            };
-            window.__errorsweepAppNavigate = (event, key, href) => {
-              const url = sameOriginUrl(href || "");
-              if (!url || !key) return true;
-              const trigger = event && event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
-              const target = trigger ? String(trigger.getAttribute("target") || "_self").toLowerCase() : "_self";
-              if (target && target !== "_self") return true;
-              event.preventDefault();
-              event.stopPropagation();
-              if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-              const handled = clickTarget(key);
-              window.__errorsweepLastAppNav = {
-                key,
-                href: url.toString(),
-                handled,
-                at: Date.now()
-              };
-              if (!handled) {
-                window.location.href = url.toString();
-              }
-              return false;
-            };
-            const bindTriggerListeners = () => {
-              Array.from(document.querySelectorAll("[data-es-app-nav]")).forEach((trigger) => {
-                if (trigger.__errorsweepAppNavHandler) {
-                  trigger.removeEventListener("click", trigger.__errorsweepAppNavHandler, true);
-                }
-                trigger.__errorsweepAppNavHandler = handleClick;
-                trigger.addEventListener("click", handleClick, true);
-              });
-              window.__errorsweepAppNavBoundAt = Date.now();
-              window.__errorsweepAppNavParentRuntime = true;
-            };
-            const findCurrentTarget = () => {
-              const current = new URL(window.location.href);
-              const currentSearch = current.searchParams.toString();
-              const triggers = Array.from(document.querySelectorAll("[data-es-app-nav]"));
-              return triggers.find((trigger) => {
-                const url = sameOriginUrl(trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "");
-                return url && url.searchParams.toString() === currentSearch;
-              });
-            };
-            const handlePopState = () => {
-              const anchor = findCurrentTarget();
-              const key = anchor && anchor.getAttribute("data-es-app-nav");
-              const handled = key ? clickTarget(key) : false;
-              window.__errorsweepLastAppNav = {
-                key: key || "",
-                href: window.location.href,
-                handled,
-                popstate: true,
-                at: Date.now()
-              };
-              if (handled) return;
-              window.location.reload();
-            };
-            if (document.__errorsweepAppNavClick) {
-              document.removeEventListener("click", document.__errorsweepAppNavClick, true);
+          if (!document || !document.body) return;
+          const cssEscape = (value) => {
+            if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
+            return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+          };
+          const clickTarget = (key) => {
+            if (!key) return false;
+            const wrapper = document.querySelector(".st-key-" + cssEscape(key));
+            const button = wrapper && (
+              wrapper.querySelector('[data-testid="stButton"] button') ||
+              wrapper.querySelector(".stButton button") ||
+              wrapper.querySelector("button")
+            );
+            if (!button || button.disabled) return false;
+            window.setTimeout(() => button.click(), 0);
+            return true;
+          };
+          const sameOriginUrl = (href) => {
+            try {
+              const url = new URL(href, window.location.href);
+              if (url.origin !== window.location.origin) return null;
+              return url;
+            } catch (err) {
+              return null;
             }
-            document.__errorsweepAppNavClick = handleClick;
-            document.addEventListener("click", handleClick, true);
-            if (document.__errorsweepAppNavObserver) {
-              document.__errorsweepAppNavObserver.disconnect();
+          };
+          const handleClick = (event) => {
+            const trigger = event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
+            if (!trigger) return;
+            const target = String(trigger.getAttribute("target") || "_self").toLowerCase();
+            if (target && target !== "_self") return;
+            const key = trigger.getAttribute("data-es-app-nav");
+            const href = trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "";
+            return window.__errorsweepAppNavigate(event, key, href);
+          };
+          window.__errorsweepAppNavigate = (event, key, href) => {
+            const url = sameOriginUrl(href || "");
+            if (!url || !key) return true;
+            const trigger = event && event.target && event.target.closest ? event.target.closest("[data-es-app-nav]") : null;
+            const target = trigger ? String(trigger.getAttribute("target") || "_self").toLowerCase() : "_self";
+            if (target && target !== "_self") return true;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            const handled = clickTarget(key);
+            window.__errorsweepLastAppNav = {
+              key,
+              href: url.toString(),
+              handled,
+              at: Date.now()
+            };
+            if (!handled) {
+              window.location.href = url.toString();
             }
-            let bindTimer = null;
-            document.__errorsweepAppNavObserver = new MutationObserver(() => {
-              if (bindTimer) window.clearTimeout(bindTimer);
-              bindTimer = window.setTimeout(bindTriggerListeners, 0);
+            return false;
+          };
+          const bindTriggerListeners = () => {
+            Array.from(document.querySelectorAll("[data-es-app-nav]")).forEach((trigger) => {
+              if (trigger.__errorsweepAppNavHandler) {
+                trigger.removeEventListener("click", trigger.__errorsweepAppNavHandler, true);
+              }
+              trigger.__errorsweepAppNavHandler = handleClick;
+              trigger.addEventListener("click", handleClick, true);
             });
-            document.__errorsweepAppNavObserver.observe(document.body, { childList: true, subtree: true });
-            [0, 50, 250, 1000].forEach((delay) => window.setTimeout(bindTriggerListeners, delay));
-            if (window.__errorsweepAppNavPopState) {
-              window.removeEventListener("popstate", window.__errorsweepAppNavPopState);
-            }
-            window.__errorsweepAppNavPopState = handlePopState;
-            window.addEventListener("popstate", handlePopState);
-          })();
-          `;
-          parentWin.eval(runtime);
+            window.__errorsweepAppNavBoundAt = Date.now();
+            window.__errorsweepAppNavParentRuntime = true;
+          };
+          const findCurrentTarget = () => {
+            const current = new URL(window.location.href);
+            const currentSearch = current.searchParams.toString();
+            const triggers = Array.from(document.querySelectorAll("[data-es-app-nav]"));
+            return triggers.find((trigger) => {
+              const url = sameOriginUrl(trigger.getAttribute("data-es-app-href") || trigger.href || trigger.getAttribute("href") || "");
+              return url && url.searchParams.toString() === currentSearch;
+            });
+          };
+          const handlePopState = () => {
+            const anchor = findCurrentTarget();
+            const key = anchor && anchor.getAttribute("data-es-app-nav");
+            const handled = key ? clickTarget(key) : false;
+            window.__errorsweepLastAppNav = {
+              key: key || "",
+              href: window.location.href,
+              handled,
+              popstate: true,
+              at: Date.now()
+            };
+            if (handled) return;
+            window.location.reload();
+          };
+          if (document.__errorsweepAppNavClick) {
+            document.removeEventListener("click", document.__errorsweepAppNavClick, true);
+          }
+          document.__errorsweepAppNavClick = handleClick;
+          document.addEventListener("click", handleClick, true);
+          if (document.__errorsweepAppNavObserver) {
+            document.__errorsweepAppNavObserver.disconnect();
+          }
+          let bindTimer = null;
+          document.__errorsweepAppNavObserver = new MutationObserver(() => {
+            if (bindTimer) window.clearTimeout(bindTimer);
+            bindTimer = window.setTimeout(bindTriggerListeners, 0);
+          });
+          document.__errorsweepAppNavObserver.observe(document.body, { childList: true, subtree: true });
+          [0, 50, 250, 1000].forEach((delay) => window.setTimeout(bindTriggerListeners, delay));
+          if (window.__errorsweepAppNavPopState) {
+            window.removeEventListener("popstate", window.__errorsweepAppNavPopState);
+          }
+          window.__errorsweepAppNavPopState = handlePopState;
+          window.addEventListener("popstate", handlePopState);
         })();
-        </script>
         """,
         height=0,
         scrolling=False,
@@ -16110,9 +16115,17 @@ def render_editor_session_handoff_bridge() -> None:
             document.addEventListener("click", handleEditorOpen, true);
           }})();
           `;
-          try {{ parentWin.eval(runtime); }} catch (err) {{
-            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
-          }}
+          try {{
+            const parentDoc = parentWin.document || document;
+            const host = parentDoc.head || parentDoc.documentElement || parentDoc.body;
+            if (host) {{
+              const script = parentDoc.createElement("script");
+              script.type = "text/javascript";
+              script.textContent = runtime;
+              host.appendChild(script);
+              script.remove();
+            }}
+          }} catch (err) {{}}
         }})();
         </script>
         """,
@@ -19186,11 +19199,16 @@ def render_public_auth_session_resume_bridge() -> None:
           const runtime = {json.dumps(resume_runtime)};
           const parentWin = window.parent || window;
           try {{
-            if (parentWin && parentWin.eval) parentWin.eval(runtime);
-            else window.eval(runtime);
-          }} catch (err) {{
-            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
-          }}
+            const parentDoc = parentWin.document || document;
+            const host = parentDoc.head || parentDoc.documentElement || parentDoc.body;
+            if (host) {{
+              const script = parentDoc.createElement("script");
+              script.type = "text/javascript";
+              script.textContent = runtime;
+              host.appendChild(script);
+              script.remove();
+            }}
+          }} catch (err) {{}}
         }})();
         </script>
         """,
