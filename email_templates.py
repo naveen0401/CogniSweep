@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from html import escape
 from typing import Any, Dict, Iterable, Tuple
+from urllib.parse import urlparse
 
 URL_RE = re.compile(r"https?://[^\s)>\"]+", re.IGNORECASE)
 
@@ -200,14 +201,27 @@ def _first_url_from_text(text: str) -> str:
     return match.group(0).rstrip(".,") if match else ""
 
 
+def _safe_link_url(value: Any) -> str:
+    url = _safe_text(value)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return ""
+    if not parsed.netloc:
+        return ""
+    return url
+
+
 def _cta(meta: Dict[str, Any], template: Dict[str, Any], body: str, app_base_url: str) -> Tuple[str, str]:
     for key in template.get("url_keys", ()):
-        url = _safe_text(meta.get(key))
+        url = _safe_link_url(meta.get(key))
         if url:
             return _safe_text(template.get("cta_label")) or "Open CogniSweep", url
-    body_url = _first_url_from_text(body)
+    body_url = _safe_link_url(_first_url_from_text(body))
     if body_url:
         return _safe_text(template.get("cta_label")) or "Open CogniSweep", body_url
+    app_base_url = _safe_link_url(app_base_url)
     if app_base_url:
         return "Open CogniSweep", app_base_url
     return "", ""

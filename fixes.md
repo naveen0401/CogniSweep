@@ -21,6 +21,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 14. Thread Lock vs Process Lock Discrepancy
 15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 16. Excel Backlog Production Hardening
+17. Transactional Email Template HTML Safety
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -56,6 +57,7 @@ None currently tracked.
 28. Local-Only Upload Storage
 29. Heavy Workflow Request Blocking
 30. Excel Backlog Production Hardening
+31. Transactional Email Template HTML Safety
 
 ## Resolved in Latest Pass
 
@@ -122,6 +124,10 @@ None currently tracked.
 ### 16. Excel Backlog Production Hardening
 *   **The Issue:** Remaining audit backlog items called out public worker/billing/Redis ports, optional async receiver tokens, email header injection risk, default public object URLs, and missing release-gate coverage for those contracts.
 *   **The Fix:** Production compose now binds worker, billing receiver, and Redis ports to localhost; the async receiver fails closed without a production token and uses constant-time token comparison; outbound email headers and addresses reject newline injection; public object URLs are disabled unless explicitly enabled; and release checks/CI now enforce these contracts. *(Verified fixed)*.
+
+### 17. Transactional Email Template HTML Safety
+*   **The Issue:** Transactional email templates escaped body/headline/fact HTML, but metadata-supplied CTA URLs were not explicitly restricted to safe web schemes.
+*   **The Fix:** Email CTA links now accept only `http` and `https` URLs with a host, while script/data-style URLs are dropped. Regression coverage verifies HTML escaping and unsafe CTA rejection. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -250,3 +256,7 @@ None currently tracked.
 ### 30. Excel Backlog Production Hardening
 *   **The Issue:** Lower-priority Excel audit findings remained around production service exposure, async worker token posture, object-storage URL defaults, and notification email header safety.
 *   **The Fix:** Added fail-closed async token enforcement, constant-time bearer-token comparison, email header sanitization, localhost-only internal compose ports, opt-in public object URLs, and a dedicated regression test plus release-gate wiring. *(Verified fixed)*.
+
+### 31. Transactional Email Template HTML Safety
+*   **The Issue:** User-controlled notification metadata could provide unsafe CTA URL schemes even though email text fields were escaped.
+*   **The Fix:** CTA URLs are filtered through a strict web-link allowlist and release-gate coverage now includes `test_email_template_security.py`. *(Verified fixed)*.
