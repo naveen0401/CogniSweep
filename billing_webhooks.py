@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
@@ -37,6 +38,36 @@ def _metadata_from(entity: Dict[str, Any]) -> Dict[str, Any]:
     metadata = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
     notes = entity.get("notes") if isinstance(entity.get("notes"), dict) else {}
     return {**notes, **metadata}
+
+
+def _epoch_seconds(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value) if value > 0 else 0
+    text = _safe_text(value)
+    if not text:
+        return 0
+    try:
+        return int(float(text))
+    except Exception:
+        pass
+    try:
+        normalized = text.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+    except Exception:
+        return 0
+
+
+def _first_epoch(*values: Any) -> int:
+    for value in values:
+        epoch = _epoch_seconds(value)
+        if epoch:
+            return epoch
+    return 0
 
 
 def verify_stripe_signature(raw_payload: str, signature_header: str, webhook_secret: str, tolerance_seconds: int = 300) -> bool:
@@ -129,6 +160,7 @@ def _normalise_razorpay(payload: Dict[str, Any]) -> Dict[str, Any]:
         "provider_order_id": _safe_text(order.get("id") or payment.get("order_id")),
         "provider_customer_id": _safe_text(entity.get("customer_id")),
         "checkout_id": _safe_text(metadata.get("checkout_id") or metadata.get("checkout_session_id")),
+        "event_created_at": _first_epoch(payload.get("created_at"), entity.get("created_at")),
         "metadata": metadata,
     }
 
@@ -167,6 +199,7 @@ def _normalise_stripe(payload: Dict[str, Any]) -> Dict[str, Any]:
         "provider_order_id": "",
         "provider_customer_id": _safe_text(entity.get("customer")),
         "checkout_id": _safe_text(metadata.get("checkout_id") or entity.get("id")),
+        "event_created_at": _first_epoch(payload.get("created"), entity.get("created")),
         "metadata": metadata,
     }
 
@@ -195,6 +228,13 @@ def normalize_billing_webhook(provider: str, raw_payload: str) -> Dict[str, Any]
             "provider_order_id": _safe_text(payload.get("provider_order_id") or payload.get("order_id")),
             "provider_customer_id": _safe_text(payload.get("provider_customer_id") or payload.get("customer_id")),
             "checkout_id": _safe_text(payload.get("checkout_id") or metadata.get("checkout_id")),
+            "event_created_at": _first_epoch(
+                payload.get("created_at"),
+                payload.get("created"),
+                payload.get("timestamp"),
+                metadata.get("created_at"),
+                metadata.get("timestamp"),
+            ),
             "metadata": metadata,
         }
     normalized["raw_sha256"] = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()

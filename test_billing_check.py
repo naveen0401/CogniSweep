@@ -26,6 +26,7 @@ def test_billing_check_script_contract():
         "def validate_env_config",
         "def run_local_smoke",
         "def probe_receiver_health",
+        "Webhook replay/idempotency coverage",
         "billing_webhook_receiver.py",
         "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL",
         "ERRORSWEEP_WEBHOOK_APPLY_UPDATES",

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +35,8 @@ SUCCESS_STATUSES = {"paid", "active", "authorized", "authenticated", "captured",
 FAILED_STATUSES = {"failed", "failure", "declined", "requires_payment_method"}
 CANCELLED_STATUSES = {"cancelled", "canceled", "cancel_at_period_end"}
 TERMINAL_CHECKOUT_STATUSES = {"cancelled", "canceled", "expired", "paid", "completed", "failed", "mandate_active"}
+DEFAULT_REPLAY_WINDOW_SECONDS = 300
+DEFAULT_FUTURE_SKEW_SECONDS = 60
 
 PLAN_CATALOG: Dict[str, Dict[str, Any]] = {
     "trial": {
@@ -91,6 +94,14 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        value = int(safe_text(os.getenv(name)))
+    except Exception:
+        value = default
+    return max(minimum, value)
 
 
 def plan_record(plan_name: str) -> Dict[str, Any]:
@@ -169,6 +180,37 @@ def fetch_collection(collection: str, workspace: str = "") -> List[Dict[str, Any
         include_all_workspaces=not bool(workspace),
         platform_scope_reason="billing_webhook_reconciliation" if not workspace else "",
     )
+
+
+def event_replay_status(normalized: Dict[str, Any], now_seconds: Optional[float] = None) -> str:
+    raw_timestamp = normalized.get("event_created_at")
+    try:
+        event_seconds = int(float(raw_timestamp or 0))
+    except Exception:
+        event_seconds = 0
+    if event_seconds <= 0:
+        return "not_available"
+
+    now_value = float(now_seconds if now_seconds is not None else time.time())
+    replay_window = env_int("ERRORSWEEP_BILLING_WEBHOOK_REPLAY_WINDOW_SECONDS", DEFAULT_REPLAY_WINDOW_SECONDS, minimum=60)
+    future_skew = env_int("ERRORSWEEP_BILLING_WEBHOOK_FUTURE_SKEW_SECONDS", DEFAULT_FUTURE_SKEW_SECONDS, minimum=1)
+    if event_seconds < now_value - replay_window:
+        return "too_old"
+    if event_seconds > now_value + future_skew:
+        return "future"
+    return "valid"
+
+
+def find_existing_billing_event(normalized: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    provider = safe_text(normalized.get("provider")).lower()
+    event_id = safe_text(normalized.get("event_id"))
+    if not provider or not event_id:
+        return None
+    workspace = safe_text(normalized.get("workspace"))
+    for item in fetch_collection("billing_events", workspace=workspace):
+        if provider == safe_text(item.get("provider")).lower() and event_id == safe_text(item.get("event_id")):
+            return item
+    return None
 
 
 def persist(collection: str, record: Dict[str, Any], workspace: str = "", user_email: str = "") -> Dict[str, Any]:
@@ -376,7 +418,7 @@ def apply_billing_event(normalized: Dict[str, Any]) -> List[str]:
     return messages
 
 
-def billing_event_record(normalized: Dict[str, Any], signature_status: str) -> Dict[str, Any]:
+def billing_event_record(normalized: Dict[str, Any], signature_status: str, replay_status: str) -> Dict[str, Any]:
     return {
         "workspace": billing_workspace(normalized),
         "user_email": safe_text(normalized.get("user_email")),
@@ -399,6 +441,7 @@ def billing_event_record(normalized: Dict[str, Any], signature_status: str) -> D
             "provider_metadata": normalized.get("metadata") or {},
             "normalized": normalized,
             "receiver": APP_NAME,
+            "event_replay_status": replay_status,
         },
     }
 
@@ -407,8 +450,35 @@ def process_webhook(provider: str, raw_payload: str, headers: Mapping[str, str],
     normalized = normalize_billing_webhook(provider, raw_payload)
     resolved_provider = safe_text(normalized.get("provider") or provider or "manual").lower()
     signature_status = verify_signature(resolved_provider, raw_payload, headers)
-    event_record = billing_event_record(normalized, signature_status)
-    event_record["provider"] = resolved_provider
+    replay_status = event_replay_status(normalized)
+    existing_event = find_existing_billing_event(normalized)
+    duplicate_applied_event = bool(existing_event and existing_event.get("applied"))
+    new_event_record = billing_event_record(normalized, signature_status, replay_status)
+    new_event_record["provider"] = resolved_provider
+    if existing_event and duplicate_applied_event:
+        event_record = dict(existing_event)
+        existing_metadata = parse_metadata(existing_event.get("metadata_json"))
+        event_record["metadata_json"] = {
+            **existing_metadata,
+            "duplicate_event_seen_at": now_iso(),
+            "duplicate_signature_status": signature_status,
+            "duplicate_replay_status": replay_status,
+            "duplicate_raw_sha256": safe_text(normalized.get("raw_sha256")),
+            "duplicate_was_already_applied": True,
+        }
+    else:
+        event_record = new_event_record
+    if existing_event and not duplicate_applied_event:
+        if safe_text(existing_event.get("id")):
+            event_record["id"] = safe_text(existing_event.get("id"))
+        existing_metadata = parse_metadata(existing_event.get("metadata_json"))
+        event_record["applied"] = bool(existing_event.get("applied"))
+        event_record["metadata_json"] = {
+            **existing_metadata,
+            **parse_metadata(new_event_record.get("metadata_json")),
+            "duplicate_event_seen_at": now_iso(),
+            "duplicate_was_already_applied": False,
+        }
     event_record = persist(
         "billing_events",
         event_record,
@@ -418,7 +488,12 @@ def process_webhook(provider: str, raw_payload: str, headers: Mapping[str, str],
 
     applied_messages: List[str] = []
     blocked_signatures = {"invalid", "missing", "secret_missing", "unavailable"}
-    if apply_updates and signature_status not in blocked_signatures:
+    blocked_replays = {"too_old", "future"}
+    if duplicate_applied_event:
+        applied_messages = ["Duplicate billing event ignored because it was already applied."]
+    elif replay_status in blocked_replays:
+        applied_messages = [f"Event stored but not applied because replay status is {replay_status}."]
+    elif apply_updates and signature_status not in blocked_signatures:
         applied_messages = apply_billing_event(normalized)
         event_record["applied"] = True
         event_record["metadata_json"] = {
@@ -439,15 +514,19 @@ def process_webhook(provider: str, raw_payload: str, headers: Mapping[str, str],
     status_code = HTTPStatus.OK
     if signature_status in {"invalid", "missing", "secret_missing"}:
         status_code = HTTPStatus.UNAUTHORIZED
+    elif replay_status in {"too_old", "future"}:
+        status_code = HTTPStatus.BAD_REQUEST
 
     response = {
-        "ok": signature_status not in {"invalid", "missing", "secret_missing"},
+        "ok": signature_status not in {"invalid", "missing", "secret_missing"} and replay_status not in {"too_old", "future"},
         "provider": resolved_provider,
         "event_id": safe_text(normalized.get("event_id")),
         "event_type": safe_text(normalized.get("event_type")),
         "status": safe_text(normalized.get("status")),
         "signature_status": signature_status,
+        "event_replay_status": replay_status,
         "applied": bool(event_record.get("applied")),
+        "duplicate": duplicate_applied_event,
         "messages": applied_messages,
     }
     return int(status_code), response

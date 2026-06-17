@@ -33,6 +33,8 @@ SUPPORTED_PROVIDERS = {"razorpay", "stripe"}
 REQUIRED_RECEIVER_SYMBOLS = [
     "process_webhook",
     "verify_signature",
+    "event_replay_status",
+    "find_existing_billing_event",
     "provider_from_path",
     "BillingWebhookHandler",
     "do_GET",
@@ -274,6 +276,26 @@ def validate_receiver_contract(results: List[Dict[str, str]]) -> None:
         "Pass" if not signature_tokens else "Blocker",
         "constant-time verification and provider headers covered" if not signature_tokens else ", ".join(signature_tokens),
         "Do not apply live billing events unless Stripe/Razorpay signatures verify.",
+    )
+
+    replay_tokens = missing_items(
+        [
+            "event_replay_status",
+            "find_existing_billing_event",
+            "duplicate_applied_event",
+            "ERRORSWEEP_BILLING_WEBHOOK_REPLAY_WINDOW_SECONDS",
+            "too_old",
+            "future",
+        ],
+        receiver,
+    )
+    add(
+        results,
+        "Billing",
+        "Webhook replay/idempotency coverage",
+        "Pass" if not replay_tokens else "Blocker",
+        "event replay window and duplicate already-applied events are guarded" if not replay_tokens else ", ".join(replay_tokens),
+        "Do not apply stale, future-dated, or already-applied billing provider events.",
     )
 
 
