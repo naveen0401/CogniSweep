@@ -5147,12 +5147,35 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));
             if (!publicEntry && !hasProtectedTarget) return;
 
-            const cookieToken = readCookie(targetDoc);
-            const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
-            const token = cookieToken || storageToken;
-            if (!token) {{
+            const cleanOriginalParams = () => {{
               const originalParams = new URLSearchParams(url.search);
               ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => originalParams.delete(key));
+              return originalParams;
+            }};
+            const clearBootstrapState = () => {{
+              if (!sessionStorage) return;
+              try {{
+                sessionStorage.removeItem(storageKey + "_bootstrap_attempted");
+                sessionStorage.removeItem(storageKey + "_bootstrap_attempts");
+                sessionStorage.removeItem(storageKey + "_bootstrap_token");
+              }} catch (err) {{}}
+            }};
+            const clearBrowserSessionToken = (tokenToClear) => {{
+              const secure = loc.protocol === "https:" ? "; Secure" : "";
+              const domainAttr = cookieDomainAttribute(loc.hostname);
+              try {{
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + domainAttr;
+              }} catch (err) {{}}
+              try {{
+                if (localStorage && (!tokenToClear || String(localStorage.getItem(storageKey) || "") === tokenToClear)) {{
+                  localStorage.removeItem(storageKey);
+                }}
+              }} catch (err) {{}}
+              clearBootstrapState();
+            }};
+            const routeToAuthFallback = () => {{
+              const originalParams = cleanOriginalParams();
               Array.from(url.searchParams.keys()).forEach((key) => url.searchParams.delete(key));
               if (publicEntry) {{
                 url.searchParams.set("es_page", "Landing");
@@ -5162,11 +5185,53 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
                 if (returnTo) url.searchParams.set("return_to", returnTo);
               }}
               loc.replace(url.toString());
+            }};
+            const cookieToken = readCookie(targetDoc);
+            const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
+            const token = cookieToken || storageToken;
+            if (!token) {{
+              clearBrowserSessionToken("");
+              routeToAuthFallback();
               return;
             }}
-            const attemptKey = storageKey + "_bootstrap_attempted";
-            if (!cookieToken && sessionStorage && sessionStorage.getItem(attemptKey) === token) return;
-            if (!cookieToken && sessionStorage) sessionStorage.setItem(attemptKey, token);
+            const attemptKey = storageKey + "_bootstrap_attempts";
+            const attemptTokenKey = storageKey + "_bootstrap_token";
+            const maxBootstrapAttempts = 3;
+            let attempts = 0;
+            if (sessionStorage) {{
+              try {{
+                const previousToken = String(sessionStorage.getItem(attemptTokenKey) || "");
+                if (previousToken !== token) {{
+                  sessionStorage.setItem(attemptTokenKey, token);
+                  sessionStorage.setItem(attemptKey, "0");
+                }} else {{
+                  const parsedAttempts = Number(sessionStorage.getItem(attemptKey) || "0");
+                  attempts = Number.isFinite(parsedAttempts) && parsedAttempts > 0 ? parsedAttempts : 0;
+                }}
+              }} catch (err) {{}}
+            }}
+            if (attempts >= maxBootstrapAttempts) {{
+              if (cookieToken && storageToken && storageToken !== cookieToken) {{
+                clearBrowserSessionToken(cookieToken);
+                if (sessionStorage) {{
+                  try {{
+                    sessionStorage.setItem(attemptTokenKey, storageToken);
+                    sessionStorage.setItem(attemptKey, "0");
+                  }} catch (err) {{}}
+                }}
+                loc.reload();
+                return;
+              }}
+              clearBrowserSessionToken(token);
+              routeToAuthFallback();
+              return;
+            }}
+            if (sessionStorage) {{
+              try {{
+                sessionStorage.setItem(attemptTokenKey, token);
+                sessionStorage.setItem(attemptKey, String(attempts + 1));
+              }} catch (err) {{}}
+            }}
 
             const secure = loc.protocol === "https:" ? "; Secure" : "";
             targetDoc.cookie = cookieName + "=" + encodeURIComponent(token) +
@@ -18239,6 +18304,34 @@ def render_public_auth_session_resume_bridge() -> None:
             return null;
           }};
 
+          const safeSessionStorage = () => {{
+            try {{ return parentWin.sessionStorage || window.sessionStorage; }} catch (err) {{}}
+            return null;
+          }};
+
+          const clearResumeState = (store) => {{
+            if (!store) return;
+            try {{
+              store.removeItem(storageKey + "_public_resume_attempts");
+              store.removeItem(storageKey + "_public_resume_token");
+            }} catch (err) {{}}
+          }};
+
+          const clearBrowserSessionToken = (storage, tokenToClear) => {{
+            const loc = parentWin.location;
+            const secure = loc.protocol === "https:" ? "; Secure" : "";
+            const domainAttr = cookieDomainAttribute(loc.hostname);
+            try {{
+              parentDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+              parentDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + domainAttr;
+            }} catch (err) {{}}
+            try {{
+              if (storage && (!tokenToClear || String(storage.getItem(storageKey) || "") === tokenToClear)) {{
+                storage.removeItem(storageKey);
+              }}
+            }} catch (err) {{}}
+          }};
+
           const cleanTargetParams = (params) => {{
             const target = {{}};
             routeParamKeys.forEach((key) => {{
@@ -18278,12 +18371,48 @@ def render_public_auth_session_resume_bridge() -> None:
           try {{
             parentDoc.body.classList.add(maskClass);
             const storage = safeStorage();
+            const resumeSessionStorage = safeSessionStorage();
             const cookieToken = readCookie();
             const storageToken = storage ? String(storage.getItem(storageKey) || "") : "";
             const token = cookieToken || storageToken;
             if (!token) {{
+              clearResumeState(resumeSessionStorage);
               revealPublicAuthPage();
               return;
+            }}
+            const attemptKey = storageKey + "_public_resume_attempts";
+            const attemptTokenKey = storageKey + "_public_resume_token";
+            const maxResumeAttempts = 2;
+            let attempts = 0;
+            if (resumeSessionStorage) {{
+              try {{
+                const previousToken = String(resumeSessionStorage.getItem(attemptTokenKey) || "");
+                if (previousToken !== token) {{
+                  resumeSessionStorage.setItem(attemptTokenKey, token);
+                  resumeSessionStorage.setItem(attemptKey, "0");
+                }} else {{
+                  const parsedAttempts = Number(resumeSessionStorage.getItem(attemptKey) || "0");
+                  attempts = Number.isFinite(parsedAttempts) && parsedAttempts > 0 ? parsedAttempts : 0;
+                }}
+              }} catch (err) {{}}
+            }}
+            if (attempts >= maxResumeAttempts) {{
+              if (cookieToken && storageToken && storageToken !== cookieToken) {{
+                clearBrowserSessionToken(storage, cookieToken);
+                clearResumeState(resumeSessionStorage);
+                parentWin.location.reload();
+                return;
+              }}
+              clearBrowserSessionToken(storage, token);
+              clearResumeState(resumeSessionStorage);
+              revealPublicAuthPage();
+              return;
+            }}
+            if (resumeSessionStorage) {{
+              try {{
+                resumeSessionStorage.setItem(attemptTokenKey, token);
+                resumeSessionStorage.setItem(attemptKey, String(attempts + 1));
+              }} catch (err) {{}}
             }}
 
             const loc = parentWin.location;

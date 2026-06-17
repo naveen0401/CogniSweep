@@ -380,6 +380,13 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));' in source
     assert 'const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));' in source
     assert '["es_editor", "job_id", "review_id"].some((key) => url.searchParams.has(key))' in source
+    assert 'sessionStorage.getItem(attemptKey) === token) return' not in source
+    assert 'const maxBootstrapAttempts = 3;' in source
+    assert 'storageKey + "_bootstrap_attempts"' in source
+    assert "routeToAuthFallback();" in source
+    assert 'const maxResumeAttempts = 2;' in source
+    assert 'storageKey + "_public_resume_attempts"' in source
+    assert "revealPublicAuthPage();" in source
     assert "parentWin.eval(runtime)" in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
