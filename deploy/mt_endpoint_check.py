@@ -53,6 +53,7 @@ REQUIRED_CLIENT_SYMBOLS = [
     "translate_with_madlad",
     "translate_with_opus_mt",
     "normalize_endpoint",
+    "validate_endpoint_for_request",
     "protect_text",
     "restore_text",
 ]
@@ -74,6 +75,7 @@ REQUIRED_TEMPLATE_KEYS = [
     "OPUS_MT_ENDPOINT",
     "OPUS_MT_API_KEY",
     "SELF_HOSTED_MT_TIMEOUT",
+    "SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS",
 ]
 PLACEHOLDER_MARKERS = (
     "replace-with",

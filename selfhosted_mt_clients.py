@@ -1,7 +1,10 @@
 """HTTP clients and placeholder protection for CogniSweep self-hosted MT."""
 from __future__ import annotations
+import ipaddress
 import logging
+import os
 import re, time
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
@@ -11,6 +14,26 @@ class TranslationRouteError(RuntimeError):
     pass
 
 PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|<[^>]+>|%[0-9$.\-+]*[sdif]|https?://\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.-]+)")
+PRIVATE_HOSTNAMES = {"localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"}
+PRIVATE_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home")
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = str(os.getenv(name, "") or "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _is_production() -> bool:
+    env = str(os.getenv("ERRORSWEEP_ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return env in {"prod", "production"}
+
+
+def private_endpoints_allowed() -> bool:
+    return _env_bool("SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS", not _is_production())
 
 def estimate_characters(texts: List[str]) -> int:
     return sum(len(str(t or "")) for t in texts)
@@ -22,6 +45,41 @@ def normalize_endpoint(endpoint: str) -> str:
     if not endpoint.endswith("/translate"):
         endpoint += "/translate"
     return endpoint
+
+
+def blocked_endpoint_reason(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return "translation endpoint must be an absolute HTTP(S) URL"
+    if parsed.username or parsed.password:
+        return "translation endpoint must not include credentials"
+    if _is_production() and parsed.scheme != "https" and not private_endpoints_allowed():
+        return "production translation endpoints must use HTTPS"
+
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return "translation endpoint host is missing"
+    if private_endpoints_allowed():
+        return ""
+    if host in PRIVATE_HOSTNAMES or host.endswith(PRIVATE_HOST_SUFFIXES):
+        return "private/local translation endpoint host is not allowed"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or str(ip) == "169.254.169.254":
+        return "private/local translation endpoint address is not allowed"
+    return ""
+
+
+def validate_endpoint_for_request(endpoint: str) -> str:
+    url = normalize_endpoint(endpoint)
+    if not url:
+        raise TranslationRouteError("Translation endpoint is missing.")
+    reason = blocked_endpoint_reason(url)
+    if reason:
+        raise TranslationRouteError(reason)
+    return url
 
 def protect_text(text: str, extra_terms: Optional[List[str]] = None) -> Tuple[str, Dict[str, str]]:
     mapping: Dict[str, str] = {}
@@ -59,13 +117,14 @@ def _chunks(items: List[Any], size: int):
         yield items[i:i+size]
 
 def _post(endpoint: str, api_key: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
-    url = normalize_endpoint(endpoint)
-    if not url:
-        raise TranslationRouteError("Translation endpoint is missing.")
+    url = validate_endpoint_for_request(endpoint)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    res = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=max(1, int(timeout or 180)))
+    except requests.RequestException as exc:
+        raise TranslationRouteError(f"Translation endpoint request failed: {exc}") from exc
     if res.status_code >= 400:
         try:
             details = res.json()
