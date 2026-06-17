@@ -34,6 +34,24 @@ def _safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _sanitize_header(value: Any, label: str, max_length: int = 320) -> str:
+    text = _safe_text(value)
+    if "\r" in text or "\n" in text:
+        raise ValueError(f"{label} contains prohibited newline characters.")
+    return text[:max(1, int(max_length))]
+
+
+def _validate_email_address(value: Any, label: str) -> str:
+    raw = _sanitize_header(value, label)
+    parsed_name, parsed_email = parseaddr(raw)
+    email = _safe_text(parsed_email or raw)
+    if "\r" in email or "\n" in email or not email or "@" not in email:
+        raise ValueError(f"{label} is missing or invalid.")
+    if raw != email and parsed_name:
+        _sanitize_header(parsed_name, f"{label} display name")
+    return email
+
+
 def _env(name: str, default: str = "") -> str:
     value = os.environ.get(name)
     if value not in (None, ""):
@@ -189,17 +207,28 @@ def dispatch_notification(record: Dict[str, Any], dry_run: bool = False) -> Dict
         return updated
 
     recipient = _safe_text(updated.get("recipient"))
-    if not recipient or "@" not in recipient:
+    try:
+        recipient = _validate_email_address(recipient, "Notification recipient")
+    except ValueError as exc:
         updated["status"] = "failed"
-        updated["error"] = "Notification recipient is missing or invalid."
+        updated["error"] = _safe_text(exc)
         updated["updated_at"] = _now_iso()
         return updated
 
     payload = notification_email_payload(updated)
-    subject = _safe_text(payload.get("subject") or updated.get("subject"))
+    try:
+        subject = _sanitize_header(payload.get("subject") or updated.get("subject"), "Email subject", max_length=240)
+        sender, sender_email, sender_name = email_sender_parts()
+        sender = _sanitize_header(sender, "Email sender")
+        sender_email = _validate_email_address(sender_email, "Email sender")
+        sender_name = _sanitize_header(sender_name, "Email sender display name", max_length=120)
+    except ValueError as exc:
+        updated["status"] = "failed"
+        updated["error"] = _safe_text(exc)
+        updated["updated_at"] = _now_iso()
+        return updated
     text_body = _safe_text(payload.get("text") or updated.get("body"))
     html_body = _safe_text(payload.get("html"))
-    sender, sender_email, sender_name = email_sender_parts()
 
     try:
         if dry_run:

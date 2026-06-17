@@ -49,6 +49,12 @@ REQUIRED_RECEIVER_SYMBOLS = [
     "update_task_status",
     "smoke_check",
     "run_server",
+    "validate_worker_token_config",
+]
+REQUIRED_RECEIVER_SECURITY_TOKENS = [
+    "hmac.compare_digest",
+    "ERRORSWEEP_ASYNC_WORKER_TOKEN is required when ERRORSWEEP_ENV=production",
+    "is_production_mode() or bool(worker_token())",
 ]
 REQUIRED_PROCESSOR_SYMBOLS = [
     "process_task_payload",
@@ -280,6 +286,16 @@ def validate_symbols(results: List[Dict[str, str]]) -> None:
         "DOCX XML is size-capped and parsed with defusedxml DTD/entity guards" if not missing_processor_security else ", ".join(missing_processor_security),
         "Keep async DOCX parsing protected from DTD/entity payloads and oversized archive expansion.",
     )
+    receiver_text = read_text(ROOT / "async_task_worker.py")
+    missing_receiver_security = missing_items(REQUIRED_RECEIVER_SECURITY_TOKENS, receiver_text)
+    add(
+        results,
+        "Async",
+        "Receiver token fail-closed contract",
+        "Pass" if not missing_receiver_security else "Blocker",
+        "production receiver requires token and compares it in constant time" if not missing_receiver_security else ", ".join(missing_receiver_security),
+        "Keep the public async receiver protected by a required bearer token in production.",
+    )
 
 
 def validate_templates(results: List[Dict[str, str]]) -> None:
@@ -337,7 +353,7 @@ def validate_compose(results: List[Dict[str, str]]) -> None:
         "worker_supervisor.py",
         "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED",
         "ERRORSWEEP_SUPERVISOR_ENABLE_ASYNC_PROCESSOR",
-        "8300:8300",
+        "127.0.0.1:8300:8300",
         "http://127.0.0.1:8300/health",
         "errorsweep-data:",
         "errorsweep-logs:",

@@ -41,6 +41,15 @@ def _secret(name: str, default: str = "") -> str:
     return default
 
 
+def _bool_secret(name: str, default: bool = False) -> bool:
+    value = _secret(name, "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _safe_segment(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
     return cleaned.strip("._") or "item"
@@ -196,6 +205,8 @@ def put_file(path: Path, key: str, content_type: str = "") -> Dict[str, Any]:
 
 
 def public_url_for_key(key: str) -> str:
+    if not _bool_secret("ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS", False):
+        return ""
     provider = object_storage_provider()
     if provider == "supabase" and _secret("SUPABASE_STORAGE_PUBLIC", "").strip().lower() in {"1", "true", "yes"}:
         return f"{_supabase_url()}/storage/v1/object/public/{quote(object_storage_bucket('supabase'))}/{quote(key, safe='/')}"
@@ -268,5 +279,6 @@ def object_storage_status() -> Dict[str, Any]:
         "bucket": bucket or "local",
         "configured": configured,
         "mode": "cloud" if provider in {"supabase", "s3", "gcs"} and configured else "local_fallback",
+        "public_urls_enabled": _bool_secret("ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS", False),
         "local_root": str(local_object_storage_root()),
     }

@@ -38,6 +38,7 @@ REQUIRED_ADAPTER_SYMBOLS = [
 ]
 REQUIRED_TEMPLATE_KEYS = [
     "ERRORSWEEP_OBJECT_STORAGE_PROVIDER",
+    "ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS",
     "SUPABASE_STORAGE_BUCKET",
     "S3_BUCKET",
     "AWS_REGION",
@@ -200,7 +201,7 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
     env_template = read_text(ENV_TEMPLATE_PATH)
     streamlit_template = read_text(STREAMLIT_TEMPLATE_PATH)
     missing_env = missing_items(REQUIRED_TEMPLATE_KEYS, env_template)
-    missing_streamlit = missing_items(["ERRORSWEEP_OBJECT_STORAGE_PROVIDER", "SUPABASE_STORAGE_BUCKET", "S3_BUCKET", "GCS_BUCKET"], streamlit_template)
+    missing_streamlit = missing_items(["ERRORSWEEP_OBJECT_STORAGE_PROVIDER", "ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS", "SUPABASE_STORAGE_BUCKET", "S3_BUCKET", "GCS_BUCKET"], streamlit_template)
     add(
         results,
         "Storage",

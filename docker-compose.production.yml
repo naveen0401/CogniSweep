@@ -43,7 +43,7 @@ services:
       ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
     command: ["python", "async_task_worker.py", "--host", "0.0.0.0", "--port", "8300"]
     ports:
-      - "8300:8300"
+      - "127.0.0.1:8300:8300"
     volumes:
       - errorsweep-data:/data/errorsweep
       - errorsweep-logs:/logs/errorsweep
@@ -91,7 +91,7 @@ services:
       ERRORSWEEP_EDITOR_JOB_DIR: /data/errorsweep/editor_jobs
     command: ["python", "billing_webhook_receiver.py"]
     ports:
-      - "8301:8301"
+      - "127.0.0.1:8301:8301"
     volumes:
       - errorsweep-data:/data/errorsweep
       - errorsweep-logs:/logs/errorsweep
@@ -108,7 +108,7 @@ services:
     profiles:
       - redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - errorsweep-redis:/data
 

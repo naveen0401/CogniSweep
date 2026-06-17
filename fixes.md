@@ -20,6 +20,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 13. LibreTranslate Code Residuals
 14. Thread Lock vs Process Lock Discrepancy
 15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+16. Excel Backlog Production Hardening
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -54,6 +55,7 @@ None currently tracked.
 27. Auth Verification and Reset Flow Gap
 28. Local-Only Upload Storage
 29. Heavy Workflow Request Blocking
+30. Excel Backlog Production Hardening
 
 ## Resolved in Latest Pass
 
@@ -116,6 +118,10 @@ None currently tracked.
 ### 15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 *   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
 *   **The Fix:** Rules ZIPs and Office ZIP containers now use hard upload, file-count, expanded-size, per-member, and XML member read limits. Rules parsing no longer uses `.getvalue()` or direct `zf.read()`, and DOCX/PPTX extraction no longer uses direct `archive.read()`. *(Verified fixed)*.
+
+### 16. Excel Backlog Production Hardening
+*   **The Issue:** Remaining audit backlog items called out public worker/billing/Redis ports, optional async receiver tokens, email header injection risk, default public object URLs, and missing release-gate coverage for those contracts.
+*   **The Fix:** Production compose now binds worker, billing receiver, and Redis ports to localhost; the async receiver fails closed without a production token and uses constant-time token comparison; outbound email headers and addresses reject newline injection; public object URLs are disabled unless explicitly enabled; and release checks/CI now enforce these contracts. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -240,3 +246,7 @@ None currently tracked.
 ### 29. Heavy Workflow Request Blocking
 *   **The Issue:** QA and Pro workflows still ran inside the Streamlit request even though lifecycle records existed, which is risky for public SaaS traffic and larger files.
 *   **The Fix:** Added an external async worker bridge for HTTP workers or Redis/Celery-style queues. QA and Pro now hand off uploaded input/rules manifests to the worker when configured, while local development keeps the existing inline behavior. *(Fixed in async worker bridge pass)*.
+
+### 30. Excel Backlog Production Hardening
+*   **The Issue:** Lower-priority Excel audit findings remained around production service exposure, async worker token posture, object-storage URL defaults, and notification email header safety.
+*   **The Fix:** Added fail-closed async token enforcement, constant-time bearer-token comparison, email header sanitization, localhost-only internal compose ports, opt-in public object URLs, and a dedicated regression test plus release-gate wiring. *(Verified fixed)*.

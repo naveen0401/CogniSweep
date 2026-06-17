@@ -87,7 +87,7 @@ REQUIRED_COMPOSE_TOKENS = [
     "billing_webhook_receiver.py",
     "ERRORSWEEP_BILLING_WEBHOOK_HOST",
     "ERRORSWEEP_BILLING_WEBHOOK_PORT",
-    "8301:8301",
+    "127.0.0.1:8301:8301",
     "http://127.0.0.1:8301/health",
     "errorsweep-data:",
     "errorsweep-logs:",

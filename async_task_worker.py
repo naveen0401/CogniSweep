@@ -9,6 +9,7 @@ QA/Pro workflow processor.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -55,12 +56,22 @@ def env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
+def is_production_mode() -> bool:
+    mode = safe_text(os.getenv("ERRORSWEEP_ENV") or os.getenv("ENVIRONMENT") or os.getenv("APP_ENV")).lower()
+    return mode in {"prod", "production", "live"}
+
+
 def worker_token() -> str:
     return safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_TOKEN"))
 
 
 def require_token() -> bool:
-    return env_bool("ERRORSWEEP_ASYNC_WORKER_REQUIRE_TOKEN", bool(worker_token()))
+    return env_bool("ERRORSWEEP_ASYNC_WORKER_REQUIRE_TOKEN", is_production_mode() or bool(worker_token()))
+
+
+def validate_worker_token_config() -> None:
+    if is_production_mode() and not worker_token():
+        raise RuntimeError("ERRORSWEEP_ASYNC_WORKER_TOKEN is required when ERRORSWEEP_ENV=production.")
 
 
 def process_on_accept() -> bool:
@@ -259,7 +270,7 @@ def authorize(headers: Any) -> Tuple[bool, str]:
     provided = safe_text(headers.get("Authorization"))
     if provided.startswith("Bearer "):
         provided = provided[7:].strip()
-    if not expected or provided != expected:
+    if not expected or not hmac.compare_digest(provided, expected):
         return False, "Missing or invalid worker token."
     return True, ""
 
@@ -385,6 +396,11 @@ def main() -> int:
         result = process_next_queued_task()
         print(json.dumps(result or {"processed": False, "message": "No queued worker-spooled tasks."}, ensure_ascii=False, indent=2, default=safe_text))
         return 0
+    try:
+        validate_worker_token_config()
+    except Exception as exc:
+        LOGGER.error("%s", exc)
+        return 1
     run_server(args.host, args.port)
     return 0
 

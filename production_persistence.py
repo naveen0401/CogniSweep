@@ -12,8 +12,8 @@ reachable; never rely on per-instance JSON storage for public traffic.
 
 Required Streamlit secrets for production mode
 ---------------------------------------------
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
+Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY through Streamlit secrets or
+environment variables. Do not commit real values to the repository.
 
 Optional
 --------
