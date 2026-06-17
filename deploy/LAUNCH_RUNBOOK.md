@@ -58,6 +58,8 @@ Copy-Item deploy/.env.production.example deploy/.env.production
 
 Fill the real values in `deploy/.env.production`. Do not commit this file.
 
+Naming note: the legacy `ERRORSWEEP_` prefix is still the supported environment-variable prefix for CogniSweep launch settings. Keep these names unchanged unless a future migration updates the application, deployment templates, and stored secrets in one coordinated change.
+
 Minimum required production identity values:
 
 - `ERRORSWEEP_ENV=production`

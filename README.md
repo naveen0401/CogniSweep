@@ -47,6 +47,8 @@ python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 Required launch providers include Supabase persistence, cloud object storage, async workers, billing/webhooks, transactional email, legal approval, CDN/WAF, and scheduled backups.
 Production translation also needs either `OPENAI_API_KEY` or a live managed OpenAI-compatible endpoint for platform fallback, plus self-hosted MT endpoints for no-key Pro workflows.
 
+Naming note: some production environment variables and Docker service names still use the legacy `ERRORSWEEP_`/`errorsweep-*` prefix. They are the stable configuration keys for CogniSweep deployments and should stay as-is until a deliberate migration plan updates code, docs, secrets, and existing production environments together.
+
 For Streamlit Cloud-style deployments, copy `.streamlit/secrets.toml.example` into the platform Secrets UI and fill the real values there. Do not commit `.streamlit/secrets.toml`.
 
 ## Production Deployment

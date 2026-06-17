@@ -25,6 +25,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 18. Model Download Integrity Verification
 19. Operational Backup PII Redaction
 20. QA Engine Shim Public Surface
+21. Legacy Env Prefix Documentation
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -64,6 +65,7 @@ None currently tracked.
 32. Model Download Integrity Verification
 33. Operational Backup PII Redaction
 34. QA Engine Shim Public Surface
+35. Legacy Env Prefix Documentation
 
 ## Resolved in Latest Pass
 
@@ -146,6 +148,10 @@ None currently tracked.
 ### 20. QA Engine Shim Public Surface
 *   **The Issue:** Legacy `qa_engine_global_v13.py` and `qa_engine_global_v14.py` shims used wildcard re-exports without an explicit public symbol list.
 *   **The Fix:** Both compatibility shims now expose `__all__` from the canonical v15 public surface, with regression coverage. *(Verified fixed)*.
+
+### 21. Legacy Env Prefix Documentation
+*   **The Issue:** CogniSweep docs and UI branding use the CogniSweep name, while stable production env vars and compose service names still use the legacy `ERRORSWEEP_` / `errorsweep-*` prefix.
+*   **The Fix:** Deployment docs now explicitly document that the legacy prefix is the current stable configuration contract and should not be renamed piecemeal. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -290,3 +296,7 @@ None currently tracked.
 ### 34. QA Engine Shim Public Surface
 *   **The Issue:** Compatibility shims obscured their public export surface.
 *   **The Fix:** Added explicit `__all__` delegation to the canonical v15 QA engine and extended shim tests. *(Verified fixed)*.
+
+### 35. Legacy Env Prefix Documentation
+*   **The Issue:** Legacy deployment key prefixes could confuse operators.
+*   **The Fix:** Added clear naming notes to README, deployment README, and launch runbook. *(Verified fixed)*.

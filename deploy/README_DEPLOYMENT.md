@@ -12,6 +12,8 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
 - `errorsweep-billing-webhook`: billing webhook receiver on port `8301`.
 - `redis`: optional profile for deployments that choose Redis/Celery style queues later.
 
+Naming note: several env vars and service names retain the legacy `ERRORSWEEP_`/`errorsweep-*` prefix. Treat these as the current stable CogniSweep deployment contract; do not rename them piecemeal in production secrets, compose files, or Streamlit Cloud settings.
+
 ## First Setup
 
 1. Copy `deploy/.env.production.example` to `deploy/.env.production`.
@@ -59,7 +61,7 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
    - app: `http://errorsweep-app:8501`
    - async receiver: `http://errorsweep-async-receiver:8300`
    - billing webhook receiver: `http://errorsweep-billing-webhook:8301`
-8. Configure `ERRORSWEEP_PUBLIC_BASE_URL` and `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
+10. Configure `ERRORSWEEP_PUBLIC_BASE_URL` and `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
 
 ## Run
 
