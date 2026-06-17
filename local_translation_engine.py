@@ -6,6 +6,7 @@ Key guarantees for localization files:
 - Leading bullets and emoji/icons are preserved exactly, but the following UI text is translated.
 - Whole square-bracket UI labels can be localized inside the brackets: [Log In] -> [Connexion].
 - Output is never intentionally logged or stored by this adapter.
+- Unsupported public translation fallback routing is intentionally not present.
 """
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ def _prepare_engine_source(source: str) -> Tuple[str, Dict[str, Any]]:
 def _restore_visual_wrapper(translation: str, meta: Dict[str, Any]) -> str:
     out = str(translation or "").strip()
     out = re.sub(r"^\s*[ÂÃ]\s*", "", out).strip()
-    # LibreTranslate sometimes duplicates list bullets at the end.
+    # Some MT engines duplicate list bullets at the end.
     out = TRAILING_BULLET_RE.sub("", out).strip()
 
     if meta.get("bracketed") and out and not (out.startswith("[") and out.endswith("]")):
@@ -135,54 +136,6 @@ def _restore_safety(source: str, translation: str) -> str:
         if token and token not in out:
             out = (out.rstrip() + " " + token).strip()
     return out
-
-
-def translate_with_libretranslate(
-    endpoint: str,
-    text: str,
-    target_language: str,
-    source_language: str = "auto",
-    api_key: str = "",
-    timeout: int = 60,
-) -> str:
-    base = endpoint.rstrip("/")
-    url = base if base.endswith("/translate") else f"{base}/translate"
-    target = normalize_language_code(target_language)
-    source = normalize_language_code(source_language) if source_language and source_language.lower() != "auto" else "auto"
-    payload = {"q": text, "source": source, "target": target, "format": "text"}
-    if api_key:
-        payload["api_key"] = api_key
-    data = _post_json(url, payload, timeout=timeout)
-    if isinstance(data, dict):
-        return str(data.get("translatedText") or data.get("translation") or "")
-    return ""
-
-
-def translate_batch_with_libretranslate(
-    endpoint: str,
-    texts: List[str],
-    target_language: str,
-    source_language: str = "auto",
-    api_key: str = "",
-    timeout: int = 120,
-) -> List[str]:
-    base = endpoint.rstrip("/")
-    url = base if base.endswith("/translate") else f"{base}/translate"
-    target = normalize_language_code(target_language)
-    source = normalize_language_code(source_language) if source_language and source_language.lower() != "auto" else "auto"
-    payload: Dict[str, Any] = {"q": texts, "source": source, "target": target, "format": "text"}
-    if api_key:
-        payload["api_key"] = api_key
-    data = _post_json(url, payload, timeout=timeout)
-    if isinstance(data, dict):
-        translated = data.get("translatedText") or data.get("translations")
-        if isinstance(translated, list):
-            return [str(item.get("translatedText", item) if isinstance(item, dict) else item) for item in translated]
-        if isinstance(translated, str) and len(texts) == 1:
-            return [translated]
-    if isinstance(data, list):
-        return [str(item.get("translatedText", item.get("translation", item)) if isinstance(item, dict) else item) for item in data]
-    return [""] * len(texts)
 
 
 def translate_with_generic_endpoint(
@@ -224,7 +177,9 @@ def self_hosted_translate_batch(
     api_key: str = "",
     timeout: int = 120,
 ) -> List[Dict[str, str]]:
-    provider = (provider or "libretranslate").strip().lower()
+    provider = (provider or "generic").strip().lower()
+    if provider in {"custom", "endpoint", "self-hosted", "self_hosted"}:
+        provider = "generic"
     endpoint = (endpoint or "").strip()
     if not endpoint:
         return [{"location": s.get("location", ""), "translation": ""} for s in segments]
@@ -247,41 +202,8 @@ def self_hosted_translate_batch(
             timeout=timeout,
         )
     else:
+        LOGGER.warning("Unsupported self-hosted translation provider '%s'; use provider='generic'.", provider)
         translations = [""] * len(engine_texts)
-        non_empty_indexes = [i for i, text in enumerate(engine_texts) if text]
-        try:
-            translated_non_empty = translate_batch_with_libretranslate(
-                endpoint=endpoint,
-                texts=[engine_texts[i] for i in non_empty_indexes],
-                target_language=target_language,
-                source_language=source_language,
-                api_key=api_key,
-                timeout=timeout,
-            )
-            for idx, trans in zip(non_empty_indexes, translated_non_empty):
-                translations[idx] = trans or ""
-        except Exception as exc:
-            LOGGER.warning("LibreTranslate batch request failed: %s", exc)
-            translated_non_empty = []
-
-        retry_indexes = [
-            i for i in non_empty_indexes
-            if not translations[i] and engine_texts[i] != original_texts[i]
-        ]
-        if retry_indexes:
-            try:
-                retry_translations = translate_batch_with_libretranslate(
-                    endpoint=endpoint,
-                    texts=[original_texts[i] for i in retry_indexes],
-                    target_language=target_language,
-                    source_language=source_language,
-                    api_key=api_key,
-                    timeout=timeout,
-                )
-                for idx, trans in zip(retry_indexes, retry_translations):
-                    translations[idx] = trans or ""
-            except Exception as exc:
-                LOGGER.warning("LibreTranslate retry request failed: %s", exc)
 
     if len(translations) < len(segments):
         translations.extend([""] * (len(segments) - len(translations)))
