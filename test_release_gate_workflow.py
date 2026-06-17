@@ -38,6 +38,7 @@ def test_github_actions_release_gate_contract():
         "python test_editor_job_security.py",
         "python test_mt_server_hardening.py",
         "python test_async_fail_closed.py",
+        "python test_dependency_locking.py",
         "python test_release_gate_workflow.py",
         "deploy/backup_check.py",
         "deploy/billing_check.py",

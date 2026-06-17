@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -15,8 +15,8 @@ WORKDIR /app
 COPY requirements_opus_mt_server.txt /app/requirements_opus_mt_server.txt
 
 # CPU-only Torch avoids downloading CUDA wheels.
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+RUN python -m pip install --upgrade pip==26.1.2 \
+    && python -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.12.0 \
     && pip install --no-cache-dir -r /app/requirements_opus_mt_server.txt
 
 COPY opus_mt_server_v45.py /app/opus_mt_server_v45.py

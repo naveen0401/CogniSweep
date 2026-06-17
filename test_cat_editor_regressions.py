@@ -410,7 +410,7 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'AUTH_STATE_UNKNOWN = "unknown"' in source
     assert 'AUTH_STATE_AUTHENTICATED = "authenticated"' in source
     assert 'AUTH_STATE_UNAUTHENTICATED = "unauthenticated"' in source
-    assert "streamlit-cookies-controller>=0.0.4" in requirements
+    assert "streamlit-cookies-controller==0.0.4" in requirements
     assert "SESSION_PERSISTENCE_SECONDS" in source
     assert "from streamlit_cookies_controller import CookieController" in source
     assert "def browser_session_cookie()" in source

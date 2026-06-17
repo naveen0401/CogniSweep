@@ -45,6 +45,7 @@ REQUIRED_DEPLOYMENT_FILES = [
 REQUIRED_ROOT_FILES = [
     "app.py",
     "requirements.txt",
+    "requirements.lock.txt",
 ]
 
 STALE_README_TOKENS = [
@@ -65,6 +66,20 @@ REQUIRED_REQUIREMENT_PACKAGES = [
     "google-cloud-storage",
     "redis",
 ]
+
+REQUIREMENT_FILES = [
+    "requirements.txt",
+    "requirements_opus_mt_server.txt",
+    "requirements_madlad_mt_server.txt",
+    "requirements_indictrans2_worker.txt",
+]
+
+LOCKED_REQUIREMENTS_FILE = "requirements.lock.txt"
+PINNED_REQUIREMENT_RE = re.compile(
+    r"^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?==[A-Za-z0-9_.!+*-]+(?:\s*;.+)?$"
+)
+DOCKER_BASE_DIGEST = "python:3.11-slim@sha256:"
+PINNED_PIP_INSTALL = "pip==26.1.2"
 
 REQUIRED_SUPABASE_TABLES = [
     "errorsweep_editor_jobs",
@@ -249,6 +264,22 @@ def requirement_name(line: str) -> str:
     return text.replace("_", "-")
 
 
+def active_requirement_lines(text: str) -> List[str]:
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def unpinned_requirement_lines(path: str) -> List[str]:
+    return [
+        line
+        for line in active_requirement_lines(read_text(path))
+        if not PINNED_REQUIREMENT_RE.fullmatch(line)
+    ]
+
+
 def check_launch_branch_files(results: List[Dict[str, str]]) -> None:
     missing = [path for path in REQUIRED_ROOT_FILES if not (ROOT / path).exists()]
     dockerfile = read_text("Dockerfile")
@@ -285,6 +316,33 @@ def check_requirements(results: List[Dict[str, str]]) -> None:
         "Pass" if not missing else "Blocker",
         f"{len(packages)} package(s); required packages present" if not missing else ", ".join(missing),
         "Keep requirements.txt updated with Streamlit, dataframe, document, AI, HTTP, XML, storage, and Redis dependencies used by production services.",
+    )
+    pin_failures = {
+        path: lines
+        for path in REQUIREMENT_FILES
+        if (lines := unpinned_requirement_lines(path))
+    }
+    add(
+        results,
+        "Release",
+        "Exact dependency pins",
+        "Pass" if not pin_failures else "Blocker",
+        "all requirements*.txt entries use ==" if not pin_failures else "; ".join(f"{path}: {lines[:3]}" for path, lines in pin_failures.items()),
+        "Keep every production and worker requirement exactly pinned; update the lockfile in the same change.",
+    )
+    lock_text = read_text(LOCKED_REQUIREMENTS_FILE)
+    lock_lines = active_requirement_lines(lock_text)
+    lock_packages = {requirement_name(line) for line in lock_lines}
+    lock_missing_direct = [package for package in packages if package not in lock_packages]
+    lock_unpinned = unpinned_requirement_lines(LOCKED_REQUIREMENTS_FILE)
+    lock_ok = bool(lock_text) and bool(lock_lines) and not lock_missing_direct and not lock_unpinned
+    add(
+        results,
+        "Release",
+        "Production dependency lockfile",
+        "Pass" if lock_ok else "Blocker",
+        f"{len(lock_lines)} locked package(s)" if lock_ok else f"missing_direct={lock_missing_direct[:5]}; unpinned={lock_unpinned[:5]}; present={bool(lock_text)}",
+        "Keep requirements.lock.txt generated from requirements.txt and install it in the production Docker image.",
     )
 
 
@@ -635,6 +693,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_legal_check.py",
         "python test_launch_rehearsal.py",
         "python test_launch_public_lock.py",
+        "python test_dependency_locking.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",
@@ -674,8 +733,9 @@ def check_secret_ignore_rules(results: List[Dict[str, str]]) -> None:
 def check_dockerfile(results: List[Dict[str, str]]) -> None:
     dockerfile = read_text("Dockerfile")
     required = [
-        "FROM python:3.11-slim",
-        "python -m pip install -r requirements.txt",
+        f"FROM {DOCKER_BASE_DIGEST}",
+        PINNED_PIP_INSTALL,
+        "python -m pip install -r requirements.lock.txt",
         "USER errorsweep",
         "HEALTHCHECK",
         "_stcore/health",
@@ -689,6 +749,22 @@ def check_dockerfile(results: List[Dict[str, str]]) -> None:
         "Pass" if not missing else "Warn",
         "non-root app image with healthcheck" if not missing else ", ".join(missing),
         "Keep the app image non-root, health-checked, and based on the pinned requirements file.",
+    )
+    opus_dockerfile = read_text("Dockerfile.opus-mt")
+    opus_required = [
+        f"FROM {DOCKER_BASE_DIGEST}",
+        PINNED_PIP_INSTALL,
+        "torch==2.12.0",
+        "-r /app/requirements_opus_mt_server.txt",
+    ]
+    opus_missing = missing_items(opus_required, opus_dockerfile)
+    add(
+        results,
+        "MT",
+        "OPUS-MT Dockerfile dependency posture",
+        "Pass" if not opus_missing else "Warn",
+        "digest-pinned base and exact worker dependencies" if not opus_missing else ", ".join(opus_missing),
+        "Keep the OPUS-MT image base digest-pinned with exact worker package versions.",
     )
 
 
