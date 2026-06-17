@@ -37,6 +37,11 @@ def _secret(name: str, default: str = "") -> str:
     return default
 
 
+def is_production_mode() -> bool:
+    mode = _secret("ERRORSWEEP_ENV", _secret("APP_ENV", "")).strip().lower()
+    return mode in {"prod", "production"}
+
+
 def async_backend_status() -> Dict[str, Any]:
     configured = _secret("ERRORSWEEP_ASYNC_BACKEND", "").strip().lower()
     worker_url = _secret("ERRORSWEEP_ASYNC_WORKER_URL", _secret("ERRORSWEEP_WORKER_ENDPOINT", "")).strip()
@@ -46,10 +51,17 @@ def async_backend_status() -> Dict[str, Any]:
         provider = "redis"
     queue_name = _secret("ERRORSWEEP_REDIS_QUEUE", "errorsweep:tasks")
     ready = provider == "local" or bool(worker_url if provider == "http" else redis_url if provider == "redis" else False)
+    mode = "external" if provider in {"http", "redis"} and ready else "local_inline"
+    message = ""
+    if is_production_mode() and mode != "external":
+        ready = False
+        mode = "blocked"
+        message = "Production requires ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL."
     return {
         "provider": provider,
         "ready": ready,
-        "mode": "external" if provider in {"http", "redis"} and ready else "local_inline",
+        "mode": mode,
+        "message": message,
         "worker_url": worker_url,
         "redis_queue": queue_name,
         "redis_configured": bool(redis_url),
@@ -94,6 +106,8 @@ def enqueue_async_task(task: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
     status = async_backend_status()
     provider = status.get("provider")
     if provider not in {"http", "redis"} or not status.get("ready"):
+        if is_production_mode():
+            raise RuntimeError(status.get("message") or "External async backend is required in production.")
         return {
             "queued": False,
             "provider": provider,

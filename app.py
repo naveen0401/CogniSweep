@@ -10550,9 +10550,20 @@ def queue_external_workflow_if_configured(
     does not need to hold the request open while work runs.
     """
     if async_backend_status is None or enqueue_async_task is None:
+        if is_production_mode():
+            task_id = safe_text(task.get("id")) or uuid.uuid4().hex
+            update_task_record(task_id, status="failed", progress=100, error="Async worker queue adapter is unavailable in production.")
+            st.error("Async worker queue is unavailable. Production QA/Pro work was not run inline.")
+            return True
         return False
     status = async_backend_status()
     if status.get("mode") != "external":
+        if is_production_mode():
+            task_id = safe_text(task.get("id")) or uuid.uuid4().hex
+            message = safe_text(status.get("message")) or "External async backend is required in production."
+            update_task_record(task_id, status="failed", progress=100, error=message)
+            st.error(message)
+            return True
         return False
 
     task_id = safe_text(task.get("id")) or uuid.uuid4().hex

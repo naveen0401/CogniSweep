@@ -35,8 +35,14 @@ REQUIRED_FILES = [
 REQUIRED_QUEUE_SYMBOLS = [
     "async_backend_status",
     "enqueue_async_task",
+    "is_production_mode",
     "_enqueue_http",
     "_enqueue_redis",
+]
+REQUIRED_QUEUE_SECURITY_TOKENS = [
+    '"blocked"',
+    "External async backend is required in production",
+    "Production requires ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL",
 ]
 REQUIRED_RECEIVER_SYMBOLS = [
     "accept_task",
@@ -244,6 +250,16 @@ def validate_symbols(results: List[Dict[str, str]]) -> None:
             "required functions present" if not missing else ", ".join(missing),
             "Keep the async worker contracts stable for Streamlit handoff, receiver status, and processor execution.",
         )
+    queue_text = read_text(ROOT / "async_worker_queue.py")
+    missing_security = missing_items(REQUIRED_QUEUE_SECURITY_TOKENS, queue_text)
+    add(
+        results,
+        "Async",
+        "Queue production fail-closed contract",
+        "Pass" if not missing_security else "Blocker",
+        "production fallback blocks local inline" if not missing_security else ", ".join(missing_security),
+        "Keep production async handoff fail-closed when no HTTP or Redis backend is configured.",
+    )
 
 
 def validate_templates(results: List[Dict[str, str]]) -> None:
