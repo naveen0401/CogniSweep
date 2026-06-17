@@ -153,7 +153,7 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
     assert "es_session" not in body
 
 
-def test_editor_opens_use_same_session_navigation() -> None:
+def test_editor_links_seed_browser_session_before_new_tab() -> None:
     source = read_app()
     helper_start = source.index("def current_session_token_for_links")
     helper_end = source.index("def external_editor_url", helper_start)
@@ -170,29 +170,28 @@ def test_editor_opens_use_same_session_navigation() -> None:
     task_links_start = source.index("def render_task_navigation_links")
     task_links_end = source.index("def render_editor_open_link", task_links_start)
     task_links_body = source[task_links_start:task_links_end]
-    assert "app_nav_target_from_href(nav_targets, target_prefix, url, label)" in task_links_body
-    assert 'target="_blank"' not in task_links_body
+    assert "editor_session_handoff_attrs(url)" in task_links_body
+    assert 'target="_blank" rel="noopener"' in task_links_body
 
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
     editor_open_body = source[editor_open_start:editor_open_end]
-    assert "st.button(label" in editor_open_body
-    assert "navigate_to_editor_url(url)" in editor_open_body
-    assert 'target="_blank"' not in editor_open_body
+    assert "editor_session_handoff_attrs(url)" in editor_open_body
+    assert 'target="_blank" rel="noopener"' in editor_open_body
 
     external_link_start = source.index("def render_external_editor_link")
     external_link_end = source.index("def load_external_editor_payload", external_link_start)
     external_link_body = source[external_link_start:external_link_end]
-    assert "st.button(label" in external_link_body
-    assert "navigate_to_editor_url(url)" in external_link_body
-    assert 'target="_blank"' not in external_link_body
+    assert "editor_session_handoff_attrs(url)" in external_link_body
+    assert 'target="_blank" rel="noopener"' in external_link_body
 
     history_start = source.index("def render_job_history_table")
     history_end = source.index("def page_projects", history_start)
     history_body = source[history_start:history_end]
     assert "LinkColumn(\"Open\"" not in history_body
     assert "Open workspace" in history_body
-    assert "navigate_to_editor_url(url)" in history_body
+    assert "editor_session_handoff_attrs(url)" in history_body
+    assert 'target="_blank" rel="noopener"' in history_body
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
@@ -225,12 +224,10 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "window.open" not in source
     editor_link_start = source.index("def render_external_editor_link")
     editor_link_end = source.index("def load_external_editor_payload", editor_link_start)
-    assert 'target="_blank"' not in source[editor_link_start:editor_link_end]
-    assert "navigate_to_editor_url(url)" in source[editor_link_start:editor_link_end]
+    assert 'target="_blank"' in source[editor_link_start:editor_link_end]
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
-    assert 'target="_blank" rel="noopener"' not in source[editor_open_start:editor_open_end]
-    assert "navigate_to_editor_url(url)" in source[editor_open_start:editor_open_end]
+    assert 'target="_blank" rel="noopener"' in source[editor_open_start:editor_open_end]
     assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {\"landing\", \"login\", \"signup\"}" in source
     assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
@@ -662,6 +659,9 @@ def test_cat_editor_reference_file_matches_attached_shell() -> None:
     assert '<section class="left-column"' in html
     assert '<aside class="right-column"' in html
     assert 'html, body { height: 100%; margin: 0; overflow: hidden; }' in html
+    assert "padding-bottom: 10px;" in html
+    assert ".table-wrap { min-height: 0; max-width: 100%; overflow: auto; background: #0e1524; padding-bottom: 8px; }" in html
+    assert ".details-scroll { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; padding: 14px 14px 52px; }" in html
     assert 'position: fixed;' in html
     assert 'grid-template-columns: minmax(0, 1fr) 340px;' in html
     assert 'width: 340px;' in html
@@ -776,6 +776,8 @@ def test_media_editor_uses_reference_template() -> None:
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" not in shell_body
     assert "max-width:var(--es-shell-content-width) !important" in shell_body
     assert "components.html(html, height=900, scrolling=False)" in shell_body
+    assert "height:calc(100dvh - 12px) !important" in shell_body
+    assert "overflow-y:auto !important" in shell_body
     assert "width:100vw !important" not in shell_body
     assert "max-width:100vw !important" not in shell_body
 
@@ -887,7 +889,8 @@ def test_human_review_editor_density_is_scoped_to_iframe_shell() -> None:
     assert "body:has(#human-review-editor-page-marker)" in body
     assert "body:has(.human-review-editor)" not in body
     assert "iframe" in body
-    assert "height:100% !important" in body
+    assert "height:calc(100dvh - 12px) !important" in body
+    assert "overflow-y:auto !important" in body
     assert "overflow:hidden !important" in body
     assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe)' in body
     assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker)' in body
@@ -1012,7 +1015,7 @@ if __name__ == "__main__":
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
-    test_editor_opens_use_same_session_navigation()
+    test_editor_links_seed_browser_session_before_new_tab()
     test_human_review_editor_uses_es_page_review_id_route()
     test_reload_session_restore_uses_cookie_not_url_only()
     test_session_check_page_removed_and_protected_routes_resolve()

@@ -10694,11 +10694,8 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         seen_urls.add(url)
         cls = "es-task-action-link primary" if primary else "es-task-action-link"
         if primary:
-            action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
-            if action_attr:
-                rendered.append(f'<button type="button" class="{cls}" {action_attr}>{escape(label)}</button>')
-            else:
-                rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_self">{escape(label)}</a>')
+            handoff_attrs = editor_session_handoff_attrs(url)
+            rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
@@ -10711,27 +10708,17 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         render_app_navigation_bridge()
 
 
-def navigate_to_editor_url(url: str) -> None:
-    target = safe_text(url).strip()
-    if not target:
-        return
-    if apply_return_to(target):
-        st.rerun()
-    st.error("Unable to open this editor route. Please reopen it from the task result.")
-
-
-def editor_open_button_key(prefix: str, label: str, url: str) -> str:
-    raw = f"{safe_text(label)}|{safe_text(url)}"
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-    clean_prefix = re.sub(r"[^a-z0-9_]+", "_", safe_text(prefix).lower()).strip("_") or "editor"
-    return f"{clean_prefix}_{digest}"
-
-
 def render_editor_open_link(label: str, url: str) -> None:
     if not safe_text(url):
         return
-    if st.button(label, key=editor_open_button_key("editor_open", label, url), type="primary", use_container_width=True):
-        navigate_to_editor_url(url)
+    handoff_attrs = editor_session_handoff_attrs(url)
+    st.markdown(
+        f"""
+        <a class="es-task-action-link primary" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
+           style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_task_result_actions(task: Dict[str, Any], key_prefix: str) -> None:
@@ -15635,8 +15622,18 @@ def external_editor_url(editor_type: str, job_id: str) -> str:
 
 def render_external_editor_link(label: str, editor_type: str, job_id: str) -> None:
     url = external_editor_url(editor_type, job_id)
-    if st.button(label, key=editor_open_button_key("external_editor_open", label, url), type="primary", use_container_width=True):
-        navigate_to_editor_url(url)
+    handoff_attrs = editor_session_handoff_attrs(url)
+    st.markdown(
+        f"""
+        <a href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
+            display:flex; align-items:center; justify-content:center; width:100%;
+            padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
+            background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
+            font-weight:900; box-shadow:0 12px 30px rgba(52,189,246,.25);
+        ">{escape(label)} ↗</a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
@@ -15975,12 +15972,18 @@ def render_reference_cat_editor_shell(
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
-            height:100% !important;
-            max-height:100% !important;
+            height:calc(100dvh - 12px) !important;
+            max-height:calc(100dvh - 12px) !important;
             min-height:0 !important;
             display:block !important;
             border:0 !important;
             overflow:hidden !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_shell,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame {
+            overflow-y:auto !important;
+            scrollbar-gutter:stable both-edges !important;
         }
         #human-review-editor-page-marker,
         .human-review-editor-page,
@@ -16366,9 +16369,16 @@ def render_reference_media_editor_shell(
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
-            height:100% !important;
+            height:calc(100dvh - 12px) !important;
+            max-height:calc(100dvh - 12px) !important;
             display:block !important;
             border:0 !important;
+        }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame {
+            overflow-y:auto !important;
+            scrollbar-gutter:stable both-edges !important;
         }
         #media-editor-page-marker,
         .media-editor-page {
@@ -19982,18 +19992,19 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
     )
     if open_rows:
         st.markdown("#### Open workspace")
-        for idx, row in enumerate(open_rows[:25]):
+        rendered_links = []
+        for row in open_rows[:25]:
             label_bits = [safe_text(row.get("label")) or "Task"]
             if safe_text(row.get("file")):
                 label_bits.append(safe_text(row.get("file")))
             label = " - ".join(label_bits)
             url = safe_text(row.get("url"))
-            if st.button(
-                f"Open {label}"[:120],
-                key=editor_open_button_key(f"{key}_history_open_{idx}", label, url),
-                use_container_width=True,
-            ):
-                navigate_to_editor_url(url)
+            handoff_attrs = editor_session_handoff_attrs(url)
+            rendered_links.append(
+                f'<a class="es-task-action-link primary" href="{escape(url, quote=True)}" '
+                f'target="_blank" rel="noopener" {handoff_attrs}>{escape(("Open " + label)[:120])}</a>'
+            )
+        st.markdown(f'<div class="es-task-actions">{"".join(rendered_links)}</div>', unsafe_allow_html=True)
 
 
 def page_projects() -> None:
