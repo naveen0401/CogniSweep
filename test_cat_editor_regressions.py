@@ -447,8 +447,14 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     ]
     assert '"auth_unknown_login_fallback"' in auth_unknown_body
     assert '"auth_unknown_landing_fallback"' in auth_unknown_body
+    assert '"auth_unknown_editor_restore"' in auth_unknown_body
+    assert "Opening editor..." in auth_unknown_body
+    assert "es-editor-auth-resolver" in auth_unknown_body
     assert "render_login()" in auth_unknown_body
     assert "render_landing_page(\"auth_unknown_landing_fallback\")" in auth_unknown_body
+    editor_restore_idx = auth_unknown_body.index('"auth_unknown_editor_restore"')
+    login_fallback_idx = auth_unknown_body.index('"auth_unknown_login_fallback"')
+    assert editor_restore_idx < login_fallback_idx
     assert 'const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));' in source
     assert 'const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));' in source
     assert '["es_editor", "job_id", "review_id"].some((key) => url.searchParams.has(key))' in source

@@ -5466,6 +5466,41 @@ def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
     )
     if protected_fallback:
         st.session_state["auth_return_to"] = encode_return_to()
+        if (
+            safe_text(route.get("es_editor") or query_get("es_editor"))
+            or safe_text(route.get("job_id") or query_get("job_id"))
+            or safe_text(route.get("review_id") or query_get("review_id"))
+        ):
+            render_auth_debug_panel(route, "auth_unknown_editor_restore")
+            st.markdown(
+                """
+                <style>
+                .es-editor-auth-resolver {
+                    min-height: 100dvh;
+                    display: grid;
+                    place-items: center;
+                    background:
+                        radial-gradient(circle at 0% 0%, rgba(17,245,181,.16), transparent 32%),
+                        radial-gradient(circle at 100% 0%, rgba(90,142,255,.16), transparent 34%),
+                        #080a12;
+                    color: #f8fbff;
+                }
+                .es-editor-auth-resolver__card {
+                    border: 1px solid rgba(148,163,184,.26);
+                    border-radius: 12px;
+                    background: rgba(18,24,48,.92);
+                    padding: 18px 22px;
+                    font-weight: 900;
+                    box-shadow: 0 20px 70px rgba(0,0,0,.38);
+                }
+                </style>
+                <div class="es-editor-auth-resolver">
+                    <div class="es-editor-auth-resolver__card">Opening editor...</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.stop()
         login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
         render_auth_debug_panel(login_route, "auth_unknown_login_fallback")
         render_login()
