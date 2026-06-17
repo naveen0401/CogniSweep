@@ -17,7 +17,17 @@ def test_legacy_qa_engine_shims_delegate_unknown_attributes():
     assert v14.__getattr__("deterministic_checks_v2") is v15.deterministic_checks_v2
 
 
+def test_legacy_qa_engine_shims_expose_explicit_public_surface():
+    assert "deterministic_checks_v2" in v13.__all__
+    assert "deterministic_checks_v2" in v14.__all__
+    assert "normalize_for_qa" in v13.__all__
+    assert "normalize_for_qa" in v14.__all__
+    assert all(not name.startswith("_") for name in v13.__all__)
+    assert all(not name.startswith("_") for name in v14.__all__)
+
+
 if __name__ == "__main__":
     test_legacy_qa_engine_shims_reexport_canonical_v15()
     test_legacy_qa_engine_shims_delegate_unknown_attributes()
+    test_legacy_qa_engine_shims_expose_explicit_public_surface()
     print("QA engine shim regression checks passed.")

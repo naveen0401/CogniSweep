@@ -24,6 +24,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 17. Transactional Email Template HTML Safety
 18. Model Download Integrity Verification
 19. Operational Backup PII Redaction
+20. QA Engine Shim Public Surface
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -62,6 +63,7 @@ None currently tracked.
 31. Transactional Email Template HTML Safety
 32. Model Download Integrity Verification
 33. Operational Backup PII Redaction
+34. QA Engine Shim Public Surface
 
 ## Resolved in Latest Pass
 
@@ -140,6 +142,10 @@ None currently tracked.
 ### 19. Operational Backup PII Redaction
 *   **The Issue:** Operational backups redacted secrets and tokens, but common PII fields such as email, names, recipients, actors, and phone numbers were not explicitly covered by the redaction map.
 *   **The Fix:** The backup worker now redacts common PII keys in nested records, still excludes `auth_tokens`, and release-gate coverage verifies PII redaction behavior. *(Verified fixed)*.
+
+### 20. QA Engine Shim Public Surface
+*   **The Issue:** Legacy `qa_engine_global_v13.py` and `qa_engine_global_v14.py` shims used wildcard re-exports without an explicit public symbol list.
+*   **The Fix:** Both compatibility shims now expose `__all__` from the canonical v15 public surface, with regression coverage. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -280,3 +286,7 @@ None currently tracked.
 ### 33. Operational Backup PII Redaction
 *   **The Issue:** Backup snapshots could preserve obvious PII even after secret/token redaction.
 *   **The Fix:** Added common PII fields to backup redaction and `test_backup_redaction.py` to keep the behavior covered. *(Verified fixed)*.
+
+### 34. QA Engine Shim Public Surface
+*   **The Issue:** Compatibility shims obscured their public export surface.
+*   **The Fix:** Added explicit `__all__` delegation to the canonical v15 QA engine and extended shim tests. *(Verified fixed)*.
