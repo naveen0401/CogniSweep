@@ -57,6 +57,11 @@ REQUIRED_CLIENT_SYMBOLS = [
     "protect_text",
     "restore_text",
 ]
+REQUIRED_CLIENT_TOKENS = [
+    "SELF_HOSTED_MT_RETRIES",
+    "SELF_HOSTED_MT_RETRY_BACKOFF_SECONDS",
+    "TRANSIENT_HTTP_STATUS_CODES",
+]
 SERVER_CONTRACT_TOKENS = {
     "opus_mt_server_v45.py": [
         "FastAPI",
@@ -270,6 +275,7 @@ def validate_contracts(results: List[Dict[str, str]]) -> None:
     client = read_text(ROOT / "selfhosted_mt_clients.py")
     missing_router = [symbol for symbol in REQUIRED_ROUTER_SYMBOLS if f"def {symbol}" not in router]
     missing_client = [symbol for symbol in REQUIRED_CLIENT_SYMBOLS if f"def {symbol}" not in client]
+    missing_client.extend(token for token in REQUIRED_CLIENT_TOKENS if token not in client)
     add(
         results,
         "MT",

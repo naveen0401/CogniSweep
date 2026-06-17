@@ -16,6 +16,7 @@ class TranslationRouteError(RuntimeError):
 PLACEHOLDER_RE = re.compile(r"(\{\{[^{}]+\}\}|\{[^{}]+\}|<[^>]+>|%[0-9$.\-+]*[sdif]|https?://\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.-]+)")
 PRIVATE_HOSTNAMES = {"localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"}
 PRIVATE_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home")
+TRANSIENT_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -25,6 +26,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, "") or default))
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(str(os.getenv(name, "") or default))
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
 
 
 def _is_production() -> bool:
@@ -116,22 +133,40 @@ def _chunks(items: List[Any], size: int):
     for i in range(0, len(items), max(1, int(size or 20))):
         yield items[i:i+size]
 
+def _retry_sleep_seconds(attempt: int) -> float:
+    base = _bounded_float_env("SELF_HOSTED_MT_RETRY_BACKOFF_SECONDS", 0.5, 0.0, 10.0)
+    return min(10.0, base * (2 ** max(0, attempt - 1)))
+
+
 def _post(endpoint: str, api_key: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
     url = validate_endpoint_for_request(endpoint)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    try:
-        res = requests.post(url, json=payload, headers=headers, timeout=max(1, int(timeout or 180)))
-    except requests.RequestException as exc:
-        raise TranslationRouteError(f"Translation endpoint request failed: {exc}") from exc
-    if res.status_code >= 400:
+    attempts = _bounded_int_env("SELF_HOSTED_MT_RETRIES", 2, 0, 5) + 1
+    last_error: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
         try:
-            details = res.json()
-        except Exception as exc:
-            LOGGER.debug("Translation endpoint error body is not JSON: %s", exc)
-            details = res.text[:500]
-        raise TranslationRouteError(f"Translation endpoint returned HTTP {res.status_code}: {details}")
+            res = requests.post(url, json=payload, headers=headers, timeout=max(1, int(timeout or 180)))
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(_retry_sleep_seconds(attempt))
+                continue
+            raise TranslationRouteError(f"Translation endpoint request failed: {exc}") from exc
+        if res.status_code >= 400:
+            try:
+                details = res.json()
+            except Exception as exc:
+                LOGGER.debug("Translation endpoint error body is not JSON: %s", exc)
+                details = res.text[:500]
+            if res.status_code in TRANSIENT_HTTP_STATUS_CODES and attempt < attempts:
+                time.sleep(_retry_sleep_seconds(attempt))
+                continue
+            raise TranslationRouteError(f"Translation endpoint returned HTTP {res.status_code}: {details}")
+        break
+    else:
+        raise TranslationRouteError(f"Translation endpoint request failed: {last_error}")
     try:
         return res.json()
     except Exception as exc:

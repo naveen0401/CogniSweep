@@ -3,7 +3,13 @@ import os
 import selfhosted_mt_clients as clients
 
 
-TRACKED_ENV = ["ERRORSWEEP_ENV", "APP_ENV", "SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS"]
+TRACKED_ENV = [
+    "ERRORSWEEP_ENV",
+    "APP_ENV",
+    "SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS",
+    "SELF_HOSTED_MT_RETRIES",
+    "SELF_HOSTED_MT_RETRY_BACKOFF_SECONDS",
+]
 
 
 def with_env(values):
@@ -23,11 +29,13 @@ def restore_env(previous):
 
 
 class FakeResponse:
-    status_code = 200
-    text = '{"translations":["Hola"]}'
+    def __init__(self, status_code=200, payload=None, text='{"translations":["Hola"]}'):
+        self.status_code = status_code
+        self.payload = payload if payload is not None else {"translations": ["Hola"]}
+        self.text = text
 
     def json(self):
-        return {"translations": ["Hola"]}
+        return self.payload
 
 
 def test_production_blocks_local_mt_endpoint_before_network():
@@ -104,8 +112,39 @@ def test_endpoint_credentials_are_rejected_before_network():
         restore_env(previous)
 
 
+def test_transient_mt_endpoint_failures_are_retried():
+    previous = with_env({"SELF_HOSTED_MT_RETRIES": "2", "SELF_HOSTED_MT_RETRY_BACKOFF_SECONDS": "0"})
+    calls = []
+    responses = [
+        FakeResponse(status_code=503, payload={"error": "warming"}),
+        FakeResponse(status_code=200, payload={"translations": ["Hola"]}),
+    ]
+    original_post = clients.requests.post
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return responses.pop(0)
+
+    clients.requests.post = fake_post
+    try:
+        translations, usage = clients.translate_with_opus_mt(
+            endpoint="https://mt.example.com/translate",
+            api_key="",
+            source_language="English",
+            target_language="Spanish",
+            texts=["Hello"],
+        )
+        assert translations == ["Hola"]
+        assert usage["success"] is True
+        assert len(calls) == 2
+    finally:
+        clients.requests.post = original_post
+        restore_env(previous)
+
+
 if __name__ == "__main__":
     test_production_blocks_local_mt_endpoint_before_network()
     test_production_private_mt_endpoint_requires_explicit_override()
     test_endpoint_credentials_are_rejected_before_network()
+    test_transient_mt_endpoint_failures_are_retried()
     print("Self-hosted MT client security tests passed.")
