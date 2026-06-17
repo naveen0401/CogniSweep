@@ -58,9 +58,39 @@ REQUIRED_CLIENT_SYMBOLS = [
     "restore_text",
 ]
 SERVER_CONTRACT_TOKENS = {
-    "opus_mt_server_v45.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
-    "indictrans2_worker.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
-    "madlad_mt_server.py": ["FastAPI", '@app.get("/health")', '@app.post("/translate")', "SERVER_API_KEY", "require_server_api_key_configured", "validate_translate_request", "MAX_NEW_TOKENS"],
+    "opus_mt_server_v45.py": [
+        "FastAPI",
+        '@app.get("/health")',
+        '@app.post("/translate")',
+        "SERVER_API_KEY",
+        "require_server_api_key_configured",
+        "validate_translate_request",
+        "MAX_NEW_TOKENS",
+        "RATE_LIMIT_REQUESTS",
+        "enforce_rate_limit",
+    ],
+    "indictrans2_worker.py": [
+        "FastAPI",
+        '@app.get("/health")',
+        '@app.post("/translate")',
+        "SERVER_API_KEY",
+        "require_server_api_key_configured",
+        "validate_translate_request",
+        "MAX_NEW_TOKENS",
+        "RATE_LIMIT_REQUESTS",
+        "enforce_rate_limit",
+    ],
+    "madlad_mt_server.py": [
+        "FastAPI",
+        '@app.get("/health")',
+        '@app.post("/translate")',
+        "SERVER_API_KEY",
+        "require_server_api_key_configured",
+        "validate_translate_request",
+        "MAX_NEW_TOKENS",
+        "RATE_LIMIT_REQUESTS",
+        "enforce_rate_limit",
+    ],
 }
 REQUIREMENT_FILES = {
     "OPUS-MT": "requirements_opus_mt_server.txt",

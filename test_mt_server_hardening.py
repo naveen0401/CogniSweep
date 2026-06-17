@@ -35,8 +35,12 @@ def test_mt_workers_cap_request_size_and_generation():
             "MAX_INPUT_LENGTH",
             "MAX_NEW_TOKENS",
             "MAX_BATCH_SIZE",
+            "RATE_LIMIT_REQUESTS",
+            "RATE_LIMIT_WINDOW_SECONDS",
+            "def enforce_rate_limit",
             "def validate_translate_request",
             "HTTPException(status_code=413",
+            "HTTPException(status_code=429",
             "max_new_tokens=MAX_NEW_TOKENS",
         ]:
             assert token in text, f"{path} missing {token}"
@@ -49,6 +53,8 @@ def test_release_gate_includes_mt_hardening_check():
     assert "require_server_api_key_configured" in mt_check
     assert "validate_translate_request" in mt_check
     assert "MAX_NEW_TOKENS" in mt_check
+    assert "enforce_rate_limit" in mt_check
+    assert "RATE_LIMIT_REQUESTS" in mt_check
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ import hmac
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 # Heavy imports are intentionally below. They load once when the server starts.
@@ -65,6 +65,10 @@ MAX_INPUT_LENGTH = _bounded_int_env("OPUS_MT_MAX_INPUT_LENGTH", 256, 32, 512)
 MAX_NEW_TOKENS = _bounded_int_env("OPUS_MT_MAX_NEW_TOKENS", 256, 8, 512)
 MAX_BATCH_SIZE = _bounded_int_env("OPUS_MT_BATCH_SIZE", 8, 1, 32)
 MAX_NUM_BEAMS = _bounded_int_env("OPUS_MT_NUM_BEAMS", 4, 1, 8)
+RATE_LIMIT_REQUESTS = _bounded_int_env("OPUS_MT_RATE_LIMIT_REQUESTS", 120, 1, 10000)
+RATE_LIMIT_WINDOW_SECONDS = _bounded_int_env("OPUS_MT_RATE_LIMIT_WINDOW_SECONDS", 60, 1, 3600)
+RATE_LIMIT_MAX_BUCKETS = _bounded_int_env("OPUS_MT_RATE_LIMIT_MAX_BUCKETS", 1024, 8, 100000)
+RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
 
 # Keep first release narrow. Add more pairs only after testing quality and model availability.
 SUPPORTED_PAIRS: Dict[Tuple[str, str], str] = {
@@ -133,6 +137,20 @@ def verify_api_key(authorization: Optional[str], request_key: Optional[str]) -> 
     supplied = (request_key or header_key or "").strip()
     if not hmac.compare_digest(supplied, SERVER_API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized OPUS-MT request.")
+
+
+def enforce_rate_limit(request: Request) -> None:
+    client = getattr(getattr(request, "client", None), "host", "") or "unknown"
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+    if len(RATE_LIMIT_BUCKETS) >= RATE_LIMIT_MAX_BUCKETS and client not in RATE_LIMIT_BUCKETS:
+        oldest = min(RATE_LIMIT_BUCKETS, key=lambda key: RATE_LIMIT_BUCKETS[key][-1] if RATE_LIMIT_BUCKETS[key] else 0)
+        RATE_LIMIT_BUCKETS.pop(oldest, None)
+    hits = [stamp for stamp in RATE_LIMIT_BUCKETS.get(client, []) if stamp >= cutoff]
+    if len(hits) >= RATE_LIMIT_REQUESTS:
+        raise HTTPException(status_code=429, detail="OPUS-MT rate limit exceeded.")
+    hits.append(now)
+    RATE_LIMIT_BUCKETS[client] = hits
 
 
 def require_server_api_key_configured() -> None:
@@ -277,7 +295,8 @@ def models():
 
 
 @app.post("/translate")
-def translate(req: TranslateRequest, authorization: Optional[str] = Header(default=None)):
+def translate(req: TranslateRequest, request: Request, authorization: Optional[str] = Header(default=None)):
+    enforce_rate_limit(request)
     verify_api_key(authorization, req.api_key)
     texts = validate_translate_request(req)
 
