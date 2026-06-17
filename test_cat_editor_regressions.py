@@ -795,6 +795,8 @@ def test_media_editor_uses_reference_template() -> None:
     assert "padding:0 !important" in shell_body
     assert "position:fixed !important" in shell_body
     assert "inset:0 !important" in shell_body
+    assert ".st-key-errorsweep_editor_frame iframe" in shell_body
+    assert "position:absolute !important" in shell_body
     assert "components.html(html, height=1, scrolling=False)" in shell_body
     assert "height:calc(100dvh - 12px) !important" not in shell_body
     assert "overflow-y:auto !important" not in shell_body
@@ -955,6 +957,13 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True)" in source
     assert "render_editor_app_shell(lambda: render_external_editor_router())" in source
     assert "render_root_app_shell(lambda: render_external_editor_router()" not in source
+    editor_shell_start = source.index("def render_editor_app_shell(")
+    editor_shell_end = source.index("def render_root_app_shell(", editor_shell_start)
+    editor_shell_body = source[editor_shell_start:editor_shell_end]
+    assert "render_editor_shell_bridge()" in editor_shell_body
+    assert 'editorFrame.querySelectorAll("iframe")' in source
+    assert "iframe.style.position = \"absolute\"" in source
+    assert "node.style.position = \"fixed\"" in source
     assert 'const shellFrameWidth = "100vw";' in source
     assert 'const contentFrameWidth = "calc(100vw - 56px)";' in source
     assert "const fullBleedEditor = !!(" not in source

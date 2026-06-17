@@ -16729,8 +16729,10 @@ def render_reference_media_editor_shell(
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell > div[data-testid="stVerticalBlock"],
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div,
-        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
-        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame div[data-testid="stElementContainer"]:has(iframe),
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame div[data-testid="stElementContainer"]:has(iframe) > div {
             box-sizing:border-box !important;
             width:100vw !important;
             max-width:100vw !important;
@@ -16746,13 +16748,13 @@ def render_reference_media_editor_shell(
         }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
-        body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
-            height:100% !important;
-            max-height:100% !important;
-            width:100% !important;
-            max-width:100% !important;
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame div[data-testid="stElementContainer"]:has(iframe) {
+            height:100dvh !important;
+            max-height:100dvh !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-height:0 !important;
-            margin:0 auto !important;
+            margin:0 !important;
             padding:0 !important;
             overflow:hidden !important;
             border:0 !important;
@@ -16767,6 +16769,13 @@ def render_reference_media_editor_shell(
             background:#080a12 !important;
             z-index:10 !important;
         }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame,
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame > div[data-testid="stVerticalBlock"],
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame div[data-testid="stElementContainer"]:has(iframe) {
+            position:fixed !important;
+            inset:0 !important;
+            display:block !important;
+        }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {
             gap:0 !important;
         }
@@ -16778,9 +16787,11 @@ def render_reference_media_editor_shell(
             padding:0 !important;
             overflow:hidden !important;
         }
-        body:has(#media-editor-page-marker) iframe {
-            width:100% !important;
-            max-width:100% !important;
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame iframe {
+            position:absolute !important;
+            inset:0 !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
             height:100dvh !important;
             max-height:100dvh !important;
@@ -25119,6 +25130,22 @@ def render_editor_shell_bridge() -> None:
             fullViewport(editorContent.querySelector('[data-testid="stVerticalBlock"]'));
             fullViewport(editorFrame);
             fullViewport(editorFrame && editorFrame.querySelector('[data-testid="stVerticalBlock"]'));
+
+            if (editorFrame) {
+              editorFrame.querySelectorAll("div[data-testid='stElementContainer']:has(iframe)").forEach((node) => {
+                fullViewport(node);
+                node.style.position = "fixed";
+                node.style.inset = "0";
+                node.style.display = "block";
+              });
+              editorFrame.querySelectorAll("iframe").forEach((iframe) => {
+                fullViewport(iframe);
+                iframe.style.position = "absolute";
+                iframe.style.inset = "0";
+                iframe.style.display = "block";
+                iframe.style.border = "0";
+              });
+            }
           };
 
           applyEditorShell();
@@ -25139,6 +25166,7 @@ def render_editor_shell_bridge() -> None:
 def render_editor_app_shell(content_renderer) -> None:
     """Render standalone editor routes in a shell that normal pages never mount."""
     st.markdown('<div id="errorsweep-editor-shell-marker" class="errorsweep_editor_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
+    render_editor_shell_bridge()
     with st.container(key="errorsweep_editor_shell", gap=None):
         with st.container(key="errorsweep_editor_content", gap=None):
             st.markdown('<div id="errorsweep-editor-content-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
