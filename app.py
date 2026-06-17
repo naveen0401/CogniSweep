@@ -12274,6 +12274,46 @@ def provider_checkout_request_curl(request_config: Dict[str, Any]) -> str:
     return ""
 
 
+SENSITIVE_PROVIDER_DISPLAY_KEY_PARTS = ("auth", "authorization", "api_key", "apikey", "secret", "token", "password", "credential")
+PROVIDER_DISPLAY_REDACTION = "[redacted]"
+
+
+def provider_display_key_is_sensitive(key: Any) -> bool:
+    lowered = safe_text(key).strip().lower()
+    return any(part in lowered for part in SENSITIVE_PROVIDER_DISPLAY_KEY_PARTS)
+
+
+def redacted_provider_display_value(key: Any, value: Any) -> Any:
+    if provider_display_key_is_sensitive(key):
+        return PROVIDER_DISPLAY_REDACTION if safe_text(value) else ""
+    if isinstance(value, dict):
+        return {item_key: redacted_provider_display_value(item_key, item_value) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [redacted_provider_display_value(key, item) for item in value]
+    return value
+
+
+def redacted_provider_checkout_request(request_config: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(request_config, dict):
+        return {}
+    return {key: redacted_provider_display_value(key, value) for key, value in request_config.items()}
+
+
+def redacted_provider_checkout_curl(curl_command: str) -> str:
+    redacted = safe_text(curl_command)
+    for secret_name in ("STRIPE_SECRET_KEY", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET"):
+        configured = secret(secret_name, "").strip()
+        if configured:
+            redacted = redacted.replace(configured, PROVIDER_DISPLAY_REDACTION)
+    redacted = re.sub(
+        r"(Authorization:\s*(?:Bearer|Basic)\s+)([^\"'\s]+)",
+        rf"\1{PROVIDER_DISPLAY_REDACTION}",
+        redacted,
+        flags=re.I,
+    )
+    return redacted
+
+
 def create_live_provider_checkout(request_config: Dict[str, Any]) -> Dict[str, str]:
     provider = safe_text(request_config.get("provider")).lower()
     if not request_config.get("ready"):
@@ -23354,15 +23394,11 @@ def page_billing() -> None:
                     provider_request = metadata.get("provider_checkout_request") if isinstance(metadata.get("provider_checkout_request"), dict) else {}
                     provider_curl = safe_text(metadata.get("provider_checkout_curl"))
                     if provider_request:
-                        display_request = {
-                            key: value
-                            for key, value in provider_request.items()
-                            if key not in {"auth"}
-                        }
-                        display_request["auth"] = provider_request.get("auth", "")
+                        display_request = redacted_provider_checkout_request(provider_request)
+                        safe_provider_curl = redacted_provider_checkout_curl(provider_curl)
                         st.json(display_request)
-                        if provider_curl:
-                            st.code(provider_curl, language="bash")
+                        if safe_provider_curl:
+                            st.code(safe_provider_curl, language="bash")
                         d1, d2 = st.columns(2)
                         d1.download_button(
                             "Download provider checkout JSON",
@@ -23373,7 +23409,7 @@ def page_billing() -> None:
                         )
                         d2.download_button(
                             "Download provider checkout curl",
-                            provider_curl or "# No curl generated\n",
+                            safe_provider_curl or "# No curl generated\n",
                             file_name="errorsweep_provider_checkout_request.sh",
                             mime="text/x-shellscript",
                             use_container_width=True,
@@ -23652,15 +23688,11 @@ def page_billing() -> None:
             provider_request = metadata.get("provider_checkout_request") if isinstance(metadata.get("provider_checkout_request"), dict) else {}
             provider_curl = safe_text(metadata.get("provider_checkout_curl"))
             if provider_request:
-                display_request = {
-                    key: value
-                    for key, value in provider_request.items()
-                    if key not in {"auth"}
-                }
-                display_request["auth"] = provider_request.get("auth", "")
+                display_request = redacted_provider_checkout_request(provider_request)
+                safe_provider_curl = redacted_provider_checkout_curl(provider_curl)
                 st.json(display_request)
-                if provider_curl:
-                    st.code(provider_curl, language="bash")
+                if safe_provider_curl:
+                    st.code(safe_provider_curl, language="bash")
                 d1, d2 = st.columns(2)
                 d1.download_button(
                     "Download provider checkout JSON",
@@ -23671,7 +23703,7 @@ def page_billing() -> None:
                 )
                 d2.download_button(
                     "Download provider checkout curl",
-                    provider_curl or "# No curl generated\n",
+                    safe_provider_curl or "# No curl generated\n",
                     file_name="errorsweep_provider_checkout_request.sh",
                     mime="text/x-shellscript",
                     use_container_width=True,

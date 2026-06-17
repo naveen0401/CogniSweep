@@ -120,6 +120,9 @@ def test_placeholders_and_release_checks_are_aligned():
     assert 'SUPABASE_URL = "https://your-project.supabase.co"' not in persistence
     assert 'SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"' not in persistence
     assert "eval(" not in app
+    assert 'display_request["auth"] = provider_request.get("auth", "")' not in app
+    assert "redacted_provider_checkout_request(provider_request)" in app
+    assert "safe_provider_curl = redacted_provider_checkout_curl(provider_curl)" in app
 
     for path in [WORKFLOW, RELEASE_CHECK, ASYNC_CHECK, BILLING_CHECK, OBJECT_STORAGE_CHECK]:
         text = source(path)
