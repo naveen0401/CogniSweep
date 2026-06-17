@@ -186,7 +186,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-17-parent-runtime-nav-v10"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-17-editor-launch-v11"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -198,6 +198,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "same_session_public_auth_routes",
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
+    "server_side_editor_launch_token",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 # Persistent browser sessions should survive reloads and browser restarts until
@@ -335,6 +336,8 @@ SESSION_COLLECTION_LIMITS = {
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
+EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
+EDITOR_LAUNCH_TTL_SECONDS = int(os.getenv("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
 AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
 AUTH_STATE_UNKNOWN = "unknown"
 AUTH_STATE_AUTHENTICATED = "authenticated"
@@ -342,7 +345,7 @@ AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
-ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to")
+ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM)
 SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")
 SESSION_COOKIE_MAX_BYTES = 3800
 LANGUAGE_CATALOG = [
@@ -4800,6 +4803,18 @@ def signed_session_token_for_user(user: Dict[str, Any]) -> str:
     return token
 
 
+def signed_editor_launch_token_for_user(user: Dict[str, Any]) -> str:
+    issued_at = int(time.time())
+    payload = {
+        **compact_session_user_payload(user),
+        "iat": issued_at,
+        "exp": issued_at + EDITOR_LAUNCH_TTL_SECONDS,
+        "purpose": "editor_launch",
+        "v": 1,
+    }
+    return sign_payload(payload)
+
+
 def browser_cookie_controller() -> Optional[Any]:
     if CookieController is None:
         return None
@@ -4949,20 +4964,61 @@ def restore_user_from_signed_session(token: str) -> bool:
     return True
 
 
+def restore_user_from_editor_launch_token(token: str) -> bool:
+    if not safe_text(token):
+        return False
+    data = verify_payload(token)
+    if not data:
+        return False
+    if safe_text(data.get("purpose")) != "editor_launch":
+        return False
+    expires_at = int(data.get("exp") or 0)
+    if not expires_at or expires_at < int(time.time()):
+        return False
+    token_user = safe_user_session_record({key: value for key, value in data.items() if key in SESSION_TOKEN_USER_FIELDS})
+    stored_user = find_user_by_email(safe_text(token_user.get("email"))) or {}
+    user = safe_user_session_record(stored_user or token_user)
+    for key in SESSION_TOKEN_USER_FIELDS:
+        if not safe_text(user.get(key)) and safe_text(token_user.get(key)):
+            user[key] = token_user.get(key)
+    user.setdefault("email", "")
+    user.setdefault("role", "User")
+    user.setdefault("account_type", "user")
+    user.setdefault("workspace", "Demo Workspace")
+    user.setdefault("login_at", "")
+    st.session_state["user"] = user
+    st.session_state["authenticated"] = True
+    return True
+
+
 def restore_session_from_cookie() -> None:
+    launch_token = query_get(EDITOR_LAUNCH_QUERY_PARAM)
     token = browser_session_cookie()
     cookie_found = bool(token)
     session_valid = False
     if st.session_state.get("authenticated") and st.session_state.get("user"):
         session_valid = True
         st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
+        query_clear(EDITOR_LAUNCH_QUERY_PARAM)
         set_auth_debug_state(cookie_found, session_valid)
         return
+    if launch_token:
+        session_valid = restore_user_from_editor_launch_token(launch_token)
+        if session_valid:
+            st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
+            query_clear(EDITOR_LAUNCH_QUERY_PARAM)
+            query_clear(AUTH_CHECK_QUERY_PARAM)
+            query_clear("es_session")
+            query_clear("es_restore")
+            query_clear("es_restore_miss")
+            set_auth_debug_state(cookie_found, session_valid)
+            return
     if token:
         session_valid = restore_user_from_signed_session(token)
         if session_valid:
             st.session_state["_pending_session_cookie"] = token
             query_clear(AUTH_CHECK_QUERY_PARAM)
+            query_clear(EDITOR_LAUNCH_QUERY_PARAM)
             query_clear("es_session")
             query_clear("es_restore")
             query_clear("es_restore_miss")
@@ -5149,7 +5205,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
             const cleanOriginalParams = () => {{
               const originalParams = new URLSearchParams(url.search);
-              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => originalParams.delete(key));
+              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_app_nav"].forEach((key) => originalParams.delete(key));
               return originalParams;
             }};
             const clearBootstrapState = () => {{
@@ -5238,7 +5294,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             if (publicEntry) {{
               ["public", "route", "return_to", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
@@ -5332,7 +5388,7 @@ def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
     return f"""
             const url = new URL(loc.href);
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
             {logout_marker_js}
     """
@@ -5404,7 +5460,7 @@ def render_global_logout_listener() -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
@@ -5606,6 +5662,7 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear("public")
     query_clear("return_to")
     query_clear(AUTH_CHECK_QUERY_PARAM)
+    query_clear(EDITOR_LAUNCH_QUERY_PARAM)
     query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
@@ -5723,7 +5780,7 @@ def logout() -> None:
     st.session_state.pop("_saas_state_hydrated", None)
     st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
     st.session_state["_clear_session_cookie"] = True
-    for key in ("es_session", "es_restore", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
+    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
     query_set("es_page", "Landing")
     render_logout_bridge()
@@ -6630,7 +6687,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", AUTH_CHECK_QUERY_PARAM):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             query_clear(stale)
     for key, value in params.items():
@@ -6807,7 +6864,7 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
 
     st.query_params["es_page"] = page_name
-    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
+    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
         
@@ -10695,7 +10752,8 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         cls = "es-task-action-link primary" if primary else "es-task-action-link"
         if primary:
             handoff_attrs = editor_session_handoff_attrs(url)
-            rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
+            href = editor_launch_url(url)
+            rendered.append(f'<a class="{cls}" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
@@ -10712,9 +10770,10 @@ def render_editor_open_link(label: str, url: str) -> None:
     if not safe_text(url):
         return
     handoff_attrs = editor_session_handoff_attrs(url)
+    href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a class="es-task-action-link primary" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
+        <a class="es-task-action-link primary" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
            style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
         """,
         unsafe_allow_html=True,
@@ -15504,6 +15563,26 @@ def editor_session_handoff_attrs(url: str) -> str:
     return attrs
 
 
+def editor_launch_url(url: str) -> str:
+    raw_url = safe_text(url).strip()
+    if not raw_url:
+        return ""
+    user = current_user()
+    if not user and is_authenticated():
+        user = current_user()
+    if not user:
+        return raw_url
+    query_string = raw_url.split("?", 1)[1] if "?" in raw_url else raw_url.lstrip("?")
+    parsed = parse_qs(query_string, keep_blank_values=False)
+    clean_params = {
+        key: safe_text(values[0])
+        for key, values in parsed.items()
+        if values and safe_text(values[0]) and key not in {"es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM}
+    }
+    clean_params[EDITOR_LAUNCH_QUERY_PARAM] = signed_editor_launch_token_for_user(user)
+    return "?" + urlencode(clean_params)
+
+
 def render_editor_session_handoff_bridge() -> None:
     """Keep authenticated editor tabs from falling back to Login during open."""
     token = current_session_token_for_links()
@@ -15623,9 +15702,10 @@ def external_editor_url(editor_type: str, job_id: str) -> str:
 def render_external_editor_link(label: str, editor_type: str, job_id: str) -> None:
     url = external_editor_url(editor_type, job_id)
     handoff_attrs = editor_session_handoff_attrs(url)
+    href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
+        <a href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
             display:flex; align-items:center; justify-content:center; width:100%;
             padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
             background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
@@ -18598,7 +18678,7 @@ def render_public_auth_session_resume_bridge() -> None:
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (storage) storage.setItem(storageKey, token);
 
-            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             routeParamKeys.forEach((key) => url.searchParams.delete(key));
             Object.entries(finalTarget).forEach(([key, value]) => {{
               if (routeParamKeys.includes(key) && value) url.searchParams.set(key, String(value));
@@ -20000,8 +20080,9 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             label = " - ".join(label_bits)
             url = safe_text(row.get("url"))
             handoff_attrs = editor_session_handoff_attrs(url)
+            href = editor_launch_url(url)
             rendered_links.append(
-                f'<a class="es-task-action-link primary" href="{escape(url, quote=True)}" '
+                f'<a class="es-task-action-link primary" href="{escape(href, quote=True)}" '
                 f'target="_blank" rel="noopener" {handoff_attrs}>{escape(("Open " + label)[:120])}</a>'
             )
         st.markdown(f'<div class="es-task-actions">{"".join(rendered_links)}</div>', unsafe_allow_html=True)
@@ -24839,7 +24920,7 @@ if __name__ == "__main__":
             st.session_state["auth_return_to"] = query_get("return_to")
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
-        for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
+        for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
             if stale in st.query_params:
                 del st.query_params[stale]
         route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}

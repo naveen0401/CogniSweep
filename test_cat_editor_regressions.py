@@ -151,6 +151,7 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
     assert "es_editor=" in body
     assert "job_id=" in body
     assert "es_session" not in body
+    assert "es_launch" not in body
 
 
 def test_editor_links_seed_browser_session_before_new_tab() -> None:
@@ -160,6 +161,18 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     helper_body = source[helper_start:helper_end]
     assert "return signed_session_token_for_user(user)" in helper_body
     assert "def render_editor_session_handoff_bridge() -> None:" in helper_body
+    assert 'EDITOR_LAUNCH_QUERY_PARAM = "es_launch"' in source
+    assert "def signed_editor_launch_token_for_user(user: Dict[str, Any]) -> str:" in source
+    assert '"purpose": "editor_launch"' in source
+    assert '"exp": issued_at + EDITOR_LAUNCH_TTL_SECONDS' in source
+    assert "def restore_user_from_editor_launch_token(token: str) -> bool:" in source
+    assert 'safe_text(data.get("purpose")) != "editor_launch"' in source
+    assert "expires_at < int(time.time())" in source
+    assert "launch_token = query_get(EDITOR_LAUNCH_QUERY_PARAM)" in source
+    assert "restore_user_from_editor_launch_token(launch_token)" in source
+    assert 'query_clear(EDITOR_LAUNCH_QUERY_PARAM)' in source
+    assert "def editor_launch_url(url: str) -> str:" in helper_body
+    assert "clean_params[EDITOR_LAUNCH_QUERY_PARAM] = signed_editor_launch_token_for_user(user)" in helper_body
     assert 'data-es-editor-open="1"' in helper_body
     assert "document.addEventListener(\"click\", handleEditorOpen, true)" in helper_body
     assert "local.setItem(storageKey, token)" in helper_body
@@ -171,18 +184,21 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     task_links_end = source.index("def render_editor_open_link", task_links_start)
     task_links_body = source[task_links_start:task_links_end]
     assert "editor_session_handoff_attrs(url)" in task_links_body
+    assert "href = editor_launch_url(url)" in task_links_body
     assert 'target="_blank" rel="noopener"' in task_links_body
 
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
     editor_open_body = source[editor_open_start:editor_open_end]
     assert "editor_session_handoff_attrs(url)" in editor_open_body
+    assert "href = editor_launch_url(url)" in editor_open_body
     assert 'target="_blank" rel="noopener"' in editor_open_body
 
     external_link_start = source.index("def render_external_editor_link")
     external_link_end = source.index("def load_external_editor_payload", external_link_start)
     external_link_body = source[external_link_start:external_link_end]
     assert "editor_session_handoff_attrs(url)" in external_link_body
+    assert "href = editor_launch_url(url)" in external_link_body
     assert 'target="_blank" rel="noopener"' in external_link_body
 
     history_start = source.index("def render_job_history_table")
@@ -191,6 +207,7 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     assert "LinkColumn(\"Open\"" not in history_body
     assert "Open workspace" in history_body
     assert "editor_session_handoff_attrs(url)" in history_body
+    assert "href = editor_launch_url(url)" in history_body
     assert 'target="_blank" rel="noopener"' in history_body
 
     app_start = source.index('if __name__ == "__main__"')
@@ -536,7 +553,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     assert 'if route_public == "login" and query_get("return_to"):' in app_body
     assert 'st.session_state["auth_return_to"] = query_get("return_to")' in app_body
     assert 'st.query_params["es_page"] = page_name' in app_body
-    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
+    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
     assert "del st.query_params[stale]" in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
@@ -565,7 +582,7 @@ def test_login_session_persists_until_explicit_logout() -> None:
     assert "def compact_session_user_payload" in source
 
     sign_start = source.index("def signed_session_token_for_user")
-    sign_end = source.index("def browser_session_cookie", sign_start)
+    sign_end = source.index("def signed_editor_launch_token_for_user", sign_start)
     sign_body = source[sign_start:sign_end]
     assert "compact_session_user_payload(user)" in sign_body
     assert "\"persistent\": True" in sign_body
