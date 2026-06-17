@@ -6,8 +6,9 @@ This module lets the Streamlit MVP keep working exactly as it does now, while
 optionally saving editor jobs and usage events to Supabase when the required
 secrets are configured.
 
-It has a safe local JSON fallback, so the app will not crash if Supabase is not
-ready yet. For release, configure Supabase and run the SQL schema file.
+It has a safe local JSON fallback for development, so local runs do not need
+Supabase. Production mode fails closed unless Supabase is configured and
+reachable; never rely on per-instance JSON storage for public traffic.
 
 Required Streamlit secrets for production mode
 ---------------------------------------------
@@ -168,6 +169,20 @@ def _service_key() -> str:
 
 def supabase_configured() -> bool:
     return bool(_supabase_url() and _service_key())
+
+
+def is_production_mode() -> bool:
+    mode = _secret("ERRORSWEEP_ENV", _secret("ENVIRONMENT", _secret("APP_ENV", ""))).strip().lower()
+    return mode in {"prod", "production", "live"}
+
+
+def local_json_fallback_allowed() -> bool:
+    return not is_production_mode()
+
+
+def require_supabase_for_production() -> None:
+    if is_production_mode() and not supabase_configured():
+        raise RuntimeError("Supabase persistence is required in production; configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
 
 
 def _headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -531,14 +546,15 @@ def save_persistent_editor_job(
 
     Returns the job_id to pass to the external editor URL.
     """
+    require_supabase_for_production()
     jid = _safe_job_id(job_id)
     payload = _normalise_payload(jid, job_type, rows, metadata, user)
 
-    # Always write local fallback so development/testing remains resilient.
-    try:
-        _write_local_job(payload)
-    except Exception as exc:
-        LOGGER.error("Failed to write local editor job fallback %s: %s", jid, exc)
+    if local_json_fallback_allowed():
+        try:
+            _write_local_job(payload)
+        except Exception as exc:
+            LOGGER.error("Failed to write local editor job fallback %s: %s", jid, exc)
 
     if not supabase_configured():
         return jid
@@ -566,8 +582,9 @@ def save_persistent_editor_job(
             timeout=SUPABASE_TIMEOUT,
         ).raise_for_status()
     except Exception as exc:
-        # Never break the app if DB is unavailable.
         LOGGER.error("Failed to save editor job %s to Supabase: %s", jid, exc)
+        if not local_json_fallback_allowed():
+            raise
     return jid
 
 
@@ -580,6 +597,7 @@ def load_persistent_editor_job(
     include_all_workspaces: bool = False,
     platform_scope_reason: str = "",
 ) -> Optional[Dict[str, Any]]:
+    require_supabase_for_production()
     jid = _safe_job_id(job_id)
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
 
@@ -617,6 +635,10 @@ def load_persistent_editor_job(
                 }
         except Exception as exc:
             LOGGER.error("Failed to load editor job %s from Supabase: %s", jid, exc)
+            if not local_json_fallback_allowed():
+                raise
+        if not local_json_fallback_allowed():
+            return None
 
     return _read_local_job(
         jid,
@@ -638,18 +660,21 @@ def update_persistent_editor_job(
     include_all_workspaces: bool = False,
     platform_scope_reason: str = "",
 ) -> bool:
+    require_supabase_for_production()
     jid = _safe_job_id(job_id)
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
-    local_payload = _read_local_job(
-        jid,
-        workspace=scope["workspace"],
-        user_email=scope["user_email"],
-        include_all_workspaces=include_all_workspaces,
-        platform_scope_reason=platform_scope_reason,
-    )
-    if local_payload is None and _local_path(jid).exists():
-        LOGGER.warning("Denied local editor job update outside caller scope: %s", jid)
-        return False
+    local_payload = None
+    if local_json_fallback_allowed():
+        local_payload = _read_local_job(
+            jid,
+            workspace=scope["workspace"],
+            user_email=scope["user_email"],
+            include_all_workspaces=include_all_workspaces,
+            platform_scope_reason=platform_scope_reason,
+        )
+        if local_payload is None and _local_path(jid).exists():
+            LOGGER.warning("Denied local editor job update outside caller scope: %s", jid)
+            return False
     local_payload = local_payload or {
         "job_id": jid,
         "id": jid,
@@ -676,10 +701,11 @@ def update_persistent_editor_job(
     local_payload["updated_at"] = _now_iso()
     local_payload["updated_at_epoch"] = time.time()
 
-    try:
-        _write_local_job(local_payload)
-    except Exception as exc:
-        LOGGER.error("Failed to update local editor job fallback %s: %s", jid, exc)
+    if local_json_fallback_allowed():
+        try:
+            _write_local_job(local_payload)
+        except Exception as exc:
+            LOGGER.error("Failed to update local editor job fallback %s: %s", jid, exc)
 
     if not supabase_configured():
         return True
@@ -708,6 +734,8 @@ def update_persistent_editor_job(
         return True
     except Exception as exc:
         LOGGER.error("Failed to update editor job %s in Supabase: %s", jid, exc)
+        if not local_json_fallback_allowed():
+            raise
         return False
 
 
@@ -722,6 +750,7 @@ def log_persistent_usage_event(
     user: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
+    require_supabase_for_production()
     user = user or {}
     metadata = metadata or {}
     record = {
@@ -743,15 +772,15 @@ def log_persistent_usage_event(
         "created_at": _now_iso(),
     }
 
-    # Local audit trail fallback.
-    try:
-        with _LOCAL_WRITE_LOCK:
-            _rotate_local_usage_events()
-            with _local_usage_path().open("a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            _rotate_local_usage_events()
-    except Exception as exc:
-        LOGGER.error("Failed to write local usage event fallback: %s", exc)
+    if local_json_fallback_allowed():
+        try:
+            with _LOCAL_WRITE_LOCK:
+                _rotate_local_usage_events()
+                with _local_usage_path().open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                _rotate_local_usage_events()
+        except Exception as exc:
+            LOGGER.error("Failed to write local usage event fallback: %s", exc)
 
     if not supabase_configured():
         return
@@ -761,6 +790,8 @@ def log_persistent_usage_event(
         requests.post(url, headers=_headers({"Prefer": "return=minimal"}), json=record, timeout=SUPABASE_TIMEOUT).raise_for_status()
     except Exception as exc:
         LOGGER.error("Failed to save usage event to Supabase: %s", exc)
+        if not local_json_fallback_allowed():
+            raise
 
 
 def fetch_persistent_usage_events(
@@ -772,6 +803,7 @@ def fetch_persistent_usage_events(
     include_all_workspaces: bool = False,
     platform_scope_reason: str = "",
 ) -> List[Dict[str, Any]]:
+    require_supabase_for_production()
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
     tenant_filters = _tenant_filters(
         workspace=scope["workspace"],
@@ -791,6 +823,10 @@ def fetch_persistent_usage_events(
                 return data
         except Exception as exc:
             LOGGER.error("Failed to fetch usage events from Supabase: %s", exc)
+            if not local_json_fallback_allowed():
+                raise
+        if not local_json_fallback_allowed():
+            return []
 
     events: List[Dict[str, Any]] = []
     try:
@@ -820,6 +856,7 @@ def fetch_persistent_editor_jobs(
     include_all_workspaces: bool = False,
     platform_scope_reason: str = "",
 ) -> List[Dict[str, Any]]:
+    require_supabase_for_production()
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
     tenant_filters = _tenant_filters(
         workspace=scope["workspace"],
@@ -844,6 +881,10 @@ def fetch_persistent_editor_jobs(
                 return data
         except Exception as exc:
             LOGGER.error("Failed to fetch editor jobs from Supabase: %s", exc)
+            if not local_json_fallback_allowed():
+                raise
+        if not local_json_fallback_allowed():
+            return []
 
     jobs = []
     for path in sorted(_local_root().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[: int(limit)]:
@@ -893,11 +934,13 @@ def save_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dic
     if collection not in SAAS_TABLES:
         raise ValueError(f"Unsupported SaaS collection: {collection}")
 
+    require_supabase_for_production()
     payload = _normalise_saas_record(collection, record, user=user)
-    try:
-        _upsert_local_saas_record(collection, payload)
-    except Exception as exc:
-        LOGGER.error("Failed to write local SaaS record %s/%s: %s", collection, payload.get("id"), exc)
+    if local_json_fallback_allowed():
+        try:
+            _upsert_local_saas_record(collection, payload)
+        except Exception as exc:
+            LOGGER.error("Failed to write local SaaS record %s/%s: %s", collection, payload.get("id"), exc)
 
     if not supabase_configured():
         return payload
@@ -914,6 +957,8 @@ def save_saas_record(collection: str, record: Dict[str, Any], user: Optional[Dic
         ).raise_for_status()
     except Exception as exc:
         LOGGER.error("Failed to save SaaS record %s/%s to Supabase: %s", collection, payload.get("id"), exc)
+        if not local_json_fallback_allowed():
+            raise
     return payload
 
 
@@ -928,6 +973,7 @@ def fetch_saas_records(
     if collection not in SAAS_TABLES:
         raise ValueError(f"Unsupported SaaS collection: {collection}")
 
+    require_supabase_for_production()
     lim = max(1, min(int(limit), 1000))
     tenant_filters = _tenant_filters(
         workspace=workspace,
@@ -948,6 +994,10 @@ def fetch_saas_records(
                 return data
         except Exception as exc:
             LOGGER.error("Failed to fetch SaaS records %s from Supabase: %s", collection, exc)
+            if not local_json_fallback_allowed():
+                raise
+        if not local_json_fallback_allowed():
+            return []
 
     records = _read_local_collection(collection)
     if workspace and not include_all_workspaces:
@@ -971,6 +1021,7 @@ def delete_saas_record(
     if collection not in SAAS_TABLES:
         raise ValueError(f"Unsupported SaaS collection: {collection}")
 
+    require_supabase_for_production()
     rid = str(record_id or "").strip()
     if not rid:
         return False
@@ -982,23 +1033,24 @@ def delete_saas_record(
     )
 
     deleted = False
-    try:
-        records = _read_local_collection(collection)
-        def in_scope(item: Dict[str, Any]) -> bool:
-            if include_all_workspaces:
+    if local_json_fallback_allowed():
+        try:
+            records = _read_local_collection(collection)
+            def in_scope(item: Dict[str, Any]) -> bool:
+                if include_all_workspaces:
+                    return True
+                if workspace and str(item.get("workspace") or "") != workspace:
+                    return False
+                if user_email and str(item.get("user_email") or "").strip().lower() != user_email.strip().lower():
+                    return False
                 return True
-            if workspace and str(item.get("workspace") or "") != workspace:
-                return False
-            if user_email and str(item.get("user_email") or "").strip().lower() != user_email.strip().lower():
-                return False
-            return True
 
-        retained = [item for item in records if not (str(item.get("id") or "") == rid and in_scope(item))]
-        if len(retained) != len(records):
-            _write_local_collection(collection, retained)
-            deleted = True
-    except Exception as exc:
-        LOGGER.error("Failed to delete local SaaS record %s/%s: %s", collection, rid, exc)
+            retained = [item for item in records if not (str(item.get("id") or "") == rid and in_scope(item))]
+            if len(retained) != len(records):
+                _write_local_collection(collection, retained)
+                deleted = True
+        except Exception as exc:
+            LOGGER.error("Failed to delete local SaaS record %s/%s: %s", collection, rid, exc)
 
     if not supabase_configured():
         return deleted
@@ -1015,6 +1067,8 @@ def delete_saas_record(
         deleted = True
     except Exception as exc:
         LOGGER.error("Failed to delete SaaS record %s/%s from Supabase: %s", collection, rid, exc)
+        if not local_json_fallback_allowed():
+            raise
     return deleted
 
 
@@ -1023,9 +1077,12 @@ def delete_saas_record(
 # ==========================================================
 
 def persistence_health() -> Dict[str, Any]:
+    production_requires_supabase = is_production_mode() and not supabase_configured()
     health = {
         "supabase_configured": supabase_configured(),
         "storage_mode": "supabase" if supabase_configured() else "local_json_fallback",
+        "production_mode": is_production_mode(),
+        "production_ready": not production_requires_supabase,
         "local_job_dir": str(_local_root()),
         "editor_jobs_table": "unknown",
         "usage_events_table": "unknown",
@@ -1036,6 +1093,9 @@ def persistence_health() -> Dict[str, Any]:
         health["editor_jobs_table"] = "not_checked"
         health["usage_events_table"] = "not_checked"
         health["saas_tables"] = {table: "not_checked" for table in SAAS_TABLES.values()}
+        if production_requires_supabase:
+            health["storage_mode"] = "blocked_missing_supabase"
+            health["error"] = "Supabase persistence is required in production."
         return health
 
     try:

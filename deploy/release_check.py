@@ -821,6 +821,30 @@ def check_persistence_cache_hardening(results: List[Dict[str, str]]) -> None:
     )
 
 
+def check_production_persistence_fail_closed(results: List[Dict[str, str]]) -> None:
+    app = read_text("app.py")
+    persistence = read_text("production_persistence.py")
+    workflow = read_text(".github/workflows/release-gate.yml")
+    required = [
+        "def require_supabase_for_production()",
+        "def local_json_fallback_allowed()",
+        "blocked_missing_supabase",
+        "Supabase persistence is required in production",
+        "Production persistence configuration blocked startup",
+        "python test_production_persistence_fail_closed.py",
+    ]
+    combined = "\n".join([app, persistence, workflow])
+    missing = missing_items(required, combined)
+    add(
+        results,
+        "Persistence",
+        "Production persistence fail-closed fallback",
+        "Pass" if not missing else "Blocker",
+        "production mode blocks local JSON fallback when Supabase is missing" if not missing else ", ".join(missing),
+        "Keep local JSON persistence as development-only; production must use Supabase or stop.",
+    )
+
+
 def check_compose(results: List[Dict[str, str]]) -> None:
     compose = read_text("docker-compose.production.yml")
     missing_services = missing_items(REQUIRED_COMPOSE_SERVICES, compose)
@@ -969,6 +993,7 @@ def collect_results(run_smoke: bool = False) -> List[Dict[str, str]]:
     check_supabase_schema_contract(results)
     check_object_storage_contract(results)
     check_persistence_cache_hardening(results)
+    check_production_persistence_fail_closed(results)
     check_dockerfile(results)
     check_compose(results)
     check_env_template(results)

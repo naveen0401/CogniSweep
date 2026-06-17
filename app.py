@@ -121,6 +121,7 @@ try:
         fetch_saas_records,
         delete_saas_record,
         persistence_health,
+        require_supabase_for_production,
     )
 except Exception as exc:
     LOGGER.warning("production_persistence import failed: %s", exc)
@@ -134,6 +135,7 @@ except Exception as exc:
     fetch_saas_records = None
     delete_saas_record = None
     persistence_health = None
+    require_supabase_for_production = None
 
 try:
     from qa_engine_global_v15 import deterministic_checks_v2
@@ -5878,6 +5880,17 @@ def logout() -> None:
 # ==========================================================
 
 def init_state() -> None:
+    if is_production_mode():
+        if require_supabase_for_production is None:
+            LOGGER.error("production_persistence.py is unavailable in production.")
+            st.error("Production persistence is unavailable. Restore production_persistence.py before public traffic.")
+            st.stop()
+        try:
+            require_supabase_for_production()
+        except RuntimeError as exc:
+            LOGGER.error("Production persistence configuration blocked startup: %s", exc)
+            st.error(str(exc))
+            st.stop()
     unlimited_email = unlimited_access_email()
     unlimited_password_hash = unlimited_access_password_hash()
     unlimited_records_configured = bool(unlimited_email and unlimited_password_hash)
