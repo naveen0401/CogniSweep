@@ -53,6 +53,7 @@ def test_github_actions_release_gate_contract():
         "python test_dependency_locking.py",
         "python test_persistence_cache_hardening.py",
         "python test_qa_correction_cache.py",
+        "python test_subtitle_external_editor_only.py",
         "python test_release_gate_workflow.py",
         "deploy/backup_check.py",
         "deploy/billing_check.py",

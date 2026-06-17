@@ -26,6 +26,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 19. Operational Backup PII Redaction
 20. QA Engine Shim Public Surface
 21. Legacy Env Prefix Documentation
+22. Subtitle Editor Opens Only In CAT Tool
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -66,6 +67,7 @@ None currently tracked.
 33. Operational Backup PII Redaction
 34. QA Engine Shim Public Surface
 35. Legacy Env Prefix Documentation
+36. Subtitle Editor Opens Only In CAT Tool
 
 ## Resolved in Latest Pass
 
@@ -152,6 +154,10 @@ None currently tracked.
 ### 21. Legacy Env Prefix Documentation
 *   **The Issue:** CogniSweep docs and UI branding use the CogniSweep name, while stable production env vars and compose service names still use the legacy `ERRORSWEEP_` / `errorsweep-*` prefix.
 *   **The Fix:** Deployment docs now explicitly document that the legacy prefix is the current stable configuration contract and should not be renamed piecemeal. *(Verified fixed)*.
+
+### 22. Subtitle Editor Opens Only In CAT Tool
+*   **The Issue:** Creating a subtitle/transcription job opened both the legacy in-page subtitle workspace and the dedicated CAT/media editor tab.
+*   **The Fix:** Subtitle/transcription creation now saves only the external media editor job, keeps the app tab on setup with an editor link, clears stale inline rows, and retires legacy workspace routes back to setup. Regression coverage verifies the CAT/media editor is the only editing surface. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -300,3 +306,7 @@ None currently tracked.
 ### 35. Legacy Env Prefix Documentation
 *   **The Issue:** Legacy deployment key prefixes could confuse operators.
 *   **The Fix:** Added clear naming notes to README, deployment README, and launch runbook. *(Verified fixed)*.
+
+### 36. Subtitle Editor Opens Only In CAT Tool
+*   **The Issue:** The subtitling feature displayed the file in two places: the old in-page subtitle workspace and the CAT/media editor tab.
+*   **The Fix:** Removed the automatic legacy workspace activation and added `test_subtitle_external_editor_only.py` to protect the flow. *(Verified fixed)*.

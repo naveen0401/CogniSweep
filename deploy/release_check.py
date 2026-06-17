@@ -729,6 +729,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_model_download_integrity.py",
         "python test_persistence_cache_hardening.py",
         "python test_qa_correction_cache.py",
+        "python test_subtitle_external_editor_only.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",

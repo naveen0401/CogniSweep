@@ -15642,6 +15642,8 @@ def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video
             LOGGER.warning("Unable to save media job to persistent store: %s", exc)
 
     st.session_state["last_media_editor_job_id"] = job_id
+    st.session_state["last_media_editor_workflow"] = workflow
+    st.session_state["last_media_editor_target_language"] = target_language or metadata.get("target_language", "")
     owner_job_record = {
         "id": job_id,
         "job_type": "media",
@@ -15998,6 +16000,16 @@ def render_external_editor_link(label: str, editor_type: str, job_id: str) -> No
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_last_media_editor_link() -> None:
+    job_id = safe_text(st.session_state.get("last_media_editor_job_id", ""))
+    if not job_id:
+        return
+    workflow = safe_text(st.session_state.get("last_media_editor_workflow", "Subtitling"))
+    label = "Open Transcription Editor" if workflow.lower().startswith("transcription") else "Open Subtitle Editor"
+    st.info("Your latest media job opens in the CAT editor tab only. The older in-page subtitle workspace is no longer used.")
+    render_external_editor_link(label, "media", job_id)
 
 
 def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
@@ -21292,8 +21304,9 @@ def render_subtitle_transcription_setup() -> None:
             elif auto_generate and rows and not has_source_text:
                 st.info("Draft target subtitles were skipped because there is no source text yet. Fill source rows manually, then translate/review later.")
 
-            enter_subtitle_workspace("Subtitling", rows, video)
             job_id = save_media_session_to_store("Subtitling", rows, video_file=video, target_language=subtitle_target_language)
+            st.session_state.subtitle_editor_active = False
+            st.session_state.subtitle_segments = []
             st.success("Subtitling editor job created. Open it in the separate editor window below.")
             render_external_editor_link("Open Subtitle Editor", "media", job_id)
     else:
@@ -21321,15 +21334,13 @@ def render_subtitle_transcription_setup() -> None:
                 rows = default_subtitle_segments(int(starter_count), transcription=True)
             if not rows:
                 rows = default_subtitle_segments(int(starter_count), transcription=True)
-            enter_subtitle_workspace("Transcription", rows, video)
             job_id = save_media_session_to_store("Transcription", rows, video_file=video, target_language="")
+            st.session_state.subtitle_editor_active = False
+            st.session_state.subtitle_segments = []
             st.success("Transcription editor job created. Open it in the separate editor window below.")
             render_external_editor_link("Open Transcription Editor", "media", job_id)
 
-    if st.session_state.subtitle_segments:
-        if st.button("Open existing subtitle/transcription workspace", use_container_width=True):
-            st.session_state.subtitle_editor_active = True
-            open_page("Subtitle Workspace" if st.session_state.get("subtitle_workflow") == "Subtitling" else "Transcription Workspace")
+    render_last_media_editor_link()
 
 
 def render_focused_subtitle_workspace() -> None:
@@ -21477,10 +21488,8 @@ def render_focused_subtitle_workspace() -> None:
 
 
 def render_subtitle_transcription_editor() -> None:
-    if st.session_state.get("subtitle_editor_active"):
-        render_focused_subtitle_workspace()
-    else:
-        render_subtitle_transcription_setup()
+    st.session_state.subtitle_editor_active = False
+    render_subtitle_transcription_setup()
 
 
 def page_subtitle_transcription_editor() -> None:
@@ -21515,9 +21524,7 @@ def page_subtitle_transcription_editor() -> None:
     if not feature_flag("subtitle_editor"):
         st.warning("Subtitle and transcription workflows are currently disabled by Platform Settings.")
         return
-    if st.session_state.get("subtitle_editor_active"):
-        render_focused_subtitle_workspace()
-        return
+    st.session_state.subtitle_editor_active = False
     hero("Subtitle / Transcription Editor", "Dedicated media localization workspace", "Create subtitles or transcripts. Pro post-editing opens separately only after a Pro translation run.")
     render_subtitle_transcription_editor()
 
@@ -21558,18 +21565,20 @@ def page_subtitle_workspace() -> None:
     if not feature_flag("subtitle_editor"):
         st.warning("Subtitle workflows are currently disabled by Platform Settings.")
         return
-    st.session_state.subtitle_editor_active = True
+    st.session_state.subtitle_editor_active = False
     st.session_state.subtitle_workflow = "Subtitling"
-    render_focused_subtitle_workspace()
+    st.info("The in-page subtitle workspace has been retired. Use the CAT subtitle editor tab for editing.")
+    render_subtitle_transcription_setup()
 
 
 def page_transcription_workspace() -> None:
     if not feature_flag("subtitle_editor"):
         st.warning("Transcription workflows are currently disabled by Platform Settings.")
         return
-    st.session_state.subtitle_editor_active = True
+    st.session_state.subtitle_editor_active = False
     st.session_state.subtitle_workflow = "Transcription"
-    render_focused_subtitle_workspace()
+    st.info("The in-page transcription workspace has been retired. Use the CAT transcription editor tab for editing.")
+    render_subtitle_transcription_setup()
 
 
 

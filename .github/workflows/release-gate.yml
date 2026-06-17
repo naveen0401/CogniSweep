@@ -96,6 +96,7 @@ jobs:
           python test_release_gate_workflow.py
           python test_cat_editor_regressions.py
           python test_media_editor_reference.py
+          python test_subtitle_external_editor_only.py
           python test_media_timing_tools.py
           python test_pro_reconstruction.py
           python test_qa_engine_shims.py
