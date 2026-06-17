@@ -30,6 +30,8 @@ def test_backup_check_script_contract():
         "ERRORSWEEP_BACKUP_RETENTION_DAYS",
         "ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED",
         "auth tokens excluded",
+        "email",
+        "phone_number",
         "--run-smoke",
     ]:
         assert token in text

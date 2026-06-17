@@ -31,6 +31,7 @@ def test_github_actions_release_gate_contract():
         "python test_launch_public_lock.py",
         "python test_launch_rehearsal.py",
         "python test_backup_check.py",
+        "python test_backup_redaction.py",
         "python test_billing_check.py",
         "python test_billing_webhook_replay.py",
         "python test_email_check.py",

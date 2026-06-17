@@ -719,6 +719,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_ai_json_extraction.py",
         "python test_launch_rehearsal.py",
         "python test_launch_public_lock.py",
+        "python test_backup_redaction.py",
         "python test_excel_backlog_security_hardening.py",
         "python test_app_zip_safety.py",
         "python test_process_file_locks.py",

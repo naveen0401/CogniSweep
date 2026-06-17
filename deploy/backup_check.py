@@ -244,7 +244,9 @@ def validate_worker_contract(results: List[Dict[str, str]]) -> None:
     missing_redaction_tokens = missing_items(
         [
             "auth_tokens",
+            "email",
             "password_hash",
+            "phone_number",
             "service_role_key",
             "token_hash",
             "private_key",

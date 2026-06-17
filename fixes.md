@@ -23,6 +23,7 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 16. Excel Backlog Production Hardening
 17. Transactional Email Template HTML Safety
 18. Model Download Integrity Verification
+19. Operational Backup PII Redaction
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -60,6 +61,7 @@ None currently tracked.
 30. Excel Backlog Production Hardening
 31. Transactional Email Template HTML Safety
 32. Model Download Integrity Verification
+33. Operational Backup PII Redaction
 
 ## Resolved in Latest Pass
 
@@ -134,6 +136,10 @@ None currently tracked.
 ### 18. Model Download Integrity Verification
 *   **The Issue:** The local model download helper fetched Hugging Face model artifacts without verifying trusted checksums.
 *   **The Fix:** `download_models.ps1` now requires a SHA-256 checksum manifest by default, verifies every downloaded non-cache file with `Get-FileHash`, and exposes `-SkipChecksumVerification` only for explicit local experiments. A manifest example and release-gate regression coverage were added. *(Verified fixed)*.
+
+### 19. Operational Backup PII Redaction
+*   **The Issue:** Operational backups redacted secrets and tokens, but common PII fields such as email, names, recipients, actors, and phone numbers were not explicitly covered by the redaction map.
+*   **The Fix:** The backup worker now redacts common PII keys in nested records, still excludes `auth_tokens`, and release-gate coverage verifies PII redaction behavior. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -270,3 +276,7 @@ None currently tracked.
 ### 32. Model Download Integrity Verification
 *   **The Issue:** Downloaded self-hosted MT model files were not checked against expected hashes before local use.
 *   **The Fix:** Added default SHA-256 manifest enforcement to the model downloader, an example manifest format, and `test_model_download_integrity.py` in the release gate. *(Verified fixed)*.
+
+### 33. Operational Backup PII Redaction
+*   **The Issue:** Backup snapshots could preserve obvious PII even after secret/token redaction.
+*   **The Fix:** Added common PII fields to backup redaction and `test_backup_redaction.py` to keep the behavior covered. *(Verified fixed)*.
