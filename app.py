@@ -10694,8 +10694,11 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         seen_urls.add(url)
         cls = "es-task-action-link primary" if primary else "es-task-action-link"
         if primary:
-            handoff_attrs = editor_session_handoff_attrs(url)
-            rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
+            action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
+            if action_attr:
+                rendered.append(f'<button type="button" class="{cls}" {action_attr}>{escape(label)}</button>')
+            else:
+                rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_self">{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
@@ -10708,17 +10711,27 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         render_app_navigation_bridge()
 
 
+def navigate_to_editor_url(url: str) -> None:
+    target = safe_text(url).strip()
+    if not target:
+        return
+    if apply_return_to(target):
+        st.rerun()
+    st.error("Unable to open this editor route. Please reopen it from the task result.")
+
+
+def editor_open_button_key(prefix: str, label: str, url: str) -> str:
+    raw = f"{safe_text(label)}|{safe_text(url)}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    clean_prefix = re.sub(r"[^a-z0-9_]+", "_", safe_text(prefix).lower()).strip("_") or "editor"
+    return f"{clean_prefix}_{digest}"
+
+
 def render_editor_open_link(label: str, url: str) -> None:
     if not safe_text(url):
         return
-    handoff_attrs = editor_session_handoff_attrs(url)
-    st.markdown(
-        f"""
-        <a class="es-task-action-link primary" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
-           style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
-        """,
-        unsafe_allow_html=True,
-    )
+    if st.button(label, key=editor_open_button_key("editor_open", label, url), type="primary", use_container_width=True):
+        navigate_to_editor_url(url)
 
 
 def render_task_result_actions(task: Dict[str, Any], key_prefix: str) -> None:
@@ -15622,18 +15635,8 @@ def external_editor_url(editor_type: str, job_id: str) -> str:
 
 def render_external_editor_link(label: str, editor_type: str, job_id: str) -> None:
     url = external_editor_url(editor_type, job_id)
-    handoff_attrs = editor_session_handoff_attrs(url)
-    st.markdown(
-        f"""
-        <a href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
-            display:flex; align-items:center; justify-content:center; width:100%;
-            padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
-            background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
-            font-weight:900; box-shadow:0 12px 30px rgba(52,189,246,.25);
-        ">{escape(label)} ↗</a>
-        """,
-        unsafe_allow_html=True,
-    )
+    if st.button(label, key=editor_open_button_key("external_editor_open", label, url), type="primary", use_container_width=True):
+        navigate_to_editor_url(url)
 
 
 def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
@@ -19946,7 +19949,9 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
         st.info("No tasks found in this section yet.")
         return
     table_rows = []
+    open_rows: List[Dict[str, str]] = []
     for row in rows:
+        editor_url = safe_text(row.get("editor_url"))
         table_rows.append({
             "Task": safe_text(row.get("label") or row.get("type") or "Task"),
             "Type": safe_text(row.get("type")),
@@ -19956,19 +19961,39 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             "Segments": int(row.get("segments") or 0),
             "Assignee": safe_text(row.get("assignee")) or "-",
             "Updated": format_local_time(row.get("updated_at") or row.get("created")),
-            "Open": safe_text(row.get("editor_url")),
+            "Open": "Available" if editor_url else "-",
         })
+        if editor_url:
+            open_rows.append({
+                "label": safe_text(row.get("label") or row.get("type") or "Task"),
+                "file": safe_text(row.get("file_name")),
+                "url": editor_url,
+            })
     st.dataframe(
         pd.DataFrame(table_rows),
         use_container_width=True,
         hide_index=True,
         key=key,
         column_config={
-            "Open": st.column_config.LinkColumn("Open", display_text="Open"),
+            "Open": st.column_config.TextColumn("Open"),
             "Task": st.column_config.TextColumn("Task", width="medium"),
             "File": st.column_config.TextColumn("File", width="medium"),
         },
     )
+    if open_rows:
+        st.markdown("#### Open workspace")
+        for idx, row in enumerate(open_rows[:25]):
+            label_bits = [safe_text(row.get("label")) or "Task"]
+            if safe_text(row.get("file")):
+                label_bits.append(safe_text(row.get("file")))
+            label = " - ".join(label_bits)
+            url = safe_text(row.get("url"))
+            if st.button(
+                f"Open {label}"[:120],
+                key=editor_open_button_key(f"{key}_history_open_{idx}", label, url),
+                use_container_width=True,
+            ):
+                navigate_to_editor_url(url)
 
 
 def page_projects() -> None:
