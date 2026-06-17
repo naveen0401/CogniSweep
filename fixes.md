@@ -27,6 +27,11 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 20. QA Engine Shim Public Surface
 21. Legacy Env Prefix Documentation
 22. Subtitle Editor Opens Only In CAT Tool
+23. Browser Eval Removed From Streamlit Bridge Scripts
+24. Provider Checkout Diagnostics Redaction
+25. Self-Hosted MT Endpoint Rate Limiting
+26. Self-Hosted MT Retry/Backoff Resilience
+27. Live MT Endpoint Probes Opt-In Guard
 
 **Unresolved & New Issues:**
 None currently tracked.
@@ -68,6 +73,11 @@ None currently tracked.
 34. QA Engine Shim Public Surface
 35. Legacy Env Prefix Documentation
 36. Subtitle Editor Opens Only In CAT Tool
+37. Browser Eval Removed From Streamlit Bridge Scripts
+38. Provider Checkout Diagnostics Redaction
+39. Self-Hosted MT Endpoint Rate Limiting
+40. Self-Hosted MT Retry/Backoff Resilience
+41. Live MT Endpoint Probes Opt-In Guard
 
 ## Resolved in Latest Pass
 
@@ -158,6 +168,26 @@ None currently tracked.
 ### 22. Subtitle Editor Opens Only In CAT Tool
 *   **The Issue:** Creating a subtitle/transcription job opened both the legacy in-page subtitle workspace and the dedicated CAT/media editor tab.
 *   **The Fix:** Subtitle/transcription creation now saves only the external media editor job, keeps the app tab on setup with an editor link, clears stale inline rows, and retires legacy workspace routes back to setup. Regression coverage verifies the CAT/media editor is the only editing surface. *(Verified fixed)*.
+
+### 23. Browser Eval Removed From Streamlit Bridge Scripts
+*   **The Issue:** The Excel audit flagged browser-side `eval(runtime)` wrappers in Streamlit bridge scripts as a fragile pattern that could amplify any future untrusted-data path.
+*   **The Fix:** Parent-document bridge scripts now install app-owned JavaScript through script elements instead of `eval`, and the Excel-backlog hardening test asserts `eval(` does not return. *(Verified fixed)*.
+
+### 24. Provider Checkout Diagnostics Redaction
+*   **The Issue:** Provider checkout request/curl diagnostics were safe today because they used placeholders, but the UI path could expose real auth material if a future provider request stored live credentials.
+*   **The Fix:** Checkout diagnostics now pass through redaction helpers before `st.json`, `st.code`, or downloads, covering auth, token, key, secret, password, and credential fields. *(Verified fixed)*.
+
+### 25. Self-Hosted MT Endpoint Rate Limiting
+*   **The Issue:** The self-hosted OPUS-MT, IndicTrans2, and MADLAD workers had API-key enforcement and payload caps, but no request throttle.
+*   **The Fix:** All three MT servers now enforce bounded per-client request windows and return HTTP 429 when exceeded. The MT hardening test and release checker enforce this contract. *(Verified fixed)*.
+
+### 26. Self-Hosted MT Retry/Backoff Resilience
+*   **The Issue:** Transient MT endpoint failures caused immediate route failure/fallback without retrying temporary 408/429/5xx conditions.
+*   **The Fix:** The shared self-hosted MT client now retries transient network and HTTP failures with bounded exponential backoff, and regression coverage verifies retry-on-503 behavior. *(Verified fixed)*.
+
+### 27. Live MT Endpoint Probes Opt-In Guard
+*   **The Issue:** Live OPUS-MT, IndicTrans2, and MADLAD endpoint probe scripts could run against localhost by default if invoked in an offline test sweep.
+*   **The Fix:** Live probes now skip unless `RUN_LIVE_MT_TESTS=1` is set, and the MT hardening test asserts the guard remains in place. *(Verified fixed)*.
 
 ## Unresolved & New Issues
 
@@ -310,3 +340,23 @@ None currently tracked.
 ### 36. Subtitle Editor Opens Only In CAT Tool
 *   **The Issue:** The subtitling feature displayed the file in two places: the old in-page subtitle workspace and the CAT/media editor tab.
 *   **The Fix:** Removed the automatic legacy workspace activation and added `test_subtitle_external_editor_only.py` to protect the flow. *(Verified fixed)*.
+
+### 37. Browser Eval Removed From Streamlit Bridge Scripts
+*   **The Issue:** Streamlit bridge scripts used parent-window `eval` for browser-session and navigation helpers.
+*   **The Fix:** Replaced those wrappers with direct script-element installation and added source regression coverage. *(Verified fixed)*.
+
+### 38. Provider Checkout Diagnostics Redaction
+*   **The Issue:** Checkout payload diagnostics could become a secret-display foot-gun if future metadata contained real auth values.
+*   **The Fix:** Added recursive display redaction for provider request JSON and cURL diagnostics. *(Verified fixed)*.
+
+### 39. Self-Hosted MT Endpoint Rate Limiting
+*   **The Issue:** MT workers were protected by API keys and payload caps but lacked request throttling.
+*   **The Fix:** Added per-client rate windows to OPUS-MT, IndicTrans2, and MADLAD workers, with release-gate coverage. *(Verified fixed)*.
+
+### 40. Self-Hosted MT Retry/Backoff Resilience
+*   **The Issue:** Temporary endpoint failures did not retry before failing a translation route.
+*   **The Fix:** Added bounded transient retry/backoff in the shared self-hosted MT HTTP client. *(Verified fixed)*.
+
+### 41. Live MT Endpoint Probes Opt-In Guard
+*   **The Issue:** Live endpoint probe scripts were not explicitly gated as integration tests.
+*   **The Fix:** Added a `RUN_LIVE_MT_TESTS=1` opt-in guard to each live endpoint probe. *(Verified fixed)*.
