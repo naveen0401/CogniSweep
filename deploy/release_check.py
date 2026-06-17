@@ -694,6 +694,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_launch_rehearsal.py",
         "python test_launch_public_lock.py",
         "python test_dependency_locking.py",
+        "python test_persistence_cache_hardening.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",
@@ -765,6 +766,38 @@ def check_dockerfile(results: List[Dict[str, str]]) -> None:
         "Pass" if not opus_missing else "Warn",
         "digest-pinned base and exact worker dependencies" if not opus_missing else ", ".join(opus_missing),
         "Keep the OPUS-MT image base digest-pinned with exact worker package versions.",
+    )
+
+
+def check_persistence_cache_hardening(results: List[Dict[str, str]]) -> None:
+    app = read_text("app.py")
+    required = [
+        "SAAS_CACHEABLE_COLLECTIONS",
+        "@st.cache_data(ttl=SAAS_CACHE_TTL_SECONDS, show_spinner=False)",
+        "def _cached_fetch_saas_records",
+        "cache_generation",
+        "clear_saas_record_cache()",
+        "except ValueError as exc:",
+        "except requests.RequestException as exc:",
+    ]
+    missing = missing_items(required, app)
+    silent_passes = re.findall(r"except(?:\s+\w+)?(?:\s+as\s+\w+)?:\s*\n\s*pass\b", app)
+    cache_block_match = re.search(r"SAAS_CACHEABLE_COLLECTIONS\s*=\s*\{(?P<body>.*?)\n\}", app, re.S)
+    cache_block = cache_block_match.group("body") if cache_block_match else ""
+    unsafe_cached = [item for item in ['"users"', '"auth_tokens"', '"task_queue"'] if item in cache_block]
+    ok = not missing and not silent_passes and not unsafe_cached
+    evidence = (
+        "cached safe SaaS reads with invalidation and no silent exception passes"
+        if ok
+        else f"missing={missing}; silent_passes={len(silent_passes)}; unsafe_cached={unsafe_cached}"
+    )
+    add(
+        results,
+        "Persistence",
+        "App persistence cache and exception hardening",
+        "Pass" if ok else "Blocker",
+        evidence,
+        "Keep hot Supabase reads cache_data-backed, invalidate after writes/deletes, and avoid silent exception swallowing.",
     )
 
 
@@ -915,6 +948,7 @@ def collect_results(run_smoke: bool = False) -> List[Dict[str, str]]:
     check_supabase_schema(results)
     check_supabase_schema_contract(results)
     check_object_storage_contract(results)
+    check_persistence_cache_hardening(results)
     check_dockerfile(results)
     check_compose(results)
     check_env_template(results)

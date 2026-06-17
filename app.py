@@ -333,6 +333,26 @@ SESSION_COLLECTION_LIMITS = {
     "status_incidents": 500,
     "consent_records": 1000,
 }
+SAAS_CACHE_TTL_SECONDS = int(os.getenv("ERRORSWEEP_SAAS_CACHE_TTL_SECONDS", "15"))
+SAAS_CACHE_GENERATION_KEY = "_saas_read_cache_generation"
+SAAS_CACHEABLE_COLLECTIONS = {
+    "workspaces",
+    "projects",
+    "jobs",
+    "payments",
+    "invoices",
+    "audit_logs",
+    "notifications",
+    "files",
+    "subscriptions",
+    "checkout_sessions",
+    "billing_events",
+    "platform_settings",
+    "privacy_requests",
+    "support_tickets",
+    "status_incidents",
+    "consent_records",
+}
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
@@ -3911,14 +3931,58 @@ def trim_session_collections() -> None:
         trim_session_list(key, limit)
 
 
+def saas_cache_generation() -> int:
+    try:
+        return int(st.session_state.get(SAAS_CACHE_GENERATION_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        st.session_state[SAAS_CACHE_GENERATION_KEY] = 0
+        return 0
+
+
+@st.cache_data(ttl=SAAS_CACHE_TTL_SECONDS, show_spinner=False)
+def _cached_fetch_saas_records(
+    collection: str,
+    workspace: str,
+    user_email: str,
+    include_all_workspaces: bool,
+    platform_scope_reason: str,
+    limit: int,
+    cache_generation: int,
+) -> Tuple[Dict[str, Any], ...]:
+    if fetch_saas_records is None:
+        return tuple()
+    rows = fetch_saas_records(
+        collection,
+        workspace=workspace,
+        user_email=user_email,
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+        limit=limit,
+    )
+    return tuple(dict(row) for row in rows if isinstance(row, dict))
+
+
+def clear_saas_record_cache() -> None:
+    st.session_state[SAAS_CACHE_GENERATION_KEY] = saas_cache_generation() + 1
+    try:
+        _cached_fetch_saas_records.clear()
+    except (AttributeError, RuntimeError) as exc:
+        LOGGER.debug("Unable to clear SaaS read cache directly: %s", exc)
+
+
 def persist_saas_record(collection: str, record: Dict[str, Any]) -> Dict[str, Any]:
     if save_saas_record is None:
         return record
     try:
-        return save_saas_record(collection, record, user=current_user() or {})
-    except Exception as exc:
-        LOGGER.warning("Unable to persist SaaS record %s: %s", collection, exc)
+        persisted = save_saas_record(collection, record, user=current_user() or {})
+    except ValueError as exc:
+        LOGGER.error("Rejected unsupported SaaS record %s: %s", collection, exc)
         return record
+    except requests.RequestException as exc:
+        LOGGER.error("Network error while persisting SaaS record %s: %s", collection, exc)
+        return record
+    clear_saas_record_cache()
+    return persisted
 
 
 def load_saas_records(
@@ -3932,6 +3996,19 @@ def load_saas_records(
     if fetch_saas_records is None:
         return []
     try:
+        if collection in SAAS_CACHEABLE_COLLECTIONS:
+            return [
+                dict(row)
+                for row in _cached_fetch_saas_records(
+                    collection,
+                    workspace,
+                    user_email,
+                    include_all_workspaces,
+                    platform_scope_reason,
+                    limit,
+                    saas_cache_generation(),
+                )
+            ]
         return fetch_saas_records(
             collection,
             workspace=workspace,
@@ -3940,8 +4017,11 @@ def load_saas_records(
             platform_scope_reason=platform_scope_reason,
             limit=limit,
         )
-    except Exception as exc:
-        LOGGER.warning("Unable to load SaaS records %s: %s", collection, exc)
+    except ValueError as exc:
+        LOGGER.error("Rejected unsupported SaaS record load %s: %s", collection, exc)
+        return []
+    except requests.RequestException as exc:
+        LOGGER.error("Network error while loading SaaS records %s: %s", collection, exc)
         return []
 
 
@@ -4103,8 +4183,10 @@ def remove_saas_record(collection: str, record_id: str) -> bool:
     if delete_saas_record is not None:
         try:
             removed = bool(delete_saas_record(collection, record_id, **persistence_read_scope(platform_scope_reason="record_delete")))
-        except Exception as exc:
-            LOGGER.warning("Unable to delete SaaS record %s/%s: %s", collection, record_id, exc)
+        except ValueError as exc:
+            LOGGER.error("Rejected unsupported SaaS record delete %s/%s: %s", collection, record_id, exc)
+        except requests.RequestException as exc:
+            LOGGER.error("Network error while deleting SaaS record %s/%s: %s", collection, record_id, exc)
     rows = st.session_state.get(collection)
     if isinstance(rows, list):
         before = len(rows)
@@ -4113,6 +4195,8 @@ def remove_saas_record(collection: str, record_id: str) -> bool:
             if not (isinstance(item, dict) and safe_text(item.get("id")) == safe_text(record_id))
         ]
         removed = removed or len(st.session_state[collection]) != before
+    if removed:
+        clear_saas_record_cache()
     return removed
 
 
@@ -4121,7 +4205,8 @@ def _setting_json_value(record: Dict[str, Any]) -> Any:
     if isinstance(value, str):
         try:
             return json.loads(value)
-        except Exception:
+        except json.JSONDecodeError as exc:
+            LOGGER.debug("Platform setting %s is not JSON: %s", safe_text(record.get("setting_key")), exc)
             return value
     return value
 
@@ -15128,8 +15213,8 @@ def stream_uploaded_file_to_path(uploaded_file: Any, path: Path, chunk_size: int
     written = 0
     try:
         uploaded_file.seek(0)
-    except Exception:
-        pass
+    except (AttributeError, OSError, ValueError) as exc:
+        LOGGER.debug("Unable to rewind uploaded file before streaming: %s", exc)
     with path.open("wb") as target:
         while True:
             chunk = uploaded_file.read(chunk_size)
@@ -15139,8 +15224,8 @@ def stream_uploaded_file_to_path(uploaded_file: Any, path: Path, chunk_size: int
             written += len(chunk)
     try:
         uploaded_file.seek(0)
-    except Exception:
-        pass
+    except (AttributeError, OSError, ValueError) as exc:
+        LOGGER.debug("Unable to rewind uploaded file after streaming: %s", exc)
     return written
 
 
@@ -15219,8 +15304,8 @@ def save_job_attachment_files(job_id: str, uploaded_files: List[Any], purpose: s
             target_dir.mkdir(parents=True, exist_ok=True)
             try:
                 uploaded.seek(0)
-            except Exception:
-                pass
+            except (AttributeError, OSError, ValueError) as exc:
+                LOGGER.debug("Unable to rewind job attachment before save: %s", exc)
             with tmp_path.open("wb") as handle:
                 while True:
                     chunk = uploaded.read(1024 * 1024)
@@ -15232,8 +15317,8 @@ def save_job_attachment_files(job_id: str, uploaded_files: List[Any], purpose: s
             os.replace(tmp_path, target_path)
             try:
                 uploaded.seek(0)
-            except Exception:
-                pass
+            except (AttributeError, OSError, ValueError) as exc:
+                LOGGER.debug("Unable to rewind job attachment after save: %s", exc)
             mime_type = safe_text(getattr(uploaded, "type", "")) or "application/octet-stream"
             storage_result = store_file_object(target_path, workspace, purpose, safe_job_id, original_name, mime_type)
             manifest = persist_saas_record("files", {
@@ -15276,8 +15361,8 @@ def save_job_attachment_files(job_id: str, uploaded_files: List[Any], purpose: s
             LOGGER.warning("Unable to save job attachment %s: %s", original_name, exc)
             try:
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as cleanup_exc:
+                LOGGER.warning("Unable to remove temporary attachment %s: %s", tmp_path, cleanup_exc)
     return manifests
 
 
