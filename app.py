@@ -214,6 +214,11 @@ PASSWORD_HASH_ITERATIONS = 260_000
 SESSION_HISTORY_LIMIT = 500
 RULE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_FILES", "250"))
 RULE_ZIP_MAX_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_BYTES", str(25 * 1024 * 1024)))
+RULE_ZIP_MAX_EXPANDED_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_EXPANDED_BYTES", str(RULE_ZIP_MAX_BYTES * 4)))
+RULE_ZIP_MEMBER_MAX_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MEMBER_MAX_BYTES", str(5 * 1024 * 1024)))
+OFFICE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_FILES", "1500"))
+OFFICE_ZIP_MAX_EXPANDED_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_EXPANDED_BYTES", str(120 * 1024 * 1024)))
+OFFICE_XML_MEMBER_MAX_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_XML_MEMBER_MAX_BYTES", str(20 * 1024 * 1024)))
 MEDIA_PREVIEW_TTL_SECONDS = int(os.getenv("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
 RETENTION_POLICY_DEFAULTS = {
     "expired_auth_token_grace_days": 0,
@@ -14004,35 +14009,107 @@ def parse_context_upload(uploaded_file) -> Dict[str, str]:
     return {"fileName": name, "text": text[:200_000]}
 
 
+class ZipSafetyError(ValueError):
+    """Raised when an uploaded ZIP-like file exceeds safe local parsing limits."""
+
+
+def read_uploaded_file_limited(uploaded_file: Any, max_bytes: int, label: str) -> bytes:
+    """Read an uploaded file into memory only up to a hard byte limit."""
+    max_bytes = max(1, int(max_bytes))
+    try:
+        uploaded_file.seek(0)
+    except (AttributeError, OSError, ValueError) as exc:
+        LOGGER.debug("Unable to rewind %s before limited read: %s", label, exc)
+    data = uploaded_file.read(max_bytes + 1)
+    too_large = len(data) > max_bytes
+    try:
+        uploaded_file.seek(0)
+    except (AttributeError, OSError, ValueError) as exc:
+        LOGGER.debug("Unable to rewind %s after limited read: %s", label, exc)
+    if too_large:
+        raise ZipSafetyError(f"{label} exceeds the {max_bytes / (1024 * 1024):.0f} MB upload limit.")
+    return data
+
+
+def _safe_zip_members(
+    archive: zipfile.ZipFile,
+    *,
+    max_files: int,
+    max_total_uncompressed: int,
+    max_member_uncompressed: Optional[int] = None,
+) -> List[zipfile.ZipInfo]:
+    members = [
+        info for info in archive.infolist()
+        if not info.is_dir() and not info.filename.startswith("__MACOSX/")
+    ]
+    if len(members) > max_files:
+        raise ZipSafetyError(f"ZIP contains {len(members)} files; maximum is {max_files}.")
+    total_uncompressed = 0
+    for info in members:
+        name = safe_text(info.filename)
+        if name.startswith("/") or re.search(r"(^|/)\.\.(/|$)", name.replace("\\", "/")):
+            raise ZipSafetyError(f"ZIP member has an unsafe path: {name}")
+        if info.file_size < 0 or info.compress_size < 0:
+            raise ZipSafetyError(f"ZIP member has invalid size metadata: {name}")
+        total_uncompressed += int(info.file_size or 0)
+        if total_uncompressed > max_total_uncompressed:
+            raise ZipSafetyError(
+                f"ZIP expands to {total_uncompressed / (1024 * 1024):.1f} MB; "
+                f"maximum is {max_total_uncompressed / (1024 * 1024):.0f} MB."
+            )
+        if max_member_uncompressed and info.file_size > max_member_uncompressed:
+            raise ZipSafetyError(
+                f"ZIP member {name} expands to {info.file_size / (1024 * 1024):.1f} MB; "
+                f"maximum per file is {max_member_uncompressed / (1024 * 1024):.0f} MB."
+            )
+    return members
+
+
+def _safe_zip_read(
+    archive: zipfile.ZipFile,
+    member: Any,
+    max_bytes: int,
+    *,
+    label: str = "ZIP member",
+) -> bytes:
+    info = archive.getinfo(member) if isinstance(member, str) else member
+    name = safe_text(getattr(info, "filename", label))
+    if int(info.file_size or 0) > max_bytes:
+        raise ZipSafetyError(
+            f"{name} expands to {int(info.file_size or 0) / (1024 * 1024):.1f} MB; "
+            f"maximum readable member size is {max_bytes / (1024 * 1024):.0f} MB."
+        )
+    with archive.open(info) as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ZipSafetyError(f"{name} exceeded the {max_bytes / (1024 * 1024):.0f} MB read limit.")
+    return data
+
+
+def _validate_office_zip_archive(archive: zipfile.ZipFile) -> List[zipfile.ZipInfo]:
+    return _safe_zip_members(
+        archive,
+        max_files=OFFICE_ZIP_MAX_FILES,
+        max_total_uncompressed=OFFICE_ZIP_MAX_EXPANDED_BYTES,
+    )
+
+
 def inspect_rules_zip(uploaded_file) -> Dict[str, Any]:
     if uploaded_file is None:
         return {"ok": True, "warnings": []}
 
     warnings: List[str] = []
     try:
-        data = uploaded_file.getvalue()
+        data = read_uploaded_file_limited(uploaded_file, RULE_ZIP_MAX_BYTES, "Rules ZIP")
         size = len(data)
-        if size > RULE_ZIP_MAX_BYTES:
-            warnings.append(
-                f"Rules ZIP is {size / (1024 * 1024):.1f} MB. "
-                f"Recommended maximum is {RULE_ZIP_MAX_BYTES / (1024 * 1024):.0f} MB."
-            )
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            members = [
-                info for info in zf.infolist()
-                if not info.is_dir() and not info.filename.startswith("__MACOSX/")
-            ]
-            if len(members) > RULE_ZIP_MAX_FILES:
-                warnings.append(
-                    f"Rules ZIP contains {len(members)} files. "
-                    f"Recommended maximum is {RULE_ZIP_MAX_FILES} files."
-                )
+            members = _safe_zip_members(
+                zf,
+                max_files=RULE_ZIP_MAX_FILES,
+                max_total_uncompressed=RULE_ZIP_MAX_EXPANDED_BYTES,
+                max_member_uncompressed=RULE_ZIP_MEMBER_MAX_BYTES,
+            )
             total_uncompressed = sum(info.file_size for info in members)
-            if total_uncompressed > RULE_ZIP_MAX_BYTES * 4:
-                warnings.append(
-                    f"Rules ZIP expands to {total_uncompressed / (1024 * 1024):.1f} MB. "
-                    "Large rule packs may slow QA; split the pack by client/domain."
-                )
             return {
                 "ok": not warnings,
                 "warnings": warnings,
@@ -14042,6 +14119,8 @@ def inspect_rules_zip(uploaded_file) -> Dict[str, Any]:
             }
     except zipfile.BadZipFile:
         return {"ok": False, "warnings": ["Rules upload is not a valid ZIP file."]}
+    except ZipSafetyError as exc:
+        return {"ok": False, "warnings": [safe_text(exc)]}
     except Exception as exc:
         LOGGER.warning("Unable to inspect rules ZIP: %s", exc)
         return {"ok": False, "warnings": [f"Could not inspect rules ZIP: {exc}"]}
@@ -14059,16 +14138,23 @@ def parse_rules_zip(uploaded_file) -> Dict[str, Any]:
 
     report = inspect_rules_zip(uploaded_file)
     chunks: List[Dict[str, str]] = []
-    if any("not a valid ZIP" in warning for warning in report.get("warnings", [])):
+    if not report.get("ok", False):
         return {"chunks": chunks, "warnings": report.get("warnings", [])}
 
     try:
-        with zipfile.ZipFile(io.BytesIO(uploaded_file.getvalue())) as zf:
-            for info in zf.infolist():
+        data = read_uploaded_file_limited(uploaded_file, RULE_ZIP_MAX_BYTES, "Rules ZIP")
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            members = _safe_zip_members(
+                zf,
+                max_files=RULE_ZIP_MAX_FILES,
+                max_total_uncompressed=RULE_ZIP_MAX_EXPANDED_BYTES,
+                max_member_uncompressed=RULE_ZIP_MEMBER_MAX_BYTES,
+            )
+            for info in members:
                 if info.is_dir() or info.filename.startswith("__MACOSX/"):
                     continue
                 suffix = Path(info.filename).suffix.lower()
-                data = zf.read(info)
+                data = _safe_zip_read(zf, info, RULE_ZIP_MEMBER_MAX_BYTES, label=info.filename)
                 text = ""
                 if suffix in {".txt", ".md", ".csv", ".tsv"}:
                     for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
@@ -14091,6 +14177,9 @@ def parse_rules_zip(uploaded_file) -> Dict[str, Any]:
                     text = "\n".join(lines)
                 if text.strip():
                     chunks.append({"source": info.filename, "text": text[:200_000]})
+    except ZipSafetyError as exc:
+        LOGGER.warning("Rejected unsafe rules ZIP: %s", exc)
+        return {"chunks": chunks, "warnings": [safe_text(exc)]}
     except Exception as exc:
         LOGGER.warning("Unable to parse rules ZIP: %s", exc)
         return {"chunks": chunks, "warnings": [f"Could not parse rules ZIP: {exc}"]}
@@ -14609,7 +14698,13 @@ def _docx_table_rows(data: bytes) -> List[List[Tuple[str, ...]]]:
     tables: List[List[Tuple[str, ...]]] = []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            document_xml = archive.read("word/document.xml")
+            _validate_office_zip_archive(archive)
+            document_xml = _safe_zip_read(
+                archive,
+                "word/document.xml",
+                OFFICE_XML_MEMBER_MAX_BYTES,
+                label="word/document.xml",
+            )
         if b"<!DOCTYPE" in document_xml.upper() or b"<!ENTITY" in document_xml.upper():
             raise ValueError("DOCX XML contains prohibited DTD/entity declarations.")
         if "defusedxml" in getattr(ET, "__name__", ""):
@@ -14634,7 +14729,13 @@ def _docx_body_paragraph_export_rows(data: bytes) -> List[Dict[str, Any]]:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            document_xml = archive.read("word/document.xml")
+            _validate_office_zip_archive(archive)
+            document_xml = _safe_zip_read(
+                archive,
+                "word/document.xml",
+                OFFICE_XML_MEMBER_MAX_BYTES,
+                label="word/document.xml",
+            )
         if b"<!DOCTYPE" in document_xml.upper() or b"<!ENTITY" in document_xml.upper():
             raise ValueError("DOCX XML contains prohibited DTD/entity declarations.")
         if "defusedxml" in getattr(ET, "__name__", ""):
@@ -14690,12 +14791,13 @@ def _pptx_text_items(data: bytes) -> List[str]:
     items: List[str] = []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            _validate_office_zip_archive(archive)
             slide_names = sorted(
                 name for name in archive.namelist()
                 if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
             )
             for name in slide_names:
-                xml_data = archive.read(name)
+                xml_data = _safe_zip_read(archive, name, OFFICE_XML_MEMBER_MAX_BYTES, label=name)
                 for text in _xml_text_items(xml_data):
                     if text:
                         items.append(text)
@@ -14708,12 +14810,13 @@ def pptx_export_rows(data: bytes) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            _validate_office_zip_archive(archive)
             slide_names = sorted(
                 name for name in archive.namelist()
                 if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
             )
             for name in slide_names:
-                xml_data = archive.read(name)
+                xml_data = _safe_zip_read(archive, name, OFFICE_XML_MEMBER_MAX_BYTES, label=name)
                 if b"<!DOCTYPE" in xml_data.upper() or b"<!ENTITY" in xml_data.upper():
                     continue
                 try:

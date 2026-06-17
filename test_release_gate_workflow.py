@@ -40,6 +40,7 @@ def test_github_actions_release_gate_contract():
         "python test_supabase_rls_policies.py",
         "python test_production_persistence_fail_closed.py",
         "python test_editor_job_security.py",
+        "python test_app_zip_safety.py",
         "python test_process_file_locks.py",
         "python test_async_docx_security.py",
         "python test_mt_server_hardening.py",

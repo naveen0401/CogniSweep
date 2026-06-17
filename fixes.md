@@ -19,9 +19,10 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 12. Brittle JSON Parsing in AI Router
 13. LibreTranslate Code Residuals
 14. Thread Lock vs Process Lock Discrepancy
+15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
 
 **Unresolved & New Issues:**
-1. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+None currently tracked.
 
 **Corrected Issues:**
 1. Landing Page Legal Links
@@ -112,10 +113,13 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 *   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not the "process lock" claimed in Corrected Issue #18. This leaves a race condition vulnerability if deployed with multiple worker processes.
 *   **The Fix:** Local JSON fallback storage now uses a stdlib OS file lock (`msvcrt.locking` on Windows, `fcntl.flock` on Unix) plus re-entrant thread locks. Editor job updates, SaaS collection upserts/deletes, and usage-log appends lock the whole read-modify-write operation. *(Verified fixed)*.
 
+### 15. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+*   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
+*   **The Fix:** Rules ZIPs and Office ZIP containers now use hard upload, file-count, expanded-size, per-member, and XML member read limits. Rules parsing no longer uses `.getvalue()` or direct `zf.read()`, and DOCX/PPTX extraction no longer uses direct `archive.read()`. *(Verified fixed)*.
+
 ## Unresolved & New Issues
 
-### 1. ZIP Bomb / RAM Exhaustion Risk in `app.py`
-*   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
+None currently tracked.
 
 ---
 
