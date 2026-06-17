@@ -14917,6 +14917,69 @@ def get_review_session_store() -> Dict[str, Dict[str, Any]]:
     return {}
 
 
+def new_editor_job_id() -> str:
+    return b64url(os.urandom(24))
+
+
+def editor_store_scope_kwargs(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return {"allow_platform": True}
+    return {
+        "workspace": safe_text(candidate.get("workspace")),
+        "user_email": safe_text(candidate.get("email") or candidate.get("username")).lower(),
+    }
+
+
+def editor_persistence_scope(reason: str, user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return {"include_all_workspaces": True, "platform_scope_reason": reason or "platform_editor_job"}
+    return {
+        "workspace": safe_text(candidate.get("workspace")),
+        "user_email": safe_text(candidate.get("email") or candidate.get("username")).lower(),
+    }
+
+
+def editor_payload_belongs_to_current_user(payload: Optional[Dict[str, Any]], user: Optional[Dict[str, Any]] = None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return True
+    workspace_key = safe_text(candidate.get("workspace")).lower()
+    user_key = safe_text(candidate.get("email") or candidate.get("username")).lower()
+    if not workspace_key and not user_key:
+        return False
+
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    payload_workspace = safe_text(
+        payload.get("workspace") or metadata.get("workspace") or payload.get("client") or metadata.get("client")
+    ).lower()
+    if workspace_key and payload_workspace and payload_workspace != workspace_key:
+        return False
+
+    explicit_users = {
+        safe_text(value).lower()
+        for value in (
+            payload.get("user_email"),
+            metadata.get("user_email"),
+            payload.get("email"),
+            metadata.get("email"),
+            payload.get("owner_email"),
+            metadata.get("owner_email"),
+            payload.get("assignee"),
+            metadata.get("assignee"),
+            payload.get("created_by"),
+            metadata.get("created_by"),
+        )
+        if safe_text(value)
+    }
+    if user_key and explicit_users:
+        return user_key in explicit_users
+    return bool(workspace_key and payload_workspace == workspace_key)
+
+
 def save_review_session_to_store(
     rows: List[Dict[str, Any]],
     title: str,
@@ -14933,7 +14996,7 @@ def save_review_session_to_store(
     - local JSON fallback for development
     - Supabase persistence when SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are configured
     """
-    session_id = uuid.uuid4().hex
+    session_id = new_editor_job_id()
     user = current_user() or {}
     metadata = {
         "title": title,
@@ -15324,7 +15387,7 @@ def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video
     separate editor like the CAT review editor. A local media preview copy is
     saved for browser playback; rows and metadata are stored safely.
     """
-    job_id = uuid.uuid4().hex
+    job_id = new_editor_job_id()
     user = current_user() or {}
     video_name = getattr(video_file, "name", "") if video_file is not None else ""
     video_type = getattr(video_file, "type", "") if video_file is not None else ""
@@ -15393,26 +15456,35 @@ def load_review_session_from_store(session_id: str) -> bool:
     if not session_id:
         return False
     payload = get_review_session_store().get(session_id)
+    if payload and not editor_payload_belongs_to_current_user(payload):
+        LOGGER.warning("Denied cached review session outside caller scope: %s", session_id)
+        payload = None
 
     if not payload and load_persistent_editor_job is not None:
         try:
             payload = load_persistent_editor_job(
                 session_id,
                 current_user() or {},
-                **persistence_read_scope(platform_scope_reason="editor_job_load"),
+                **editor_persistence_scope("editor_job_load"),
             )
+            if payload and not editor_payload_belongs_to_current_user(payload):
+                LOGGER.warning("Denied persistent review session outside caller scope: %s", session_id)
+                payload = None
         except Exception as exc:
             LOGGER.warning("Unable to load job %s from persistent store: %s", session_id, exc)
             payload = None
 
     if not payload and load_editor_job is not None:
         try:
-            payload = load_editor_job(session_id)
+            payload = load_editor_job(session_id, **editor_store_scope_kwargs())
         except Exception as exc:
             LOGGER.warning("Unable to load job %s from local editor store: %s", session_id, exc)
             payload = None
 
     if not payload:
+        return False
+    if not editor_payload_belongs_to_current_user(payload):
+        LOGGER.warning("Denied review session outside caller scope: %s", session_id)
         return False
     rows = payload.get("rows") or []
     if not rows:
@@ -15726,26 +15798,38 @@ def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
             payload = load_persistent_editor_job(
                 job_id,
                 current_user() or {},
-                **persistence_read_scope(platform_scope_reason="external_editor_load"),
+                **editor_persistence_scope("external_editor_load"),
             )
-            if payload:
+            if payload and editor_payload_belongs_to_current_user(payload):
                 return payload
+            if payload:
+                LOGGER.warning("Denied persistent external editor job outside caller scope: %s", job_id)
         except Exception as exc:
             LOGGER.warning("Unable to load external editor job %s from persistent store: %s", job_id, exc)
 
     # v41 local JSON fallback.
     if load_editor_job is not None:
         try:
-            payload = load_editor_job(job_id)
-            if payload:
+            payload = load_editor_job(job_id, **editor_store_scope_kwargs())
+            if payload and editor_payload_belongs_to_current_user(payload):
                 return payload
+            if payload:
+                LOGGER.warning("Denied local external editor job outside caller scope: %s", job_id)
         except Exception as exc:
             LOGGER.warning("Unable to load external editor job %s from local store: %s", job_id, exc)
-    return get_review_session_store().get(job_id)
+    payload = get_review_session_store().get(job_id)
+    if payload and editor_payload_belongs_to_current_user(payload):
+        return payload
+    if payload:
+        LOGGER.warning("Denied cached external editor job outside caller scope: %s", job_id)
+    return None
 
 
 def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
     if not job_id or not payload:
+        return
+    if not editor_payload_belongs_to_current_user(payload):
+        LOGGER.warning("Denied external editor job update outside caller scope: %s", job_id)
         return
     rows = payload.get("rows") or []
     metadata = payload.get("metadata") or {
@@ -15768,7 +15852,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
 
     if update_editor_job is not None:
         try:
-            update_editor_job(job_id, rows=rows, metadata=metadata)
+            update_editor_job(job_id, rows=rows, metadata=metadata, **editor_store_scope_kwargs())
         except Exception as exc:
             LOGGER.warning("Unable to update external editor job %s in local store: %s", job_id, exc)
 
@@ -15781,7 +15865,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
                 metadata=metadata,
                 status=metadata.get("status", "draft"),
                 user=current_user() or {},
-                **persistence_read_scope(platform_scope_reason="external_editor_update"),
+                **editor_persistence_scope("external_editor_update"),
             )
         except Exception as exc:
             LOGGER.warning("Unable to update external editor job %s in persistent store: %s", job_id, exc)

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import base64
 import tempfile
 import threading
 import time
@@ -185,10 +186,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _random_job_id() -> str:
+    return base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+
+
 def _safe_job_id(job_id: Optional[str]) -> str:
-    raw = str(job_id or uuid.uuid4().hex).strip()
+    raw = str(job_id or _random_job_id()).strip()
     safe = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
-    return (safe or uuid.uuid4().hex)[:96]
+    return (safe or _random_job_id())[:96]
 
 
 def _current_user_email(user: Optional[Dict[str, Any]] = None) -> str:
@@ -249,6 +254,51 @@ def _scope_from_user(
     }
 
 
+def _payload_scope_value(payload: Dict[str, Any], *keys: str) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    for source in (payload, metadata):
+        for key in keys:
+            value = _scope_text(source.get(key))
+            if value:
+                return value
+    return ""
+
+
+def _local_editor_payload_in_scope(
+    payload: Dict[str, Any],
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> bool:
+    if include_all_workspaces or _is_platform_scope(workspace, platform_scope_reason):
+        return True
+    workspace_key = _scope_text(workspace).lower()
+    user_key = _scope_text(user_email).lower()
+    if not workspace_key and not user_key:
+        return False
+
+    payload_workspace = _payload_scope_value(payload, "workspace", "client").lower()
+    if workspace_key and payload_workspace and payload_workspace != workspace_key:
+        return False
+
+    explicit_users = {
+        _scope_text(value).lower()
+        for value in (
+            _payload_scope_value(payload, "user_email"),
+            _payload_scope_value(payload, "email"),
+            _payload_scope_value(payload, "owner_email"),
+            _payload_scope_value(payload, "assignee"),
+            _payload_scope_value(payload, "created_by"),
+        )
+        if _scope_text(value)
+    }
+    if user_key and explicit_users:
+        return user_key in explicit_users
+    return bool(workspace_key and payload_workspace == workspace_key)
+
+
 # ==========================================================
 # Local JSON fallback
 # ==========================================================
@@ -296,15 +346,32 @@ def _rotate_local_usage_events() -> None:
     _atomic_write_text(path, "\n".join(retained) + ("\n" if retained else ""))
 
 
-def _read_local_job(job_id: str) -> Optional[Dict[str, Any]]:
+def _read_local_job(
+    job_id: str,
+    *,
+    workspace: str = "",
+    user_email: str = "",
+    include_all_workspaces: bool = False,
+    platform_scope_reason: str = "",
+) -> Optional[Dict[str, Any]]:
     path = _local_path(job_id)
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         LOGGER.warning("Unable to read local editor job %s: %s", path, exc)
         return None
+    if not _local_editor_payload_in_scope(
+        payload,
+        workspace=workspace,
+        user_email=user_email,
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    ):
+        LOGGER.warning("Denied local editor job load outside caller scope: %s", _safe_job_id(job_id))
+        return None
+    return payload
 
 
 def _read_local_collection(collection: str) -> List[Dict[str, Any]]:
@@ -538,6 +605,8 @@ def load_persistent_editor_job(
                 return {
                     "job_id": row.get("id") or jid,
                     "job_type": row.get("job_type") or metadata.get("job_type") or "cat",
+                    "workspace": row.get("workspace") or metadata.get("workspace") or "",
+                    "user_email": row.get("user_email") or metadata.get("user_email") or "",
                     "rows": row.get("rows") or [],
                     "metadata": metadata,
                     "title": metadata.get("title") or metadata.get("source") or "CogniSweep CAT",
@@ -549,7 +618,13 @@ def load_persistent_editor_job(
         except Exception as exc:
             LOGGER.error("Failed to load editor job %s from Supabase: %s", jid, exc)
 
-    return _read_local_job(jid)
+    return _read_local_job(
+        jid,
+        workspace=scope["workspace"],
+        user_email=scope["user_email"],
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
 
 
 def update_persistent_editor_job(
@@ -565,7 +640,17 @@ def update_persistent_editor_job(
 ) -> bool:
     jid = _safe_job_id(job_id)
     scope = _scope_from_user(user, workspace=workspace, user_email=user_email)
-    local_payload = _read_local_job(jid) or {
+    local_payload = _read_local_job(
+        jid,
+        workspace=scope["workspace"],
+        user_email=scope["user_email"],
+        include_all_workspaces=include_all_workspaces,
+        platform_scope_reason=platform_scope_reason,
+    )
+    if local_payload is None and _local_path(jid).exists():
+        LOGGER.warning("Denied local editor job update outside caller scope: %s", jid)
+        return False
+    local_payload = local_payload or {
         "job_id": jid,
         "id": jid,
         "job_type": "cat",
@@ -581,9 +666,13 @@ def update_persistent_editor_job(
         merged = dict(local_payload.get("metadata") or {})
         merged.update(metadata)
         local_payload["metadata"] = merged
+        local_payload["workspace"] = merged.get("workspace") or local_payload.get("workspace") or scope["workspace"]
+        local_payload["user_email"] = merged.get("user_email") or local_payload.get("user_email") or scope["user_email"]
     if status:
         local_payload["status"] = status
         local_payload.setdefault("metadata", {})["status"] = status
+    local_payload.setdefault("workspace", scope["workspace"])
+    local_payload.setdefault("user_email", scope["user_email"])
     local_payload["updated_at"] = _now_iso()
     local_payload["updated_at_epoch"] = time.time()
 
