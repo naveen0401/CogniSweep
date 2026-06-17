@@ -271,7 +271,8 @@ def test_public_auth_pages_resume_saved_session_before_showing_form() -> None:
     assert 'AUTH_RESUME_MASK_ID = "errorsweep-auth-resume-mask"' in source
     assert "AUTH_RESUME_MARKER_ID" in bridge_body
     assert "AUTH_RESUME_MASK_ID" in bridge_body
-    assert "body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid=\"stAppViewContainer\"]" in bridge_body
+    assert "body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid=\"stAppViewContainer\"]" not in bridge_body
+    assert "body.{AUTH_RESUME_MASK_CLASS} [data-testid=\"stAppViewContainer\"]" in bridge_body
     assert "const routeStorageKey" in bridge_body
     assert "targetFromReturnTo(url)" in bridge_body
     assert "targetFromSavedRoute(storage)" in bridge_body
@@ -376,7 +377,15 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'url.searchParams.set(authCheckedKey' not in source
     assert 'query_get(AUTH_CHECK_QUERY_PARAM) == "1"' not in source
     assert 'query_set(AUTH_CHECK_QUERY_PARAM' not in source
-    assert 'st.caption("Loading...")' in source
+    assert 'st.caption("Loading...")' not in source
+    auth_unknown_body = source[
+        source.index("def render_auth_unknown_state"):
+        source.index("def landing_redirect_url_js")
+    ]
+    assert '"auth_unknown_login_fallback"' in auth_unknown_body
+    assert '"auth_unknown_landing_fallback"' in auth_unknown_body
+    assert "render_login()" in auth_unknown_body
+    assert "render_landing_page(\"auth_unknown_landing_fallback\")" in auth_unknown_body
     assert 'const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));' in source
     assert 'const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));' in source
     assert '["es_editor", "job_id", "review_id"].some((key) => url.searchParams.has(key))' in source

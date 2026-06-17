@@ -5304,8 +5304,27 @@ def current_auth_state(route: Optional[Dict[str, Any]] = None) -> str:
 def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
     set_auth_debug_state(bool(browser_session_cookie()), False, "auth_unknown_resolving", route or {})
     render_browser_session_bootstrap(route)
-    render_auth_debug_panel(route, "auth_unknown_resolving")
-    st.caption("Loading...")
+    route = route or {}
+    route_name = safe_text(route.get("public") or route.get("route")).strip().lower()
+    route_page = normalize_es_page(route.get("page") or route.get("es_page"))
+    route_alias_page = normalize_es_page(ROUTE_PAGE_ALIASES.get(route_name, ""))
+    protected_fallback = (
+        route_page in known_protected_es_pages()
+        or route_alias_page in known_protected_es_pages()
+        or protected_route_requested()
+        or safe_text(route.get("es_editor") or query_get("es_editor"))
+        or safe_text(route.get("job_id") or query_get("job_id"))
+        or safe_text(route.get("review_id") or query_get("review_id"))
+    )
+    if protected_fallback:
+        st.session_state["auth_return_to"] = encode_return_to()
+        login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+        render_auth_debug_panel(login_route, "auth_unknown_login_fallback")
+        render_login()
+    else:
+        landing_route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
+        render_auth_debug_panel(landing_route, "auth_unknown_landing_fallback")
+        render_landing_page("auth_unknown_landing_fallback")
     st.stop()
 
 
@@ -18245,13 +18264,11 @@ def render_public_auth_session_resume_bridge() -> None:
           padding: 18px 22px;
         }}
 
-        body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"],
-        body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid="stAppViewContainer"] {{
+        body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"] {{
           visibility: hidden !important;
         }}
 
-        body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID},
-        body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID} {{
+        body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID} {{
           display: grid !important;
           visibility: visible !important;
         }}
