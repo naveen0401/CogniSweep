@@ -38,7 +38,9 @@ def test_auth_redirect_uses_es_page_login_without_route_param() -> None:
     auth_start = source.index("def protected_route_requested")
     auth_end = source.index("def get_current_route", auth_start)
     auth_body = source[auth_start:auth_end]
-    assert "public_es_route and public_es_route in PUBLIC_ROUTES" in auth_body
+    assert 'has_editor_target = any(query_get(key) for key in ("es_editor", "job_id", "review_id"))' in auth_body
+    assert "public_es_route and public_es_route in PUBLIC_ROUTES and not has_editor_target" in auth_body
+    assert "is_human_review_editor_page(es_page) or has_editor_target" in auth_body
     redirect_start = source.index("def redirect_to_login_with_return_to")
     redirect_end = source.index("def require_auth", redirect_start)
     redirect_body = source[redirect_start:redirect_end]
@@ -259,6 +261,49 @@ def test_authenticated_login_tab_shows_logged_in_state() -> None:
     assert "st.rerun()" not in login_body
 
 
+def test_public_auth_pages_resume_saved_session_before_showing_form() -> None:
+    source = read_app()
+    bridge_start = source.index("def render_public_auth_session_resume_bridge")
+    bridge_end = source.index("def render_login()", bridge_start)
+    bridge_body = source[bridge_start:bridge_end]
+
+    assert 'AUTH_RESUME_MARKER_ID = "errorsweep-auth-resume-marker"' in source
+    assert 'AUTH_RESUME_MASK_ID = "errorsweep-auth-resume-mask"' in source
+    assert "AUTH_RESUME_MARKER_ID" in bridge_body
+    assert "AUTH_RESUME_MASK_ID" in bridge_body
+    assert "body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid=\"stAppViewContainer\"]" in bridge_body
+    assert "const routeStorageKey" in bridge_body
+    assert "targetFromReturnTo(url)" in bridge_body
+    assert "targetFromSavedRoute(storage)" in bridge_body
+    assert "parentDoc.cookie = cookieName + \"=\" + encodeURIComponent(token)" in bridge_body
+    assert "loc.replace(nextUrl)" in bridge_body
+
+    login_start = source.index("def render_login()")
+    login_end = source.index("def profile_language_defaults", login_start)
+    login_body = source[login_start:login_end]
+    marker_idx = login_body.index("render_public_auth_page_marker()")
+    clear_idx = login_body.index("render_login_submit_mask_clear_bridge()")
+    resume_idx = login_body.index("render_public_auth_session_resume_bridge()")
+    form_idx = login_body.index('with st.form("unified_login"')
+    assert marker_idx < clear_idx < resume_idx < form_idx
+
+
+def test_streamlit_theme_and_visual_tokens_are_high_contrast() -> None:
+    source = read_app()
+    config = Path(".streamlit/config.toml").read_text(encoding="utf-8")
+
+    assert 'base = "dark"' in config
+    assert 'primaryColor = "#11F5B5"' in config
+    assert 'backgroundColor = "#050713"' in config
+    assert 'secondaryBackgroundColor = "#121830"' in config
+    assert 'textColor = "#F8FBFF"' in config
+    assert "color-scheme: dark;" in source
+    assert "--es-panel: rgba(18, 24, 48, .96);" in source
+    assert "--es-card: rgba(18, 24, 48, .94);" in source
+    assert "--es-muted: #c9d3f4;" in source
+    assert "background-color: var(--es-bg);" in source
+
+
 def test_login_stays_in_current_streamlit_session() -> None:
     source = Path(__file__).with_name("managed_ai_router.py").read_text(encoding="utf-8")
     assert "_install_login_new_tab_bridge" not in source
@@ -332,6 +377,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'query_get(AUTH_CHECK_QUERY_PARAM) == "1"' not in source
     assert 'query_set(AUTH_CHECK_QUERY_PARAM' not in source
     assert 'st.caption("Loading...")' in source
+    assert 'const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));' in source
+    assert 'const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));' in source
+    assert '["es_editor", "job_id", "review_id"].some((key) => url.searchParams.has(key))' in source
+    assert "parentWin.eval(runtime)" in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
 
@@ -389,7 +438,23 @@ def test_session_check_page_removed_and_protected_routes_resolve() -> None:
     assert '"missing_or_invalid_cookie_show_login"' in app_body
     assert "render_login()" in app_body
     assert "st.session_state[\"auth_return_to\"] = encode_return_to()" in app_body
+    assert "latest_route = get_current_route()" in app_body
+    assert '"late_protected_route_refresh"' in app_body
     assert 'render_public_app()' in app_body
+
+    public_start = source.index("def render_public_app()")
+    public_end = source.index("# ==========================================================\n# Pages", public_start)
+    public_body = source[public_start:public_end]
+    assert "if protected_route_requested():" in public_body
+    assert 'render_auth_debug_panel(login_route, "protected_route_in_public_renderer")' in public_body
+    assert "render_login()" in public_body
+
+    landing_start = source.index("def render_landing_page")
+    landing_end = source.index("LOGIN_SUBMIT_MASK_ID", landing_start)
+    landing_body = source[landing_start:landing_end]
+    assert "if protected_route_requested() and route.get(\"route\") not in PUBLIC_ROUTES:" in landing_body
+    assert 'render_auth_debug_panel(login_route, "protected_route_in_landing_renderer")' in landing_body
+    assert "render_login()" in landing_body
     assert '"missing_or_invalid_cookie_show_landing"' in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
@@ -406,6 +471,8 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
     app_body = source[app_start:app_end]
     assert 'route_public in {"login", "signup"}' in app_body
+    assert 'if route_public == "login" and query_get("return_to"):' in app_body
+    assert 'st.session_state["auth_return_to"] = query_get("return_to")' in app_body
     assert 'st.query_params["es_page"] = page_name' in app_body
     assert 'for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
     assert "del st.query_params[stale]" in app_body
@@ -416,6 +483,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     pending_body = source[pending_start:pending_end]
     assert "if route_name in PUBLIC_ROUTES:" in pending_body
     assert "public_es_route = public_route_for_es_page(query_get(\"es_page\"))" in pending_body
+    assert "if public_es_route and public_es_route in PUBLIC_ROUTES:" in pending_body
     assert 'route_page = normalize_es_page(route.get("page") or route.get("es_page"))' in pending_body
     assert "if route_page in known_protected_es_pages():" in pending_body
     assert 'route_alias_page = normalize_es_page(ROUTE_PAGE_ALIASES.get(route_name, ""))' in pending_body
@@ -873,6 +941,8 @@ if __name__ == "__main__":
     test_public_login_and_authenticated_entry_routes_open_dashboard()
     test_public_entry_routes_use_cookie_provider_not_restore_miss_gate()
     test_authenticated_login_tab_shows_logged_in_state()
+    test_public_auth_pages_resume_saved_session_before_showing_form()
+    test_streamlit_theme_and_visual_tokens_are_high_contrast()
     test_login_stays_in_current_streamlit_session()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()

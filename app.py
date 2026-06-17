@@ -611,32 +611,36 @@ st.markdown(
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap');
 
 :root {
-  --es-bg: #070914;
-  --es-panel: rgba(18, 21, 38, .86);
-  --es-card: rgba(18, 21, 38, .78);
-  --es-border: rgba(84, 105, 180, .35);
-  --es-border-soft: rgba(84, 105, 180, .20);
-  --es-text: #f7fbff;
-  --es-muted: #a8b0d6;
-  --es-green: #00d985;
-  --es-cyan: #34bdf6;
-  --es-purple: #8b5cf6;
-  --es-red: #ff4b33;
-  --es-amber: #f59e0b;
+  color-scheme: dark;
+  --es-bg: #050713;
+  --es-panel: rgba(18, 24, 48, .96);
+  --es-card: rgba(18, 24, 48, .94);
+  --es-border: rgba(104, 137, 230, .58);
+  --es-border-soft: rgba(104, 137, 230, .38);
+  --es-text: #f8fbff;
+  --es-muted: #c9d3f4;
+  --es-green: #11f5b5;
+  --es-cyan: #4cc9ff;
+  --es-purple: #a78bfa;
+  --es-red: #ff5c47;
+  --es-amber: #fbbf24;
   --es-shell-frame-padding: 0 18px 0;
   --es-shell-content-width: calc(100vw - 56px);
 }
 
 html, body, [class*="css"] {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--es-text);
+  background-color: var(--es-bg);
 }
 
 .stApp {
   background:
-    radial-gradient(circle at 8% 12%, rgba(0, 217, 133, .18), transparent 26%),
-    radial-gradient(circle at 88% 8%, rgba(52, 189, 246, .12), transparent 28%),
-    radial-gradient(circle at 55% 96%, rgba(139, 92, 246, .10), transparent 34%),
-    linear-gradient(180deg, #070914 0%, #060711 100%);
+    radial-gradient(circle at 8% 12%, rgba(17, 245, 181, .24), transparent 26%),
+    radial-gradient(circle at 88% 8%, rgba(76, 201, 255, .20), transparent 28%),
+    radial-gradient(circle at 55% 96%, rgba(167, 139, 250, .18), transparent 34%),
+    linear-gradient(180deg, #050713 0%, #070b18 100%);
+  background-color: var(--es-bg);
   color: var(--es-text);
 }
 
@@ -798,8 +802,8 @@ body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_app_shell {
   gap: 0 !important;
   overflow: hidden !important;
   background:
-    radial-gradient(circle at 0% 10%, rgba(0, 217, 133, .12), transparent 32%),
-    radial-gradient(circle at 100% 0%, rgba(139, 92, 246, .13), transparent 36%),
+    radial-gradient(circle at 0% 10%, rgba(17, 245, 181, .20), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(167, 139, 250, .20), transparent 36%),
     #060a14;
 }
 
@@ -1026,9 +1030,9 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-hero {
   background:
-    linear-gradient(135deg, rgba(0, 217, 133, .14), rgba(52, 189, 246, .08) 42%, rgba(245, 158, 11, .08) 68%, rgba(139, 92, 246, .18)),
-    rgba(17, 20, 38, .88);
-  border: 1px solid rgba(52, 189, 246, .26);
+    linear-gradient(135deg, rgba(17, 245, 181, .22), rgba(76, 201, 255, .16) 42%, rgba(251, 191, 36, .14) 68%, rgba(167, 139, 250, .24)),
+    rgba(17, 22, 44, .96);
+  border: 1px solid rgba(76, 201, 255, .42);
   border-radius: 14px;
   padding: 28px 30px;
   margin-bottom: 20px;
@@ -1107,8 +1111,8 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-bento-card {
   background:
-    linear-gradient(180deg, rgba(23, 29, 54, .82), rgba(12, 16, 31, .86));
-  border: 1px solid rgba(88,113,190,.28);
+    linear-gradient(180deg, rgba(26, 34, 68, .96), rgba(12, 18, 38, .98));
+  border: 1px solid rgba(104,137,230,.42);
   border-radius: 12px;
   padding: 18px;
   min-height: 132px;
@@ -5076,9 +5080,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
     domain_js = browser_cookie_domain_js_function()
-    components.html(
-        f"""
-        <script>
+    bootstrap_runtime = f"""
         (function() {{
           try {{
             const cookieName = {cookie_name_json};
@@ -5135,12 +5137,14 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const page = normalizedPage(url.searchParams.get("es_page"));
             const publicRoute = normalizedPage(url.searchParams.get("public") || url.searchParams.get("route"));
             const hasRouteTarget = ["es_page", "es_editor", "job_id", "review_id", "task_id", "route", "public"].some((key) => url.searchParams.has(key));
+            const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));
             const hasProtectedTarget = (
-              routeParamKeys.some((key) => url.searchParams.has(key))
+              hasEditorTarget
+              || (!!page && !publicEntryPages.has(page))
               || normalizedPage(url.searchParams.get("route")) === "human review editor"
               || normalizedPage(url.searchParams.get("route")) === "human_review_editor"
-            ) && !publicEntryPages.has(page) && !publicEntryPages.has(publicRoute);
-            const publicEntry = !hasRouteTarget || publicEntryPages.has(page) || publicEntryPages.has(publicRoute);
+            );
+            const publicEntry = !hasRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(page) || publicEntryPages.has(publicRoute)));
             if (!publicEntry && !hasProtectedTarget) return;
 
             const cookieToken = readCookie(targetDoc);
@@ -5179,6 +5183,20 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             else loc.replace(nextUrl);
           }} catch (err) {{}}
         }})();
+    """
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const runtime = {json.dumps(bootstrap_runtime)};
+          const parentWin = window.parent || window;
+          try {{
+            if (parentWin && parentWin.eval) parentWin.eval(runtime);
+            else window.eval(runtime);
+          }} catch (err) {{
+            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
+          }}
+        }})();
         </script>
         """,
         height=0,
@@ -5193,7 +5211,7 @@ def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
     if route_name in PUBLIC_ROUTES:
         return False
     public_es_route = public_route_for_es_page(query_get("es_page"))
-    if public_es_route in PUBLIC_ROUTES:
+    if public_es_route and public_es_route in PUBLIC_ROUTES:
         return False
     route_page = normalize_es_page(route.get("page") or route.get("es_page"))
     if route_page in known_protected_es_pages():
@@ -5285,7 +5303,13 @@ def render_global_logout_listener() -> None:
             const route = normalizedPage(url.searchParams.get("route") || url.searchParams.get("public"));
             const page = normalizedPage(url.searchParams.get("es_page"));
             const hasAnyRouteTarget = ["es_page", "es_editor", "job_id", "review_id", "route", "public", "return_to"].some((key) => url.searchParams.has(key));
-            return !hasAnyRouteTarget || publicEntryPages.has(route) || publicEntryPages.has(page);
+            const hasProtectedTarget = (
+              ["es_editor", "job_id", "review_id"].some((key) => url.searchParams.has(key))
+              || route === "human review editor"
+              || route === "human_review_editor"
+              || (!!page && !publicEntryPages.has(page))
+            );
+            return !hasAnyRouteTarget || (!hasProtectedTarget && (publicEntryPages.has(route) || publicEntryPages.has(page)));
           }};
           const restoreAuthAndGoDashboard = (token) => {{
             if (!token) return;
@@ -6772,13 +6796,14 @@ def requested_route_params() -> Dict[str, str]:
 def protected_route_requested() -> bool:
     route = safe_text(query_get("route")).strip().lower()
     es_page = normalize_es_page(query_get("es_page"))
+    has_editor_target = any(query_get(key) for key in ("es_editor", "job_id", "review_id"))
     public_es_route = public_route_for_es_page(es_page)
-    if public_es_route and public_es_route in PUBLIC_ROUTES:
+    if public_es_route and public_es_route in PUBLIC_ROUTES and not has_editor_target:
         return False
     public_routes = PUBLIC_ROUTES
-    if route in public_routes and not (query_get("es_page") or query_get("es_editor") or query_get("job_id") or query_get("review_id")):
+    if route in public_routes and not (query_get("es_page") or has_editor_target):
         return False
-    if is_human_review_editor_page(es_page) or safe_text(query_get("es_editor")):
+    if is_human_review_editor_page(es_page) or has_editor_target:
         return True
     if es_page in known_protected_es_pages():
         return True
@@ -17572,6 +17597,16 @@ def render_router_debug_panel(resolved_route: Optional[Dict[str, Any]] = None, d
 
 def render_landing_page(reason: str = "explicit_landing") -> None:
     route = get_current_route()
+    if protected_route_requested() and route.get("route") not in PUBLIC_ROUTES:
+        if is_authenticated():
+            render_app()
+            return
+        st.session_state["auth_return_to"] = encode_return_to()
+        login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+        render_auth_debug_panel(login_route, "protected_route_in_landing_renderer")
+        render_login()
+        return
+
     review_id = query_get("review_id") or safe_text(st.session_state.get("active_review_session_id", ""))
     LOGGER.warning(
         "LANDING_RENDERED reason=%s query_params=%s route=%s session_route=%s authenticated=%s review_id=%s user=%s",
@@ -17917,6 +17952,9 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
 
 LOGIN_SUBMIT_MASK_ID = "errorsweep-login-submit-mask"
 LOGIN_SUBMIT_MASK_CLASS = "es-login-submit-pending"
+AUTH_RESUME_MARKER_ID = "errorsweep-auth-resume-marker"
+AUTH_RESUME_MASK_ID = "errorsweep-auth-resume-mask"
+AUTH_RESUME_MASK_CLASS = "es-auth-resume-pending"
 
 
 def render_public_auth_page_marker() -> None:
@@ -18099,9 +18137,205 @@ def render_login_submit_handoff_mask_bridge() -> None:
     )
 
 
+def render_public_auth_session_resume_bridge() -> None:
+    """Hide public auth pages while an existing browser session opens the app."""
+    marker_id_json = json.dumps(AUTH_RESUME_MARKER_ID)
+    mask_id_json = json.dumps(AUTH_RESUME_MASK_ID)
+    mask_class_json = json.dumps(AUTH_RESUME_MASK_CLASS)
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    domain_js = browser_cookie_domain_js_function()
+    st.html(
+        dedent(f"""
+        <div id="{AUTH_RESUME_MARKER_ID}" aria-hidden="true"></div>
+        <div id="{AUTH_RESUME_MASK_ID}" role="status" aria-live="polite">
+          <div>Opening your workspace...</div>
+        </div>
+        <style>
+        #{AUTH_RESUME_MARKER_ID} {{
+          display: none !important;
+        }}
+
+        #{AUTH_RESUME_MASK_ID} {{
+          position: fixed;
+          inset: 0;
+          z-index: 2147483646;
+          display: none;
+          place-items: center;
+          background:
+            radial-gradient(circle at 12% 14%, rgba(17,245,181,.24), transparent 32%),
+            radial-gradient(circle at 88% 10%, rgba(76,201,255,.20), transparent 30%),
+            #050713;
+          color: #f8fbff;
+          font: 800 16px Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+
+        #{AUTH_RESUME_MASK_ID} > div {{
+          border: 1px solid rgba(104,137,230,.46);
+          border-radius: 12px;
+          background: rgba(18,24,48,.96);
+          box-shadow: 0 24px 68px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.08);
+          padding: 18px 22px;
+        }}
+
+        body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"],
+        body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid="stAppViewContainer"] {{
+          visibility: hidden !important;
+        }}
+
+        body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID},
+        body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID} {{
+          display: grid !important;
+          visibility: visible !important;
+        }}
+        </style>
+        """).strip(),
+    )
+    resume_runtime = f"""
+        (() => {{
+          const parentDoc = document;
+          const parentWin = window;
+          const markerId = {marker_id_json};
+          const maskId = {mask_id_json};
+          const maskClass = {mask_class_json};
+          const cookieName = {cookie_name_json};
+          const storageKey = {storage_key_json};
+          const routeStorageKey = {route_storage_key_json};
+          const routeParamKeys = {route_param_keys_json};
+          const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
+{domain_js}
+
+          const revealPublicAuthPage = () => {{
+            try {{
+              parentDoc.body.classList.remove(maskClass);
+              const marker = parentDoc.getElementById(markerId);
+              const mask = parentDoc.getElementById(maskId);
+              if (marker) marker.remove();
+              if (mask) mask.remove();
+            }} catch (err) {{}}
+          }};
+
+          const normalizedPage = (value) => String(value || "")
+            .replace(/[+_-]/g, " ")
+            .replace(/\\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+          const readCookie = () => {{
+            try {{
+              const prefix = cookieName + "=";
+              for (const part of String(parentDoc.cookie || "").split(";")) {{
+                const item = part.trim();
+                if (item.startsWith(prefix)) return decodeURIComponent(item.slice(prefix.length));
+              }}
+            }} catch (err) {{}}
+            return "";
+          }};
+
+          const safeStorage = () => {{
+            try {{ return parentWin.localStorage || window.localStorage; }} catch (err) {{}}
+            return null;
+          }};
+
+          const cleanTargetParams = (params) => {{
+            const target = {{}};
+            routeParamKeys.forEach((key) => {{
+              const value = params && params.get ? params.get(key) : params && params[key];
+              if (value) target[key] = String(value);
+            }});
+            const route = normalizedPage(params && params.get ? params.get("route") : params && params.route);
+            const page = normalizedPage(target.es_page);
+            if (route === "human review editor" || route === "human_review_editor") {{
+              target.es_page = "Human Review Editor";
+            }}
+            if (target.es_page && publicEntryPages.has(page)) delete target.es_page;
+            if (target.es_editor || target.es_page || target.job_id || target.review_id) return target;
+            return {{}};
+          }};
+
+          const targetFromReturnTo = (url) => {{
+            const raw = String(url.searchParams.get("return_to") || "").replace(/^\\?/, "");
+            if (!raw) return {{}};
+            try {{
+              return cleanTargetParams(new URLSearchParams(raw));
+            }} catch (err) {{
+              return {{}};
+            }}
+          }};
+
+          const targetFromSavedRoute = (storage) => {{
+            if (!storage) return {{}};
+            try {{
+              const saved = JSON.parse(storage.getItem(routeStorageKey) || "{{}}");
+              return cleanTargetParams(saved);
+            }} catch (err) {{
+              return {{}};
+            }}
+          }};
+
+          try {{
+            parentDoc.body.classList.add(maskClass);
+            const storage = safeStorage();
+            const cookieToken = readCookie();
+            const storageToken = storage ? String(storage.getItem(storageKey) || "") : "";
+            const token = cookieToken || storageToken;
+            if (!token) {{
+              revealPublicAuthPage();
+              return;
+            }}
+
+            const loc = parentWin.location;
+            const url = new URL(loc.href);
+            const target = targetFromReturnTo(url);
+            const savedTarget = Object.keys(target).length ? {{}} : targetFromSavedRoute(storage);
+            const finalTarget = Object.keys(target).length ? target : (Object.keys(savedTarget).length ? savedTarget : {{ es_page: "Dashboard" }});
+            if (!finalTarget.es_page && !finalTarget.es_editor) finalTarget.es_page = "Dashboard";
+
+            const secure = loc.protocol === "https:" ? "; Secure" : "";
+            parentDoc.cookie = cookieName + "=" + encodeURIComponent(token) +
+              "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+            if (storage) storage.setItem(storageKey, token);
+
+            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            routeParamKeys.forEach((key) => url.searchParams.delete(key));
+            Object.entries(finalTarget).forEach(([key, value]) => {{
+              if (routeParamKeys.includes(key) && value) url.searchParams.set(key, String(value));
+            }});
+
+            const nextUrl = url.toString();
+            if (nextUrl === loc.href) loc.reload();
+            else loc.replace(nextUrl);
+          }} catch (err) {{
+            revealPublicAuthPage();
+          }}
+        }})();
+    """
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const runtime = {json.dumps(resume_runtime)};
+          const parentWin = window.parent || window;
+          try {{
+            if (parentWin && parentWin.eval) parentWin.eval(runtime);
+            else window.eval(runtime);
+          }} catch (err) {{
+            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
+          }}
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
 def render_login() -> None:
     render_public_auth_page_marker()
     render_login_submit_mask_clear_bridge()
+    render_public_auth_session_resume_bridge()
     if is_authenticated():
         render_logged_in_login_state()
         return
@@ -18356,6 +18590,7 @@ def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
 
 def render_signup() -> None:
     render_public_auth_page_marker()
+    render_public_auth_session_resume_bridge()
     launch_gate = public_signup_launch_gate()
     if launch_gate.get("locked"):
         render_public_signup_launch_locked(launch_gate)
@@ -18720,6 +18955,18 @@ def render_sso_handoff() -> None:
 
 
 def render_public_app() -> None:
+    if protected_route_requested():
+        protected_route = get_current_route()
+        if protected_route.get("route") not in PUBLIC_ROUTES:
+            if is_authenticated():
+                render_app()
+                return
+            st.session_state["auth_return_to"] = encode_return_to()
+            login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+            render_auth_debug_panel(login_route, "protected_route_in_public_renderer")
+            render_login()
+            return
+
     legacy_public_route = safe_text(query_get("route") or query_get("public")).strip().lower()
     route = (
         public_route_for_es_page(query_get("es_page"))
@@ -24265,6 +24512,8 @@ if __name__ == "__main__":
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
     if route_public in {"login", "signup"}:
+        if route_public == "login" and query_get("return_to"):
+            st.session_state["auth_return_to"] = query_get("return_to")
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
         for stale in ("es_restore_miss", "es_session", "es_restore", "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
@@ -24325,6 +24574,20 @@ if __name__ == "__main__":
             route = authenticated_shell_route_from_session()
         set_auth_debug_state(bool(browser_session_cookie()), True, "valid_cookie_public_entry_to_dashboard", route)
         st.rerun()
+
+    latest_route = get_current_route()
+    latest_route_protected = (
+        latest_route.get("route") not in PUBLIC_ROUTES
+        and (
+            protected_route_requested()
+            or safe_text(latest_route.get("es_editor"))
+            or safe_text(latest_route.get("job_id"))
+            or safe_text(latest_route.get("review_id"))
+        )
+    )
+    if route.get("route") in PUBLIC_ROUTES and latest_route_protected:
+        route = latest_route
+        set_auth_debug_state(bool(browser_session_cookie()), bool(auth_state == AUTH_STATE_AUTHENTICATED), "late_protected_route_refresh", route)
 
     if route.get("route") in PUBLIC_ROUTES:
         render_auth_debug_panel(route, safe_text((st.session_state.get("_auth_debug") or {}).get("route_decision")) or f"public:{route.get('route')}")
