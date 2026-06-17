@@ -786,23 +786,45 @@ def get_ai_client(route: AIRoute) -> OpenAI:
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
     text = (text or "").strip()
-    text = re.sub(r"^```json\s*", "", text, flags=re.I)
-    text = re.sub(r"^```\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    fence_match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.I | re.S)
+    if fence_match:
+        text = fence_match.group(1).strip()
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
+    decoder = json.JSONDecoder()
+    fallback: Optional[Dict[str, Any]] = None
+
+    def normalize_payload(value: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            return {"items": value}
+        return None
 
     try:
         data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-        if isinstance(data, list):
-            return {"items": data}
+        normalized = normalize_payload(data)
+        if normalized is not None:
+            return normalized
     except Exception:
         pass
+
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            data, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        normalized = normalize_payload(data)
+        if normalized is None:
+            continue
+        if isinstance(normalized.get("items"), list):
+            return normalized
+        if fallback is None:
+            fallback = normalized
+
+    if fallback is not None:
+        return fallback
 
     return {"items": []}
 

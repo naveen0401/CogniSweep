@@ -712,6 +712,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_billing_webhook_replay.py",
         "python test_email_check.py",
         "python test_legal_check.py",
+        "python test_ai_json_extraction.py",
         "python test_launch_rehearsal.py",
         "python test_launch_public_lock.py",
         "python test_async_docx_security.py",

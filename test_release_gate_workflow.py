@@ -35,6 +35,7 @@ def test_github_actions_release_gate_contract():
         "python test_billing_webhook_replay.py",
         "python test_email_check.py",
         "python test_legal_check.py",
+        "python test_ai_json_extraction.py",
         "python test_persistence_tenant_scope.py",
         "python test_supabase_rls_policies.py",
         "python test_production_persistence_fail_closed.py",

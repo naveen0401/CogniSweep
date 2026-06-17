@@ -260,6 +260,16 @@ def validate_contracts(results: List[Dict[str, str]]) -> None:
         "private/local/metadata URL guards present" if not missing_security else ", ".join(missing_security),
         "Keep SSRF protections for OpenAI-compatible base URLs before accepting BYO or managed endpoints.",
     )
+    json_tokens = ["json.JSONDecoder", "raw_decode", "normalize_payload", "items"]
+    missing_json = missing_items(json_tokens, router)
+    add(
+        results,
+        "AI",
+        "Managed AI JSON extraction",
+        "Pass" if not missing_json else "Blocker",
+        "decoder-based JSON object/array extraction present" if not missing_json else ", ".join(missing_json),
+        "Keep AI response parsing resilient to prose or braces outside the returned JSON payload.",
+    )
 
 
 def validate_requirements(results: List[Dict[str, str]]) -> None:
