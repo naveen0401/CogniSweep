@@ -153,6 +153,38 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
     assert "es_session" not in body
 
 
+def test_editor_links_seed_browser_session_before_new_tab() -> None:
+    source = read_app()
+    helper_start = source.index("def current_session_token_for_links")
+    helper_end = source.index("def external_editor_url", helper_start)
+    helper_body = source[helper_start:helper_end]
+    assert "return signed_session_token_for_user(user)" in helper_body
+    assert "def render_editor_session_handoff_bridge() -> None:" in helper_body
+    assert 'data-es-editor-open="1"' in helper_body
+    assert "document.addEventListener(\"click\", handleEditorOpen, true)" in helper_body
+    assert "local.setItem(storageKey, token)" in helper_body
+    assert "local.setItem(routeStorageKey, JSON.stringify(route))" in helper_body
+    assert "url.searchParams.set(\"es_session\", token)" not in source
+    assert "url.searchParams.set(\"es_restore\", token)" not in source
+
+    task_links_start = source.index("def render_task_navigation_links")
+    task_links_end = source.index("def render_editor_open_link", task_links_start)
+    assert "editor_session_handoff_attrs(url)" in source[task_links_start:task_links_end]
+
+    editor_open_start = source.index("def render_editor_open_link")
+    editor_open_end = source.index("def render_task_result_actions", editor_open_start)
+    assert "editor_session_handoff_attrs(url)" in source[editor_open_start:editor_open_end]
+
+    external_link_start = source.index("def render_external_editor_link")
+    external_link_end = source.index("def load_external_editor_payload", external_link_start)
+    assert "editor_session_handoff_attrs(url)" in source[external_link_start:external_link_end]
+
+    app_start = source.index('if __name__ == "__main__"')
+    app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
+    app_body = source[app_start:app_end]
+    assert "sync_browser_route_state(current_route)\n            render_editor_session_handoff_bridge()" in app_body
+
+
 def test_human_review_editor_uses_es_page_review_id_route() -> None:
     source = read_app()
     assert "def navigate_to_human_review_editor(review_id: str = \"\")" in source
@@ -963,6 +995,7 @@ if __name__ == "__main__":
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
+    test_editor_links_seed_browser_session_before_new_tab()
     test_human_review_editor_uses_es_page_review_id_route()
     test_reload_session_restore_uses_cookie_not_url_only()
     test_session_check_page_removed_and_protected_routes_resolve()

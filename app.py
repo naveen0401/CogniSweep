@@ -10694,13 +10694,14 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         seen_urls.add(url)
         cls = "es-task-action-link primary" if primary else "es-task-action-link"
         if primary:
-            rendered.append(f'<a class="{cls}" href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>')
+            handoff_attrs = editor_session_handoff_attrs(url)
+            rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
             rendered.append(f'<button type="button" class="{cls}" {action_attr}>{escape(label)}</button>')
         else:
-            rendered.append(f'<a class="{cls}" href="{escape(url)}" target="_self">{escape(label)}</a>')
+            rendered.append(f'<a class="{cls}" href="{escape(url, quote=True)}" target="_self">{escape(label)}</a>')
     if rendered:
         st.markdown(f'<div class="es-task-actions">{"".join(rendered)}</div>', unsafe_allow_html=True)
         render_app_navigation_targets(nav_targets, target_prefix)
@@ -10710,9 +10711,10 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
 def render_editor_open_link(label: str, url: str) -> None:
     if not safe_text(url):
         return
+    handoff_attrs = editor_session_handoff_attrs(url)
     st.markdown(
         f"""
-        <a class="es-task-action-link primary" href="{escape(url)}" target="_blank" rel="noopener"
+        <a class="es-task-action-link primary" href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
            style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
         """,
         unsafe_allow_html=True,
@@ -15470,7 +15472,145 @@ def go_to_human_review_workspace() -> None:
 
 
 def current_session_token_for_links() -> str:
-    return ""
+    user = current_user()
+    if not user and is_authenticated():
+        user = current_user()
+    if not user:
+        return ""
+    return signed_session_token_for_user(user)
+
+
+def editor_handoff_route_params(url: str) -> Dict[str, str]:
+    raw_url = safe_text(url).strip()
+    if not raw_url:
+        return {}
+    query_string = raw_url.split("?", 1)[1] if "?" in raw_url else raw_url.lstrip("?")
+    parsed = parse_qs(query_string, keep_blank_values=False)
+    params: Dict[str, str] = {}
+    for key in ROUTE_STORAGE_PARAM_KEYS:
+        value = safe_text((parsed.get(key) or [""])[0])
+        if not value:
+            continue
+        params[key] = normalize_es_page(value) if key == "es_page" else value
+    return params
+
+
+def editor_session_handoff_attrs(url: str) -> str:
+    route = editor_handoff_route_params(url)
+    route_attr = escape(json.dumps(route), quote=True) if route else ""
+    attrs = 'data-es-editor-open="1"'
+    if route_attr:
+        attrs += f' data-es-route="{route_attr}"'
+    return attrs
+
+
+def render_editor_session_handoff_bridge() -> None:
+    """Keep authenticated editor tabs from falling back to Login during open."""
+    token = current_session_token_for_links()
+    if not token:
+        return
+    cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    token_json = json.dumps(token)
+    domain_js = browser_cookie_domain_js_function()
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const parentWin = window.parent || window;
+          const runtime = `
+          (() => {{
+            const cookieName = {cookie_name_json};
+            const storageKey = {storage_key_json};
+            const routeStorageKey = {route_storage_key_json};
+            const routeParamKeys = {route_param_keys_json};
+            const token = {token_json};
+{domain_js}
+            const storage = () => {{
+              try {{ return window.localStorage; }} catch (err) {{}}
+              return null;
+            }};
+            const tabStorage = () => {{
+              try {{ return window.sessionStorage; }} catch (err) {{}}
+              return null;
+            }};
+            const routeFromHref = (href) => {{
+              try {{
+                const url = new URL(href || "", window.location.href);
+                const route = {{}};
+                routeParamKeys.forEach((key) => {{
+                  const value = url.searchParams.get(key);
+                  if (value) route[key] = value;
+                }});
+                return route;
+              }} catch (err) {{
+                return {{}};
+              }}
+            }};
+            const normalizeRoute = (value, href) => {{
+              let route = {{}};
+              try {{
+                route = value ? JSON.parse(value) : {{}};
+              }} catch (err) {{
+                route = {{}};
+              }}
+              if (!route || (!route.es_page && !route.es_editor && !route.job_id && !route.review_id)) {{
+                route = routeFromHref(href);
+              }}
+              return route || {{}};
+            }};
+            const writeSession = (routeValue, href) => {{
+              if (!token) return;
+              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              try {{
+                document.cookie = cookieName + "=" + encodeURIComponent(token) +
+                  "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(window.location.hostname);
+              }} catch (err) {{}}
+              try {{
+                const local = storage();
+                if (local) local.setItem(storageKey, token);
+              }} catch (err) {{}}
+              try {{
+                const scoped = tabStorage();
+                if (scoped) {{
+                  scoped.removeItem(storageKey + "_bootstrap_attempted");
+                  scoped.removeItem(storageKey + "_bootstrap_attempts");
+                  scoped.removeItem(storageKey + "_bootstrap_token");
+                }}
+              }} catch (err) {{}}
+              const route = normalizeRoute(routeValue, href);
+              if (route.es_page || route.es_editor || route.job_id || route.review_id) {{
+                try {{
+                  const local = storage();
+                  if (local) local.setItem(routeStorageKey, JSON.stringify(route));
+                }} catch (err) {{}}
+              }}
+              window.__errorsweepLastEditorSessionHandoff = {{ at: Date.now(), route }};
+            }};
+            const handleEditorOpen = (event) => {{
+              const trigger = event.target && event.target.closest ? event.target.closest("[data-es-editor-open]") : null;
+              if (!trigger) return;
+              writeSession(trigger.getAttribute("data-es-route") || "", trigger.href || trigger.getAttribute("href") || "");
+            }};
+            writeSession("", "");
+            if (document.__errorsweepEditorSessionHandoff) {{
+              document.removeEventListener("click", document.__errorsweepEditorSessionHandoff, true);
+            }}
+            document.__errorsweepEditorSessionHandoff = handleEditorOpen;
+            document.addEventListener("click", handleEditorOpen, true);
+          }})();
+          `;
+          try {{ parentWin.eval(runtime); }} catch (err) {{
+            try {{ window.eval(runtime); }} catch (fallbackErr) {{}}
+          }}
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
 
 
 def external_editor_url(editor_type: str, job_id: str) -> str:
@@ -15482,9 +15622,10 @@ def external_editor_url(editor_type: str, job_id: str) -> str:
 
 def render_external_editor_link(label: str, editor_type: str, job_id: str) -> None:
     url = external_editor_url(editor_type, job_id)
+    handoff_attrs = editor_session_handoff_attrs(url)
     st.markdown(
         f"""
-        <a href="{url}" target="_blank" style="
+        <a href="{escape(url, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
             display:flex; align-items:center; justify-content:center; width:100%;
             padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
             background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
@@ -24753,6 +24894,7 @@ if __name__ == "__main__":
             current_route = route
             render_auth_debug_panel(route, safe_text((st.session_state.get("_auth_debug") or {}).get("route_decision")) or f"authenticated:{route.get('route')}")
             sync_browser_route_state(current_route)
+            render_editor_session_handoff_bridge()
             hydrate_saas_state_for_user()
             render_app()
 
