@@ -188,7 +188,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-17-editor-launch-v11"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-18-editor-auth-v12"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -365,6 +365,7 @@ SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
 EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
 EDITOR_LAUNCH_TTL_SECONDS = int(os.getenv("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
+EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"
 AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
 AUTH_STATE_UNKNOWN = "unknown"
 AUTH_STATE_AUTHENTICATED = "authenticated"
@@ -372,7 +373,7 @@ AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
-ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM)
+ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM)
 SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")
 SESSION_COOKIE_MAX_BYTES = 3800
 LANGUAGE_CATALOG = [
@@ -5088,10 +5089,13 @@ def restore_session_from_cookie() -> None:
     token = browser_session_cookie()
     cookie_found = bool(token)
     session_valid = False
+    editor_target = bool(query_get("es_editor") or query_get("job_id") or query_get("review_id"))
+    st.session_state.pop("_editor_auth_restore_failed", None)
     if st.session_state.get("authenticated") and st.session_state.get("user"):
         session_valid = True
         st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
         query_clear(EDITOR_LAUNCH_QUERY_PARAM)
+        query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
         set_auth_debug_state(cookie_found, session_valid)
         return
     if launch_token:
@@ -5099,25 +5103,32 @@ def restore_session_from_cookie() -> None:
         if session_valid:
             st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
             query_clear(EDITOR_LAUNCH_QUERY_PARAM)
+            query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
             query_clear(AUTH_CHECK_QUERY_PARAM)
             query_clear("es_session")
             query_clear("es_restore")
             query_clear("es_restore_miss")
             set_auth_debug_state(cookie_found, session_valid)
             return
+        if editor_target:
+            st.session_state["_editor_auth_restore_failed"] = True
     if token:
         session_valid = restore_user_from_signed_session(token)
         if session_valid:
             st.session_state["_pending_session_cookie"] = token
             query_clear(AUTH_CHECK_QUERY_PARAM)
             query_clear(EDITOR_LAUNCH_QUERY_PARAM)
+            query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
             query_clear("es_session")
             query_clear("es_restore")
             query_clear("es_restore_miss")
         else:
             st.session_state.pop("user", None)
             st.session_state.pop("authenticated", None)
-            st.session_state["_clear_session_cookie"] = True
+            if editor_target:
+                st.session_state["_editor_auth_restore_failed"] = True
+            else:
+                st.session_state["_clear_session_cookie"] = True
     set_auth_debug_state(cookie_found, session_valid)
 
 
@@ -5226,6 +5237,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    editor_auth_failed_param_json = json.dumps(EDITOR_AUTH_FAILED_QUERY_PARAM)
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
     domain_js = browser_cookie_domain_js_function()
     bootstrap_runtime = f"""
@@ -5234,6 +5246,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
             const routeParamKeys = {route_param_keys_json};
+            const editorAuthFailedParam = {editor_auth_failed_param_json};
             const publicEntryPages = new Set({public_entry_pages_json});
             const candidateWindows = [window.parent, window.top, window];
 {domain_js}
@@ -5286,6 +5299,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const publicRoute = normalizedPage(url.searchParams.get("public") || url.searchParams.get("route"));
             const hasRouteTarget = ["es_page", "es_editor", "job_id", "review_id", "task_id", "route", "public"].some((key) => url.searchParams.has(key));
             const hasEditorTarget = ["es_editor", "job_id", "review_id", "task_id"].some((key) => url.searchParams.has(key));
+            const hasEditorLaunchToken = !!url.searchParams.get("es_launch");
             const hasProtectedTarget = (
               hasEditorTarget
               || (!!page && !publicEntryPages.has(page))
@@ -5297,7 +5311,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
             const cleanOriginalParams = () => {{
               const originalParams = new URLSearchParams(url.search);
-              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_app_nav"].forEach((key) => originalParams.delete(key));
+              ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_app_nav"].forEach((key) => originalParams.delete(key));
               return originalParams;
             }};
             const clearBootstrapState = () => {{
@@ -5323,6 +5337,12 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               clearBootstrapState();
             }};
             const routeToAuthFallback = () => {{
+              if (hasEditorTarget) {{
+                ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+                url.searchParams.set(editorAuthFailedParam, "1");
+                loc.replace(url.toString());
+                return;
+              }}
               const originalParams = cleanOriginalParams();
               Array.from(url.searchParams.keys()).forEach((key) => url.searchParams.delete(key));
               if (publicEntry) {{
@@ -5338,7 +5358,10 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const token = cookieToken || storageToken;
             if (!token) {{
-              clearBrowserSessionToken("");
+              if (!hasEditorTarget) clearBrowserSessionToken("");
+              if (hasEditorTarget && hasEditorLaunchToken) {{
+                return;
+              }}
               routeToAuthFallback();
               return;
             }}
@@ -5370,7 +5393,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
                 loc.reload();
                 return;
               }}
-              clearBrowserSessionToken(token);
+              if (!hasEditorTarget) clearBrowserSessionToken(token);
               routeToAuthFallback();
               return;
             }}
@@ -5386,7 +5409,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             if (publicEntry) {{
               ["public", "route", "return_to", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
@@ -5418,6 +5441,8 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
 def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
     if st.session_state.get("authenticated") and st.session_state.get("user"):
+        return False
+    if query_get(EDITOR_AUTH_FAILED_QUERY_PARAM) == "1" or st.session_state.get("_editor_auth_restore_failed"):
         return False
     route = route or {}
     route_name = safe_text(route.get("public") or route.get("route")).strip().lower()
@@ -5511,11 +5536,93 @@ def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
     st.stop()
 
 
+def editor_route_target_requested(route: Optional[Dict[str, Any]] = None) -> bool:
+    route = route or {}
+    return bool(
+        safe_text(route.get("es_editor") or query_get("es_editor"))
+        or safe_text(route.get("job_id") or query_get("job_id"))
+        or safe_text(route.get("review_id") or query_get("review_id"))
+    )
+
+
+def render_editor_auth_restore_failed(route: Optional[Dict[str, Any]] = None) -> None:
+    render_auth_debug_panel(route or {}, "editor_auth_restore_failed")
+    st.markdown(
+        """
+        <style>
+        .es-editor-auth-failed {
+            min-height: 100dvh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background:
+                radial-gradient(circle at 0% 0%, rgba(17,245,181,.16), transparent 32%),
+                radial-gradient(circle at 100% 0%, rgba(90,142,255,.16), transparent 34%),
+                #080a12;
+            color: #f8fbff;
+        }
+        .es-editor-auth-failed__card {
+            width: min(520px, 100%);
+            border: 1px solid rgba(148,163,184,.28);
+            border-radius: 14px;
+            background: rgba(18,24,48,.94);
+            padding: 24px;
+            box-shadow: 0 24px 80px rgba(0,0,0,.42);
+        }
+        .es-editor-auth-failed__card h1 {
+            margin: 0 0 8px;
+            font-size: 24px;
+        }
+        .es-editor-auth-failed__card p {
+            margin: 0 0 18px;
+            color: rgba(248,251,255,.72);
+            line-height: 1.45;
+        }
+        .es-editor-auth-failed__actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .es-editor-auth-failed__actions a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
+            padding: 0 16px;
+            border-radius: 999px;
+            text-decoration: none;
+            font-weight: 900;
+        }
+        .es-editor-auth-failed__primary {
+            background: linear-gradient(90deg, #00d985, #34bdf6);
+            color: #061018;
+        }
+        .es-editor-auth-failed__secondary {
+            border: 1px solid rgba(148,163,184,.36);
+            color: #f8fbff;
+        }
+        </style>
+        <div class="es-editor-auth-failed">
+            <section class="es-editor-auth-failed__card" aria-label="Editor session restore failed">
+                <h1>Open the editor from CogniSweep again</h1>
+                <p>The editor tab could not restore its signed launch session. Your main CogniSweep session was not cleared.</p>
+                <div class="es-editor-auth-failed__actions">
+                    <a class="es-editor-auth-failed__primary" href="?es_page=Dashboard" target="_self">Return to Dashboard</a>
+                    <a class="es-editor-auth-failed__secondary" href="?es_page=Login" target="_self">Go to Login</a>
+                </div>
+            </section>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+
 def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
     return f"""
             const url = new URL(loc.href);
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
             {logout_marker_js}
     """
@@ -5587,7 +5694,7 @@ def render_global_logout_listener() -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
@@ -5790,6 +5897,7 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear("return_to")
     query_clear(AUTH_CHECK_QUERY_PARAM)
     query_clear(EDITOR_LAUNCH_QUERY_PARAM)
+    query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
     query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
@@ -5907,7 +6015,7 @@ def logout() -> None:
     st.session_state.pop("_saas_state_hydrated", None)
     st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
     st.session_state["_clear_session_cookie"] = True
-    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
+    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
     query_set("es_page", "Landing")
     render_logout_bridge()
@@ -6825,7 +6933,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             query_clear(stale)
     for key, value in params.items():
@@ -7002,7 +7110,7 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
 
     st.query_params["es_page"] = page_name
-    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
+    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
         
@@ -15898,7 +16006,7 @@ def editor_launch_url(url: str) -> str:
     clean_params = {
         key: safe_text(values[0])
         for key, values in parsed.items()
-        if values and safe_text(values[0]) and key not in {"es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM}
+        if values and safe_text(values[0]) and key not in {"es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM}
     }
     clean_params[EDITOR_LAUNCH_QUERY_PARAM] = signed_editor_launch_token_for_user(user)
     return "?" + urlencode(clean_params)
@@ -19057,7 +19165,7 @@ def render_public_auth_session_resume_bridge() -> None:
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (storage) storage.setItem(storageKey, token);
 
-            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             routeParamKeys.forEach((key) => url.searchParams.delete(key));
             Object.entries(finalTarget).forEach(([key, value]) => {{
               if (routeParamKeys.includes(key) && value) url.searchParams.set(key, String(value));
@@ -25313,7 +25421,7 @@ if __name__ == "__main__":
             st.session_state["auth_return_to"] = query_get("return_to")
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
-        for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
+        for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
             if stale in st.query_params:
                 del st.query_params[stale]
         route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}
@@ -25392,6 +25500,8 @@ if __name__ == "__main__":
     else:
         if auth_state == AUTH_STATE_UNAUTHENTICATED:
             if route.get("route") not in PUBLIC_ROUTES and protected_route_requested():
+                if editor_route_target_requested(route):
+                    render_editor_auth_restore_failed(route)
                 login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
                 st.session_state["auth_return_to"] = encode_return_to()
                 render_auth_debug_panel(login_route, "missing_or_invalid_cookie_show_login")

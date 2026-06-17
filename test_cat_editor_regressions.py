@@ -162,6 +162,7 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     assert "return signed_session_token_for_user(user)" in helper_body
     assert "def render_editor_session_handoff_bridge() -> None:" in helper_body
     assert 'EDITOR_LAUNCH_QUERY_PARAM = "es_launch"' in source
+    assert 'EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"' in source
     assert "def signed_editor_launch_token_for_user(user: Dict[str, Any]) -> str:" in source
     assert '"purpose": "editor_launch"' in source
     assert '"exp": issued_at + EDITOR_LAUNCH_TTL_SECONDS' in source
@@ -179,6 +180,17 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     assert "local.setItem(routeStorageKey, JSON.stringify(route))" in helper_body
     assert "url.searchParams.set(\"es_session\", token)" not in source
     assert "url.searchParams.set(\"es_restore\", token)" not in source
+    bootstrap_start = source.index("def render_browser_session_bootstrap")
+    bootstrap_end = source.index("def auth_bootstrap_pending", bootstrap_start)
+    bootstrap_body = source[bootstrap_start:bootstrap_end]
+    assert "const hasEditorLaunchToken = !!url.searchParams.get(\"es_launch\");" in bootstrap_body
+    assert "if (!hasEditorTarget) clearBrowserSessionToken(\"\");" in bootstrap_body
+    assert "if (!hasEditorTarget) clearBrowserSessionToken(token);" in bootstrap_body
+    assert 'url.searchParams.set(editorAuthFailedParam, "1");' in bootstrap_body
+    assert 'url.searchParams.set("es_page", "Login");' in bootstrap_body
+    editor_failed_idx = bootstrap_body.index('url.searchParams.set(editorAuthFailedParam, "1");')
+    login_idx = bootstrap_body.index('url.searchParams.set("es_page", "Login");')
+    assert editor_failed_idx < login_idx
 
     task_links_start = source.index("def render_task_navigation_links")
     task_links_end = source.index("def render_editor_open_link", task_links_start)
@@ -450,6 +462,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert '"auth_unknown_editor_restore"' in auth_unknown_body
     assert "Opening editor..." in auth_unknown_body
     assert "es-editor-auth-resolver" in auth_unknown_body
+    assert "def render_editor_auth_restore_failed" in source
+    assert "Your main CogniSweep session was not cleared." in source
+    assert "editor_route_target_requested(route)" in source
+    assert "render_editor_auth_restore_failed(route)" in source
     assert "render_login()" in auth_unknown_body
     assert "render_landing_page(\"auth_unknown_landing_fallback\")" in auth_unknown_body
     editor_restore_idx = auth_unknown_body.index('"auth_unknown_editor_restore"')
@@ -559,13 +575,14 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
     assert 'if route_public == "login" and query_get("return_to"):' in app_body
     assert 'st.session_state["auth_return_to"] = query_get("return_to")' in app_body
     assert 'st.query_params["es_page"] = page_name' in app_body
-    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
+    assert 'for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM)' in app_body
     assert "del st.query_params[stale]" in app_body
     assert 'st.query_params["es_restore_miss"] = "1"' not in app_body
 
     pending_start = source.index("def auth_bootstrap_pending")
     pending_end = source.index("def current_auth_state", pending_start)
     pending_body = source[pending_start:pending_end]
+    assert 'query_get(EDITOR_AUTH_FAILED_QUERY_PARAM) == "1"' in pending_body
     assert "if route_name in PUBLIC_ROUTES:" in pending_body
     assert "public_es_route = public_route_for_es_page(query_get(\"es_page\"))" in pending_body
     assert "if public_es_route and public_es_route in PUBLIC_ROUTES:" in pending_body
