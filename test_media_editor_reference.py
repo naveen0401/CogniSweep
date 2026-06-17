@@ -26,7 +26,19 @@ def test_reference_media_editor_updates_timing_metrics():
     assert 'el("timingDurationInput")' in html
 
 
+def test_reference_media_editor_uses_fixed_viewport_shell():
+    html = REFERENCE_HTML.read_text(encoding="utf-8")
+
+    assert "width: 100vw;" in html
+    assert "max-width: 100vw;" in html
+    assert "overscroll-behavior: none;" in html
+    assert "grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);" in html
+    assert "width: 340px;" in html
+    assert "max-width: 340px;" in html
+
+
 if __name__ == "__main__":
     test_reference_media_editor_has_timing_quick_actions()
     test_reference_media_editor_updates_timing_metrics()
+    test_reference_media_editor_uses_fixed_viewport_shell()
     print("Media editor reference checks passed.")

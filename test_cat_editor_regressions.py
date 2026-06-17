@@ -791,12 +791,15 @@ def test_media_editor_uses_reference_template() -> None:
     assert 'id="media-editor-page-marker"' in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content" in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" not in shell_body
-    assert "max-width:var(--es-shell-content-width) !important" in shell_body
-    assert "components.html(html, height=900, scrolling=False)" in shell_body
-    assert "height:calc(100dvh - 12px) !important" in shell_body
-    assert "overflow-y:auto !important" in shell_body
-    assert "width:100vw !important" not in shell_body
-    assert "max-width:100vw !important" not in shell_body
+    assert "max-width:var(--es-shell-content-width) !important" not in shell_body
+    assert "padding:0 !important" in shell_body
+    assert "position:fixed !important" in shell_body
+    assert "inset:0 !important" in shell_body
+    assert "components.html(html, height=1, scrolling=False)" in shell_body
+    assert "height:calc(100dvh - 12px) !important" not in shell_body
+    assert "overflow-y:auto !important" not in shell_body
+    assert "width:100vw !important" in shell_body
+    assert "max-width:100vw !important" in shell_body
 
 
 def test_media_editor_reference_file_restores_workflow_controls() -> None:

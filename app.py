@@ -16623,7 +16623,7 @@ def render_reference_media_editor_shell(
     media_type: str,
     media_name: str,
 ) -> None:
-    """Render the supplied media-editor reference HTML inside the Dashboard-aligned shell."""
+    """Render the supplied media-editor reference HTML in its isolated full-screen shell."""
     reference_path = Path(__file__).resolve().parent / "assets" / "media_editor_reference.html"
     if not reference_path.exists():
         st.error("Media editor reference HTML is missing. Restore assets/media_editor_reference.html.")
@@ -16693,9 +16693,17 @@ def render_reference_media_editor_shell(
         <style>
         body:has(#media-editor-page-marker),
         body:has(#media-editor-page-marker) [data-testid="stAppViewContainer"],
-        body:has(#media-editor-page-marker) [data-testid="stMain"] {
+        body:has(#media-editor-page-marker) [data-testid="stMain"],
+        body:has(#media-editor-page-marker) [data-testid="stMainBlockContainer"],
+        body:has(#media-editor-page-marker) .block-container {
+            width:100vw !important;
+            max-width:100vw !important;
+            min-width:0 !important;
             height:100dvh !important;
             max-height:100dvh !important;
+            min-height:0 !important;
+            margin:0 !important;
+            padding:0 !important;
             overflow:hidden !important;
             background:#080a12 !important;
         }
@@ -16706,11 +16714,15 @@ def render_reference_media_editor_shell(
             display:none !important;
         }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content {
-            width:100% !important;
-            max-width:var(--es-shell-content-width) !important;
+            box-sizing:border-box !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
-            padding:var(--es-shell-frame-padding) !important;
-            margin:0 auto !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            min-height:0 !important;
+            padding:0 !important;
+            margin:0 !important;
             overflow:hidden !important;
         }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell,
@@ -16719,10 +16731,14 @@ def render_reference_media_editor_shell(
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div,
         body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe),
         body:has(#media-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div {
-            width:100% !important;
-            max-width:100% !important;
+            box-sizing:border-box !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
-            margin:0 auto !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            min-height:0 !important;
+            margin:0 !important;
             padding:0 !important;
             left:auto !important;
             right:auto !important;
@@ -16742,6 +16758,15 @@ def render_reference_media_editor_shell(
             border:0 !important;
             border-radius:0 !important;
         }
+        body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell {
+            position:fixed !important;
+            inset:0 !important;
+            display:grid !important;
+            grid-template-rows:minmax(0, 1fr) !important;
+            grid-template-columns:minmax(0, 1fr) !important;
+            background:#080a12 !important;
+            z-index:10 !important;
+        }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {
             gap:0 !important;
         }
@@ -16757,16 +16782,16 @@ def render_reference_media_editor_shell(
             width:100% !important;
             max-width:100% !important;
             min-width:0 !important;
-            height:calc(100dvh - 12px) !important;
-            max-height:calc(100dvh - 12px) !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            min-height:100dvh !important;
             display:block !important;
             border:0 !important;
         }
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_shell,
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content,
         body:has(#media-editor-page-marker) .st-key-errorsweep_editor_frame {
-            overflow-y:auto !important;
-            scrollbar-gutter:stable both-edges !important;
+            overflow:hidden !important;
         }
         #media-editor-page-marker,
         .media-editor-page {
@@ -16776,7 +16801,7 @@ def render_reference_media_editor_shell(
         """,
         unsafe_allow_html=True,
     )
-    components.html(html, height=900, scrolling=False)
+    components.html(html, height=1, scrolling=False)
 
 
 def render_external_editor_router() -> bool:
