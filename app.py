@@ -21984,50 +21984,59 @@ def render_subtitle_transcription_setup() -> None:
         """
         <section class="es-media-command-header">
           <div>
-            <div class="es-media-command-kicker">Media Localization Studio</div>
-            <h1>Prepare a subtitle or transcript job</h1>
-            <p>Attach media, choose the workflow, and open the focused CAT-style editor.</p>
+            <div class="es-media-command-kicker">Media Studio</div>
+            <h1>Create a media workspace</h1>
+            <p>Prepare subtitle or transcription jobs from uploaded media or a validated direct file URL.</p>
           </div>
           <div class="es-media-command-meta">
             <span>Editor mode</span>
-            <strong>External workspace</strong>
+            <strong>Separate workspace</strong>
+            <em>opens after setup</em>
           </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
 
-    setup_col, source_col = st.columns([0.42, 0.58], gap="large")
+    setup_col, source_col = st.columns([0.46, 0.54], gap="large")
     with setup_col:
-        st.markdown('<div class="es-media-field-title">Workflow</div><div class="es-media-field-help">Select the editor job type.</div>', unsafe_allow_html=True)
-        workflow = st.radio(
-            "Editor workflow",
-            ["Subtitling", "Transcription"],
-            horizontal=True,
-            key="subtitle_workflow_picker",
-            label_visibility="collapsed",
-        )
+        with st.container(key="media_workflow_card"):
+            st.markdown(
+                '<div class="es-media-field-title">Workflow</div><div class="es-media-field-help">Choose the editor you want to create.</div>',
+                unsafe_allow_html=True,
+            )
+            workflow = st.radio(
+                "Editor workflow",
+                ["Subtitling", "Transcription"],
+                horizontal=True,
+                key="subtitle_workflow_picker",
+                label_visibility="collapsed",
+            )
     with source_col:
-        st.markdown('<div class="es-media-field-title">Media source</div><div class="es-media-field-help">Upload a file or fetch a direct media URL.</div>', unsafe_allow_html=True)
-        media_source_mode = st.radio(
-            "Media source",
-            ["Upload a file", "Paste a direct file URL"],
-            horizontal=True,
-            key="subtitle_media_source_mode",
-            label_visibility="collapsed",
-        )
+        with st.container(key="media_source_card"):
+            st.markdown(
+                '<div class="es-media-field-title">Media source</div><div class="es-media-field-help">Upload media or fetch one direct download link.</div>',
+                unsafe_allow_html=True,
+            )
+            media_source_mode = st.radio(
+                "Media source",
+                ["Upload a file", "Paste a direct file URL"],
+                horizontal=True,
+                key="subtitle_media_source_mode",
+                label_visibility="collapsed",
+            )
     video = None
     with st.container(key="media_source_panel"):
         if media_source_mode == "Upload a file":
             st.markdown(
-                '<div class="es-media-panel-title">Attach media</div><div class="es-media-muted">Supported media: MP4, MOV, M4V, WEBM, MP3, WAV, M4A.</div>',
+                '<div class="es-media-panel-title">Media intake</div><div class="es-media-muted">Upload one audio/video file. Supported: MP4, MOV, M4V, WEBM, MP3, WAV, M4A.</div>',
                 unsafe_allow_html=True,
             )
             video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
         else:
             st.markdown(
                 """
-                <div class="es-media-panel-title">Load media from a direct URL</div>
+                <div class="es-media-panel-title">Direct file URL</div>
                 <div class="es-media-muted">Use raw audio/video file links from cloud storage or public file servers. Share-page links from YouTube, Instagram, Facebook, Vimeo, TikTok, Google Photos, and similar platforms are blocked.</div>
                 <div class="es-media-inline-note">Google Drive: share the file with anyone who has the link, then paste the file share link. Dropbox: paste the share link; CogniSweep requests the direct-download version.</div>
                 """,
@@ -22068,10 +22077,15 @@ def render_subtitle_transcription_setup() -> None:
                     st.session_state["subtitle_url_media_record"] = {}
             st.caption(BLOCKED_PLATFORM_MESSAGE)
     user_key_available = bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
-    media_compliance_ack = st.checkbox(
-        "I confirm I have rights or client authorization to process this media, including any confidential audio or copyrighted material.",
-        key="media_compliance_ack",
-    )
+    with st.container(key="media_compliance_panel"):
+        st.markdown(
+            '<div class="es-media-panel-title">Authorization</div><div class="es-media-muted">Confirm this before creating a workspace.</div>',
+            unsafe_allow_html=True,
+        )
+        media_compliance_ack = st.checkbox(
+            "I confirm I have rights or client authorization to process this media, including any confidential audio or copyrighted material.",
+            key="media_compliance_ack",
+        )
 
     if video is not None:
         with st.container(key="media_preview_panel"):
@@ -22086,13 +22100,16 @@ def render_subtitle_transcription_setup() -> None:
             with info_col:
                 st.markdown('<div class="es-media-panel-title">Media ready</div>', unsafe_allow_html=True)
                 st.success("Video/audio loaded.")
-                st.caption(f"{getattr(video, 'name', 'media')} • {media_source_mode} • {format_media_size(getattr(video, 'size', 0))}")
+                st.caption(f"{getattr(video, 'name', 'media')} - {media_source_mode} - {format_media_size(getattr(video, 'size', 0))}")
                 if user_key_available:
                     st.caption("Transcription route: user API key available.")
                 else:
                     st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
     else:
-        st.info("Upload a video/audio file or load a direct file URL to begin.")
+        st.markdown(
+            '<div class="es-media-status-note">Upload a video/audio file or load a direct file URL to unlock workspace creation.</div>',
+            unsafe_allow_html=True,
+        )
 
     if workflow == "Subtitling":
         with st.container(key="media_subtitle_options"):
@@ -22408,44 +22425,48 @@ def page_subtitle_transcription_editor() -> None:
           font-weight: 800 !important;
         }
         body:has(#subtitle-transcription-page-marker) .block-container {
-          padding-top: 1rem !important;
+          padding-top: 0.55rem !important;
+          padding-bottom: 1.25rem !important;
         }
         .es-media-command-header {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
-          gap: 1.5rem;
-          margin: 0 0 1.25rem;
-          padding: 1.15rem 1.35rem;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 1rem;
+          margin: 0 0 0.95rem;
+          padding: 0.95rem 1.1rem;
           border: 1px solid rgba(92, 210, 255, 0.22);
-          border-radius: 10px;
-          background: linear-gradient(120deg, rgba(5, 22, 31, 0.92), rgba(25, 18, 55, 0.86));
-          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.20);
+          border-radius: 8px;
+          background: linear-gradient(120deg, rgba(5, 22, 31, 0.92), rgba(24, 18, 54, 0.84));
+          box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18);
         }
         .es-media-command-kicker {
           color: #00f5bc;
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-size: 0.76rem;
+          font-size: 0.74rem;
           font-weight: 800;
           letter-spacing: 0;
           text-transform: uppercase;
         }
         .es-media-command-header h1 {
-          margin: 0.25rem 0 0;
+          margin: 0.18rem 0 0;
           color: #f8fbff;
-          font-size: 2.05rem;
-          line-height: 1.08;
+          font-size: 1.68rem;
+          line-height: 1.12;
           letter-spacing: 0;
         }
         .es-media-command-header p,
         .es-media-muted,
         .es-media-field-help {
-          margin: 0.35rem 0 0;
+          margin: 0.28rem 0 0;
           color: #bac7dd;
         }
+        .es-media-command-header p {
+          max-width: 760px;
+        }
         .es-media-command-meta {
-          min-width: 190px;
-          padding: 0.8rem 0.95rem;
+          min-width: 172px;
+          padding: 0.72rem 0.85rem;
           border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 8px;
           background: rgba(255, 255, 255, 0.045);
@@ -22457,8 +22478,16 @@ def page_subtitle_transcription_editor() -> None:
           font-size: 0.78rem;
         }
         .es-media-command-meta strong {
+          display: block;
           color: #f8fbff;
           font-size: 1rem;
+        }
+        .es-media-command-meta em {
+          display: block;
+          margin-top: 0.12rem;
+          color: #9fb0cb;
+          font-size: 0.74rem;
+          font-style: normal;
         }
         .es-media-field-title,
         .es-media-panel-title {
@@ -22472,6 +22501,14 @@ def page_subtitle_transcription_editor() -> None:
           margin-bottom: 0.3rem;
           font-size: 1.02rem;
         }
+        body:has(#subtitle-transcription-page-marker) .st-key-media_workflow_card,
+        body:has(#subtitle-transcription-page-marker) .st-key-media_source_card {
+          min-height: 120px;
+          padding: 0.9rem 1rem;
+          border: 1px solid rgba(127, 148, 190, 0.22);
+          border-radius: 8px;
+          background: linear-gradient(180deg, rgba(21, 19, 49, 0.82), rgba(11, 10, 28, 0.76));
+        }
         .es-media-inline-note {
           margin: 0.65rem 0 0.85rem;
           padding: 0.65rem 0.75rem;
@@ -22484,19 +22521,40 @@ def page_subtitle_transcription_editor() -> None:
         body:has(#subtitle-transcription-page-marker) .st-key-media_preview_panel,
         body:has(#subtitle-transcription-page-marker) .st-key-media_subtitle_options,
         body:has(#subtitle-transcription-page-marker) .st-key-media_transcription_options {
-          margin-top: 1rem;
-          padding: 1rem;
+          margin-top: 0.85rem;
+          padding: 0.95rem;
           border: 1px solid rgba(127, 148, 190, 0.24);
-          border-radius: 10px;
-          background: rgba(11, 10, 28, 0.72);
+          border-radius: 8px;
+          background: rgba(11, 10, 28, 0.74);
+        }
+        body:has(#subtitle-transcription-page-marker) .st-key-media_compliance_panel {
+          margin-top: 0.75rem;
+          padding: 0.85rem 0.95rem;
+          border: 1px solid rgba(0, 245, 188, 0.18);
+          border-radius: 8px;
+          background: rgba(0, 245, 188, 0.055);
+        }
+        body:has(#subtitle-transcription-page-marker) .st-key-media_source_panel [data-testid="stFileUploader"] section {
+          border-color: rgba(127, 148, 190, 0.18) !important;
+          border-radius: 8px !important;
+          background: rgba(31, 26, 65, 0.48) !important;
+        }
+        .es-media-status-note {
+          margin: 0.85rem 0 0;
+          padding: 0.85rem 1rem;
+          border: 1px solid rgba(92, 136, 255, 0.28);
+          border-radius: 8px;
+          background: rgba(54, 86, 168, 0.18);
+          color: #7dabff;
+          font-weight: 750;
         }
         body:has(#subtitle-transcription-page-marker) .stRadio {
           margin-bottom: 0.25rem !important;
         }
         @media (max-width: 900px) {
           .es-media-command-header {
+            grid-template-columns: minmax(0, 1fr);
             align-items: flex-start;
-            flex-direction: column;
           }
           .es-media-command-meta {
             min-width: 0;

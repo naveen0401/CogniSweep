@@ -57,6 +57,25 @@ def test_legacy_subtitle_workspace_routes_redirect_to_external_setup():
     assert "in-page transcription workspace has been retired" in transcription
 
 
+def test_media_studio_setup_uses_compact_professional_shell():
+    text = source(APP)
+    setup = function_body(text, "render_subtitle_transcription_setup", "render_focused_subtitle_workspace")
+    page = function_body(text, "page_subtitle_transcription_editor", "page_human_review")
+
+    assert "Create a media workspace" in setup
+    assert "Prepare a subtitle or transcript job" not in setup
+    assert "Separate workspace" in setup
+    assert "External workspace" not in setup
+    assert 'st.container(key="media_workflow_card")' in setup
+    assert 'st.container(key="media_source_card")' in setup
+    assert 'st.container(key="media_compliance_panel")' in setup
+    assert "Media intake" in setup
+    assert "es-media-status-note" in setup
+    assert ".st-key-media_workflow_card" in page
+    assert ".st-key-media_source_card" in page
+    assert ".st-key-media_compliance_panel" in page
+
+
 def test_subtitle_external_editor_regression_is_in_release_gate():
     assert "python test_subtitle_external_editor_only.py" in source(WORKFLOW)
     assert "python test_subtitle_external_editor_only.py" in source(RELEASE_CHECK)
@@ -66,5 +85,6 @@ if __name__ == "__main__":
     test_subtitle_creation_only_launches_external_media_editor()
     test_subtitle_page_no_longer_auto_renders_legacy_workspace()
     test_legacy_subtitle_workspace_routes_redirect_to_external_setup()
+    test_media_studio_setup_uses_compact_professional_shell()
     test_subtitle_external_editor_regression_is_in_release_gate()
     print("Subtitle external editor-only checks passed.")
