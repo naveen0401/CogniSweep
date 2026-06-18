@@ -196,7 +196,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-18-editor-auth-v12"
+DEPLOY_BUILD_ID = "cloud-canary-2026-06-18-local-time-v13"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -210,6 +210,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "pre_render_login_submit_callback",
     "server_side_editor_launch_token",
     "direct_file_url_media_source",
+    "browser_timezone_local_time_display",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -7631,6 +7632,47 @@ def sync_browser_timezone() -> None:
     )
 
 
+def install_local_time_render_bridge() -> None:
+    """Format marked UTC timestamps in the browser's local timezone."""
+    render_parent_script(
+        """
+        (() => {
+          const formatLocalTime = (isoValue) => {
+            const date = new Date(isoValue);
+            if (Number.isNaN(date.getTime())) return "";
+            const formatter = new Intl.DateTimeFormat(undefined, {
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+              timeZoneName: "short"
+            });
+            const parts = {};
+            formatter.formatToParts(date).forEach((part) => {
+              if (part.type !== "literal") parts[part.type] = part.value;
+            });
+            const zone = parts.timeZoneName || "";
+            return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.dayPeriod || ""} ${zone}`.trim();
+          };
+          const render = () => {
+            document.querySelectorAll("time[data-es-local-time]").forEach((node) => {
+              const isoValue = node.getAttribute("datetime") || node.getAttribute("data-utc") || "";
+              const formatted = formatLocalTime(isoValue);
+              if (formatted) node.textContent = formatted;
+            });
+          };
+          render();
+          if (!window.__cognisweepLocalTimeObserver) {
+            window.__cognisweepLocalTimeObserver = new MutationObserver(render);
+            window.__cognisweepLocalTimeObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+          }
+        })();
+        """
+    )
+
+
 def is_human_review_editor_page(page: str) -> bool:
     normalized_page = normalize_es_page(page)
     return normalized_page == "Human Review Editor" or safe_text(page).strip() in HUMAN_REVIEW_EDITOR_PAGES
@@ -8491,13 +8533,28 @@ def format_local_time(value: Any) -> str:
     return f"{local_dt.strftime('%Y-%m-%d %I:%M %p')} {zone}".strip()
 
 
+def utc_iso_for_time(value: Any) -> str:
+    dt = parse_datetime_value(value, naive_tz=timezone.utc)
+    if dt is None:
+        return ""
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def local_time_html(value: Any) -> str:
+    fallback = format_local_time(value)
+    iso_value = utc_iso_for_time(value)
+    if not iso_value:
+        return escape(fallback)
+    return f'<time data-es-local-time datetime="{escape(iso_value, quote=True)}">{escape(fallback)}</time>'
+
+
 def display_records(records: List[Dict[str, Any]], time_columns: Optional[set] = None) -> List[Dict[str, Any]]:
     cols = time_columns or TIME_DISPLAY_COLUMNS
     output = []
     for record in records or []:
         item = dict(record)
         for key in list(item.keys()):
-            if key in cols or key.endswith("_at"):
+            if key in cols or key.lower() in cols or key.endswith("_at"):
                 item[key] = format_local_time(item.get(key))
         output.append(item)
     return output
@@ -15808,7 +15865,7 @@ def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_nam
     ws_summary["A1"].fill = PatternFill("solid", fgColor=dark)
     ws_summary["A1"].alignment = Alignment(horizontal="center")
     summary_rows = [
-        ("Generated", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        ("Generated", format_local_time(now_stamp())),
         ("File", safe_text(file_name) or "media_editor"),
         ("Rows", len(rows or [])),
         ("Confirmed", f"{confirmed} / {len(rows or [])}"),
@@ -18113,7 +18170,7 @@ def render_row_comments(row: Dict[str, Any], key_prefix: str) -> bool:
         for comment in comments[-5:]:
             mention_text = f" Mentions: {comment['mentions']}" if comment.get("mentions") else ""
             st.markdown(
-                f'<div class="es-cat-mini-row"><b>{escape(comment["author"])}</b><br>{escape(comment["body"])}<br><span class="es-small">{escape(comment["created_at"])}{escape(mention_text)}</span></div>',
+                f'<div class="es-cat-mini-row"><b>{escape(comment["author"])}</b><br>{escape(comment["body"])}<br><span class="es-small">{escape(format_local_time(comment.get("created_at")))}{escape(mention_text)}</span></div>',
                 unsafe_allow_html=True,
             )
     else:
@@ -18965,7 +19022,7 @@ def create_qa_excel_report(segment_rows: List[Dict[str, Any]], detailed_findings
     ws_summary["A1"].fill = PatternFill("solid", fgColor=dark)
     ws_summary["A1"].alignment = Alignment(horizontal="center")
     summary_rows = [
-        ("Generated", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        ("Generated", format_local_time(now_stamp())),
         ("Result", summary["result"]),
         ("QA Score", summary["qa_score"]),
         ("Total Segments", summary["total_segments"]),
@@ -21232,12 +21289,13 @@ def job_history_status_class(status: Any) -> str:
     return "neutral"
 
 
-def job_history_detail_item(label: str, value: Any) -> str:
+def job_history_detail_item(label: str, value: Any, *, value_html: str = "") -> str:
     display_value = safe_text(value) or "-"
+    rendered_value = value_html or escape(display_value)
     return (
         "<div>"
         f"<dt>{escape(label)}</dt>"
-        f"<dd>{escape(display_value)}</dd>"
+        f"<dd>{rendered_value}</dd>"
         "</div>"
     )
 
@@ -21255,13 +21313,14 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
         language = safe_text(row.get("language")) or "-"
         status = safe_text(row.get("status")) or "Status unknown"
         status_class = job_history_status_class(status)
-        updated_at = format_local_time(row.get("updated_at") or row.get("created"))
+        updated_value = row.get("updated_at") or row.get("created")
+        updated_at = format_local_time(updated_value)
         details = [
             job_history_detail_item("File", file_name),
             job_history_detail_item("Language", language),
             job_history_detail_item("Segments", int(row.get("segments") or 0)),
             job_history_detail_item("Assignee", safe_text(row.get("assignee")) or "-"),
-            job_history_detail_item("Updated", updated_at),
+            job_history_detail_item("Updated", updated_at, value_html=local_time_html(updated_value)),
             job_history_detail_item("Workspace", safe_text(row.get("workspace")) or safe_text(row.get("project")) or "-"),
         ]
         if editor_url:
@@ -26370,6 +26429,7 @@ if __name__ == "__main__":
     render_deploy_debug_page()
     render_global_logout_listener()
     sync_browser_timezone()
+    install_local_time_render_bridge()
 
     if query_get("es_logout") == "1":
         logout()
