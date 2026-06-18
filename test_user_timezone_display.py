@@ -20,6 +20,10 @@ def test_browser_timezone_is_synced_before_routing() -> None:
     assert "def install_local_time_render_bridge() -> None:" in source
     assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in source
     assert 'time[data-es-local-time]' in source
+    assert 'bridgeVersion = "local-time-v2"' in source
+    assert 'disconnect()' in source
+    assert 'data-es-local-rendered' in source
+    assert 'MutationObserver(scheduleRender)' in source
     main_start = source.index('if __name__ == "__main__":')
     main_body = source[main_start : source.index("if query_get(\"es_logout\")", main_start)]
     assert "sync_browser_timezone()" in main_body

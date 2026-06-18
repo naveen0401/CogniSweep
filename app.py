@@ -7637,6 +7637,12 @@ def install_local_time_render_bridge() -> None:
     render_parent_script(
         """
         (() => {
+          const bridgeVersion = "local-time-v2";
+          if (window.__cognisweepLocalTimeObserver && window.__cognisweepLocalTimeObserverVersion !== bridgeVersion) {
+            try { window.__cognisweepLocalTimeObserver.disconnect(); } catch (err) {}
+            window.__cognisweepLocalTimeObserver = null;
+          }
+          window.__cognisweepLocalTimeObserverVersion = bridgeVersion;
           const formatLocalTime = (isoValue) => {
             const date = new Date(isoValue);
             if (Number.isNaN(date.getTime())) return "";
@@ -7660,12 +7666,24 @@ def install_local_time_render_bridge() -> None:
             document.querySelectorAll("time[data-es-local-time]").forEach((node) => {
               const isoValue = node.getAttribute("datetime") || node.getAttribute("data-utc") || "";
               const formatted = formatLocalTime(isoValue);
-              if (formatted) node.textContent = formatted;
+              if (!formatted) return;
+              if (node.getAttribute("data-es-local-rendered") === formatted && node.textContent === formatted) return;
+              node.setAttribute("data-es-local-rendered", formatted);
+              if (node.textContent !== formatted) node.textContent = formatted;
+            });
+          };
+          let renderQueued = false;
+          const scheduleRender = () => {
+            if (renderQueued) return;
+            renderQueued = true;
+            window.requestAnimationFrame(() => {
+              renderQueued = false;
+              render();
             });
           };
           render();
           if (!window.__cognisweepLocalTimeObserver) {
-            window.__cognisweepLocalTimeObserver = new MutationObserver(render);
+            window.__cognisweepLocalTimeObserver = new MutationObserver(scheduleRender);
             window.__cognisweepLocalTimeObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
           }
         })();
