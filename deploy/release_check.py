@@ -221,6 +221,7 @@ PYTHON_ENTRYPOINTS = [
     "operational_backup_worker.py",
     "cloud_object_storage.py",
     "production_persistence.py",
+    "url_media_fetcher.py",
     "local_file_lock.py",
 ]
 
@@ -732,6 +733,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_persistence_cache_hardening.py",
         "python test_qa_correction_cache.py",
         "python test_subtitle_external_editor_only.py",
+        "python test_url_media_fetcher.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",

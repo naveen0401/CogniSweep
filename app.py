@@ -89,6 +89,14 @@ from pro_reconstruction import (
 
 from media_timing_tools import adjust_media_segment_timing, media_timing_summary
 
+from url_media_fetcher import (
+    BLOCKED_PLATFORM_MESSAGE,
+    DirectMediaUrlError,
+    cleanup_fetched_media_record,
+    fetch_media_url_to_temp,
+    fetched_media_from_record,
+)
+
 
 
 from openpyxl import load_workbook, Workbook
@@ -201,6 +209,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "full_width_global_app_shell",
     "pre_render_login_submit_callback",
     "server_side_editor_launch_token",
+    "direct_file_url_media_source",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 # Persistent browser sessions should survive reloads and browser restarts until
@@ -220,6 +229,7 @@ OFFICE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_FILES", "1500"))
 OFFICE_ZIP_MAX_EXPANDED_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_EXPANDED_BYTES", str(120 * 1024 * 1024)))
 OFFICE_XML_MEMBER_MAX_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_XML_MEMBER_MAX_BYTES", str(20 * 1024 * 1024)))
 MEDIA_PREVIEW_TTL_SECONDS = int(os.getenv("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
+MEDIA_URL_MAX_BYTES = int(os.getenv("ERRORSWEEP_MEDIA_URL_MAX_BYTES", str(200 * 1024 * 1024)))
 RETENTION_POLICY_DEFAULTS = {
     "expired_auth_token_grace_days": 0,
     "expired_file_manifest_grace_days": 7,
@@ -15780,6 +15790,17 @@ def render_media_preview(media_source: Optional[Any], mime: str, name: str = "")
         st.video(media_source, format=mime)
 
 
+def format_media_size(size_bytes: int) -> str:
+    size = float(max(0, int(size_bytes or 0)))
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "bytes":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video_file=None, target_language: str = "") -> str:
     """Save subtitle/transcription rows as an external media editor job.
 
@@ -21441,14 +21462,65 @@ def render_subtitle_transcription_setup() -> None:
     st.caption("Create a dedicated editor workspace. Subtitling can use a source script. Transcription auto-generation is available only when the user provides an API key.")
 
     workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True, key="subtitle_workflow_picker")
-    video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
+    media_source_mode = st.radio(
+        "Media source",
+        ["Upload a file", "Paste a direct file URL"],
+        horizontal=True,
+        key="subtitle_media_source_mode",
+    )
+    video = None
+    if media_source_mode == "Upload a file":
+        video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
+    else:
+        st.caption(
+            "Use only direct audio/video file links from cloud storage or public file servers. "
+            "YouTube, Instagram, Facebook, Vimeo, TikTok, and similar platform links are not supported."
+        )
+        st.caption(
+            "Google Drive: share the file with anyone who has the link, then paste the share link here. "
+            "Dropbox: paste the share link; CogniSweep will request the direct-download version."
+        )
+        direct_media_url = st.text_input(
+            "Paste a direct file URL",
+            placeholder="https://example.com/client-video.mp4",
+            key="subtitle_direct_media_url",
+        )
+        stored_url_record = st.session_state.get("subtitle_url_media_record", {})
+        if stored_url_record and direct_media_url and safe_text(stored_url_record.get("source_url")) != safe_text(direct_media_url):
+            cleanup_fetched_media_record(stored_url_record)
+            st.session_state["subtitle_url_media_record"] = {}
+            stored_url_record = {}
+        if st.button("Load direct file URL", use_container_width=True, disabled=not safe_text(direct_media_url)):
+            cleanup_fetched_media_record(st.session_state.get("subtitle_url_media_record", {}))
+            st.session_state["subtitle_url_media_record"] = {}
+            try:
+                with st.spinner("Checking and downloading direct media URL..."):
+                    stored_url_record = fetch_media_url_to_temp(
+                        direct_media_url,
+                        max_bytes=MEDIA_URL_MAX_BYTES,
+                        temp_dir=media_preview_root(),
+                    )
+                st.session_state["subtitle_url_media_record"] = stored_url_record
+                st.success(f"Direct media file loaded: {stored_url_record.get('name', 'media')} ({format_media_size(stored_url_record.get('size', 0))}).")
+            except DirectMediaUrlError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                LOGGER.warning("Direct media URL fetch failed: %s", exc)
+                st.error("Unable to download this direct media URL. Please check the link or upload the file directly.")
+        stored_url_record = st.session_state.get("subtitle_url_media_record", {})
+        if stored_url_record:
+            video = fetched_media_from_record(stored_url_record)
+            if video is None:
+                st.warning("The downloaded media file is no longer available. Please load the direct file URL again.")
+                st.session_state["subtitle_url_media_record"] = {}
+        st.caption(BLOCKED_PLATFORM_MESSAGE)
     user_key_available = bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
     media_compliance_ack = st.checkbox(
         "I confirm I have rights or client authorization to process this media, including any confidential audio or copyrighted material.",
         key="media_compliance_ack",
     )
 
-    if video:
+    if video is not None:
         preview_col, info_col = st.columns([0.45, 0.55], gap="large")
         with preview_col:
             preview_key = hashlib.sha256(
@@ -21460,12 +21532,13 @@ def render_subtitle_transcription_setup() -> None:
         with info_col:
             st.success("Video/audio loaded.")
             st.caption("The editor will open as a dedicated workspace page, separate from this setup screen.")
+            st.caption(f"Media source: {media_source_mode}. Size: {format_media_size(getattr(video, 'size', 0))}.")
             if user_key_available:
                 st.caption("Transcription route: user API key available.")
             else:
                 st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
     else:
-        st.info("Upload a video/audio file to begin.")
+        st.info("Upload a video/audio file or load a direct file URL to begin.")
 
     if workflow == "Subtitling":
         source_file = st.file_uploader(
@@ -21542,6 +21615,12 @@ def render_subtitle_transcription_setup() -> None:
                 st.info("Draft target subtitles were skipped because there is no source text yet. Fill source rows manually, then translate/review later.")
 
             job_id = save_media_session_to_store("Subtitling", rows, video_file=video, target_language=subtitle_target_language)
+            if media_source_mode == "Paste a direct file URL":
+                close_media = getattr(video, "close", None)
+                if callable(close_media):
+                    close_media()
+                cleanup_fetched_media_record(st.session_state.get("subtitle_url_media_record", {}))
+                st.session_state["subtitle_url_media_record"] = {}
             st.session_state.subtitle_editor_active = False
             st.session_state.subtitle_segments = []
             st.success("Subtitling editor job created. Open it in the separate editor window below.")
@@ -21572,6 +21651,12 @@ def render_subtitle_transcription_setup() -> None:
             if not rows:
                 rows = default_subtitle_segments(int(starter_count), transcription=True)
             job_id = save_media_session_to_store("Transcription", rows, video_file=video, target_language="")
+            if media_source_mode == "Paste a direct file URL":
+                close_media = getattr(video, "close", None)
+                if callable(close_media):
+                    close_media()
+                cleanup_fetched_media_record(st.session_state.get("subtitle_url_media_record", {}))
+                st.session_state["subtitle_url_media_record"] = {}
             st.session_state.subtitle_editor_active = False
             st.session_state.subtitle_segments = []
             st.success("Transcription editor job created. Open it in the separate editor window below.")

@@ -134,7 +134,8 @@ def test_navigation_uses_central_route_helpers() -> None:
     assert "data-es-app-nav" in source
     assert "data-es-app-href" in source
     assert "window.__errorsweepAppNavigate" in source
-    assert "parentWin.eval(runtime)" in source
+    assert "script.textContent = runtime" in source
+    assert "parentWin.eval(runtime)" not in source
     assert "__errorsweepAppNavParentRuntime" in source
     assert '<button type="button" class="es-topnav-link{active}"' in body
     assert "render_native_navigation_bridge" not in source
@@ -481,7 +482,8 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'const maxResumeAttempts = 2;' in source
     assert 'storageKey + "_public_resume_attempts"' in source
     assert "revealPublicAuthPage();" in source
-    assert "parentWin.eval(runtime)" in source
+    assert "script.textContent = runtime" in source
+    assert "parentWin.eval(runtime)" not in source
     assert "query_clear(\"es_restore\")" in source
     assert "window.parent.document" in source
 
@@ -1017,7 +1019,8 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert ".st-key-topnav_app_nav_targets" in source
     assert ".st-key-dashboard_app_nav_targets" in source
     assert "def render_app_navigation_bridge()" in source
-    assert "parentWin.eval(runtime)" in source
+    assert "script.textContent = runtime" in source
+    assert "parentWin.eval(runtime)" not in source
     assert "window.__errorsweepAppNavParentRuntime = true" in source
     assert "window.history.pushState" not in source
     assert "window.addEventListener(\"popstate\", handlePopState)" in source
