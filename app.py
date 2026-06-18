@@ -16714,6 +16714,14 @@ def render_reference_cat_editor_shell(
     qa_by_idx = qa_by_idx or {}
 
     html = reference_path.read_text(encoding="utf-8")
+    logo_data_uri = brand_logo_asset_data_uri()
+    if logo_data_uri:
+        html = html.replace(
+            '<div class="logo">ES</div>',
+            f'<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>',
+            1,
+        )
+    html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(app_page_link("CogniSweep Pro")))
     component_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(editor_rows):
         findings = qa_by_idx.get(idx, [])
@@ -17187,6 +17195,7 @@ def render_reference_media_editor_shell(
     payload = {
         "job_id": safe_text(job_id),
         "file_slug": file_slug,
+        "back_url": app_page_link("Subtitle / Transcription Editor"),
         "metadata": {
             "title": safe_text(metadata.get("title") or "CogniSweep Media Editor") or "CogniSweep Media Editor",
             "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
@@ -17200,6 +17209,13 @@ def render_reference_media_editor_shell(
     }
 
     html = reference_path.read_text(encoding="utf-8")
+    logo_data_uri = brand_logo_asset_data_uri()
+    if logo_data_uri:
+        html = html.replace(
+            '<div class="logo">ES</div>',
+            f'<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>',
+            1,
+        )
     html = html.replace("__MEDIA_EDITOR_PAYLOAD__", json.dumps(payload, ensure_ascii=False))
 
     st.markdown(

@@ -74,8 +74,17 @@
       border-radius: 12px;
       font-weight: 900;
       color: #090b12;
-      background: linear-gradient(135deg, var(--mint), var(--cyan), var(--violet));
+      background: #fffdf7;
+      border: 1px solid rgba(148, 163, 184, .28);
+      overflow: hidden;
+      padding: 3px;
       flex: 0 0 auto;
+    }
+    .logo img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
     }
     .title-block { min-width: 0; }
     .title {
@@ -1814,7 +1823,21 @@
       el("exportCsvBtn").addEventListener("click", exportCsv);
       el("exportSrtBtn").addEventListener("click", exportSrt);
       el("backBtn").addEventListener("click", () => {
-        window.parent.location.href = "?es_page=Subtitle%20/%20Transcription%20Editor";
+        const target = safe(payload.back_url) || "?es_page=Subtitle+%2F+Transcription+Editor&es_app_nav=1";
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = target;
+          anchor.target = "_top";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+        } catch (error) {
+          try {
+            window.top.location.assign(target);
+          } catch (fallbackError) {
+            window.location.assign(target);
+          }
+        }
       });
       window.addEventListener("beforeunload", () => saveCurrentDraft("draft"));
     }

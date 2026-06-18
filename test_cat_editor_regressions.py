@@ -243,6 +243,19 @@ def test_human_review_editor_uses_es_page_review_id_route() -> None:
     assert "render_editor_open_link(\"Open Human Review Editor\"" in source
 
 
+def test_cat_editor_uses_real_logo_and_route_back_button() -> None:
+    source = read_app()
+    html = Path("assets/cat_editor_reference.html").read_text(encoding="utf-8")
+    body = active_cat_editor_body(source)
+
+    assert ".logo img" in html
+    assert 'class="btn btn-ghost back-btn"' in html
+    assert "const backUrl = __CAT_EDITOR_BACK_URL__;" in html
+    assert "anchor.target = '_top'" in html
+    assert "html = html.replace(\"__CAT_EDITOR_BACK_URL__\", json.dumps(app_page_link(\"CogniSweep Pro\")))" in body
+    assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in body
+
+
 def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     source = read_app()
     assert "def public_login_link_target() -> str" in source

@@ -82,7 +82,16 @@
       border-radius: 12px;
       font-weight: 900;
       color: #090b12;
-      background: linear-gradient(135deg, var(--mint), var(--cyan), var(--violet));
+      background: #fffdf7;
+      border: 1px solid rgba(148, 163, 184, .28);
+      overflow: hidden;
+      padding: 3px;
+    }
+    .logo img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
     }
     .title-block { min-width: 0; }
     .title {
@@ -115,6 +124,7 @@
       white-space: nowrap;
     }
     .btn:hover { filter: brightness(1.08); }
+    .btn-ghost { background: transparent; }
     .btn-primary { border-color: var(--cyan); background: var(--cyan); color: #07111f; }
     .btn-mint { border-color: var(--mint); background: var(--mint); color: #07111f; }
     .export-btn {
@@ -592,6 +602,7 @@
         </div>
       </div>
       <div class="header-actions">
+        <button class="btn btn-ghost back-btn" type="button">Back</button>
         <button class="btn btn-primary submit-btn" disabled>Submit</button>
         <button class="btn export-btn">Export</button>
         <span class="pill">Reviewer</span>
@@ -739,6 +750,7 @@
     const uploadedContext = { fileName: '', text: '', error: '' };
     const exportAsset = {};
     const languageResources = { glossary: [], dnt: [], tm: [] };
+    const backUrl = __CAT_EDITOR_BACK_URL__;
 
     const tbody = document.getElementById('segmentRows');
     const sourceSearchInput = document.querySelector('.source-search');
@@ -756,6 +768,7 @@
     const filterOptionInputs = Array.from(document.querySelectorAll('.filter-option'));
     const submitButton = document.querySelector('.submit-btn');
     const exportButton = document.querySelector('.export-btn');
+    const backButton = document.querySelector('.back-btn');
     const confirmAllCheck = document.getElementById('confirmAll');
     const tinyButtons = Array.from(document.querySelectorAll('.tiny-btn'));
     const originalRows = rows.map(row => ({ ...row }));
@@ -2574,6 +2587,25 @@
 
     submitButton.addEventListener('click', submitPage);
     exportButton.addEventListener('click', exportTranslationPackage);
+    if (backButton) {
+      backButton.addEventListener('click', () => {
+        const target = backUrl || '?es_page=CogniSweep+Pro&es_app_nav=1';
+        try {
+          const anchor = document.createElement('a');
+          anchor.href = target;
+          anchor.target = '_top';
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+        } catch (error) {
+          try {
+            window.top.location.assign(target);
+          } catch (fallbackError) {
+            window.location.assign(target);
+          }
+        }
+      });
+    }
 
     tinyButtons.forEach(button => {
       if (button.innerText.trim() === 'New Window') {
