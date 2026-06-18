@@ -402,9 +402,11 @@ AUTH_STATE_AUTHENTICATED = "authenticated"
 AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
+BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
+BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
 ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM)
-SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")
+SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")
 SESSION_COOKIE_MAX_BYTES = 3800
 LANGUAGE_CATALOG = [
     "English",
@@ -7587,6 +7589,48 @@ def render_route_restore_bridge() -> None:
     )
 
 
+def sync_browser_timezone() -> None:
+    """Expose the browser timezone to Streamlit so UI timestamps are viewer-local."""
+    timezone_param_json = json.dumps(BROWSER_TIMEZONE_QUERY_PARAM)
+    storage_key_json = json.dumps(BROWSER_TIMEZONE_STORAGE_KEY)
+    render_parent_script(
+        f"""
+        (() => {{
+          const timezoneParam = {timezone_param_json};
+          const storageKey = {storage_key_json};
+          let browserTimezone = "";
+          try {{
+            browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+          }} catch (err) {{}}
+          if (!browserTimezone || !/^[A-Za-z0-9_+\\-/]+$/.test(browserTimezone)) return;
+          try {{
+            window.localStorage.setItem(storageKey, browserTimezone);
+          }} catch (err) {{}}
+          let url;
+          try {{
+            url = new URL(window.location.href);
+          }} catch (err) {{
+            return;
+          }}
+          if (url.searchParams.get(timezoneParam) === browserTimezone) return;
+          url.searchParams.set(timezoneParam, browserTimezone);
+          const nextUrl = url.toString();
+          try {{
+            window.history.replaceState({{}}, "", nextUrl);
+          }} catch (err) {{}}
+          try {{
+            const reloadKey = storageKey + ":last_sync";
+            const lastSync = window.sessionStorage.getItem(reloadKey) || "";
+            if (lastSync !== browserTimezone) {{
+              window.sessionStorage.setItem(reloadKey, browserTimezone);
+              window.location.replace(nextUrl);
+            }}
+          }} catch (err) {{}}
+        }})();
+        """
+    )
+
+
 def is_human_review_editor_page(page: str) -> bool:
     normalized_page = normalize_es_page(page)
     return normalized_page == "Human Review Editor" or safe_text(page).strip() in HUMAN_REVIEW_EDITOR_PAGES
@@ -8347,42 +8391,99 @@ def render_navigation() -> None:
 # ==========================================================
 
 def now_stamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def timezone_from_name(value: Any) -> Optional[ZoneInfo]:
+    name = safe_text(value)
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except Exception as exc:
+        LOGGER.debug("Invalid timezone %s: %s", name, exc)
+        return None
+
+
+def user_timezone_name() -> str:
+    user = current_user() or {}
+    return safe_text(user.get("timezone"))
+
+
+def browser_timezone_name() -> str:
+    query_timezone = safe_text(query_get(BROWSER_TIMEZONE_QUERY_PARAM))
+    if query_timezone and timezone_from_name(query_timezone):
+        st.session_state["browser_timezone"] = query_timezone
+        return query_timezone
+    session_timezone = safe_text(st.session_state.get("browser_timezone"))
+    if session_timezone and timezone_from_name(session_timezone):
+        return session_timezone
+    try:
+        context_timezone = safe_text(getattr(st.context, "timezone", None))
+        if context_timezone and timezone_from_name(context_timezone):
+            st.session_state["browser_timezone"] = context_timezone
+            return context_timezone
+    except Exception as exc:
+        LOGGER.debug("Browser timezone unavailable: %s", exc)
+    return ""
 
 
 def local_timezone() -> timezone:
+    """Return the viewer's timezone, preferring browser/user settings over server time."""
     configured = secret("ERRORSWEEP_DISPLAY_TIMEZONE", secret("TZ", "")).strip()
-    if configured:
-        try:
-            return ZoneInfo(configured)
-        except Exception as exc:
-            LOGGER.warning("Invalid display timezone %s: %s", configured, exc)
-    try:
-        browser_timezone = getattr(st.context, "timezone", None)
-        if browser_timezone:
-            return ZoneInfo(str(browser_timezone))
-    except Exception as exc:
-        LOGGER.debug("Browser timezone unavailable: %s", exc)
+    for candidate in (browser_timezone_name(), user_timezone_name(), configured):
+        tz = timezone_from_name(candidate)
+        if tz:
+            return tz
     return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def parse_datetime_value(value: Any, *, naive_tz: timezone = timezone.utc) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            if float(value) > 1_000_000_000:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except Exception:
+            return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        numeric = None
+    if numeric and numeric > 1_000_000_000:
+        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+    parse_raw = raw
+    explicit_utc = False
+    if parse_raw.upper().endswith(" UTC"):
+        parse_raw = parse_raw[:-4].strip()
+        explicit_utc = True
+    try:
+        dt = datetime.fromisoformat(parse_raw.replace("Z", "+00:00"))
+    except ValueError:
+        dt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(parse_raw, fmt)
+                break
+            except ValueError:
+                continue
+        if dt is None:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc if explicit_utc else naive_tz)
+    return dt
 
 
 def format_local_time(value: Any) -> str:
     if value in (None, ""):
         return ""
-    if isinstance(value, (int, float)) and value > 1_000_000_000:
-        dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
-    else:
-        raw = str(value).strip()
-        if not raw:
-            return ""
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", raw):
-            return raw
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return raw
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=local_timezone())
+    dt = parse_datetime_value(value, naive_tz=timezone.utc)
+    if dt is None:
+        return safe_text(value)
     local_dt = dt.astimezone(local_timezone())
     zone = local_dt.tzname() or ""
     if " " in zone:
@@ -10751,18 +10852,9 @@ RETENTION_COLLECTION_LABELS = {
 
 
 def parse_record_datetime(value: Any) -> Optional[datetime]:
-    raw = safe_text(value)
-    if not raw:
+    dt = parse_datetime_value(value, naive_tz=timezone.utc)
+    if dt is None:
         return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
-        try:
-            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
-        except Exception:
-            return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
@@ -20574,13 +20666,15 @@ def page_dashboard() -> None:
     pro_translation_attr = dashboard_nav_attr("CogniSweep Pro", "Run Translation")
     rules_attr = dashboard_nav_attr("Memory & Rules", "Upload Rules")
     qa_attr = dashboard_nav_attr("CogniSweep QA", "Run QA")
+    local_hour = datetime.now(local_timezone()).hour
+    greeting = "morning" if local_hour < 12 else "afternoon" if local_hour < 17 else "evening"
     st.html(
         dedent(f"""
             <section class="es-personal-hero">
               <div class="es-hero-row">
                 <div>
                   <div class="es-kicker">Workspace command center</div>
-                  <div class="es-welcome-title">Good {escape('morning' if datetime.now().hour < 12 else 'afternoon' if datetime.now().hour < 17 else 'evening')}, {escape(display_name_from_user(user))}</div>
+                  <div class="es-welcome-title">Good {escape(greeting)}, {escape(display_name_from_user(user))}</div>
                   <div class="es-hero-summary">
                     You have <b>{pending_review}</b> segment(s) waiting for review, <b>{len(attention_items)}</b> priority item(s), and <b>{active_rules}</b> saved rule asset(s) ready for QA and translation.
                   </div>
@@ -26275,6 +26369,7 @@ def render_app() -> None:
 if __name__ == "__main__":
     render_deploy_debug_page()
     render_global_logout_listener()
+    sync_browser_timezone()
 
     if query_get("es_logout") == "1":
         logout()
