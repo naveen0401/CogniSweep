@@ -117,6 +117,7 @@ REQUIRED_ENV_KEYS = [
     "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
+    "ERRORSWEEP_LANGUAGE_RESOURCE_MASTER_KEY",
     "ERRORSWEEP_OWNER_USERNAME",
     "ERRORSWEEP_OWNER_PASSWORD_HASH",
     "ERRORSWEEP_USER_USERNAME",
@@ -167,6 +168,7 @@ REQUIRED_STREAMLIT_SECRET_KEYS = [
     "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT",
     "ERRORSWEEP_PUBLIC_BASE_URL",
     "ERRORSWEEP_SESSION_SECRET",
+    "ERRORSWEEP_LANGUAGE_RESOURCE_MASTER_KEY",
     "ERRORSWEEP_OWNER_USERNAME",
     "ERRORSWEEP_OWNER_PASSWORD_HASH",
     "ERRORSWEEP_USER_USERNAME",
@@ -222,6 +224,7 @@ PYTHON_ENTRYPOINTS = [
     "cloud_object_storage.py",
     "production_persistence.py",
     "url_media_fetcher.py",
+    "language_resource_connectors.py",
     "local_file_lock.py",
 ]
 
@@ -748,6 +751,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_qa_correction_cache.py",
         "python test_subtitle_external_editor_only.py",
         "python test_url_media_fetcher.py",
+        "python test_language_resource_connectors.py",
         "python test_release_gate_workflow.py",
         "python deploy/release_check.py --strict",
         "python deploy/launch_rehearsal.py",

@@ -1039,11 +1039,18 @@
       const glossary = resourceList('glossary');
       const dnt = resourceList('dnt');
       const tm = resourceList('tm');
-      if (!glossary.length && !dnt.length && !tm.length) {
+      const status = resourceList('status');
+      if (!glossary.length && !dnt.length && !tm.length && !status.length) {
         container.innerHTML = '<p class="resource-empty">Glossary, DNT list, and translation memory resources are not available for this task.</p>';
         return;
       }
       container.innerHTML = [
+        renderResourceSection('Connection status', status, item => `
+          <li class="resource-item">
+            <span class="resource-term">${escapeHtml(item.connection || 'Language resources')}</span>
+            <span class="resource-target">${escapeHtml(item.status || '')}</span>
+          </li>
+        `),
         renderResourceSection('All Glossary', glossary, item => `
           <li class="resource-item">
             <span class="resource-term">${escapeHtml(item.source || item.source_term || item.term || '')}</span>

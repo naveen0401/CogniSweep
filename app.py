@@ -97,6 +97,17 @@ from url_media_fetcher import (
     fetched_media_from_record,
 )
 
+from language_resource_connectors import (
+    DEFAULT_CACHE_SECONDS,
+    ConnectorConfig,
+    LanguageResourceError,
+    LanguageResourceSecretError,
+    decrypt_api_secret,
+    encrypt_api_secret,
+    lookup_hash as language_resource_lookup_hash,
+    make_connector,
+    mask_secret_tail,
+)
 
 
 from openpyxl import load_workbook, Workbook
@@ -370,6 +381,10 @@ SESSION_COLLECTION_LIMITS = {
     "support_tickets": 1000,
     "status_incidents": 500,
     "consent_records": 1000,
+    "integration_connections": 500,
+    "resource_bindings": 1000,
+    "resource_lookup_cache": 1000,
+    "integration_audit": 1000,
 }
 SAAS_CACHE_TTL_SECONDS = int(runtime_env("ERRORSWEEP_SAAS_CACHE_TTL_SECONDS", "15"))
 SAAS_CACHE_GENERATION_KEY = "_saas_read_cache_generation"
@@ -390,6 +405,9 @@ SAAS_CACHEABLE_COLLECTIONS = {
     "support_tickets",
     "status_incidents",
     "consent_records",
+    "integration_connections",
+    "resource_bindings",
+    "integration_audit",
 }
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
@@ -6607,6 +6625,10 @@ def init_state() -> None:
         "support_tickets": [],
         "status_incidents": [],
         "consent_records": [],
+        "integration_connections": [],
+        "resource_bindings": [],
+        "resource_lookup_cache": [],
+        "integration_audit": [],
         "feature_flags": feature_flag_defaults(),
         "retention_policy": retention_policy_defaults(),
         "legal_versions": legal_version_defaults(),
@@ -6758,6 +6780,8 @@ COMMON_SELF_SERVICE_PERMISSIONS = {
     "language.select",
     "page.dashboard",
     "page.account",
+    "integrations.personal.create",
+    "integrations.external_resources.use",
 }
 WORKFLOW_PERMISSIONS = {
     "page.projects",
@@ -6774,6 +6798,9 @@ COMPANY_MANAGEMENT_PERMISSIONS = {
     "billing.company",
     "billing.invoice",
     "admin.workspace",
+    "integrations.workspace.manage",
+    "integrations.resources.bind",
+    "integrations.audit.view",
 }
 PERSONAL_WORKSPACE_OWNER_PERMISSIONS = {
     "team.manage",
@@ -6838,6 +6865,11 @@ PERMISSION_FLAG_LABELS = {
     "billing.invoice": "Invoice generation",
     "admin.workspace": "Workspace admin",
     "talent.search": "Talent database",
+    "integrations.personal.create": "Create personal integrations",
+    "integrations.external_resources.use": "Use external language resources",
+    "integrations.workspace.manage": "Manage workspace integrations",
+    "integrations.resources.bind": "Bind resources to projects",
+    "integrations.audit.view": "View integration audit",
 }
 PERMISSION_FLAG_ALIASES = {
     "manage_team": "team.manage",
@@ -6852,6 +6884,11 @@ PERMISSION_FLAG_ALIASES = {
     "can_manage_workspace": "admin.workspace",
     "talent": "talent.search",
     "talent_database": "talent.search",
+    "can_create_personal_integration": "integrations.personal.create",
+    "can_use_external_resources": "integrations.external_resources.use",
+    "can_manage_workspace_integrations": "integrations.workspace.manage",
+    "can_bind_resources_to_projects": "integrations.resources.bind",
+    "can_view_integration_audit": "integrations.audit.view",
 }
 
 ROUTE_PAGE_ALIASES = {
@@ -8590,6 +8627,436 @@ def display_records(records: List[Dict[str, Any]], time_columns: Optional[set] =
 
 def display_dataframe(records: List[Dict[str, Any]], **kwargs) -> None:
     st.dataframe(pd.DataFrame(display_records(records)), use_container_width=True, hide_index=True, **kwargs)
+
+
+def language_resource_master_key() -> str:
+    """Return the app secret used only for encrypting external resource keys."""
+    explicit = secret("ERRORSWEEP_LANGUAGE_RESOURCE_MASTER_KEY", "")
+    if len(explicit.strip()) >= 32:
+        return explicit.strip()
+    session_secret = secret("ERRORSWEEP_SESSION_SECRET", "")
+    if len(session_secret.strip()) >= 32 and session_secret.strip() != DEFAULT_SESSION_SECRET:
+        return session_secret.strip()
+    if not is_production_mode():
+        return DEFAULT_SESSION_SECRET * 2
+    return ""
+
+
+def language_resource_secret_ready() -> bool:
+    return bool(language_resource_master_key())
+
+
+def coerce_string_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [safe_text(item) for item in value if safe_text(item)]
+    if isinstance(value, tuple):
+        return [safe_text(item) for item in value if safe_text(item)]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, list):
+                return [safe_text(item) for item in decoded if safe_text(item)]
+        except json.JSONDecodeError:
+            return [safe_text(item) for item in re.split(r"[,;\n|]+", text) if safe_text(item)]
+        return [safe_text(item) for item in re.split(r"[,;\n|]+", text) if safe_text(item)]
+    return []
+
+
+def resource_ids_text(value: Any) -> str:
+    return ", ".join(coerce_string_list(value))
+
+
+def language_resource_collection_records(collection: str, limit: int = 500) -> List[Dict[str, Any]]:
+    user = current_user() or {}
+    workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    records: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for source_rows in (
+        load_saas_records(collection, workspace=workspace, limit=limit),
+        st.session_state.get(collection, []),
+    ):
+        for row in source_rows or []:
+            if not isinstance(row, dict):
+                continue
+            record = dict(row)
+            key = safe_text(
+                record.get("connection_id")
+                or record.get("binding_id")
+                or record.get("audit_id")
+                or record.get("cache_id")
+                or record.get("id")
+            )
+            if not key:
+                continue
+            dedupe_key = f"{collection}:{key}"
+            if dedupe_key in seen:
+                continue
+            records.append(record)
+            seen.add(dedupe_key)
+    return records
+
+
+def upsert_session_record(collection: str, record: Dict[str, Any], identity_key: str) -> None:
+    rows = st.session_state.setdefault(collection, [])
+    wanted = safe_text(record.get(identity_key) or record.get("id"))
+    for idx, item in enumerate(rows):
+        if safe_text(item.get(identity_key) or item.get("id")) == wanted:
+            rows[idx] = {**item, **record}
+            break
+    else:
+        rows.insert(0, record)
+    trim_session_list(collection, SESSION_COLLECTION_LIMITS.get(collection, SESSION_HISTORY_LIMIT))
+
+
+def remove_session_record(collection: str, identity_key: str, identity_value: str) -> None:
+    wanted = safe_text(identity_value)
+    st.session_state[collection] = [
+        item for item in st.session_state.get(collection, [])
+        if safe_text(item.get(identity_key) or item.get("id")) != wanted
+    ]
+
+
+def visible_language_resource_connections(include_disabled: bool = True) -> List[Dict[str, Any]]:
+    user = current_user() or {}
+    user_email = safe_text(user.get("email")).lower()
+    workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    rows = language_resource_collection_records(
+        "integration_connections",
+        SESSION_COLLECTION_LIMITS.get("integration_connections", 500),
+    )
+    visible: List[Dict[str, Any]] = []
+    for row in rows:
+        scope = safe_text(row.get("scope") or "Personal")
+        row_email = safe_text(row.get("user_email") or row.get("owner_user_id")).lower()
+        row_workspace = safe_text(row.get("workspace"))
+        personal = scope.lower().startswith("personal")
+        workspace_shared = scope.lower().startswith("workspace")
+        if personal and row_email != user_email:
+            continue
+        if workspace_shared and row_workspace != workspace and not is_platform_owner_identity(user):
+            continue
+        if not include_disabled and safe_text(row.get("status")).lower() in {"disabled", "revoked", "deleted"}:
+            continue
+        visible.append(dict(row))
+    visible.sort(key=lambda item: (not bool(item.get("is_personal_default")), int(item.get("priority", 100) or 100), safe_text(item.get("connection_name")).lower()))
+    return visible
+
+
+def language_resource_connection_by_id(connection_id: str) -> Optional[Dict[str, Any]]:
+    wanted = safe_text(connection_id)
+    if not wanted:
+        return None
+    for item in visible_language_resource_connections(include_disabled=True):
+        if safe_text(item.get("connection_id") or item.get("id")) == wanted:
+            return dict(item)
+    return None
+
+
+def visible_resource_bindings(include_disabled: bool = False) -> List[Dict[str, Any]]:
+    user = current_user() or {}
+    user_email = safe_text(user.get("email")).lower()
+    workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    rows = language_resource_collection_records(
+        "resource_bindings",
+        SESSION_COLLECTION_LIMITS.get("resource_bindings", 1000),
+    )
+    visible = []
+    for row in rows:
+        if safe_text(row.get("workspace")) != workspace and not is_platform_owner_identity(user):
+            continue
+        if safe_text(row.get("user_email")).lower() not in {"", user_email} and not has_permission("integrations.resources.bind", user):
+            continue
+        if not include_disabled and not bool(row.get("enabled", True)):
+            continue
+        visible.append(dict(row))
+    visible.sort(key=lambda item: int(item.get("priority", 100) or 100))
+    return visible
+
+
+def record_integration_audit(
+    connection_id: str,
+    action: str,
+    success: bool,
+    provider_status_code: Optional[int] = None,
+    latency_ms: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    user = current_user() or {}
+    record = {
+        "audit_id": uuid.uuid4().hex,
+        "connection_id": safe_text(connection_id),
+        "workspace": safe_text(user.get("workspace") or "Demo Workspace"),
+        "user_email": safe_text(user.get("email")).lower(),
+        "user_id": safe_text(user.get("email")).lower(),
+        "action": safe_text(action),
+        "success": bool(success),
+        "provider_status_code": provider_status_code,
+        "latency_ms": latency_ms,
+        "metadata_json": metadata or {},
+        "created_at": now_stamp(),
+    }
+    persisted = persist_saas_record("integration_audit", record)
+    upsert_session_record("integration_audit", persisted, "audit_id")
+
+
+def save_language_resource_connection(record: Dict[str, Any]) -> Dict[str, Any]:
+    persisted = persist_saas_record("integration_connections", record)
+    upsert_session_record("integration_connections", persisted, "connection_id")
+    return persisted
+
+
+def save_resource_binding(record: Dict[str, Any]) -> Dict[str, Any]:
+    persisted = persist_saas_record("resource_bindings", record)
+    upsert_session_record("resource_bindings", persisted, "binding_id")
+    return persisted
+
+
+def delete_language_resource_connection(connection_id: str) -> bool:
+    wanted = safe_text(connection_id)
+    if not wanted:
+        return False
+    record = language_resource_connection_by_id(wanted)
+    record_id = safe_text((record or {}).get("id") or wanted)
+    deleted = False
+    if delete_saas_record is not None and record_id:
+        try:
+            user = current_user() or {}
+            deleted = delete_saas_record(
+                "integration_connections",
+                record_id,
+                workspace=safe_text(user.get("workspace")),
+                user_email=safe_text(user.get("email")).lower(),
+            )
+        except Exception as exc:
+            LOGGER.warning("Unable to delete language resource connection %s: %s", wanted, exc)
+    remove_session_record("integration_connections", "connection_id", wanted)
+    for binding in list(visible_resource_bindings(include_disabled=True)):
+        if safe_text(binding.get("connection_id")) == wanted:
+            remove_session_record("resource_bindings", "binding_id", safe_text(binding.get("binding_id") or binding.get("id")))
+    record_integration_audit(wanted, "delete_connection", True)
+    return deleted or True
+
+
+def connection_connector_config(connection: Dict[str, Any], api_secret: str = "") -> ConnectorConfig:
+    return ConnectorConfig(
+        connection_id=safe_text(connection.get("connection_id") or connection.get("id")),
+        provider=safe_text(connection.get("provider") or "Generic REST"),
+        connection_name=safe_text(connection.get("connection_name") or "External resources"),
+        base_url=safe_text(connection.get("base_url")),
+        auth_type=safe_text(connection.get("auth_type") or "Bearer token"),
+        api_secret=api_secret,
+        organization_id=safe_text(connection.get("organization_id")),
+        provider_workspace_id=safe_text(connection.get("provider_workspace_id")),
+    )
+
+
+def decrypt_language_resource_secret(connection: Dict[str, Any]) -> str:
+    encrypted = safe_text(connection.get("encrypted_secret"))
+    if not encrypted:
+        return ""
+    master = language_resource_master_key()
+    if not master:
+        raise LanguageResourceSecretError("missing_master_key", "Language-resource encryption key is not configured.")
+    return decrypt_api_secret(encrypted, master)
+
+
+def test_language_resource_connection(connection: Dict[str, Any], api_secret: str = "") -> Tuple[Dict[str, Any], Optional[LanguageResourceError]]:
+    start = time.perf_counter()
+    connection_id = safe_text(connection.get("connection_id") or connection.get("id") or uuid.uuid4().hex)
+    try:
+        secret_value = api_secret or decrypt_language_resource_secret(connection)
+        connector = make_connector(connection_connector_config(connection, secret_value))
+        result = connector.test_connection()
+        result["last_tested_at"] = now_stamp()
+        record_integration_audit(
+            connection_id,
+            "test_connection",
+            True,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            metadata={
+                "provider": safe_text(connection.get("provider")),
+                "tm_count": result.get("tm_count", 0),
+                "glossary_count": result.get("glossary_count", 0),
+                "dnt_count": result.get("dnt_count", 0),
+            },
+        )
+        return result, None
+    except Exception as exc:
+        err = exc if isinstance(exc, LanguageResourceError) else LanguageResourceError("provider_error", "External language resource connection failed.")
+        record_integration_audit(
+            connection_id,
+            "test_connection",
+            False,
+            provider_status_code=getattr(err, "status_code", None),
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            metadata={"error_code": getattr(err, "code", "provider_error")},
+        )
+        return {}, err
+
+
+def active_language_resource_connections(project_id: str = "") -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    connections = visible_language_resource_connections(include_disabled=False)
+    by_id = {safe_text(item.get("connection_id") or item.get("id")): item for item in connections}
+    project_key = safe_text(project_id)
+    active: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    seen: Set[str] = set()
+    for binding in visible_resource_bindings(include_disabled=False):
+        if project_key and safe_text(binding.get("project_id")) not in {"", project_key}:
+            continue
+        connection = by_id.get(safe_text(binding.get("connection_id")))
+        if not connection:
+            continue
+        cid = safe_text(connection.get("connection_id") or connection.get("id"))
+        active.append((connection, binding))
+        seen.add(cid)
+    for connection in connections:
+        cid = safe_text(connection.get("connection_id") or connection.get("id"))
+        if cid in seen:
+            continue
+        if bool(connection.get("is_personal_default")) or not active:
+            active.append((connection, {}))
+            seen.add(cid)
+    return active[:5]
+
+
+def get_language_resource_cache(cache_key: str) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    cache = st.session_state.setdefault("_language_resource_runtime_cache", {})
+    item = cache.get(cache_key)
+    if not isinstance(item, dict):
+        return None
+    if float(item.get("expires_epoch", 0) or 0) < now:
+        cache.pop(cache_key, None)
+        return None
+    value = item.get("value")
+    return dict(value) if isinstance(value, dict) else None
+
+
+def set_language_resource_cache(cache_key: str, value: Dict[str, Any], cache_seconds: int) -> None:
+    ttl = max(30, min(int(cache_seconds or DEFAULT_CACHE_SECONDS), 3600))
+    cache = st.session_state.setdefault("_language_resource_runtime_cache", {})
+    cache[cache_key] = {
+        "expires_epoch": time.time() + ttl,
+        "value": value,
+    }
+    if len(cache) > 200:
+        for key, item in sorted(cache.items(), key=lambda pair: float((pair[1] or {}).get("expires_epoch", 0) or 0))[:-160]:
+            cache.pop(key, None)
+
+
+def dedupe_external_results(results: List[Dict[str, Any]], key_fields: Tuple[str, ...], limit: int) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+    for item in results:
+        key = tuple(safe_text(item.get(field)).lower() for field in key_fields)
+        if key in seen:
+            existing = seen[key]
+            providers = set(coerce_string_list(existing.get("providers") or existing.get("provider")))
+            providers.add(safe_text(item.get("provider")))
+            existing["providers"] = sorted(provider for provider in providers if provider)
+            try:
+                if float(item.get("match_score") or 0) > float(existing.get("match_score") or 0):
+                    existing["match_score"] = item.get("match_score")
+            except (TypeError, ValueError):
+                pass
+            continue
+        copy = dict(item)
+        copy["providers"] = [safe_text(item.get("provider"))] if safe_text(item.get("provider")) else []
+        seen[key] = copy
+        deduped.append(copy)
+    return deduped[:limit]
+
+
+def external_language_resource_lookup(
+    source_text: str,
+    source_language: str = "",
+    target_language: str = "",
+    project_id: str = "",
+) -> Dict[str, Any]:
+    source = safe_text(source_text)
+    if not source or not has_permission("integrations.external_resources.use"):
+        return {"tm": [], "glossary": [], "dnt": [], "connections": [], "errors": []}
+
+    tm_results: List[Dict[str, Any]] = []
+    glossary_results: List[Dict[str, Any]] = []
+    dnt_results: List[Dict[str, Any]] = []
+    statuses: List[Dict[str, Any]] = []
+    errors: List[Dict[str, str]] = []
+
+    for connection, binding in active_language_resource_connections(project_id):
+        connection_id = safe_text(connection.get("connection_id") or connection.get("id"))
+        if not bool(connection.get("automatic_lookup_enabled", True)):
+            continue
+        src_lang = safe_text(binding.get("source_language") or connection.get("source_language") or source_language)
+        tgt_lang = safe_text(binding.get("target_language") or connection.get("target_language") or target_language)
+        cache_seconds = int(connection.get("cache_seconds") or DEFAULT_CACHE_SECONDS)
+        cache_key = language_resource_lookup_hash(connection_id, source, src_lang, tgt_lang, "all")
+        cached = get_language_resource_cache(cache_key)
+        if cached:
+            for key in ("tm", "glossary", "dnt"):
+                for item in cached.get(key, []):
+                    copy = dict(item)
+                    copy["cached"] = True
+                    if key == "tm":
+                        tm_results.append(copy)
+                    elif key == "glossary":
+                        glossary_results.append(copy)
+                    else:
+                        dnt_results.append(copy)
+            statuses.append({"connection": safe_text(connection.get("connection_name")), "status": "cached"})
+            continue
+        try:
+            api_secret = decrypt_language_resource_secret(connection)
+            connector = make_connector(connection_connector_config(connection, api_secret))
+            tm_ids = coerce_string_list(binding.get("tm_resource_ids") or connection.get("tm_resource_ids"))
+            glossary_ids = coerce_string_list(binding.get("glossary_resource_ids") or connection.get("glossary_resource_ids"))
+            dnt_ids = coerce_string_list(binding.get("dnt_resource_ids") or connection.get("dnt_resource_ids"))
+            tm = connector.search_tm(source, src_lang, tgt_lang, limit=5, resource_ids=tm_ids)
+            glossary = connector.lookup_terms(source, src_lang, tgt_lang, resource_ids=glossary_ids)
+            dnt = connector.lookup_dnt(source, src_lang, resource_ids=dnt_ids)
+            payload = {"tm": tm, "glossary": glossary, "dnt": dnt}
+            set_language_resource_cache(cache_key, payload, cache_seconds)
+            tm_results.extend(tm)
+            glossary_results.extend(glossary)
+            dnt_results.extend(dnt)
+            statuses.append({"connection": safe_text(connection.get("connection_name")), "status": "connected"})
+        except Exception as exc:
+            err = exc if isinstance(exc, LanguageResourceError) else LanguageResourceError("provider_error", "External language resource lookup failed.")
+            errors.append(
+                {
+                    "connection": safe_text(connection.get("connection_name")),
+                    "code": safe_text(getattr(err, "code", "provider_error")),
+                    "message": safe_text(str(err)),
+                }
+            )
+            statuses.append({"connection": safe_text(connection.get("connection_name")), "status": "degraded"})
+            record_integration_audit(
+                connection_id,
+                "editor_lookup",
+                False,
+                provider_status_code=getattr(err, "status_code", None),
+                metadata={"error_code": getattr(err, "code", "provider_error")},
+            )
+
+    def tm_sort(item: Dict[str, Any]) -> Tuple[int, float, str]:
+        exact = 1 if safe_text(item.get("source_text")).lower() == source.lower() else 0
+        try:
+            score = float(item.get("match_score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        return (exact, score, safe_text(item.get("updated_at")))
+
+    tm_results = sorted(tm_results, key=tm_sort, reverse=True)
+    return {
+        "tm": dedupe_external_results(tm_results, ("source_text", "target_text"), 8),
+        "glossary": dedupe_external_results(glossary_results, ("source_term", "target_term"), 12),
+        "dnt": dedupe_external_results(dnt_results, ("term",), 12),
+        "connections": statuses,
+        "errors": errors,
+    }
 
 
 def add_audit(action: str, details: str = "") -> None:
@@ -16972,7 +17439,11 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
 
 
 
-def build_editor_language_resources(rules: Optional[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, str]]]:
+def build_editor_language_resources(
+    rules: Optional[Dict[str, Any]] = None,
+    rows: Optional[List[Dict[str, Any]]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, List[Dict[str, str]]]:
     """Collect all language assets shown in the CAT editor side panel."""
     base_rules = workspace_rules()
     candidate_rules = [base_rules]
@@ -17044,7 +17515,67 @@ def build_editor_language_resources(rules: Optional[Dict[str, Any]] = None) -> D
             }
         )
 
-    return {"glossary": glossary, "dnt": dnt, "tm": tm}
+    status: List[Dict[str, str]] = []
+    meta = metadata if isinstance(metadata, dict) else {}
+    source_language = safe_text(meta.get("source_language") or meta.get("source_lang") or "en")
+    target_language = safe_text(meta.get("target_language") or meta.get("language") or "")
+    project_id = safe_text(meta.get("project_id") or meta.get("project"))
+    seen_source: Set[str] = set()
+    for row in (rows or [])[:30]:
+        source = safe_text(row.get("source") if isinstance(row, dict) else "")
+        if not source or source.lower() in seen_source:
+            continue
+        seen_source.add(source.lower())
+        external = external_language_resource_lookup(source, source_language, target_language, project_id)
+        for connection_status in external.get("connections", []):
+            status_key = (
+                safe_text(connection_status.get("connection")).lower(),
+                safe_text(connection_status.get("status")).lower(),
+            )
+            if status_key not in {(safe_text(item.get("connection")).lower(), safe_text(item.get("status")).lower()) for item in status}:
+                status.append(
+                    {
+                        "connection": safe_text(connection_status.get("connection")),
+                        "status": safe_text(connection_status.get("status")),
+                    }
+                )
+        for item in external.get("tm", []):
+            tm.append(
+                {
+                    "source": safe_text(item.get("source_text")),
+                    "target": safe_text(item.get("target_text")),
+                    "language": safe_text(item.get("resource_name") or item.get("provider") or "External TM"),
+                    "note": " · ".join(part for part in [
+                        safe_text(item.get("provider")),
+                        f"{item.get('match_score')}%" if safe_text(item.get("match_score")) else "",
+                        "cached" if item.get("cached") else "",
+                    ] if part),
+                }
+            )
+        for item in external.get("glossary", []):
+            glossary.append(
+                {
+                    "source": safe_text(item.get("source_term")),
+                    "target": safe_text(item.get("target_term")),
+                    "source_name": " · ".join(part for part in [safe_text(item.get("provider")), safe_text(item.get("resource_name"))] if part),
+                }
+            )
+        for item in external.get("dnt", []):
+            dnt.append(
+                {
+                    "term": safe_text(item.get("term")),
+                    "source_name": " · ".join(part for part in [safe_text(item.get("provider")), safe_text(item.get("resource_name")), safe_text(item.get("instruction"))] if part),
+                }
+            )
+        for err in external.get("errors", []):
+            status.append(
+                {
+                    "connection": safe_text(err.get("connection")),
+                    "status": f"degraded: {safe_text(err.get('code'))}",
+                }
+            )
+
+    return {"glossary": glossary, "dnt": dnt, "tm": tm, "status": status}
 
 
 def render_reference_cat_editor_shell(
@@ -17107,7 +17638,7 @@ def render_reference_cat_editor_shell(
     rows_json = json.dumps(component_rows, ensure_ascii=False)
     uploaded_context_json = json.dumps(uploaded_context or {}, ensure_ascii=False)
     export_asset_json = json.dumps(export_source or {}, ensure_ascii=False)
-    language_resources_json = json.dumps(build_editor_language_resources(rules), ensure_ascii=False)
+    language_resources_json = json.dumps(build_editor_language_resources(rules, component_rows, metadata), ensure_ascii=False)
     html = re.sub(r"const rows = \[.*?\];", lambda _match: f"const rows = {rows_json};", html, flags=re.S)
     html = re.sub(
         r"const uploadedContext = \{.*?\};",
@@ -17593,7 +18124,7 @@ def render_reference_media_editor_shell(
         },
         "media": media_preview_component_payload(media_source, media_type, media_name or file_name),
         "rows": component_rows,
-        "resources": build_editor_language_resources(workspace_rules()),
+        "resources": build_editor_language_resources(workspace_rules(), component_rows, metadata),
     }
 
     html = reference_path.read_text(encoding="utf-8")
@@ -17878,22 +18409,58 @@ def compute_review_completion(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     return {"total": total, "translated": translated, "approved": approved, "needs_review": needs_review}
 
 
-def compute_matches(source: str) -> Dict[str, List[Dict[str, str]]]:
+def compute_matches(source: str, source_language: str = "", target_language: str = "", project_id: str = "") -> Dict[str, List[Dict[str, Any]]]:
     source_l = source.lower()
-    tm_hits = []
+    tm_hits: List[Dict[str, Any]] = []
     for item in st.session_state.tm:
         if item.get("source", "").lower() == source_l:
             tm_hits.append({"type": "TM 100%", "source": item.get("source",""), "target": item.get("target","")})
         elif source_l and item.get("source", "").lower() in source_l:
             tm_hits.append({"type": "TM fuzzy", "source": item.get("source",""), "target": item.get("target","")})
 
-    gloss_hits = []
+    gloss_hits: List[Dict[str, Any]] = []
     for item in st.session_state.glossary:
         if item.get("source","").lower() in source_l:
             gloss_hits.append(item)
 
-    dnt_hits = [{"term": term} for term in st.session_state.dnt if term.lower() in source_l]
-    return {"tm": tm_hits[:5], "glossary": gloss_hits[:8], "dnt": dnt_hits[:8]}
+    dnt_hits: List[Dict[str, Any]] = [{"term": term} for term in st.session_state.dnt if term.lower() in source_l]
+    external = external_language_resource_lookup(source, source_language, target_language, project_id)
+    for item in external.get("tm", []):
+        score = safe_text(item.get("match_score"))
+        tm_hits.append(
+            {
+                "type": f"{safe_text(item.get('provider') or 'External TM')} {score + '%' if score else ''}".strip(),
+                "source": safe_text(item.get("source_text")),
+                "target": safe_text(item.get("target_text")),
+                "provider": safe_text(item.get("provider")),
+                "resource_name": safe_text(item.get("resource_name")),
+                "cached": bool(item.get("cached")),
+            }
+        )
+    for item in external.get("glossary", []):
+        gloss_hits.append(
+            {
+                "source": safe_text(item.get("source_term")),
+                "target": safe_text(item.get("target_term")),
+                "notes": " · ".join(part for part in [safe_text(item.get("provider")), safe_text(item.get("resource_name")), safe_text(item.get("definition"))] if part),
+                "provider": safe_text(item.get("provider")),
+            }
+        )
+    for item in external.get("dnt", []):
+        dnt_hits.append(
+            {
+                "term": safe_text(item.get("term")),
+                "provider": safe_text(item.get("provider")),
+                "instruction": safe_text(item.get("instruction")),
+            }
+        )
+    return {
+        "tm": tm_hits[:8],
+        "glossary": gloss_hits[:12],
+        "dnt": dnt_hits[:12],
+        "connections": external.get("connections", []),
+        "errors": external.get("errors", []),
+    }
 
 
 def editor_predictive_suggestions(source: str, target: str, matches: Dict[str, List[Dict[str, str]]], limit: int = 5) -> List[Dict[str, str]]:
@@ -22109,6 +22676,17 @@ def page_pro() -> None:
 def render_assist_panel(source: str) -> None:
     matches = compute_matches(source)
     st.markdown("#### Assist panel")
+    if matches.get("connections"):
+        status_text = ", ".join(
+            f"{safe_text(item.get('connection'))}: {safe_text(item.get('status'))}"
+            for item in matches.get("connections", [])
+            if safe_text(item.get("connection"))
+        )
+        if status_text:
+            st.caption(f"Language resources: {status_text}")
+    if matches.get("errors"):
+        for err in matches.get("errors", [])[:2]:
+            st.warning(f"External resource unavailable: {safe_text(err.get('connection')) or 'provider'} ({safe_text(err.get('code'))}). Editing remains available.")
     st.markdown("##### TM matches")
     if matches["tm"]:
         for m in matches["tm"]:
@@ -24778,6 +25356,350 @@ def page_billing() -> None:
         st.info("No billing webhook events recorded yet.")
 
 
+def render_language_resource_connections_panel() -> None:
+    user = current_user() or {}
+    user_email = safe_text(user.get("email")).lower()
+    workspace = safe_text(user.get("workspace") or "Demo Workspace")
+    st.markdown("### Language Resource Connections")
+    st.caption("Connect personal external TM, glossary, and DNT APIs. MT/AI provider keys remain separate from language-resource keys.")
+
+    if not language_resource_secret_ready():
+        st.warning("Set ERRORSWEEP_LANGUAGE_RESOURCE_MASTER_KEY or a strong ERRORSWEEP_SESSION_SECRET before saving external API keys.")
+
+    connections = visible_language_resource_connections(include_disabled=True)
+    if connections:
+        summary_rows = []
+        for item in connections:
+            summary_rows.append(
+                {
+                    "Name": item.get("connection_name", ""),
+                    "Provider": item.get("provider", ""),
+                    "Scope": item.get("scope", "Personal"),
+                    "Status": item.get("status", "Draft"),
+                    "Key": mask_secret_tail(item.get("secret_last_four", "")),
+                    "Default": "Yes" if item.get("is_personal_default") else "",
+                    "Last tested": format_local_time(item.get("last_tested_at")),
+                }
+            )
+        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No external language-resource connections have been saved yet. Internal CogniSweep TM, glossary, and DNT resources still work.")
+
+    labels = ["Add new connection"] + [
+        f"{safe_text(item.get('connection_name') or item.get('provider') or 'Connection')} ({safe_text(item.get('connection_id') or item.get('id'))[-6:]})"
+        for item in connections
+    ]
+    selected_label = st.selectbox("Connection", labels, key="language_resource_connection_selector")
+    selected_idx = labels.index(selected_label)
+    existing = connections[selected_idx - 1] if selected_idx > 0 else {}
+    existing_id = safe_text(existing.get("connection_id") or existing.get("id"))
+
+    with st.form("language_resource_connection_form", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        connection_name = c1.text_input("Connection name", value=safe_text(existing.get("connection_name") or "My language resources"))
+        provider_options = ["Generic REST"]
+        provider_value = safe_text(existing.get("provider") or "Generic REST")
+        provider = c2.selectbox("Provider", provider_options, index=provider_options.index(provider_value) if provider_value in provider_options else 0)
+        c3, c4 = st.columns(2)
+        auth_options = ["Bearer token", "API key"]
+        auth_value = safe_text(existing.get("auth_type") or "Bearer token")
+        auth_type = c3.selectbox("Authentication type", auth_options, index=auth_options.index(auth_value) if auth_value in auth_options else 0)
+        scope_options = ["Personal"]
+        if has_permission("integrations.workspace.manage"):
+            scope_options.append("Workspace shared")
+        scope_value = safe_text(existing.get("scope") or "Personal")
+        scope = c4.selectbox("Connection scope", scope_options, index=scope_options.index(scope_value) if scope_value in scope_options else 0)
+        base_url = st.text_input("API base URL", value=safe_text(existing.get("base_url")), placeholder="https://provider.example.com/api")
+        api_key = st.text_input(
+            "API key / personal access token",
+            type="password",
+            placeholder="Leave blank to keep the saved key" if existing_id else "Paste token",
+            help="Stored encrypted at rest. CogniSweep never sends this key to browser JavaScript, URLs, exports, or MT providers.",
+        )
+        c5, c6 = st.columns(2)
+        organization_id = c5.text_input("Account or organization ID", value=safe_text(existing.get("organization_id")))
+        provider_workspace_id = c6.text_input("Provider workspace/project ID", value=safe_text(existing.get("provider_workspace_id")))
+        c7, c8 = st.columns(2)
+        source_language = c7.text_input("Source language", value=safe_text(existing.get("source_language") or "en"))
+        target_language = c8.text_input("Target language", value=safe_text(existing.get("target_language") or ""))
+        tm_resource_ids = st.text_input("TM resources", value=resource_ids_text(existing.get("tm_resource_ids")), help="Comma-separated provider resource IDs. Leave blank to let the provider search defaults.")
+        glossary_resource_ids = st.text_input("Glossary/termbase resources", value=resource_ids_text(existing.get("glossary_resource_ids")))
+        dnt_resource_ids = st.text_input("DNT resources", value=resource_ids_text(existing.get("dnt_resource_ids")))
+        c9, c10 = st.columns(2)
+        automatic_lookup_enabled = c9.checkbox("Enable automatic editor lookup", value=bool(existing.get("automatic_lookup_enabled", True)))
+        is_personal_default = c10.checkbox("Set personal default", value=bool(existing.get("is_personal_default", False)))
+        cache_seconds = st.number_input(
+            "Cache duration seconds",
+            min_value=30,
+            max_value=3600,
+            value=int(existing.get("cache_seconds") or DEFAULT_CACHE_SECONDS),
+            step=30,
+        )
+        b1, b2, b3, b4 = st.columns(4)
+        test_clicked = b1.form_submit_button("Test connection", use_container_width=True)
+        save_clicked = b2.form_submit_button("Save connection", use_container_width=True)
+        disable_clicked = b3.form_submit_button("Disable connection", use_container_width=True, disabled=not existing_id)
+        delete_clicked = b4.form_submit_button("Delete connection", use_container_width=True, disabled=not existing_id)
+
+    form_connection_id = existing_id or f"lrc_{uuid.uuid4().hex}"
+    encrypted_secret = safe_text(existing.get("encrypted_secret"))
+    secret_last_four = safe_text(existing.get("secret_last_four"))
+    if api_key.strip():
+        try:
+            encrypted_secret = encrypt_api_secret(api_key.strip(), language_resource_master_key())
+            secret_last_four = api_key.strip()[-4:]
+        except LanguageResourceSecretError as exc:
+            st.error(str(exc))
+            return
+
+    candidate = {
+        **existing,
+        "connection_id": form_connection_id,
+        "workspace": workspace,
+        "user_email": user_email,
+        "owner_user_id": user_email,
+        "workspace_id": workspace,
+        "scope": scope,
+        "provider": provider,
+        "connection_name": connection_name,
+        "base_url": base_url,
+        "auth_type": auth_type,
+        "encrypted_secret": encrypted_secret,
+        "secret_last_four": secret_last_four,
+        "status": safe_text(existing.get("status") or "Draft"),
+        "automatic_lookup_enabled": bool(automatic_lookup_enabled),
+        "cache_seconds": int(cache_seconds),
+        "source_language": source_language,
+        "target_language": target_language,
+        "organization_id": organization_id,
+        "provider_workspace_id": provider_workspace_id,
+        "tm_resource_ids": coerce_string_list(tm_resource_ids),
+        "glossary_resource_ids": coerce_string_list(glossary_resource_ids),
+        "dnt_resource_ids": coerce_string_list(dnt_resource_ids),
+        "is_personal_default": bool(is_personal_default),
+        "metadata_json": stored_metadata_dict(existing.get("metadata_json")),
+    }
+
+    if test_clicked:
+        if not base_url.strip():
+            st.error("Enter the provider API base URL before testing.")
+        elif not api_key.strip() and not encrypted_secret:
+            st.error("Enter an API key or save a connection with a key before testing.")
+        else:
+            result, error = test_language_resource_connection(candidate, api_key.strip())
+            if error:
+                candidate["status"] = "Failed"
+                candidate["last_error_code"] = error.code
+                save_language_resource_connection(candidate)
+                st.error(f"Connection failed: {error}")
+            else:
+                metadata = stored_metadata_dict(candidate.get("metadata_json"))
+                metadata["last_resources"] = {
+                    "translation_memories": result.get("translation_memories", []),
+                    "glossaries": result.get("glossaries", []),
+                    "dnt_resources": result.get("dnt_resources", []),
+                    "missing_scopes": result.get("missing_scopes", []),
+                    "provider_account_identity": result.get("provider_account_identity", ""),
+                }
+                candidate.update(
+                    {
+                        "status": "Connected",
+                        "last_tested_at": result.get("last_tested_at") or now_stamp(),
+                        "last_success_at": now_stamp(),
+                        "last_error_code": "",
+                        "metadata_json": metadata,
+                    }
+                )
+                save_language_resource_connection(candidate)
+                st.success(
+                    f"Connected. TM: {result.get('tm_count', 0)}, glossary: {result.get('glossary_count', 0)}, DNT: {result.get('dnt_count', 0)}, latency: {result.get('latency_ms', 0)} ms."
+                )
+                if result.get("missing_scopes"):
+                    st.warning("Missing provider scopes: " + ", ".join(safe_text(item) for item in result.get("missing_scopes", [])))
+                st.rerun()
+
+    if save_clicked:
+        if not connection_name.strip():
+            st.error("Connection name is required.")
+        elif not base_url.strip():
+            st.error("API base URL is required.")
+        elif not encrypted_secret:
+            st.error("API key is required before saving.")
+        else:
+            if is_personal_default:
+                for item in visible_language_resource_connections(include_disabled=True):
+                    if safe_text(item.get("connection_id")) != form_connection_id and safe_text(item.get("user_email")).lower() == user_email:
+                        save_language_resource_connection({**item, "is_personal_default": False})
+            candidate["status"] = "Connected" if safe_text(candidate.get("status")).lower() == "connected" else "Saved"
+            save_language_resource_connection(candidate)
+            record_integration_audit(form_connection_id, "save_connection", True, metadata={"provider": provider, "scope": scope})
+            st.success("Language-resource connection saved.")
+            st.rerun()
+
+    if disable_clicked and existing_id:
+        updated = {**existing, "status": "Disabled", "automatic_lookup_enabled": False}
+        save_language_resource_connection(updated)
+        record_integration_audit(existing_id, "disable_connection", True)
+        st.success("Connection disabled. Editor lookup will stop using it.")
+        st.rerun()
+
+    if delete_clicked and existing_id:
+        delete_language_resource_connection(existing_id)
+        st.success("Connection deleted.")
+        st.rerun()
+
+    last_resources = stored_metadata_dict(candidate.get("metadata_json")).get("last_resources", {})
+    if isinstance(last_resources, dict) and any(last_resources.get(key) for key in ("translation_memories", "glossaries", "dnt_resources")):
+        st.markdown("#### Last tested resources")
+        ctm, cgl, cdnt = st.columns(3)
+        ctm.metric("TMs", len(last_resources.get("translation_memories", []) or []))
+        cgl.metric("Glossaries", len(last_resources.get("glossaries", []) or []))
+        cdnt.metric("DNT lists", len(last_resources.get("dnt_resources", []) or []))
+        resource_preview = []
+        for label, key in (("TM", "translation_memories"), ("Glossary", "glossaries"), ("DNT", "dnt_resources")):
+            for item in last_resources.get(key, []) or []:
+                resource_preview.append({"Type": label, "ID": item.get("id", ""), "Name": item.get("name", "")})
+        if resource_preview:
+            st.dataframe(pd.DataFrame(resource_preview), use_container_width=True, hide_index=True)
+
+    st.markdown("### Bind connection to project")
+    active_connections = [item for item in visible_language_resource_connections(include_disabled=False) if safe_text(item.get("status")).lower() != "failed"]
+    if not active_connections:
+        st.info("Save and test a connection before binding resources to a project.")
+    else:
+        project_options, project_lookup = project_select_options()
+        if not project_options:
+            st.info("Create a project first, or mark a connection as personal default to use it without project binding.")
+        with st.form("language_resource_binding_form"):
+            c1, c2 = st.columns(2)
+            conn_labels = [
+                f"{safe_text(item.get('connection_name') or item.get('provider'))} ({safe_text(item.get('connection_id'))[-6:]})"
+                for item in active_connections
+            ]
+            selected_conn_label = c1.selectbox("Connection", conn_labels)
+            selected_project_label = c2.selectbox("Project", project_options or ["Personal default / no project"], disabled=not bool(project_options))
+            selected_conn = active_connections[conn_labels.index(selected_conn_label)]
+            selected_project = project_lookup.get(selected_project_label, {}) if project_options else {}
+            bc1, bc2 = st.columns(2)
+            bind_source = bc1.text_input("Source language", value=safe_text(selected_conn.get("source_language") or "en"))
+            bind_target = bc2.text_input("Target language", value=safe_text(selected_conn.get("target_language") or ""))
+            bind_tm = st.text_input("TM resource IDs", value=resource_ids_text(selected_conn.get("tm_resource_ids")))
+            bind_glossary = st.text_input("Glossary resource IDs", value=resource_ids_text(selected_conn.get("glossary_resource_ids")))
+            bind_dnt = st.text_input("DNT resource IDs", value=resource_ids_text(selected_conn.get("dnt_resource_ids")))
+            bc3, bc4 = st.columns(2)
+            bind_priority = bc3.number_input("Priority", min_value=1, max_value=999, value=100)
+            bind_enabled = bc4.checkbox("Enabled", value=True)
+            save_binding = st.form_submit_button("Save project binding", use_container_width=True)
+        if save_binding:
+            project_id = project_identity(selected_project) if selected_project else ""
+            binding_seed = f"{safe_text(selected_conn.get('connection_id'))}:{project_id}:{bind_source}:{bind_target}"
+            binding_id = f"lrb_{hashlib.sha1(binding_seed.encode('utf-8')).hexdigest()[:24]}"
+            binding = {
+                "binding_id": binding_id,
+                "workspace": workspace,
+                "user_email": user_email,
+                "connection_id": safe_text(selected_conn.get("connection_id")),
+                "project_id": project_id,
+                "tm_resource_ids": coerce_string_list(bind_tm),
+                "glossary_resource_ids": coerce_string_list(bind_glossary),
+                "dnt_resource_ids": coerce_string_list(bind_dnt),
+                "source_language": bind_source,
+                "target_language": bind_target,
+                "priority": int(bind_priority),
+                "enabled": bool(bind_enabled),
+                "metadata_json": {"project": safe_text(selected_project.get("project")) if selected_project else ""},
+            }
+            save_resource_binding(binding)
+            record_integration_audit(safe_text(selected_conn.get("connection_id")), "save_resource_binding", True, metadata={"project_id": project_id})
+            st.success("Resource binding saved.")
+            st.rerun()
+
+    bindings = visible_resource_bindings(include_disabled=True)
+    if bindings:
+        st.markdown("#### Current bindings")
+        display_rows = []
+        for item in bindings:
+            connection = language_resource_connection_by_id(item.get("connection_id")) or {}
+            display_rows.append(
+                {
+                    "Connection": connection.get("connection_name", item.get("connection_id", "")),
+                    "Project": item.get("project_id") or "Personal default",
+                    "Source": item.get("source_language", ""),
+                    "Target": item.get("target_language", ""),
+                    "Priority": item.get("priority", ""),
+                    "Enabled": "Yes" if item.get("enabled", True) else "No",
+                }
+            )
+        st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    if has_permission("integrations.audit.view"):
+        audit_rows = [
+            item for item in language_resource_collection_records("integration_audit", 1000)
+            if safe_text(item.get("user_email")).lower() == user_email or safe_text(item.get("workspace")) == workspace
+        ][:25]
+        st.markdown("### Integration audit")
+        if audit_rows:
+            preview = []
+            for item in audit_rows:
+                preview.append(
+                    {
+                        "Time": format_local_time(item.get("created_at")),
+                        "Action": item.get("action", ""),
+                        "Connection": item.get("connection_id", ""),
+                        "Success": "Yes" if item.get("success") else "No",
+                        "Latency": item.get("latency_ms", ""),
+                    }
+                )
+            st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No integration audit events yet.")
+
+
+def render_ai_mt_providers_panel() -> None:
+    st.markdown("### AI & MT providers")
+    st.caption("Use included AI/MT, or add an OpenAI-compatible API key for translation generation. Language-resource connections are managed separately.")
+    current_mode = current_ai_route_label()
+    st.info(f"Current route: {current_mode}")
+    with st.form("byo_key_form"):
+        presets = {
+            "OpenAI": "",
+            "OpenAI-compatible / Custom": st.session_state.get("byo_ai_base_url", ""),
+            "OpenRouter": "https://openrouter.ai/api/v1",
+            "Groq": "https://api.groq.com/openai/v1",
+            "Together AI": "https://api.together.xyz/v1",
+            "Fireworks AI": "https://api.fireworks.ai/inference/v1",
+            "Google Gemini OpenAI-compatible": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "Local vLLM / LM Studio": "http://127.0.0.1:8000/v1",
+        }
+        provider = st.selectbox("API provider", list(presets.keys()), index=list(presets.keys()).index(st.session_state.get("byo_ai_provider", "OpenAI-compatible / Custom")) if st.session_state.get("byo_ai_provider") in presets else 1)
+        default_base = presets.get(provider, "")
+        byo_base_url = st.text_input(
+            "Base URL (leave blank for OpenAI)",
+            value=st.session_state.get("byo_ai_base_url", default_base) or default_base,
+            help="Use any OpenAI-compatible chat/completions endpoint. Examples: Groq, OpenRouter, Together, Fireworks, Gemini OpenAI-compatible, vLLM, LM Studio.",
+        )
+        byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to use included/self-hosted routes if configured.")
+        byo_model = st.text_input("Model name", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
+        col_a, col_b = st.columns(2)
+        save_key = col_a.form_submit_button("Use this key", use_container_width=True)
+        clear_key = col_b.form_submit_button("Clear BYO key", use_container_width=True)
+    if save_key:
+        if byo_key.strip():
+            st.session_state["byo_openai_api_key"] = byo_key.strip()
+            st.session_state["byo_openai_model"] = byo_model.strip() or DEFAULT_MODEL
+            st.session_state["byo_ai_provider"] = provider
+            st.session_state["byo_ai_base_url"] = byo_base_url.strip()
+            st.success(f"BYO {provider} key activated for this session.")
+        else:
+            st.warning("No key entered. Included AI will be used if configured.")
+    if clear_key:
+        st.session_state.pop("byo_openai_api_key", None)
+        st.session_state.pop("byo_openai_model", None)
+        st.session_state.pop("byo_ai_provider", None)
+        st.session_state.pop("byo_ai_base_url", None)
+        st.success("BYO key cleared. Included AI will be used if configured.")
+
+
 def page_account() -> None:
     hero("Account", "Profile and workspace preferences", "Manage user profile, workspace settings, and notification preferences.")
     user = current_user() or {}
@@ -24803,8 +25725,11 @@ def page_account() -> None:
                 ("Account Overview", "Identity, role, and workspace details"),
                 ("Professional Profile", "Talent profile used for job matching"),
             ]),
+            ("Integrations", [
+                ("AI & MT Providers", "Bring your own AI provider for this session"),
+                ("Language Resource Connections", "Connect external TM, glossary, and DNT APIs"),
+            ]),
             ("Preferences", [
-                ("AI Access", "Bring your own AI provider for this session"),
                 ("Support", "Account help and support requests"),
                 ("Notifications", "Personal notification preferences and history"),
             ]),
@@ -24859,49 +25784,11 @@ def page_account() -> None:
                     st.session_state.pop("_profile_completion_force", None)
                     st.rerun()
 
-        elif selected_section == "AI Access":
-            st.markdown("### AI access")
-            st.caption("Use included AI, or add any OpenAI-compatible API key, model, and base URL available to you. Your key is kept only in this session for the MVP.")
-            current_mode = current_ai_route_label()
-            st.info(f"Current route: {current_mode}")
-            with st.form("byo_key_form"):
-                presets = {
-                    "OpenAI": "",
-                    "OpenAI-compatible / Custom": st.session_state.get("byo_ai_base_url", ""),
-                    "OpenRouter": "https://openrouter.ai/api/v1",
-                    "Groq": "https://api.groq.com/openai/v1",
-                    "Together AI": "https://api.together.xyz/v1",
-                    "Fireworks AI": "https://api.fireworks.ai/inference/v1",
-                    "Google Gemini OpenAI-compatible": "https://generativelanguage.googleapis.com/v1beta/openai",
-                    "Local vLLM / LM Studio": "http://127.0.0.1:8000/v1",
-                }
-                provider = st.selectbox("API provider", list(presets.keys()), index=list(presets.keys()).index(st.session_state.get("byo_ai_provider", "OpenAI-compatible / Custom")) if st.session_state.get("byo_ai_provider") in presets else 1)
-                default_base = presets.get(provider, "")
-                byo_base_url = st.text_input(
-                    "Base URL (leave blank for OpenAI)",
-                    value=st.session_state.get("byo_ai_base_url", default_base) or default_base,
-                    help="Use any OpenAI-compatible chat/completions endpoint. Examples: Groq, OpenRouter, Together, Fireworks, Gemini OpenAI-compatible, vLLM, LM Studio.",
-                )
-                byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to use included/self-hosted routes if configured.")
-                byo_model = st.text_input("Model name", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
-                col_a, col_b = st.columns(2)
-                save_key = col_a.form_submit_button("Use this key", use_container_width=True)
-                clear_key = col_b.form_submit_button("Clear BYO key", use_container_width=True)
-            if save_key:
-                if byo_key.strip():
-                    st.session_state["byo_openai_api_key"] = byo_key.strip()
-                    st.session_state["byo_openai_model"] = byo_model.strip() or DEFAULT_MODEL
-                    st.session_state["byo_ai_provider"] = provider
-                    st.session_state["byo_ai_base_url"] = byo_base_url.strip()
-                    st.success(f"BYO {provider} key activated for this session.")
-                else:
-                    st.warning("No key entered. Included AI will be used if configured.")
-            if clear_key:
-                st.session_state.pop("byo_openai_api_key", None)
-                st.session_state.pop("byo_openai_model", None)
-                st.session_state.pop("byo_ai_provider", None)
-                st.session_state.pop("byo_ai_base_url", None)
-                st.success("BYO key cleared. Included AI will be used if configured.")
+        elif selected_section in {"AI Access", "AI & MT Providers"}:
+            render_ai_mt_providers_panel()
+
+        elif selected_section == "Language Resource Connections":
+            render_language_resource_connections_panel()
 
         elif selected_section == "Support":
             render_account_support_panel()

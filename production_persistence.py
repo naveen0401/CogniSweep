@@ -93,6 +93,10 @@ SAAS_TABLES = {
     "files": "errorsweep_files",
     "notifications": "errorsweep_notifications",
     "task_queue": "errorsweep_task_queue",
+    "integration_connections": "errorsweep_integration_connections",
+    "resource_bindings": "errorsweep_resource_bindings",
+    "resource_lookup_cache": "errorsweep_resource_lookup_cache",
+    "integration_audit": "errorsweep_integration_audit",
 }
 
 SAAS_COLUMNS = {
@@ -161,6 +165,27 @@ SAAS_COLUMNS = {
     "files": {"id", "workspace", "user_email", "file_name", "purpose", "mime_type", "size_bytes", "sha256", "storage_key", "storage_provider", "storage_bucket", "public_url", "local_path", "status", "expires_at", "created_at", "updated_at"},
     "notifications": {"id", "workspace", "user_email", "recipient", "subject", "event_type", "status", "provider", "body", "error", "read_at", "dismissed_at", "metadata_json", "sent_at", "created_at", "updated_at"},
     "task_queue": {"id", "workspace", "user_email", "task_type", "label", "status", "progress", "total_units", "processed_units", "result_ref", "error", "metadata_json", "started_at", "finished_at", "created_at", "updated_at"},
+    "integration_connections": {
+        "id", "workspace", "user_email", "connection_id", "owner_user_id", "workspace_id", "scope", "provider",
+        "connection_name", "base_url", "auth_type", "encrypted_secret", "secret_last_four", "status",
+        "automatic_lookup_enabled", "cache_seconds", "source_language", "target_language", "organization_id",
+        "provider_workspace_id", "tm_resource_ids", "glossary_resource_ids", "dnt_resource_ids",
+        "is_personal_default", "last_tested_at", "last_success_at", "last_error_code", "metadata_json",
+        "created_at", "updated_at",
+    },
+    "resource_bindings": {
+        "id", "workspace", "user_email", "binding_id", "connection_id", "project_id", "tm_resource_ids",
+        "glossary_resource_ids", "dnt_resource_ids", "source_language", "target_language", "priority",
+        "enabled", "metadata_json", "created_at", "updated_at",
+    },
+    "resource_lookup_cache": {
+        "id", "workspace", "user_email", "cache_id", "connection_id", "resource_type", "lookup_hash",
+        "normalized_response", "expires_at", "metadata_json", "created_at", "updated_at",
+    },
+    "integration_audit": {
+        "id", "workspace", "user_email", "audit_id", "connection_id", "user_id", "action", "success",
+        "provider_status_code", "latency_ms", "metadata_json", "created_at", "updated_at",
+    },
 }
 
 
@@ -504,6 +529,14 @@ def _record_id(collection: str, record: Dict[str, Any]) -> str:
         return _safe_job_id(
             f"{record.get('workspace') or ''}-{record.get('task_type') or ''}-{record.get('label') or ''}-{record.get('created_at') or _now_iso()}"
         )
+    if collection == "integration_connections" and record.get("connection_id"):
+        return _safe_job_id(record.get("connection_id"))
+    if collection == "resource_bindings" and record.get("binding_id"):
+        return _safe_job_id(record.get("binding_id"))
+    if collection == "resource_lookup_cache" and record.get("cache_id"):
+        return _safe_job_id(record.get("cache_id"))
+    if collection == "integration_audit" and record.get("audit_id"):
+        return _safe_job_id(record.get("audit_id"))
     return uuid.uuid4().hex
 
 

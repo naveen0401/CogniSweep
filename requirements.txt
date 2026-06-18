@@ -5,6 +5,7 @@ openpyxl==3.1.5
 python-docx==1.2.0
 openai==2.38.0
 requests==2.34.2
+cryptography==49.0.0
 defusedxml==0.7.1
 boto3==1.43.31
 google-cloud-storage==3.12.0

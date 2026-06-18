@@ -62,6 +62,7 @@ jobs:
             email_dispatch_worker.py \
             operational_backup_worker.py \
             url_media_fetcher.py \
+            language_resource_connectors.py \
             local_file_lock.py
 
       - name: Run launch-safe regression tests
@@ -101,6 +102,7 @@ jobs:
           python test_media_editor_reference.py
           python test_subtitle_external_editor_only.py
           python test_url_media_fetcher.py
+          python test_language_resource_connectors.py
           python test_media_timing_tools.py
           python test_pro_reconstruction.py
           python test_qa_engine_shims.py

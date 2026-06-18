@@ -944,6 +944,10 @@
         </div>
         <div class="assist-scroll es-scroll">
           <div class="assist-section">
+            <h3>Connections</h3>
+            <div id="connectionStatus"></div>
+          </div>
+          <div class="assist-section">
             <h3>TM matches</h3>
             <div id="tmMatches"></div>
           </div>
@@ -1608,6 +1612,7 @@
 
     function renderAssist(row) {
       const resources = payload.resources || {};
+      const status = Array.isArray(resources.status) ? resources.status : [];
       const source = safe(row.source).toLowerCase();
       const target = safe(row.target).toLowerCase();
       const tm = (resources.tm || []).filter((item) => {
@@ -1626,6 +1631,7 @@
       if (cps > 20) quality.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
       if (safe(row.target).length > 84) quality.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
       if (parseTimecode(row.end) <= parseTimecode(row.start)) quality.push({ severity: "Blocker", message: "End time must be after start time." });
+      el("connectionStatus").innerHTML = status.length ? status.map((item) => `<div class="assist-card"><b>${htmlEscape(item.connection || "Language resources")}</b><br>${htmlEscape(item.status || "")}</div>`).join("") : `<div class="empty">Internal resources active.</div>`;
       el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape(item.note || item.language || "TM match")}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
       el("glossaryMatches").innerHTML = glossary.length ? glossary.map((item) => `<div class="assist-card"><b>${htmlEscape(item.source)}</b> -> ${htmlEscape(item.target)}<small>${htmlEscape(item.source_name || "Saved glossary")}</small></div>`).join("") : `<div class="empty">No glossary hits.</div>`;
       el("qualityChecks").innerHTML = quality.length ? quality.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.severity || item.Severity || "Review")}</b><br>${htmlEscape(item.message || item.Explanation || item.issue || "Review this segment.")}</div>`).join("") : `<div class="assist-card"><b>Clear</b><br>No timing or quality warnings for the selected segment.</div>`;

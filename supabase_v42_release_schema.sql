@@ -561,6 +561,112 @@ create index if not exists idx_errorsweep_consent_records_email on public.errors
 create index if not exists idx_errorsweep_consent_records_versions on public.errorsweep_consent_records(terms_version, privacy_version, nda_version);
 create index if not exists idx_errorsweep_consent_records_updated_at on public.errorsweep_consent_records(updated_at desc);
 
+create table if not exists public.errorsweep_integration_connections (
+    id text primary key,
+    workspace text,
+    user_email text,
+    connection_id text unique,
+    owner_user_id text,
+    workspace_id text,
+    scope text,
+    provider text,
+    connection_name text,
+    base_url text,
+    auth_type text,
+    encrypted_secret text,
+    secret_last_four text,
+    status text,
+    automatic_lookup_enabled boolean not null default true,
+    cache_seconds integer not null default 600,
+    source_language text,
+    target_language text,
+    organization_id text,
+    provider_workspace_id text,
+    tm_resource_ids jsonb,
+    glossary_resource_ids jsonb,
+    dnt_resource_ids jsonb,
+    is_personal_default boolean not null default false,
+    last_tested_at timestamptz,
+    last_success_at timestamptz,
+    last_error_code text,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_integration_connections_workspace on public.errorsweep_integration_connections(workspace);
+create index if not exists idx_errorsweep_integration_connections_user_email on public.errorsweep_integration_connections(user_email);
+create index if not exists idx_errorsweep_integration_connections_connection_id on public.errorsweep_integration_connections(connection_id);
+create index if not exists idx_errorsweep_integration_connections_status on public.errorsweep_integration_connections(status);
+create index if not exists idx_errorsweep_integration_connections_updated_at on public.errorsweep_integration_connections(updated_at desc);
+
+create table if not exists public.errorsweep_resource_bindings (
+    id text primary key,
+    workspace text,
+    user_email text,
+    binding_id text unique,
+    connection_id text,
+    project_id text,
+    tm_resource_ids jsonb,
+    glossary_resource_ids jsonb,
+    dnt_resource_ids jsonb,
+    source_language text,
+    target_language text,
+    priority integer not null default 100,
+    enabled boolean not null default true,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_resource_bindings_workspace on public.errorsweep_resource_bindings(workspace);
+create index if not exists idx_errorsweep_resource_bindings_user_email on public.errorsweep_resource_bindings(user_email);
+create index if not exists idx_errorsweep_resource_bindings_connection_id on public.errorsweep_resource_bindings(connection_id);
+create index if not exists idx_errorsweep_resource_bindings_project_id on public.errorsweep_resource_bindings(project_id);
+create index if not exists idx_errorsweep_resource_bindings_enabled on public.errorsweep_resource_bindings(enabled);
+create index if not exists idx_errorsweep_resource_bindings_updated_at on public.errorsweep_resource_bindings(updated_at desc);
+
+create table if not exists public.errorsweep_resource_lookup_cache (
+    id text primary key,
+    workspace text,
+    user_email text,
+    cache_id text unique,
+    connection_id text,
+    resource_type text,
+    lookup_hash text,
+    normalized_response jsonb,
+    expires_at timestamptz,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_resource_lookup_cache_workspace on public.errorsweep_resource_lookup_cache(workspace);
+create index if not exists idx_errorsweep_resource_lookup_cache_user_email on public.errorsweep_resource_lookup_cache(user_email);
+create index if not exists idx_errorsweep_resource_lookup_cache_lookup_hash on public.errorsweep_resource_lookup_cache(lookup_hash);
+create index if not exists idx_errorsweep_resource_lookup_cache_expires_at on public.errorsweep_resource_lookup_cache(expires_at);
+
+create table if not exists public.errorsweep_integration_audit (
+    id text primary key,
+    workspace text,
+    user_email text,
+    audit_id text unique,
+    connection_id text,
+    user_id text,
+    action text,
+    success boolean,
+    provider_status_code integer,
+    latency_ms integer,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_integration_audit_workspace on public.errorsweep_integration_audit(workspace);
+create index if not exists idx_errorsweep_integration_audit_user_email on public.errorsweep_integration_audit(user_email);
+create index if not exists idx_errorsweep_integration_audit_connection_id on public.errorsweep_integration_audit(connection_id);
+create index if not exists idx_errorsweep_integration_audit_created_at on public.errorsweep_integration_audit(created_at desc);
+
 alter table public.errorsweep_editor_jobs enable row level security;
 alter table public.errorsweep_usage_events enable row level security;
 alter table public.errorsweep_users enable row level security;
@@ -582,6 +688,10 @@ alter table public.errorsweep_privacy_requests enable row level security;
 alter table public.errorsweep_support_tickets enable row level security;
 alter table public.errorsweep_status_incidents enable row level security;
 alter table public.errorsweep_consent_records enable row level security;
+alter table public.errorsweep_integration_connections enable row level security;
+alter table public.errorsweep_resource_bindings enable row level security;
+alter table public.errorsweep_resource_lookup_cache enable row level security;
+alter table public.errorsweep_integration_audit enable row level security;
 
 create or replace function public.errorsweep_jwt_workspace()
 returns text
@@ -777,6 +887,30 @@ create policy errorsweep_consent_records_tenant_access on public.errorsweep_cons
 for all to authenticated
 using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email))
 with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(email));
+
+drop policy if exists errorsweep_integration_connections_tenant_access on public.errorsweep_integration_connections;
+create policy errorsweep_integration_connections_tenant_access on public.errorsweep_integration_connections
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_resource_bindings_tenant_access on public.errorsweep_resource_bindings;
+create policy errorsweep_resource_bindings_tenant_access on public.errorsweep_resource_bindings
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_resource_lookup_cache_tenant_access on public.errorsweep_resource_lookup_cache;
+create policy errorsweep_resource_lookup_cache_tenant_access on public.errorsweep_resource_lookup_cache
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
+
+drop policy if exists errorsweep_integration_audit_tenant_access on public.errorsweep_integration_audit;
+create policy errorsweep_integration_audit_tenant_access on public.errorsweep_integration_audit
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(user_id))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(user_id));
 
 create or replace view public.errorsweep_usage_daily as
 select
