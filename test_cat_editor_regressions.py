@@ -256,6 +256,28 @@ def test_cat_editor_uses_real_logo_and_route_back_button() -> None:
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in body
 
 
+def test_cat_editor_has_mobile_working_layout() -> None:
+    html = Path("assets/cat_editor_reference.html").read_text(encoding="utf-8")
+    mobile_start = html.index("@media (max-width: 760px)")
+    mobile_end = html.index("@media (max-width: 430px)", mobile_start)
+    mobile_css = html[mobile_start:mobile_end]
+
+    assert ".app-shell {" in mobile_css
+    assert "padding-top: 0;" in mobile_css
+    assert ".app-header {" in mobile_css
+    assert "position: static;" in mobile_css
+    assert ".header-actions {" in mobile_css
+    assert "overflow-x: auto;" in mobile_css
+    assert ".editor-layout {" in mobile_css
+    assert "grid-template-columns: minmax(0, 1fr);" in mobile_css
+    assert ".right-column {" in mobile_css
+    assert "display: none;" in mobile_css
+    assert ".left-column {" in mobile_css
+    assert "grid-template-rows: 44px minmax(92px, 20vh) auto 42px minmax(0, 1fr) auto;" in mobile_css
+    assert ".table-wrap {" in mobile_css
+    assert "-webkit-overflow-scrolling: touch;" in mobile_css
+
+
 def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     source = read_app()
     assert "def public_login_link_target() -> str" in source
@@ -1085,6 +1107,8 @@ if __name__ == "__main__":
     test_editor_urls_are_clean_routes_without_session_tokens()
     test_editor_links_seed_browser_session_before_new_tab()
     test_human_review_editor_uses_es_page_review_id_route()
+    test_cat_editor_uses_real_logo_and_route_back_button()
+    test_cat_editor_has_mobile_working_layout()
     test_reload_session_restore_uses_cookie_not_url_only()
     test_session_check_page_removed_and_protected_routes_resolve()
     test_public_login_signup_navigation_ignores_restore_miss()

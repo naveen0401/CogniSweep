@@ -49,9 +49,29 @@ def test_reference_media_editor_has_real_logo_slot_and_route_back_button():
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in app_source
 
 
+def test_reference_media_editor_has_mobile_working_layout():
+    html = REFERENCE_HTML.read_text(encoding="utf-8")
+    mobile_start = html.index("@media (max-width: 760px)")
+    mobile_end = html.index("@media (max-width: 430px)", mobile_start)
+    mobile_css = html[mobile_start:mobile_end]
+
+    assert ".header-actions {" in mobile_css
+    assert "overflow-x: auto;" in mobile_css
+    assert ".editor-layout {" in mobile_css
+    assert "grid-template-columns: minmax(0, 1fr);" in mobile_css
+    assert ".left-column {" in mobile_css
+    assert "grid-template-rows: minmax(240px, 42vh) auto minmax(0, 1fr) auto;" in mobile_css
+    assert ".media-strip {" in mobile_css
+    assert "grid-template-columns: 1fr;" in mobile_css
+    assert ".table-wrap {" in mobile_css
+    assert "-webkit-overflow-scrolling: touch;" in mobile_css
+    assert "body.transcription-mode table" in mobile_css
+
+
 if __name__ == "__main__":
     test_reference_media_editor_has_timing_quick_actions()
     test_reference_media_editor_updates_timing_metrics()
     test_reference_media_editor_uses_fixed_viewport_shell()
     test_reference_media_editor_has_real_logo_slot_and_route_back_button()
+    test_reference_media_editor_has_mobile_working_layout()
     print("Media editor reference checks passed.")

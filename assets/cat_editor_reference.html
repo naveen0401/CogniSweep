@@ -589,6 +589,205 @@
       .context-panel { grid-template-columns: 1fr; }
       .mode-actions { display: none; }
     }
+
+    @media (max-width: 760px) {
+      html,
+      body {
+        overflow: hidden;
+      }
+      .app-shell {
+        height: 100dvh;
+        max-height: 100dvh;
+        padding-top: 0;
+        padding-bottom: 0;
+        overflow: hidden;
+      }
+      .app-header {
+        position: static;
+        box-sizing: border-box;
+        width: 100vw;
+        max-width: 100vw;
+        height: auto;
+        min-height: 0;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px 10px;
+        overflow: hidden;
+      }
+      .brand {
+        width: calc(100vw - 20px);
+        max-width: calc(100vw - 20px);
+        gap: 10px;
+        align-items: flex-start;
+      }
+      .title-block {
+        flex: 1 1 auto;
+        max-width: calc(100% - 44px);
+      }
+      .logo {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+      }
+      .title,
+      .subtitle {
+        overflow-wrap: anywhere;
+        overflow: hidden;
+      }
+      .title {
+        display: block;
+        font-size: 13px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .subtitle {
+        display: none;
+      }
+      .header-actions {
+        flex: 1 1 calc(100vw - 20px);
+        width: calc(100vw - 20px);
+        max-width: calc(100vw - 20px);
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+      .header-actions::-webkit-scrollbar {
+        display: none;
+      }
+      .header-actions .btn,
+      .header-actions .pill {
+        flex: 0 0 auto;
+        height: 34px;
+        padding: 0 10px;
+      }
+      .header-actions .pill {
+        display: none;
+      }
+      .editor-layout {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+        min-height: 0;
+        overflow: hidden;
+      }
+      .right-column {
+        display: none;
+      }
+      .left-column {
+        width: 100vw;
+        max-width: 100vw;
+        height: 100%;
+        border-right: 0;
+        grid-template-rows: 44px minmax(92px, 20vh) auto 42px minmax(0, 1fr) auto;
+      }
+      .tabs-row {
+        min-height: 44px;
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding: 0 8px;
+        scrollbar-width: none;
+      }
+      .tabs-row::-webkit-scrollbar,
+      .tabs::-webkit-scrollbar {
+        display: none;
+      }
+      .tabs {
+        height: 44px;
+        flex: 1 1 auto;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .tab {
+        padding: 0 12px;
+        font-size: 12px;
+      }
+      .context-panel {
+        grid-template-columns: 1fr;
+        max-height: 20vh;
+        padding: 8px;
+        gap: 8px;
+      }
+      .context-card {
+        padding: 8px;
+      }
+      .context-preview {
+        display: none;
+      }
+      .search-row {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .search-box {
+        grid-template-columns: 1fr;
+        gap: 6px;
+        padding: 8px;
+        border-right: 0;
+      }
+      .search-box input {
+        height: 34px;
+      }
+      .search-actions {
+        gap: 8px;
+        padding: 0 8px 8px;
+        overflow-x: auto;
+      }
+      .search-actions > .link-action,
+      .search-actions > .action-menu {
+        flex: 0 0 auto;
+        min-width: 130px;
+      }
+      .format-row {
+        min-height: 42px;
+        gap: 8px;
+        padding: 0 8px;
+      }
+      .format-row button {
+        min-width: 36px;
+      }
+      .table-wrap {
+        min-height: 0;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      table {
+        min-width: 680px;
+        font-size: 12px;
+      }
+      th,
+      td {
+        padding: 7px 8px;
+      }
+      .col-id { width: 44px; }
+      .col-match { width: 68px; }
+      .col-confirm { width: 62px; }
+      .target-editor {
+        min-height: 54px;
+        font-size: 12px;
+      }
+      .editor-footer {
+        height: auto;
+        min-height: 38px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        padding: 6px 8px;
+        white-space: normal;
+        font-size: 11px;
+      }
+    }
+
+    @media (max-width: 430px) {
+      .left-column {
+        grid-template-rows: 42px minmax(84px, 18vh) auto 40px minmax(0, 1fr) auto;
+      }
+      .header-actions .btn {
+        font-size: 12px;
+      }
+      table {
+        min-width: 640px;
+      }
+    }
   </style>
 </head>
 <body>
