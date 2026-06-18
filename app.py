@@ -4224,7 +4224,7 @@ def is_production_mode() -> bool:
 
 FEATURE_FLAG_META = {
     "main_api_translation": ("Main API translation", "Allow Pro/QA workflows to call BYO AI or built-in MT translation routes."),
-    "pro_human_review": ("Pro post-editing Human Review", "Allow Pro translation to open the Human Review workspace."),
+    "pro_human_review": ("Translation Studio Human Review", "Allow Translation Studio runs to open the Human Review workspace."),
     "scorecards": ("Scorecards", "Allow translator/reviewer scorecard generation workflows."),
     "subtitle_editor": ("Subtitle / Transcription Editor", "Allow subtitle and transcription workspace tools."),
     "public_registration": ("Public registration", "Allow unauthenticated users to create a trial workspace."),
@@ -6837,8 +6837,12 @@ ROUTE_PAGE_ALIASES = {
     "job_history": "Job History",
     "history": "Job History",
     "pro": "CogniSweep Pro",
+    "translation": "CogniSweep Pro",
+    "translation-studio": "CogniSweep Pro",
     "quality": "CogniSweep QA",
     "quality-checks": "CogniSweep QA",
+    "qa-report": "CogniSweep QA",
+    "qa-reports": "CogniSweep QA",
     "qa": "CogniSweep QA",
     "glossary": "Memory & Rules",
     "translation-memory": "Memory & Rules",
@@ -6954,6 +6958,10 @@ def normalize_es_page(raw_page: Any) -> str:
         "errorsweep pro": "CogniSweep Pro",
         "error sweep pro": "CogniSweep Pro",
         "errorsweeppro": "CogniSweep Pro",
+        "translation": "CogniSweep Pro",
+        "translate": "CogniSweep Pro",
+        "translation studio": "CogniSweep Pro",
+        "translation workflow": "CogniSweep Pro",
         "human review editor": "Human Review Editor",
         "humanrevieweditor": "Human Review Editor",
         "pro": "CogniSweep Pro",
@@ -6963,6 +6971,8 @@ def normalize_es_page(raw_page: Any) -> str:
         "jobhistory": "Job History",
         "history": "Job History",
         "qa tasks": "CogniSweep QA",
+        "qa report": "CogniSweep QA",
+        "qa reports": "CogniSweep QA",
         "qa": "CogniSweep QA",
         "quality": "CogniSweep QA",
         "quality checks": "CogniSweep QA",
@@ -8169,8 +8179,8 @@ def render_navigation() -> None:
         "Projects": "Projects",
         "Jobs": "Jobs",
         "Job History": "History",
-        "CogniSweep QA": "QA Tasks",
-        "CogniSweep Pro": "Pro",
+        "CogniSweep QA": "QA Reports",
+        "CogniSweep Pro": "Translation",
         "Subtitle / Transcription Editor": "Media Studio",
         "Scorecards": "Scorecards",
         "Memory & Rules": "Rules",
@@ -8945,7 +8955,7 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
             "id": "async_worker",
             "service": "Async worker",
             "provider": safe_text(async_health.get("provider") or "local"),
-            "purpose": "External processing for heavy QA and Pro translation tasks",
+            "purpose": "External processing for heavy QA and Translation Studio tasks",
             "data_categories": "Uploaded files, source/target text, rules, task metadata",
             "route_type": "external" if async_active else "local",
             "active": async_active,
@@ -11528,7 +11538,7 @@ def render_task_queue_panel(limit: int = 12) -> None:
     tasks = st.session_state.get("task_queue", [])
     st.markdown("### Async task queue")
     if not tasks:
-        st.info("No task lifecycle records yet. QA and Pro runs will appear here with progress, status, and retry visibility.")
+        st.info("No task lifecycle records yet. QA and Translation Studio runs will appear here with progress, status, and retry visibility.")
         return
     summary = task_status_summary(tasks)
     metrics([
@@ -15845,7 +15855,7 @@ def save_review_session_to_store(
     context: Optional[Dict[str, str]] = None,
     export_source: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Save a Pro review job for separate-tab editor use.
+    """Save a Translation Studio review job for separate-tab editor use.
 
     v42 release hardening:
     - session memory for current tab
@@ -15859,7 +15869,7 @@ def save_review_session_to_store(
         "target_language": target_language,
         "file_name": file_name,
         "created": now_stamp() if "now_stamp" in globals() else "",
-        "source": "CogniSweep Pro",
+        "source": "Translation Studio",
         "workspace": user.get("workspace", "Demo Workspace"),
         "user_email": user.get("email", ""),
         "status": "draft",
@@ -15911,7 +15921,7 @@ def save_review_session_to_store(
         "row_count": len(rows or []),
         "created": metadata.get("created", ""),
         "updated_at": metadata.get("created", ""),
-        "source": metadata.get("source", "CogniSweep Pro"),
+        "source": metadata.get("source", "Translation Studio"),
     }
     st.session_state["last_pro_task_details"] = owner_job_record
     st.session_state.setdefault("owner_recent_editor_jobs", [])
@@ -16364,7 +16374,7 @@ def load_review_session_from_store(session_id: str) -> bool:
     st.session_state.latest_human_review_segments = rows
     st.session_state.pro_post_editing_ready = True
     st.session_state.selected_review_index = min(int(st.session_state.get("selected_review_index", 0) or 0), max(len(rows)-1, 0))
-    st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "CogniSweep Pro"
+    st.session_state.review_workspace_title = metadata.get("title") or payload.get("title") or "Translation Studio"
     st.session_state.review_workspace_language = metadata.get("target_language") or payload.get("target_language") or ""
     st.session_state.review_workspace_file_name = metadata.get("file_name") or payload.get("file_name") or ""
     st.session_state.review_workspace_context = metadata.get("context") or payload.get("context") or {}
@@ -16376,7 +16386,7 @@ def load_review_session_from_store(session_id: str) -> bool:
 
 def prepare_human_review_session(
     rows: List[Dict[str, Any]],
-    source: str = "CogniSweep Pro",
+    source: str = "Translation Studio",
     target_language: str = "",
     file_name: str = "",
     rules: Optional[Dict[str, Any]] = None,
@@ -16468,7 +16478,7 @@ def go_to_human_review_workspace() -> None:
     if session_id:
         navigate_to_human_review_editor(str(session_id))
         return
-    st.error("Missing review_id. Run Pro translation before opening Human Review.")
+    st.error("Missing review_id. Run Translation Studio before opening Human Review.")
 
 
 def current_session_token_for_links() -> str:
@@ -16927,7 +16937,7 @@ def render_reference_cat_editor_shell(
     )
     html = re.sub(
         r'<div class="subtitle">.*?</div>',
-        f'<div class="subtitle">CogniSweep CAT Editor &middot; Pro Human Review &middot; File: {escape(file_name)}</div>',
+        f'<div class="subtitle">CogniSweep CAT Editor &middot; Translation Review &middot; File: {escape(file_name)}</div>',
         html,
         count=1,
         flags=re.S,
@@ -17087,12 +17097,12 @@ def render_reference_cat_editor_shell(
 def render_external_cat_editor(job_id: str) -> None:
     payload = load_external_editor_payload(job_id)
     if not payload:
-        st.error("Editor job not found or expired. Please go back to CogniSweep Pro and open the editor again.")
+        st.error("Editor job not found or expired. Please go back to Translation Studio and open the editor again.")
         return
     rows = payload.get("rows") or []
     metadata = payload.get("metadata") or payload
     if not rows:
-        st.error("This editor job has no rows. Please rerun Pro translation and open the editor again.")
+        st.error("This editor job has no rows. Please rerun Translation Studio and open the editor again.")
         return
     if not (metadata.get("export_source") or payload.get("export_source")):
         recovered_export_source = recover_pro_export_source_for_file(metadata.get("file_name") or payload.get("file_name") or "")
@@ -17527,10 +17537,10 @@ def render_external_editor_router() -> bool:
     if route.get("route") == "human_review_editor":
         review_id = safe_text(route.get("review_id") or query_get("review_id"))
         if not review_id:
-            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            st.error("Missing review_id. Open Human Review Editor from the Translation Studio result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the Translation Studio result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -17538,10 +17548,10 @@ def render_external_editor_router() -> bool:
     if requested_page in HUMAN_REVIEW_EDITOR_PAGES:
         review_id = safe_text(route.get("review_id") or query_get("review_id"))
         if not review_id:
-            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            st.error("Missing review_id. Open Human Review Editor from the Translation Studio result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the Translation Studio result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -17551,10 +17561,10 @@ def render_external_editor_router() -> bool:
     if editor_type == "human_review":
         review_id = safe_text(route.get("review_id") or query_get("review_id"))
         if not review_id:
-            st.error("Missing review_id. Open Human Review Editor from the Pro review result page.")
+            st.error("Missing review_id. Open Human Review Editor from the Translation Studio result page.")
             return True
         if not load_external_editor_payload(review_id):
-            st.error("Review not found. Go back to the CogniSweep Pro review result page and open the Human Review Editor again.")
+            st.error("Review not found. Go back to the Translation Studio result page and open the Human Review Editor again.")
             return True
         render_external_cat_editor(review_id)
         return True
@@ -19100,7 +19110,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                       <div class="es-lp-panel">
                         <div class="es-lp-panel-head">
                           <div>
-                            <div class="es-lp-eyebrow">CogniSweep Pro run</div>
+                            <div class="es-lp-eyebrow">Translation Studio run</div>
                             <h3>Mobile app strings - French</h3>
                           </div>
                           <div class="es-lp-status">Human Review ready</div>
@@ -19199,7 +19209,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                 </article>
                 <article class="es-lp-card">
                   <div class="es-lp-icon">PRO</div>
-                  <h3>CogniSweep Pro</h3>
+                  <h3>Translation Studio</h3>
                   <p>Translate source files with rules, run QA automatically, and open a dedicated Human Review editor for approval.</p>
                   <span class="es-lp-card-link es-lp-sky">Translate + QA + review</span>
                 </article>
@@ -19256,7 +19266,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                   <h2>Every export has a review path.</h2>
                   <p>CogniSweep keeps quality decisions visible. QA findings, translator edits, reviewer comments, timing checks, and scorecard penalties remain tied to the work that produced them.</p>
                   <ul class="es-lp-list">
-                    <li><span class="es-lp-sky">OK</span> QA reports for bilingual content and Pro translation output</li>
+                    <li><span class="es-lp-sky">OK</span> QA reports for bilingual content and Translation Studio output</li>
                     <li><span class="es-lp-sky">OK</span> Human Review editor with source, target, TM, glossary, DNT, issues, and history</li>
                     <li><span class="es-lp-sky">OK</span> Translator-vs-reviewer Excel scorecards with anonymized export</li>
                   </ul>
@@ -19269,7 +19279,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
             <div class="es-lp-inner">
               <div class="es-lp-cta">
                 <h2>Launch a real localization command center, not another file handoff process.</h2>
-                <p>Start with QA and Pro review, then expand into media localization, scorecards, team access, billing, and production readiness.</p>
+                <p>Start with QA and Translation Studio review, then expand into media localization, scorecards, team access, billing, and production readiness.</p>
                 <div class="es-lp-hero-actions">
                   <a class="es-lp-btn primary" href="{public_page_link('signup')}" target="_self">Start for free</a>
                   <a class="es-lp-btn" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
@@ -20483,7 +20493,7 @@ def _legacy_page_dashboard_unused() -> None:
         st.markdown("### 📁 Create a project")
         st.caption("Set source/target languages, domain, and reusable rules.")
     with c2.container(border=True):
-        st.markdown("### 🚀 Run QA or Pro")
+        st.markdown("### 🚀 Run QA or Translation")
         st.caption("Upload bilingual files or source files and route outputs to review.")
     with c3.container(border=True):
         st.markdown("### 🎬 Subtitle / Transcription")
@@ -20536,7 +20546,7 @@ def page_dashboard() -> None:
         return app_nav_attr(key, page_link(page))
 
     new_project_attr = dashboard_nav_attr("Projects", "New Project")
-    pro_translation_attr = dashboard_nav_attr("CogniSweep Pro", "Run Pro Translation")
+    pro_translation_attr = dashboard_nav_attr("CogniSweep Pro", "Run Translation")
     rules_attr = dashboard_nav_attr("Memory & Rules", "Upload Rules")
     qa_attr = dashboard_nav_attr("CogniSweep QA", "Run QA")
     st.html(
@@ -20554,7 +20564,7 @@ def page_dashboard() -> None:
               </div>
               <div class="es-fab-row">
                 <button type="button" class="es-fab-action" {new_project_attr}>New Project</button>
-                <button type="button" class="es-fab-action" {pro_translation_attr}>Run Pro Translation</button>
+                <button type="button" class="es-fab-action" {pro_translation_attr}>Run Translation</button>
                 <button type="button" class="es-fab-action secondary" {rules_attr}>Upload Rules</button>
                 <button type="button" class="es-fab-action secondary" {qa_attr}>Run QA</button>
               </div>
@@ -20604,7 +20614,7 @@ def page_dashboard() -> None:
                   </div>
                   <div class="es-flow-step">
                     <span class="es-code-chip">02 Analyze</span>
-                    <b>Run QA or Pro</b>
+                    <b>Run QA or Translation</b>
                     <div class="es-small">Detect placeholders, DNT, terminology, and linguistic risk.</div>
                   </div>
                   <div class="es-flow-step">
@@ -20800,7 +20810,7 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
     default_language = targets[0] if targets[0] in LANGUAGE_CATALOG else "French"
     with st.form(form_key, enter_to_submit=False):
         c1, c2, c3 = st.columns(3)
-        job_type = c1.selectbox("Job type", ["QA", "Pro Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
+        job_type = c1.selectbox("Job type", ["QA", "Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
         language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index(default_language), key=f"{form_key}_language")
         assignee = c3.text_input("Assignee", value="reviewer@cognisweep.local", key=f"{form_key}_assignee")
         assignment_files = st.file_uploader("Assignment upload (optional)", accept_multiple_files=True, key=f"{form_key}_files", help="Upload any file or ZIP package that should be assigned with this project job.")
@@ -21351,7 +21361,7 @@ def page_jobs() -> None:
 
 
 def page_job_history() -> None:
-    hero("Job History", "Account task history", "Review project tasks and direct Pro uploads for this account with links back to the editor.")
+    hero("Job History", "Account task history", "Review project tasks and direct translation uploads for this account with links back to the editor.")
     user = current_user() or {}
     rows = job_history_rows_for_user(user)
     projects = job_history_projects_for_user(user)
@@ -21396,12 +21406,12 @@ def page_job_history() -> None:
 
     st.markdown("### Individual tasks")
     if direct_rows:
-        st.caption("Direct Pro uploads and standalone editor jobs appear here when they are not attached to a project.")
+        st.caption("Direct translation uploads and standalone editor jobs appear here when they are not attached to a project.")
     render_job_history_table(direct_rows, "job_history_individual_tasks")
 
 
 def page_qa() -> None:
-    hero("CogniSweep QA", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
+    hero("QA Reports", "Review existing translation", "Upload bilingual files, detect issues, and create review-ready findings.")
     render_stepper(["Upload bilingual file", "Select rules and strictness", "Run QA report"], active_idx=0)
     render_upload_dropzone("Drop bilingual content here", "Supports Excel, CSV, DOCX, TXT, SRT, and VTT. Rules ZIP can be attached for client-specific QA.", "XLSX / CSV / DOCX / SRT")
     file = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="qa_file")
@@ -21558,7 +21568,7 @@ def page_qa() -> None:
             "qa.completed",
             metadata={"segments": len(findings), "score": qa_summary["qa_score"], "result": qa_summary["result"]},
         )
-        st.success("QA completed. Download the professional QA workbook below. Post-editing Human Review is available after Pro translation runs only.")
+        st.success("QA completed. Download the professional QA workbook below. Post-editing Human Review is available after Translation Studio runs only.")
         metrics([
             ("QA Score", qa_summary["qa_score"], qa_summary["result"]),
             ("Segments", qa_summary["total_segments"], "checked"),
@@ -21586,9 +21596,9 @@ def page_qa() -> None:
 
 
 def page_pro() -> None:
-    hero("CogniSweep Pro", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
+    hero("Translation Studio", "Translate + QA + Human Review", "Translate first, then open a dedicated Human Review workspace for editing and approval.")
     if not feature_flag("pro_human_review"):
-        st.warning("CogniSweep Pro and Human Review are currently disabled by Platform Settings.")
+        st.warning("Translation Studio and Human Review are currently disabled by Platform Settings.")
         return
     st.caption(f"AI access: {current_ai_route_label()}")
     render_privacy_route_notice("Translation route")
@@ -21622,16 +21632,16 @@ def page_pro() -> None:
                         smoke_rows = smoke_test_builtin_engines()
                     st.dataframe(pd.DataFrame(smoke_rows), use_container_width=True, hide_index=True)
 
-    # If a Pro review session already exists, keep the action visible even after reruns.
+    # If a translation review session already exists, keep the action visible even after reruns.
     # This prevents the user from losing access to the post-editing workspace.
     if st.session_state.get("review_segments") or st.session_state.get("last_pro_review_segments"):
         restore_human_review_session_from_cache()
-        st.success("A Pro Human Review session is ready.")
+        st.success("A Human Review session is ready.")
         review_job_id = safe_text(st.session_state.get("active_review_session_id") or query_get("review_id"))
         if review_job_id:
             render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
         else:
-            st.error("Missing review_id. Run Pro translation before opening Human Review.")
+            st.error("Missing review_id. Run Translation Studio before opening Human Review.")
     render_upload_dropzone("Drop source or bilingual content here", "CogniSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "pptx", "txt", "html", "json", "xml", "xlf", "xliff", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
@@ -21650,7 +21660,7 @@ def page_pro() -> None:
     if st.button("Run Translate + Review", use_container_width=True, disabled=uploaded is None):
         task = create_task_record(
             "pro_translation",
-            f"Pro translation: {getattr(uploaded, 'name', 'uploaded file')} -> {target_language}",
+            f"Translation Studio: {getattr(uploaded, 'name', 'uploaded file')} -> {target_language}",
             metadata={"file_name": getattr(uploaded, "name", ""), "target_language": target_language, "domain": domain_choice},
         )
         update_task_record(task["id"], status="running", progress=5)
@@ -21671,7 +21681,7 @@ def page_pro() -> None:
             update_task_record(task["id"], status="failed", progress=100, error="No segments found in uploaded file.")
             st.error("No segments found.")
             return
-        allowed, usage_message, usage_details = check_workspace_usage_allowance(rows, "Pro translation")
+        allowed, usage_message, usage_details = check_workspace_usage_allowance(rows, "Translation Studio")
         if not allowed:
             update_task_record(task["id"], status="failed", progress=100, error=usage_message, metadata_json={**(task.get("metadata_json") or {}), "usage_check": usage_details})
             st.error(usage_message)
@@ -21793,7 +21803,7 @@ def page_pro() -> None:
         # Without this, the Human Review page can open with no rows and look blank.
         prepare_human_review_session(
             review_rows,
-            source="CogniSweep Pro",
+            source="Translation Studio",
             target_language=target_language,
             file_name=getattr(uploaded, "name", "uploaded_file"),
             rules=client_rules,
@@ -21805,7 +21815,7 @@ def page_pro() -> None:
         pro_job = persist_saas_record("jobs", {
             "created": now_stamp(),
             "workspace": (current_user() or {}).get("workspace", "Demo Workspace"),
-            "type": "Pro Translation",
+            "type": "Translation",
             "file_name": getattr(uploaded, "name", "uploaded_file"),
             "language": target_language,
             "status": status,
@@ -21814,7 +21824,7 @@ def page_pro() -> None:
             "review_job_id": review_session_id,
             "editor_job_id": review_session_id,
             "metadata_json": {
-                "source": "CogniSweep Pro",
+                "source": "Translation Studio",
                 "file_name": getattr(uploaded, "name", "uploaded_file"),
                 "target_language": target_language,
                 "review_job_id": review_session_id,
@@ -21827,7 +21837,7 @@ def page_pro() -> None:
         })
         st.session_state.jobs.insert(0, pro_job)
         trim_session_list("jobs")
-        add_audit("Pro translation run", f"{target_language}: {status}")
+        add_audit("Translation run", f"{target_language}: {status}")
         update_task_record(
             task["id"],
             status="completed" if status != "Blocked" else "needs_review",
@@ -21845,8 +21855,8 @@ def page_pro() -> None:
         record_billable_workflow_usage("pro_translation", review_rows, provider="errorsweep_pro", model="translate_qa_review")
         queue_email_notification(
             (current_user() or {}).get("email", ""),
-            "CogniSweep Pro translation completed",
-            f"Pro translation for {target_language} finished with status '{status}'. Segments: {len(review_rows)}. Missing/review rows: {missing}.",
+            "Translation Studio completed",
+            f"Translation for {target_language} finished with status '{status}'. Segments: {len(review_rows)}. Missing/review rows: {missing}.",
             "pro.completed",
             metadata={
                 "target_language": target_language,
@@ -21877,7 +21887,7 @@ def page_pro() -> None:
             if review_job_id:
                 render_editor_open_link("Open Human Review Editor", human_review_editor_link(str(review_job_id)))
             else:
-                st.error("Review job was not created. Please rerun Pro translation.")
+                st.error("Review job was not created. Please rerun Translation Studio.")
         with cta2:
             uploaded_suffix = Path(getattr(uploaded, "name", "")).suffix.lower()
             if uploaded_suffix == ".csv":
@@ -22374,7 +22384,7 @@ def render_subtitle_transcription_editor() -> None:
 
 def page_subtitle_transcription_editor() -> None:
     # Public/manual editor page. This page is only for subtitle and transcription work.
-    # Pro post-editing Human Review is opened only from CogniSweep Pro via the hidden
+    # Translation Studio Human Review is opened only from CogniSweep Pro via the hidden
     # Human Review Workspace route.
     st.markdown(
         """
@@ -22510,7 +22520,7 @@ def page_human_review() -> None:
 
 
 def page_human_review_workspace() -> None:
-    """Dedicated CAT-style post-editing route opened from CogniSweep Pro outputs only."""
+    """Dedicated CAT-style post-editing route opened from Translation Studio outputs only."""
     st.markdown('<div id="human-review-editor-page-marker" class="human_review_editor_page" aria-hidden="true"></div>', unsafe_allow_html=True)
     if not feature_flag("pro_human_review"):
         st.warning("Human Review is currently disabled by Platform Settings.")
@@ -22521,15 +22531,15 @@ def page_human_review_workspace() -> None:
     if not st.session_state.get("review_segments") and st.session_state.get("pro_post_edit_rows"):
         prepare_human_review_session(
             st.session_state.get("pro_post_edit_rows", []),
-            source="CogniSweep Pro",
+            source="Translation Studio",
             target_language=st.session_state.get("pro_post_edit_language", ""),
             file_name=st.session_state.get("pro_post_edit_file_name", ""),
             context=st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
         )
 
     if not st.session_state.get("review_segments"):
-        st.warning("No Pro post-editing rows are loaded yet. Run CogniSweep Pro first, then click Open Human Review workspace.")
-        if st.button("Go to CogniSweep Pro", type="primary", use_container_width=True):
+        st.warning("No Translation Studio rows are loaded yet. Run Translation Studio first, then click Open Human Review workspace.")
+        if st.button("Go to Translation Studio", type="primary", use_container_width=True):
             open_page("CogniSweep Pro")
         return
 
@@ -23929,7 +23939,7 @@ def page_billing() -> None:
             if safe_text(workspace).lower() != "platform" and seat_state["used"] >= max(1, seat_state["limit"]):
                 st.warning("This workspace is at the current plan seat limit. Upgrade before inviting more active users.")
             if max(usage["segments"] / max(1, allowance["segments"]), usage["characters"] / max(1, allowance["characters"])) >= 0.85:
-                st.warning("This workspace is above 85% of the current plan allowance. Upgrade before large QA or Pro runs.")
+                st.warning("This workspace is above 85% of the current plan allowance. Upgrade before large QA or Translation Studio runs.")
 
         elif selected_section == "Plans & Checkout":
             st.markdown("### Choose a plan")
@@ -24227,7 +24237,7 @@ def page_billing() -> None:
     if safe_text(workspace).lower() != "platform" and seat_state["used"] >= max(1, seat_state["limit"]):
         st.warning("This workspace is at the current plan seat limit. Upgrade before inviting more active users.")
     if max(usage["segments"] / max(1, allowance["segments"]), usage["characters"] / max(1, allowance["characters"])) >= 0.85:
-        st.warning("This workspace is above 85% of the current plan allowance. Upgrade before large QA or Pro runs.")
+        st.warning("This workspace is above 85% of the current plan allowance. Upgrade before large QA or Translation Studio runs.")
 
     st.markdown("### Choose a plan")
     render_pricing_graphic(subscription.get("plan", "Trial"), subscription.get("billing_cycle", "monthly"))
@@ -24860,7 +24870,7 @@ def page_owner_console() -> None:
             if combined_jobs:
                 st.dataframe(pd.DataFrame(display_records(combined_jobs)), use_container_width=True, hide_index=True)
             else:
-                st.info("No persisted editor jobs found yet. Run Pro, click Open Human Review Editor, then return here.")
+                st.info("No persisted editor jobs found yet. Run Translation Studio, click Open Human Review Editor, then return here.")
     return
 
     metrics([
@@ -24991,7 +25001,7 @@ def page_owner_console() -> None:
     if combined_jobs:
         st.dataframe(pd.DataFrame(display_records(combined_jobs)), use_container_width=True, hide_index=True)
     else:
-        st.info("No persisted editor jobs found yet. Run Pro, click Open Human Review Editor, then return here.")
+        st.info("No persisted editor jobs found yet. Run Translation Studio, click Open Human Review Editor, then return here.")
 
 
 def page_payments_received() -> None:

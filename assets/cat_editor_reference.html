@@ -797,7 +797,7 @@
         <div class="logo">ES</div>
         <div class="title-block">
           <div class="title">Web_2_2-24hr / Automated Project / Telugu Review</div>
-          <div class="subtitle">CogniSweep CAT Editor · Pro Human Review · File: Translate word.docx</div>
+          <div class="subtitle">CogniSweep CAT Editor · Translation Review · File: Translate word.docx</div>
         </div>
       </div>
       <div class="header-actions">
@@ -1636,7 +1636,7 @@
         ? `Tick ${pendingCount} more segment${pendingCount === 1 ? '' : 's'} Done before exporting`
         : sourceReady
         ? `Export translated ${assetExtension()} package`
-        : 'All segments are complete. If this older editor session cannot recover the original uploaded file, reopen the latest Pro run with the source file uploaded.';
+        : 'All segments are complete. If this older editor session cannot recover the original uploaded file, reopen the latest Translation Studio run with the source file uploaded.';
     }
 
     function finalTarget(row) {
@@ -1840,7 +1840,7 @@
 
     function originalAssetBytes() {
       if (!exportAsset?.bytes_b64) {
-        throw new Error('Original uploaded file metadata is unavailable. Reopen this editor from the Pro translation result.');
+        throw new Error('Original uploaded file metadata is unavailable. Reopen this editor from the Translation Studio result.');
       }
       return base64ToBytes(exportAsset.bytes_b64);
     }
@@ -2645,7 +2645,7 @@
         }
         if (!exportAssetReady()) {
           updateExportButtonState();
-          const message = 'Export is active, but this editor session does not include the original uploaded file. Reopen the latest Pro run or rerun Pro translation with the source file uploaded so same-format export can use that file as the template.';
+          const message = 'Export is active, but this editor session does not include the original uploaded file. Reopen the latest Translation Studio run or rerun Translation Studio with the source file uploaded so same-format export can use that file as the template.';
           updateFooter(message);
           alert(message);
           return;

@@ -114,6 +114,18 @@ def test_jobs_tool_is_hidden_without_permission():
     assert 'href="#"' not in body
 
 
+def test_workflow_nav_labels_are_professional():
+    text = source()
+    body = function_body("render_navigation", "now_stamp")
+
+    assert '"CogniSweep QA": "QA Reports"' in body
+    assert '"CogniSweep Pro": "Translation"' in body
+    assert '"CogniSweep QA": "QA Tasks"' not in body
+    assert '"CogniSweep Pro": "Pro"' not in body
+    assert '"qa-report": "CogniSweep QA"' in text
+    assert '"translation-studio": "CogniSweep Pro"' in text
+
+
 def test_job_history_page_is_registered_with_renderer_and_schema():
     text = source()
     persistence = Path("production_persistence.py").read_text(encoding="utf-8")
@@ -185,6 +197,7 @@ if __name__ == "__main__":
     test_notes_and_language_tools_are_clickable_panels()
     test_team_billing_admin_visibility_comes_from_allowed_pages()
     test_jobs_tool_is_hidden_without_permission()
+    test_workflow_nav_labels_are_professional()
     test_job_history_page_is_registered_with_renderer_and_schema()
     test_notes_drawer_has_professional_actions_and_sanitizer()
     test_notification_read_dismiss_columns_are_persisted()
