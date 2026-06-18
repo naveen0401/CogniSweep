@@ -60,6 +60,230 @@ python production_smoke_test.py --markdown --strict
 python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict
 ```
 
+## Public Launch Execution Runbook
+
+Use this section to close the external setup blockers. Do **not** commit real keys, tokens, passwords, hashes, Supabase keys, Razorpay/Stripe keys, or SMTP/API secrets into this repo. Put production values in Streamlit Cloud secrets or in a private `deploy/.env.production` file that stays outside git.
+
+### 1. Live HTTPS App URL
+
+Set this first because verification links, password reset links, billing returns, legal probes, and launch rehearsal all depend on it.
+
+Streamlit Cloud secret:
+
+```toml
+COGNISWEEP_PUBLIC_BASE_URL = "https://cognisweep.streamlit.app"
+```
+
+If using a custom domain later, replace it with the final HTTPS domain, for example:
+
+```toml
+COGNISWEEP_PUBLIC_BASE_URL = "https://cognisweep.com"
+```
+
+### 2. Owner And Workspace Bootstrap Credentials
+
+Generate PBKDF2 hashes locally. Production login does not accept plain password secrets.
+
+```powershell
+python deploy/auth_session_check.py --generate-password-hash
+```
+
+Add these to Streamlit Cloud secrets:
+
+```toml
+COGNISWEEP_ENV = "production"
+COGNISWEEP_SESSION_SECRET = "replace-with-a-long-random-secret-at-least-32-chars"
+COGNISWEEP_LANGUAGE_RESOURCE_MASTER_KEY = "replace-with-a-different-long-random-secret-at-least-32-chars"
+
+COGNISWEEP_OWNER_USERNAME = "owner@your-domain.com"
+COGNISWEEP_OWNER_PASSWORD_HASH = "pbkdf2_sha256$260000$..."
+
+COGNISWEEP_USER_USERNAME = "workspace-owner@your-domain.com"
+COGNISWEEP_USER_PASSWORD_HASH = "pbkdf2_sha256$260000$..."
+COGNISWEEP_ORG_NAME = "Your Workspace Name"
+COGNISWEEP_DEFAULT_USER_ROLE = "Workspace Owner"
+```
+
+Do not use:
+
+```toml
+COGNISWEEP_OWNER_PASSWORD = "plain-password"
+COGNISWEEP_USER_PASSWORD = "plain-password"
+```
+
+Validate a private env file, if you are using one:
+
+```powershell
+python deploy/auth_session_check.py --env-file deploy/.env.production --strict
+```
+
+### 3. Supabase Production Project And Schema
+
+Create a production Supabase project, then copy:
+
+- Project URL
+- anon public key
+- service-role key
+
+Streamlit Cloud secrets:
+
+```toml
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_ANON_KEY = "replace-with-anon-key"
+SUPABASE_SERVICE_ROLE_KEY = "replace-with-service-role-key"
+SUPABASE_STORAGE_BUCKET = "cognisweep-files"
+COGNISWEEP_OBJECT_STORAGE_PROVIDER = "supabase"
+COGNISWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS = "false"
+```
+
+In Supabase SQL Editor, run:
+
+```sql
+-- paste and run the full contents of supabase_v42_release_schema.sql
+```
+
+Then validate from your machine using a private env file:
+
+```powershell
+python deploy/supabase_schema_check.py --env-file deploy/.env.production --probe-rest --strict
+```
+
+### 4. OpenAI Or Managed AI Fallback
+
+Choose one.
+
+Option A, OpenAI:
+
+```toml
+OPENAI_API_KEY = "replace-with-openai-key"
+COGNISWEEP_OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+COGNISWEEP_MANAGED_AI_ENABLED = "false"
+```
+
+Option B, managed OpenAI-compatible endpoint:
+
+```toml
+COGNISWEEP_MANAGED_AI_ENABLED = "true"
+COGNISWEEP_MANAGED_AI_BASE_URL = "https://ai.your-domain.com/v1"
+COGNISWEEP_MANAGED_AI_API_KEY = "replace-with-managed-ai-token"
+COGNISWEEP_MANAGED_AI_MODEL = "your-model-name"
+```
+
+Validate:
+
+```powershell
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-models --strict
+```
+
+Use `--probe-chat` only when you are ready to spend a tiny live API call.
+
+### 5. Billing Provider And Webhook URL
+
+Choose Razorpay or Stripe. For Razorpay:
+
+```toml
+COGNISWEEP_BILLING_PROVIDER = "razorpay"
+RAZORPAY_KEY_ID = "replace-with-live-key-id"
+RAZORPAY_KEY_SECRET = "replace-with-live-key-secret"
+RAZORPAY_WEBHOOK_SECRET = "replace-with-webhook-secret"
+RAZORPAY_PLAN_ID_PRO = "replace-with-live-plan-id"
+RAZORPAY_PLAN_ID_AGENCY = "replace-with-live-plan-id"
+COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL = "https://billing.your-domain.com/webhooks/billing/razorpay"
+COGNISWEEP_BILLING_CREATE_PROVIDER_CHECKOUT = "true"
+```
+
+For Stripe:
+
+```toml
+COGNISWEEP_BILLING_PROVIDER = "stripe"
+STRIPE_SECRET_KEY = "replace-with-live-secret-key"
+STRIPE_WEBHOOK_SECRET = "replace-with-webhook-secret"
+STRIPE_PRICE_ID_PRO = "replace-with-price-id"
+STRIPE_PRICE_ID_AGENCY = "replace-with-price-id"
+COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL = "https://billing.your-domain.com/webhooks/billing/stripe"
+COGNISWEEP_BILLING_CREATE_PROVIDER_CHECKOUT = "true"
+```
+
+Validate:
+
+```powershell
+python deploy/billing_check.py --env-file deploy/.env.production --probe-health --strict
+```
+
+### 6. Transactional Email
+
+Choose Resend, SendGrid, or SMTP. Resend is the simplest path.
+
+```toml
+COGNISWEEP_EMAIL_PROVIDER = "resend"
+COGNISWEEP_EMAIL_FROM = "no-reply@your-domain.com"
+RESEND_API_KEY = "replace-with-resend-api-key"
+COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED = "true"
+```
+
+The sender domain must be verified in the provider dashboard before public launch.
+
+Validate:
+
+```powershell
+python deploy/email_check.py --env-file deploy/.env.production --run-smoke --strict
+```
+
+### 7. Legal Approval Flag
+
+Only set this after reviewed public documents are live.
+
+```toml
+COGNISWEEP_LEGAL_REVIEWED = "true"
+```
+
+Validate:
+
+```powershell
+python deploy/legal_check.py --env-file deploy/.env.production --base-url https://cognisweep.streamlit.app --probe-public --strict
+```
+
+### 8. Live Self-Hosted MT Endpoints
+
+For no-key translation fallback, configure live HTTPS endpoints and API keys.
+
+```toml
+SELF_HOSTED_MT_ACTIVE_ENGINES = "indictrans2,opus"
+INDICTRANS2_ENDPOINT = "https://mt.your-domain.com/indictrans2/translate"
+INDICTRANS2_API_KEY = "replace-with-worker-token"
+OPUS_MT_ENDPOINT = "https://mt.your-domain.com/opus/translate"
+OPUS_MT_API_KEY = "replace-with-worker-token"
+SELF_HOSTED_MT_TIMEOUT = "300"
+SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS = "false"
+```
+
+Validate:
+
+```powershell
+python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-health --strict
+```
+
+Use `--probe-translate` only after endpoints are ready for a live translation test.
+
+### 9. CDN/WAF And Final Rehearsal
+
+Set the WAF/CDN provider once Cloudflare or equivalent protection is enabled:
+
+```toml
+COGNISWEEP_WAF_PROVIDER = "cloudflare"
+```
+
+Final rehearsal:
+
+```powershell
+python deploy/release_check.py --strict
+python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+python production_smoke_test.py --markdown --strict
+python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict
+```
+
+Launch is ready when the final rehearsal has no blockers and any remaining warnings are explicitly accepted external operations.
+
 **Corrected Issues:**
 1. Landing Page Legal Links
 2. Landing Page Claim and Logo Neutrality
