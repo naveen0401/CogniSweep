@@ -148,6 +148,18 @@ def test_app_keeps_language_resource_keys_server_side():
     assert "connectionStatus" in read(MEDIA_EDITOR)
 
 
+def test_language_resource_helpers_do_not_break_existing_session_upserts():
+    app = read(APP)
+    tree = ast.parse(app)
+    definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "upsert_session_record"]
+    assert definitions, "upsert_session_record must exist"
+    active_definition = definitions[-1]
+    arg_names = [arg.arg for arg in active_definition.args.args]
+    assert arg_names[:2] == ["collection", "record"]
+    assert "identity_key" in arg_names
+    assert active_definition.args.defaults, "identity_key must remain optional for signup/login callers"
+
+
 def test_persistence_schema_and_release_guards_cover_language_resources():
     persistence = read(PERSISTENCE)
     schema = read(SCHEMA).lower()
@@ -190,5 +202,6 @@ if __name__ == "__main__":
     test_secret_encryption_round_trip_and_masking()
     test_generic_rest_connector_normalizes_resources_and_segment_lookups()
     test_app_keeps_language_resource_keys_server_side()
+    test_language_resource_helpers_do_not_break_existing_session_upserts()
     test_persistence_schema_and_release_guards_cover_language_resources()
     print("Language resource connector checks passed.")

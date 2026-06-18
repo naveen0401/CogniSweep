@@ -8699,11 +8699,14 @@ def language_resource_collection_records(collection: str, limit: int = 500) -> L
     return records
 
 
-def upsert_session_record(collection: str, record: Dict[str, Any], identity_key: str) -> None:
+def upsert_session_record(collection: str, record: Dict[str, Any], identity_key: Optional[str] = None) -> None:
     rows = st.session_state.setdefault(collection, [])
-    wanted = safe_text(record.get(identity_key) or record.get("id"))
+    wanted = safe_text(record.get(identity_key) if identity_key else "")
+    wanted = wanted or safe_text(record.get("id"))
     for idx, item in enumerate(rows):
-        if safe_text(item.get(identity_key) or item.get("id")) == wanted:
+        item_identity = safe_text(item.get(identity_key) if identity_key else "")
+        item_identity = item_identity or safe_text(item.get("id"))
+        if wanted and item_identity == wanted:
             rows[idx] = {**item, **record}
             break
     else:
