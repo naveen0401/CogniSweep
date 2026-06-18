@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from operational_backup_worker import (
     EXPORT_BINARY_VALUE,
     EXPORT_REDACTED_VALUE,
@@ -34,7 +36,18 @@ def test_backup_never_exports_auth_tokens_collection():
     assert "auth_tokens" not in configured_collections("users,auth_tokens,workspaces")
 
 
+def test_backup_reads_use_explicit_platform_scope_reason():
+    source = Path("operational_backup_worker.py").read_text(encoding="utf-8")
+    start = source.index("def fetch_backup_records")
+    end = source.index("def build_backup_payload", start)
+    body = source[start:end]
+
+    assert "include_all_workspaces=True" in body
+    assert 'platform_scope_reason="operational_backup_snapshot"' in body
+
+
 if __name__ == "__main__":
     test_backup_redacts_common_pii_and_nested_secrets()
     test_backup_never_exports_auth_tokens_collection()
+    test_backup_reads_use_explicit_platform_scope_reason()
     print("Backup redaction tests passed.")

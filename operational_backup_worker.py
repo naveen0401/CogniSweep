@@ -178,7 +178,12 @@ def fetch_backup_records(collections: Iterable[str], limit: int) -> Tuple[Dict[s
     errors: Dict[str, str] = {}
     for collection in collections:
         try:
-            records[collection] = fetch_saas_records(collection, limit=limit, include_all_workspaces=True)
+            records[collection] = fetch_saas_records(
+                collection,
+                limit=limit,
+                include_all_workspaces=True,
+                platform_scope_reason="operational_backup_snapshot",
+            )
         except Exception as exc:
             records[collection] = []
             errors[collection] = _safe_text(exc)[:500]

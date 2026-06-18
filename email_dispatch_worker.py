@@ -281,7 +281,12 @@ def persist_notification(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def dispatch_pending(limit: int = DEFAULT_BATCH_LIMIT, dry_run: bool = False) -> Dict[str, int]:
-    records = fetch_saas_records("notifications", limit=max(1, min(int(limit or 1), 1000)), include_all_workspaces=True)
+    records = fetch_saas_records(
+        "notifications",
+        limit=max(1, min(int(limit or 1), 1000)),
+        include_all_workspaces=True,
+        platform_scope_reason="email_dispatch_worker_queue",
+    )
     summary = {"checked": len(records), "pending": 0, "sent": 0, "failed": 0, "provider_pending": 0, "dry_run": 0}
     for record in _pending_notifications(records):
         if summary["pending"] >= max(1, int(limit or 1)):

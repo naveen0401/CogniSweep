@@ -33,8 +33,32 @@ Based on a review of the CogniSweep build (v46), these are the currently tracked
 26. Self-Hosted MT Retry/Backoff Resilience
 27. Live MT Endpoint Probes Opt-In Guard
 
-**Unresolved & New Issues:**
+**Unresolved & New Code Issues:**
 None currently tracked.
+
+**Public Launch Configuration Blockers:**
+These are not code defects; they are production values and external services that must be configured before opening public traffic.
+
+1. Production public HTTPS app URL: replace the placeholder `ERRORSWEEP_PUBLIC_BASE_URL`.
+2. Platform owner bootstrap login: set `ERRORSWEEP_OWNER_USERNAME` and `ERRORSWEEP_OWNER_PASSWORD_HASH`.
+3. Initial workspace bootstrap login: set `ERRORSWEEP_USER_USERNAME`, `ERRORSWEEP_USER_PASSWORD_HASH`, and `ERRORSWEEP_ORG_NAME`.
+4. Supabase production project: set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, run `supabase_v42_release_schema.sql`, and verify the tables.
+5. Platform AI fallback: configure `OPENAI_API_KEY` or a managed HTTPS OpenAI-compatible endpoint.
+6. Billing provider: configure live Razorpay or Stripe credentials, plan IDs, webhook signing secret, and HTTPS webhook receiver URL.
+7. Transactional email: configure Resend, SendGrid, or SMTP credentials and a verified production sender.
+8. Legal approval: set `ERRORSWEEP_LEGAL_REVIEWED=true` only after reviewed Terms, Privacy, DPA, and Cookie Notice are live.
+9. Self-hosted no-key MT: configure at least one live HTTPS MT endpoint, with IndicTrans2 and OPUS-MT currently required by the launch gate.
+10. CDN/WAF and final smoke: keep Cloudflare or equivalent enabled, then run the strict launch rehearsal with live probes.
+
+Current verification commands:
+
+```powershell
+python deploy/release_check.py --strict
+python deploy/auth_session_check.py --env-file deploy/.env.production --strict
+python deploy/launch_env_check.py --env-file deploy/.env.production --strict
+python production_smoke_test.py --markdown --strict
+python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os-env --probe-public --probe-workers --strict
+```
 
 **Corrected Issues:**
 1. Landing Page Legal Links
@@ -191,7 +215,26 @@ None currently tracked.
 
 ## Unresolved & New Issues
 
-None currently tracked.
+### 1. Performance Regression in QA Regex Compilation
+*   **The Issue:** The `rule_offline_correction_dictionary` function in `qa_engine_global_v15.py` re-parses and re-compiles correction rules for every segment.
+*   **Impact:** This negates previous performance fixes and will cause significant slowdowns on large QA jobs. The compiled rule patterns should be cached for the duration of a QA run.
+
+### 2. Potential XML Vulnerability in Async Worker
+*   **The Issue:** The `async_workflow_processor.py` uses the `python-docx` library to parse DOCX files, which is inconsistent with the main application's use of `defusedxml` for security hardening.
+*   **Impact:** If `python-docx` is not configured to safely handle external entities and DTDs, the async worker may be vulnerable to XML bombs (e.g., Billion Laughs attack).
+
+### 3. Brittle JSON Parsing in AI Router
+*   **The Issue:** The `_extract_json_object` function in `managed_ai_router.py` uses a simple string search for `{` and `}` to find JSON in LLM responses.
+*   **Impact:** This can fail if the LLM includes curly braces in its explanatory text, causing the JSON to be parsed incorrectly or not at all, leading to silent data loss from the AI.
+
+### 4. LibreTranslate Code Residuals
+*   **The Issue:** Despite being marked as resolved, `local_translation_engine.py` still contains `translate_with_libretranslate`.
+
+### 5. Thread Lock vs Process Lock Discrepancy
+*   **The Issue:** `production_persistence.py` and `editor_job_store.py` use `threading.Lock()`, which is a thread lock, not a process lock. This leaves a race condition vulnerability if deployed with multiple worker processes.
+
+### 6. ZIP Bomb / RAM Exhaustion Risk in `app.py`
+*   **The Issue:** While media files stream to disk, `parse_rules_zip` and DOCX parsing still use `.getvalue()` and `zf.read()`, reading fully into memory and posing an OOM risk for overly large ZIP payloads.
 
 ---
 

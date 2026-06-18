@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from email_templates import render_transactional_email
 
 
@@ -38,7 +40,18 @@ def test_email_template_rejects_non_http_cta_urls():
     assert "data:text/html" not in payload["html"]
 
 
+def test_email_dispatch_reads_use_explicit_platform_scope_reason():
+    source = Path("email_dispatch_worker.py").read_text(encoding="utf-8")
+    start = source.index("def dispatch_pending")
+    end = source.index("def main", start)
+    body = source[start:end]
+
+    assert "include_all_workspaces=True" in body
+    assert 'platform_scope_reason="email_dispatch_worker_queue"' in body
+
+
 if __name__ == "__main__":
     test_email_template_escapes_dynamic_html_fields()
     test_email_template_rejects_non_http_cta_urls()
+    test_email_dispatch_reads_use_explicit_platform_scope_reason()
     print("Email template security tests passed.")
