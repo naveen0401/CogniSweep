@@ -44,6 +44,28 @@ def test_platform_owner_navigation_uses_two_rows_without_scroll_strip():
     assert ".es-topnav-owner-link" in text
 
 
+def test_mobile_navigation_uses_compact_scrollable_layout():
+    text = source()
+    assert "@media (max-width: 760px)" in text
+    mobile_start = text.index("@media (max-width: 760px)")
+    mobile_end = text.index("@media (max-width: 430px)", mobile_start)
+    mobile_css = text[mobile_start:mobile_end]
+
+    for token in [
+        'grid-template-areas:',
+        '"brand tools"',
+        '"links links"',
+        "overflow-x: auto !important;",
+        "-webkit-overflow-scrolling: touch;",
+        ".es-topnav-tool span",
+        ".es-topnav-user > div:first-child",
+        ".es-topnav-owner-links",
+        "flex-wrap: nowrap !important;",
+        "body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_page_frame div[data-testid=\"stHorizontalBlock\"]",
+    ]:
+        assert token in mobile_css
+
+
 def test_notes_and_language_tools_are_clickable_panels():
     text = source()
     body = function_body("render_navigation", "now_stamp")
@@ -159,6 +181,7 @@ def test_permission_matrix_models_company_and_individual_access():
 if __name__ == "__main__":
     test_topnav_uses_one_permission_ordered_renderer()
     test_platform_owner_navigation_uses_two_rows_without_scroll_strip()
+    test_mobile_navigation_uses_compact_scrollable_layout()
     test_notes_and_language_tools_are_clickable_panels()
     test_team_billing_admin_visibility_comes_from_allowed_pages()
     test_jobs_tool_is_hidden_without_permission()

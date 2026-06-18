@@ -3615,6 +3615,296 @@ input.es-grid-overlay-escaped {
   .es-topnav-owner-row .es-topnav-owner-tag { margin-left: 0; }
   .es-account-menu { right: 0; }
 }
+
+@media (max-width: 760px) {
+  :root {
+    --es-shell-frame-padding: 0 10px 14px;
+    --es-shell-content-width: calc(100vw - 20px);
+  }
+
+  html,
+  body,
+  .stApp,
+  [data-testid="stAppViewContainer"],
+  [data-testid="stMain"],
+  [data-testid="stMainBlockContainer"] {
+    width: 100vw !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  .st-key-errorsweep_shell_content,
+  .st-key-errorsweep_shell_content[data-testid="stVerticalBlock"] {
+    padding: var(--es-shell-frame-padding) !important;
+    scrollbar-gutter: auto !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .st-key-errorsweep_shell_content > div[data-testid="stVerticalBlock"],
+  .st-key-errorsweep_page_frame,
+  .st-key-errorsweep_page_frame[data-testid="stVerticalBlock"],
+  body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_shell_content div:has(> .st-key-errorsweep_page_frame) {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_page_frame div[data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap !important;
+    gap: .75rem !important;
+  }
+
+  body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_page_frame div[data-testid="column"] {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 100% !important;
+  }
+
+  .es-topnav {
+    border-left: 0;
+    border-right: 0;
+    box-shadow: 0 14px 42px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+
+  .es-topnav-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand tools"
+      "links links";
+    align-items: center !important;
+    gap: 7px;
+    min-height: 0;
+    padding: 8px 10px 7px;
+  }
+
+  .es-topnav-brand {
+    grid-area: brand;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .es-topnav-mark {
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    flex: 0 0 auto;
+  }
+
+  .es-topnav-name {
+    font-size: 18px;
+    max-width: 48vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .es-topnav-links {
+    grid-area: links;
+    justify-content: flex-start;
+    flex-wrap: nowrap !important;
+    gap: 7px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 2px 0 1px;
+  }
+
+  .es-topnav-links::-webkit-scrollbar,
+  .es-topnav-owner-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .es-topnav-link {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid rgba(84,105,180,.30);
+    border-radius: 999px;
+    background: rgba(255,255,255,.045);
+    font-size: 10.5px;
+  }
+
+  .es-topnav-link.active {
+    border-color: rgba(0,217,133,.46);
+    background: rgba(0,217,133,.10);
+  }
+
+  .es-topnav-link.active::after {
+    display: none;
+  }
+
+  .es-topnav-tools {
+    grid-area: tools;
+    align-self: center;
+    min-height: 38px;
+    border-top: 0;
+    border-left: 0;
+  }
+
+  .es-topnav-tool {
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0 7px;
+    border: 1px solid rgba(84,105,180,.22);
+    border-radius: 9px;
+  }
+
+  .es-topnav-tool span {
+    display: none;
+  }
+
+  .es-topnav-badge {
+    top: -4px;
+    right: -4px;
+  }
+
+  .es-topnav-user {
+    min-width: 0;
+    padding: 0 0 0 6px;
+    gap: 6px;
+  }
+
+  .es-topnav-user > div:first-child {
+    display: none;
+  }
+
+  .es-topnav-avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .es-account-menu {
+    position: fixed;
+    top: 54px;
+    right: 10px;
+    width: min(285px, calc(100vw - 20px));
+    min-width: 0;
+  }
+
+  .es-topnav-owner-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 6px 10px 8px;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .es-topnav-owner-row .es-topnav-owner-tag {
+    margin-left: 0;
+    flex: 0 0 auto;
+  }
+
+  .es-topnav-owner-links {
+    flex-wrap: nowrap !important;
+    gap: 7px;
+    overflow: visible;
+  }
+
+  .es-topnav-owner-link {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 0 9px;
+  }
+
+  .es-topnav-panel {
+    top: 62px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-height: calc(100dvh - 74px);
+  }
+
+  .es-dashboard-grid,
+  .es-hero-row,
+  .es-grid-4,
+  .es-grid-3,
+  .es-landing-grid,
+  .es-price-band {
+    grid-template-columns: 1fr !important;
+  }
+
+  .es-personal-hero,
+  .es-hero,
+  .es-card {
+    padding: 16px !important;
+    border-radius: 12px !important;
+  }
+
+  .es-welcome-title {
+    font-size: 32px;
+    line-height: 1.04;
+  }
+
+  .es-hero-orb {
+    width: 116px;
+    height: 116px;
+    margin: 8px auto 0;
+  }
+
+  .es-fab-row {
+    gap: 8px;
+  }
+
+  .es-fab-action,
+  body:has(#errorsweep-root-shell-marker) .st-key-errorsweep_page_frame .stButton > button {
+    min-height: 40px !important;
+    white-space: normal !important;
+  }
+
+  [data-testid="stDataFrame"],
+  [data-testid="stDataEditor"],
+  [data-testid="stTable"] {
+    max-width: 100% !important;
+    overflow-x: auto !important;
+  }
+}
+
+@media (max-width: 430px) {
+  :root {
+    --es-shell-frame-padding: 0 8px 12px;
+    --es-shell-content-width: calc(100vw - 16px);
+  }
+
+  .es-topnav-row {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .es-topnav-name {
+    font-size: 17px;
+    max-width: 40vw;
+  }
+
+  .es-topnav-tool {
+    min-width: 34px;
+    padding: 0 5px;
+  }
+
+  .es-account-caret {
+    display: none;
+  }
+
+  .es-topnav-owner-row {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .es-topnav-link {
+    min-height: 32px;
+    padding: 0 9px;
+    font-size: 10px;
+  }
+}
 </style>
 """,
     unsafe_allow_html=True,
