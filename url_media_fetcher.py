@@ -38,6 +38,8 @@ BLOCKED_STREAMING_DOMAINS = (
     "fb.watch",
     "vimeo.com",
     "tiktok.com",
+    "photos.google.com",
+    "photos.app.goo.gl",
 )
 BLOCKED_PLATFORM_MESSAGE = (
     "Direct platform links aren't supported. Please upload the file directly "

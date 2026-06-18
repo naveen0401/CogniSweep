@@ -59,6 +59,13 @@ def test_streaming_platforms_are_blocked():
     else:
         raise AssertionError("YouTube URL should be rejected")
 
+    try:
+        normalize_direct_media_url("https://photos.app.goo.gl/mqmcQQgbJiF5DL1p6")
+    except DirectMediaUrlError as exc:
+        assert str(exc) == BLOCKED_PLATFORM_MESSAGE
+    else:
+        raise AssertionError("Google Photos URL should be rejected")
+
 
 def test_google_drive_and_dropbox_links_convert_to_direct_downloads():
     google = with_public_dns(lambda: normalize_direct_media_url("https://drive.google.com/file/d/file123/view?usp=sharing"))
@@ -130,4 +137,3 @@ if __name__ == "__main__":
     test_declared_oversized_media_is_rejected_before_download()
     test_direct_media_download_creates_uploaded_file_compatible_record()
     print("Direct media URL fetcher checks passed.")
-

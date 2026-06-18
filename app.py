@@ -6411,6 +6411,10 @@ ROUTE_PAGE_ALIASES = {
     "account": "Account",
     "talent": "Talent Database",
     "talent-database": "Talent Database",
+    "media": "Subtitle / Transcription Editor",
+    "media-studio": "Subtitle / Transcription Editor",
+    "media-localization": "Subtitle / Transcription Editor",
+    "media-localization-studio": "Subtitle / Transcription Editor",
 }
 PAGE_ROUTE_SLUGS = {page: slug for slug, page in ROUTE_PAGE_ALIASES.items() if page}
 PUBLIC_ROUTES = {
@@ -6537,6 +6541,10 @@ def normalize_es_page(raw_page: Any) -> str:
         "talent database": "Talent Database",
         "admin": "Admin",
         "scorecards": "Scorecards",
+        "media": "Subtitle / Transcription Editor",
+        "media studio": "Subtitle / Transcription Editor",
+        "media localization": "Subtitle / Transcription Editor",
+        "media localization studio": "Subtitle / Transcription Editor",
         "subtitle transcription editor": "Subtitle / Transcription Editor",
         "subtitle editor": "Subtitle / Transcription Editor",
         "transcription editor": "Subtitle / Transcription Editor",
@@ -7725,7 +7733,7 @@ def render_navigation() -> None:
         "Job History": "History",
         "CogniSweep QA": "QA Tasks",
         "CogniSweep Pro": "Pro",
-        "Subtitle / Transcription Editor": "Subtitles",
+        "Subtitle / Transcription Editor": "Media Studio",
         "Scorecards": "Scorecards",
         "Memory & Rules": "Rules",
         "Team & Roles": "Team",
@@ -21458,62 +21466,93 @@ def enter_subtitle_workspace(workflow: str, rows: List[Dict[str, Any]], video_fi
 
 
 def render_subtitle_transcription_setup() -> None:
-    st.markdown("### Subtitle / Transcription Editor")
-    st.caption("Create a dedicated editor workspace. Subtitling can use a source script. Transcription auto-generation is available only when the user provides an API key.")
-
-    workflow = st.radio("Editor workflow", ["Subtitling", "Transcription"], horizontal=True, key="subtitle_workflow_picker")
-    media_source_mode = st.radio(
-        "Media source",
-        ["Upload a file", "Paste a direct file URL"],
-        horizontal=True,
-        key="subtitle_media_source_mode",
+    st.markdown(
+        """
+        <section class="es-media-command-header">
+          <div>
+            <div class="es-media-command-kicker">Media Localization Studio</div>
+            <h1>Prepare a subtitle or transcript job</h1>
+            <p>Attach media, choose the workflow, and open the focused CAT-style editor.</p>
+          </div>
+          <div class="es-media-command-meta">
+            <span>Editor mode</span>
+            <strong>External workspace</strong>
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
     )
+
+    setup_col, source_col = st.columns([0.42, 0.58], gap="large")
+    with setup_col:
+        st.markdown('<div class="es-media-field-title">Workflow</div><div class="es-media-field-help">Select the editor job type.</div>', unsafe_allow_html=True)
+        workflow = st.radio(
+            "Editor workflow",
+            ["Subtitling", "Transcription"],
+            horizontal=True,
+            key="subtitle_workflow_picker",
+            label_visibility="collapsed",
+        )
+    with source_col:
+        st.markdown('<div class="es-media-field-title">Media source</div><div class="es-media-field-help">Upload a file or fetch a direct media URL.</div>', unsafe_allow_html=True)
+        media_source_mode = st.radio(
+            "Media source",
+            ["Upload a file", "Paste a direct file URL"],
+            horizontal=True,
+            key="subtitle_media_source_mode",
+            label_visibility="collapsed",
+        )
     video = None
-    if media_source_mode == "Upload a file":
-        video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
-    else:
-        st.caption(
-            "Use only direct audio/video file links from cloud storage or public file servers. "
-            "YouTube, Instagram, Facebook, Vimeo, TikTok, and similar platform links are not supported."
-        )
-        st.caption(
-            "Google Drive: share the file with anyone who has the link, then paste the share link here. "
-            "Dropbox: paste the share link; CogniSweep will request the direct-download version."
-        )
-        direct_media_url = st.text_input(
-            "Paste a direct file URL",
-            placeholder="https://example.com/client-video.mp4",
-            key="subtitle_direct_media_url",
-        )
-        stored_url_record = st.session_state.get("subtitle_url_media_record", {})
-        if stored_url_record and direct_media_url and safe_text(stored_url_record.get("source_url")) != safe_text(direct_media_url):
-            cleanup_fetched_media_record(stored_url_record)
-            st.session_state["subtitle_url_media_record"] = {}
-            stored_url_record = {}
-        if st.button("Load direct file URL", use_container_width=True, disabled=not safe_text(direct_media_url)):
-            cleanup_fetched_media_record(st.session_state.get("subtitle_url_media_record", {}))
-            st.session_state["subtitle_url_media_record"] = {}
-            try:
-                with st.spinner("Checking and downloading direct media URL..."):
-                    stored_url_record = fetch_media_url_to_temp(
-                        direct_media_url,
-                        max_bytes=MEDIA_URL_MAX_BYTES,
-                        temp_dir=media_preview_root(),
-                    )
-                st.session_state["subtitle_url_media_record"] = stored_url_record
-                st.success(f"Direct media file loaded: {stored_url_record.get('name', 'media')} ({format_media_size(stored_url_record.get('size', 0))}).")
-            except DirectMediaUrlError as exc:
-                st.error(str(exc))
-            except Exception as exc:
-                LOGGER.warning("Direct media URL fetch failed: %s", exc)
-                st.error("Unable to download this direct media URL. Please check the link or upload the file directly.")
-        stored_url_record = st.session_state.get("subtitle_url_media_record", {})
-        if stored_url_record:
-            video = fetched_media_from_record(stored_url_record)
-            if video is None:
-                st.warning("The downloaded media file is no longer available. Please load the direct file URL again.")
+    with st.container(key="media_source_panel"):
+        if media_source_mode == "Upload a file":
+            st.markdown(
+                '<div class="es-media-panel-title">Attach media</div><div class="es-media-muted">Supported media: MP4, MOV, M4V, WEBM, MP3, WAV, M4A.</div>',
+                unsafe_allow_html=True,
+            )
+            video = st.file_uploader("Upload video/audio", type=["mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a"], key="subtitle_video_setup")
+        else:
+            st.markdown(
+                """
+                <div class="es-media-panel-title">Load media from a direct URL</div>
+                <div class="es-media-muted">Use raw audio/video file links from cloud storage or public file servers. Share-page links from YouTube, Instagram, Facebook, Vimeo, TikTok, Google Photos, and similar platforms are blocked.</div>
+                <div class="es-media-inline-note">Google Drive: share the file with anyone who has the link, then paste the file share link. Dropbox: paste the share link; CogniSweep requests the direct-download version.</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            direct_media_url = st.text_input(
+                "Paste a direct file URL",
+                placeholder="https://example.com/client-video.mp4",
+                key="subtitle_direct_media_url",
+            )
+            stored_url_record = st.session_state.get("subtitle_url_media_record", {})
+            if stored_url_record and direct_media_url and safe_text(stored_url_record.get("source_url")) != safe_text(direct_media_url):
+                cleanup_fetched_media_record(stored_url_record)
                 st.session_state["subtitle_url_media_record"] = {}
-        st.caption(BLOCKED_PLATFORM_MESSAGE)
+                stored_url_record = {}
+            if st.button("Load direct file URL", use_container_width=True, disabled=not safe_text(direct_media_url)):
+                cleanup_fetched_media_record(st.session_state.get("subtitle_url_media_record", {}))
+                st.session_state["subtitle_url_media_record"] = {}
+                try:
+                    with st.spinner("Checking and downloading direct media URL..."):
+                        stored_url_record = fetch_media_url_to_temp(
+                            direct_media_url,
+                            max_bytes=MEDIA_URL_MAX_BYTES,
+                            temp_dir=media_preview_root(),
+                        )
+                    st.session_state["subtitle_url_media_record"] = stored_url_record
+                    st.success(f"Direct media file loaded: {stored_url_record.get('name', 'media')} ({format_media_size(stored_url_record.get('size', 0))}).")
+                except DirectMediaUrlError as exc:
+                    st.error(str(exc))
+                except Exception as exc:
+                    LOGGER.warning("Direct media URL fetch failed: %s", exc)
+                    st.error("Unable to download this direct media URL. Please check the link or upload the file directly.")
+            stored_url_record = st.session_state.get("subtitle_url_media_record", {})
+            if stored_url_record:
+                video = fetched_media_from_record(stored_url_record)
+                if video is None:
+                    st.warning("The downloaded media file is no longer available. Please load the direct file URL again.")
+                    st.session_state["subtitle_url_media_record"] = {}
+            st.caption(BLOCKED_PLATFORM_MESSAGE)
     user_key_available = bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
     media_compliance_ack = st.checkbox(
         "I confirm I have rights or client authorization to process this media, including any confidential audio or copyrighted material.",
@@ -21521,45 +21560,56 @@ def render_subtitle_transcription_setup() -> None:
     )
 
     if video is not None:
-        preview_col, info_col = st.columns([0.45, 0.55], gap="large")
-        with preview_col:
-            preview_key = hashlib.sha256(
-                f"{getattr(video, 'name', 'media')}:{getattr(video, 'size', '')}".encode("utf-8")
-            ).hexdigest()[:18]
-            preview_record = save_media_preview_file(f"setup_{preview_key}", video)
-            preview_source, preview_type, preview_name = read_media_preview_bytes(preview_record)
-            render_media_preview(preview_source, preview_type or getattr(video, "type", "video/mp4"), preview_name or getattr(video, "name", "media"))
-        with info_col:
-            st.success("Video/audio loaded.")
-            st.caption("The editor will open as a dedicated workspace page, separate from this setup screen.")
-            st.caption(f"Media source: {media_source_mode}. Size: {format_media_size(getattr(video, 'size', 0))}.")
-            if user_key_available:
-                st.caption("Transcription route: user API key available.")
-            else:
-                st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
+        with st.container(key="media_preview_panel"):
+            preview_col, info_col = st.columns([0.36, 0.64], gap="large")
+            with preview_col:
+                preview_key = hashlib.sha256(
+                    f"{getattr(video, 'name', 'media')}:{getattr(video, 'size', '')}".encode("utf-8")
+                ).hexdigest()[:18]
+                preview_record = save_media_preview_file(f"setup_{preview_key}", video)
+                preview_source, preview_type, preview_name = read_media_preview_bytes(preview_record)
+                render_media_preview(preview_source, preview_type or getattr(video, "type", "video/mp4"), preview_name or getattr(video, "name", "media"))
+            with info_col:
+                st.markdown('<div class="es-media-panel-title">Media ready</div>', unsafe_allow_html=True)
+                st.success("Video/audio loaded.")
+                st.caption(f"{getattr(video, 'name', 'media')} • {media_source_mode} • {format_media_size(getattr(video, 'size', 0))}")
+                if user_key_available:
+                    st.caption("Transcription route: user API key available.")
+                else:
+                    st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
     else:
         st.info("Upload a video/audio file or load a direct file URL to begin.")
 
     if workflow == "Subtitling":
-        source_file = st.file_uploader(
-            "Upload English source subtitle/script (optional for subtitling)",
-            type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
-            key="subtitle_source_setup",
-        )
-        target_file = st.file_uploader(
-            "Upload existing target subtitle file (optional)",
-            type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
-            key="subtitle_target_setup",
-        )
-        c1, c2, c3 = st.columns([1, 1, 1])
-        subtitle_target_language = c1.text_input("Target subtitle language", value=st.session_state.get("subtitle_target_language", "French"), key="subtitle_target_lang_setup")
-        speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only if no source file is uploaded and a user API key is available for transcription.")
-        starter_rows = c3.number_input("Starter rows", min_value=1, max_value=200, value=10, key="subtitle_starter_rows")
-        auto_generate = st.checkbox(
-            "Generate draft target subtitles",
-            value=True,
-            help="If source rows exist, target subtitles use BYO API key or built-in self-hosted MT translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
-        )
+        with st.container(key="media_subtitle_options"):
+            st.markdown(
+                '<div class="es-media-panel-title">Subtitle setup</div><div class="es-media-muted">Optional source and target subtitle files can pre-fill the editor grid.</div>',
+                unsafe_allow_html=True,
+            )
+            upload_col1, upload_col2 = st.columns(2, gap="large")
+            with upload_col1:
+                source_file = st.file_uploader(
+                    "English source subtitle/script",
+                    type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
+                    key="subtitle_source_setup",
+                    help="Optional for subtitling.",
+                )
+            with upload_col2:
+                target_file = st.file_uploader(
+                    "Existing target subtitle file",
+                    type=["srt", "vtt", "txt", "csv", "xlsx", "docx"],
+                    key="subtitle_target_setup",
+                    help="Optional existing target subtitles.",
+                )
+            c1, c2, c3 = st.columns([1, 1, 1])
+            subtitle_target_language = c1.text_input("Target subtitle language", value=st.session_state.get("subtitle_target_language", "French"), key="subtitle_target_lang_setup")
+            speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only if no source file is uploaded and a user API key is available for transcription.")
+            starter_rows = c3.number_input("Starter rows", min_value=1, max_value=200, value=10, key="subtitle_starter_rows")
+            auto_generate = st.checkbox(
+                "Generate draft target subtitles",
+                value=True,
+                help="If source rows exist, target subtitles use BYO API key or built-in self-hosted MT translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
+            )
 
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None or not media_compliance_ack):
             st.session_state.subtitle_target_language = subtitle_target_language
@@ -21626,18 +21676,22 @@ def render_subtitle_transcription_setup() -> None:
             st.success("Subtitling editor job created. Open it in the separate editor window below.")
             render_external_editor_link("Open Subtitle Editor", "media", job_id)
     else:
-        st.caption("Transcription mode does not need a source file. Auto-transcription requires a user API key. Without a user key, blank transcript rows are created for human editing.")
-        c1, c2 = st.columns([1, 1])
-        speech_locale = c1.text_input("Speech locale", value="en-US", key="transcription_locale")
-        starter_count = c2.number_input("Starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
-        auto_transcribe = st.checkbox(
-            "Auto-generate transcript using user API key",
-            value=user_key_available,
-            disabled=not user_key_available,
-            help="Speech-to-text is available only when the user has added an API key in Account. Without a key, the editor opens with blank rows for manual transcription.",
-        )
-        if not user_key_available:
-            st.info("No user API key found. The transcription workspace will open with blank rows for manual editing.")
+        with st.container(key="media_transcription_options"):
+            st.markdown(
+                '<div class="es-media-panel-title">Transcription setup</div><div class="es-media-muted">Auto-transcription requires a user API key. Without one, the editor opens with blank rows for human transcription.</div>',
+                unsafe_allow_html=True,
+            )
+            c1, c2 = st.columns([1, 1])
+            speech_locale = c1.text_input("Speech locale", value="en-US", key="transcription_locale")
+            starter_count = c2.number_input("Starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+            auto_transcribe = st.checkbox(
+                "Auto-generate transcript using user API key",
+                value=user_key_available,
+                disabled=not user_key_available,
+                help="Speech-to-text is available only when the user has added an API key in Account. Without a key, the editor opens with blank rows for manual transcription.",
+            )
+            if not user_key_available:
+                st.info("No user API key found. The transcription workspace will open with blank rows for manual editing.")
 
         if st.button("Create transcription workspace", use_container_width=True, disabled=video is None or not media_compliance_ack):
             if auto_transcribe and user_key_available:
@@ -21839,6 +21893,103 @@ def page_subtitle_transcription_editor() -> None:
           color: #f8fbff !important;
           font-weight: 800 !important;
         }
+        body:has(#subtitle-transcription-page-marker) .block-container {
+          padding-top: 1rem !important;
+        }
+        .es-media-command-header {
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 1.5rem;
+          margin: 0 0 1.25rem;
+          padding: 1.15rem 1.35rem;
+          border: 1px solid rgba(92, 210, 255, 0.22);
+          border-radius: 10px;
+          background: linear-gradient(120deg, rgba(5, 22, 31, 0.92), rgba(25, 18, 55, 0.86));
+          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.20);
+        }
+        .es-media-command-kicker {
+          color: #00f5bc;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 0.76rem;
+          font-weight: 800;
+          letter-spacing: 0;
+          text-transform: uppercase;
+        }
+        .es-media-command-header h1 {
+          margin: 0.25rem 0 0;
+          color: #f8fbff;
+          font-size: 2.05rem;
+          line-height: 1.08;
+          letter-spacing: 0;
+        }
+        .es-media-command-header p,
+        .es-media-muted,
+        .es-media-field-help {
+          margin: 0.35rem 0 0;
+          color: #bac7dd;
+        }
+        .es-media-command-meta {
+          min-width: 190px;
+          padding: 0.8rem 0.95rem;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 8px;
+          background: rgba(255, 255, 255, 0.045);
+          text-align: right;
+        }
+        .es-media-command-meta span {
+          display: block;
+          color: #9fb0cb;
+          font-size: 0.78rem;
+        }
+        .es-media-command-meta strong {
+          color: #f8fbff;
+          font-size: 1rem;
+        }
+        .es-media-field-title,
+        .es-media-panel-title {
+          color: #f8fbff;
+          font-weight: 850;
+        }
+        .es-media-field-title {
+          font-size: 0.98rem;
+        }
+        .es-media-panel-title {
+          margin-bottom: 0.3rem;
+          font-size: 1.02rem;
+        }
+        .es-media-inline-note {
+          margin: 0.65rem 0 0.85rem;
+          padding: 0.65rem 0.75rem;
+          border-left: 3px solid #00f5bc;
+          border-radius: 6px;
+          background: rgba(0, 245, 188, 0.08);
+          color: #dce8ff;
+        }
+        body:has(#subtitle-transcription-page-marker) .st-key-media_source_panel,
+        body:has(#subtitle-transcription-page-marker) .st-key-media_preview_panel,
+        body:has(#subtitle-transcription-page-marker) .st-key-media_subtitle_options,
+        body:has(#subtitle-transcription-page-marker) .st-key-media_transcription_options {
+          margin-top: 1rem;
+          padding: 1rem;
+          border: 1px solid rgba(127, 148, 190, 0.24);
+          border-radius: 10px;
+          background: rgba(11, 10, 28, 0.72);
+        }
+        body:has(#subtitle-transcription-page-marker) .stRadio {
+          margin-bottom: 0.25rem !important;
+        }
+        @media (max-width: 900px) {
+          .es-media-command-header {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .es-media-command-meta {
+            min-width: 0;
+            width: 100%;
+            text-align: left;
+          }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -21847,7 +21998,6 @@ def page_subtitle_transcription_editor() -> None:
         st.warning("Subtitle and transcription workflows are currently disabled by Platform Settings.")
         return
     st.session_state.subtitle_editor_active = False
-    hero("Subtitle / Transcription Editor", "Dedicated media localization workspace", "Create subtitles or transcripts. Pro post-editing opens separately only after a Pro translation run.")
     render_subtitle_transcription_editor()
 
 # Backward-compatible alias for old references.
