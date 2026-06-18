@@ -7643,6 +7643,14 @@ def install_local_time_render_bridge() -> None:
             window.__cognisweepLocalTimeObserver = null;
           }
           window.__cognisweepLocalTimeObserverVersion = bridgeVersion;
+          const browserTimeZone = (() => {
+            try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (err) { return ""; }
+          })();
+          const zoneAliases = {
+            "Asia/Calcutta": "IST",
+            "Asia/Kolkata": "IST"
+          };
+          const displayZoneName = (fallback) => zoneAliases[browserTimeZone] || fallback || "";
           const formatLocalTime = (isoValue) => {
             const date = new Date(isoValue);
             if (Number.isNaN(date.getTime())) return "";
@@ -7659,7 +7667,7 @@ def install_local_time_render_bridge() -> None:
             formatter.formatToParts(date).forEach((part) => {
               if (part.type !== "literal") parts[part.type] = part.value;
             });
-            const zone = parts.timeZoneName || "";
+            const zone = displayZoneName(parts.timeZoneName);
             return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.dayPeriod || ""} ${zone}`.trim();
           };
           const render = () => {
@@ -7827,6 +7835,8 @@ def get_current_route() -> Dict[str, str]:
         return {"route": safe_text(public_route), "public": safe_text(public_route), "page": PUBLIC_ROUTE_PAGE_NAMES.get(public_route, "Landing")}
     if public_route:
         return {"route": public_route, "unknown": public_route}
+    if not route_query_has_explicit_target():
+        return {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
     return {"route": "page", "page": safe_text(st.session_state.get("page", "Dashboard")) or "Dashboard"}
 
 

@@ -21,6 +21,9 @@ def test_browser_timezone_is_synced_before_routing() -> None:
     assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in source
     assert 'time[data-es-local-time]' in source
     assert 'bridgeVersion = "local-time-v2"' in source
+    assert '"Asia/Calcutta": "IST"' in source
+    assert '"Asia/Kolkata": "IST"' in source
+    assert "displayZoneName(parts.timeZoneName)" in source
     assert 'disconnect()' in source
     assert 'data-es-local-rendered' in source
     assert 'MutationObserver(scheduleRender)' in source
@@ -66,3 +69,12 @@ def test_display_records_handles_title_case_time_columns() -> None:
     end = source.index("def display_dataframe", start)
     body = source[start:end]
     assert "key.lower() in cols" in body
+
+
+def test_plain_root_route_does_not_reuse_stale_login_page() -> None:
+    source = read_app()
+    start = source.index("def get_current_route")
+    end = source.index("def is_authenticated", start)
+    body = source[start:end]
+    assert 'return {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}' in body
+    assert body.index('return {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}') < body.index('return {"route": "page", "page": safe_text(st.session_state.get("page", "Dashboard")) or "Dashboard"}')
