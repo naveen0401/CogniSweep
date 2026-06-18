@@ -21163,7 +21163,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             </article>
             """
         )
-    st.markdown(f'<section class="es-history-list">{"".join(rendered_rows)}</section>', unsafe_allow_html=True)
+    st.html(f'<section class="es-history-list">{"".join(rendered_rows)}</section>')
 
 
 def page_projects() -> None:

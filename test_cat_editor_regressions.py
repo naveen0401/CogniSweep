@@ -219,6 +219,8 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     history_body = source[history_start:history_end]
     assert "LinkColumn(\"Open\"" not in history_body
     assert "st.dataframe(" not in history_body
+    assert "st.html(f'<section class=\"es-history-list\"" in history_body
+    assert "unsafe_allow_html=True" not in history_body
     assert "Open workspace" not in history_body
     assert "es-history-task-card" in history_body
     assert "Open task" in history_body
