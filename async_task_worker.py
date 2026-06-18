@@ -43,12 +43,30 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = os.getenv(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def env_bool(name: str, default: bool = False) -> bool:
-    value = safe_text(os.getenv(name)).lower()
+    value = safe_text(env_value(name)).lower()
     if value in {"1", "true", "yes", "on"}:
         return True
     if value in {"0", "false", "no", "off"}:
@@ -57,12 +75,12 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def is_production_mode() -> bool:
-    mode = safe_text(os.getenv("ERRORSWEEP_ENV") or os.getenv("ENVIRONMENT") or os.getenv("APP_ENV")).lower()
+    mode = safe_text(env_value("ERRORSWEEP_ENV") or env_value("ENVIRONMENT") or env_value("APP_ENV")).lower()
     return mode in {"prod", "production", "live"}
 
 
 def worker_token() -> str:
-    return safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_TOKEN"))
+    return safe_text(env_value("ERRORSWEEP_ASYNC_WORKER_TOKEN"))
 
 
 def require_token() -> bool:
@@ -79,7 +97,7 @@ def process_on_accept() -> bool:
 
 
 def worker_root() -> Path:
-    configured = safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_DIR"))
+    configured = safe_text(env_value("ERRORSWEEP_ASYNC_WORKER_DIR"))
     root = Path(configured) if configured else Path(tempfile.gettempdir()) / "errorsweep_async_worker"
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -379,12 +397,12 @@ def run_server(host: str, port: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the CogniSweep async task worker receiver.")
-    parser.add_argument("--host", default=safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_HOST")) or DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=int(os.getenv("ERRORSWEEP_ASYNC_WORKER_PORT", str(DEFAULT_PORT))))
+    parser.add_argument("--host", default=safe_text(env_value("ERRORSWEEP_ASYNC_WORKER_HOST")) or DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=int(env_value("ERRORSWEEP_ASYNC_WORKER_PORT", str(DEFAULT_PORT))))
     parser.add_argument("--smoke", action="store_true", help="Persist a smoke-test task and exit.")
     parser.add_argument("--process-once", action="store_true", help="Process the oldest queued worker-spooled task and exit.")
     args = parser.parse_args()
-    logging.basicConfig(level=safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_LOG_LEVEL")) or "INFO", format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=safe_text(env_value("ERRORSWEEP_ASYNC_WORKER_LOG_LEVEL")) or "INFO", format="%(asctime)s %(levelname)s %(message)s")
     if args.smoke:
         result = smoke_check()
         print(json.dumps(result, ensure_ascii=False, indent=2, default=safe_text))

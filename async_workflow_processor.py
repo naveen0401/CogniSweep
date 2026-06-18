@@ -71,9 +71,27 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = os.getenv(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def env_int(name: str, default: int, minimum: int = 1) -> int:
     try:
-        value = int(safe_text(os.getenv(name)))
+        value = int(safe_text(env_value(name)))
     except Exception:
         value = default
     return max(minimum, value)
@@ -84,14 +102,14 @@ def now_iso() -> str:
 
 
 def worker_root() -> Path:
-    configured = safe_text(os.getenv("ERRORSWEEP_ASYNC_WORKER_DIR"))
+    configured = safe_text(env_value("ERRORSWEEP_ASYNC_WORKER_DIR"))
     root = Path(configured) if configured else Path(tempfile.gettempdir()) / "errorsweep_async_worker"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
 def results_root() -> Path:
-    configured = safe_text(os.getenv("ERRORSWEEP_ASYNC_RESULT_DIR"))
+    configured = safe_text(env_value("ERRORSWEEP_ASYNC_RESULT_DIR"))
     root = Path(configured) if configured else worker_root() / "results"
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -228,7 +246,7 @@ def checked_local_manifest_bytes(path: Path, file_name: str) -> bytes:
 
 def checked_remote_manifest_bytes(url: str, file_name: str) -> bytes:
     max_bytes = manifest_max_bytes()
-    timeout = int(os.getenv("ERRORSWEEP_ASYNC_FILE_TIMEOUT", "120"))
+    timeout = int(env_value("ERRORSWEEP_ASYNC_FILE_TIMEOUT", "120"))
     response = requests.get(url, timeout=timeout, stream=True)
     try:
         response.raise_for_status()
@@ -991,10 +1009,10 @@ def main() -> int:
     parser.add_argument("--task-id", default="", help="Process one specific worker-spooled task id.")
     parser.add_argument("--once", action="store_true", help="Process the oldest queued worker-spooled task and exit.")
     parser.add_argument("--loop", action="store_true", help="Continuously process queued worker-spooled tasks.")
-    parser.add_argument("--interval", type=int, default=int(os.getenv("ERRORSWEEP_ASYNC_PROCESSOR_INTERVAL", "10")))
+    parser.add_argument("--interval", type=int, default=int(env_value("ERRORSWEEP_ASYNC_PROCESSOR_INTERVAL", "10")))
     parser.add_argument("--smoke", action="store_true", help="Run a local deterministic processor smoke test and exit.")
     args = parser.parse_args()
-    logging.basicConfig(level=safe_text(os.getenv("ERRORSWEEP_ASYNC_PROCESSOR_LOG_LEVEL")) or "INFO", format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=safe_text(env_value("ERRORSWEEP_ASYNC_PROCESSOR_LOG_LEVEL")) or "INFO", format="%(asctime)s %(levelname)s %(message)s")
     if args.smoke:
         result = smoke_check()
         print(json.dumps(result, ensure_ascii=False, indent=2, default=safe_text))

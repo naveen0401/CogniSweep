@@ -196,10 +196,22 @@ def nonsecret_evidence(key: str, value: str) -> str:
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
 
 
 def configured(env: Dict[str, str], names: Sequence[str], min_length: int = 1) -> bool:
@@ -208,7 +220,7 @@ def configured(env: Dict[str, str], names: Sequence[str], min_length: int = 1) -
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on", "enabled"}
@@ -239,7 +251,7 @@ def require_flag(
     *,
     status_when_false: str = "Blocker",
 ) -> None:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     add(results, area, check, "Pass" if env_bool(env, name) else status_when_false, "enabled" if env_bool(env, name) else value or "missing", action)
 
 
@@ -358,7 +370,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         return None
 
     env = parse_env_file(env_path)
-    provider = safe_text(env.get("ERRORSWEEP_EMAIL_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_EMAIL_PROVIDER"]).lower()
     sender = value_for(env, ["ERRORSWEEP_EMAIL_FROM", "SENDGRID_FROM_EMAIL", "RESEND_FROM_EMAIL"])
     add(
         results,
@@ -391,7 +403,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Email Config",
         "HTML templates enabled",
         "Pass" if env_bool(env, "ERRORSWEEP_EMAIL_HTML_ENABLED", True) else "Warn",
-        "enabled" if env_bool(env, "ERRORSWEEP_EMAIL_HTML_ENABLED", True) else safe_text(env.get("ERRORSWEEP_EMAIL_HTML_ENABLED")) or "missing",
+        "enabled" if env_bool(env, "ERRORSWEEP_EMAIL_HTML_ENABLED", True) else value_for(env, ["ERRORSWEEP_EMAIL_HTML_ENABLED"]) or "missing",
         "Keep branded HTML enabled unless a provider-specific deliverability issue requires plain text temporarily.",
     )
     return env

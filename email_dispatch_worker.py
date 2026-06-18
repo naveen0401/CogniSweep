@@ -52,10 +52,21 @@ def _validate_email_address(value: Any, label: str) -> str:
     return email
 
 
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
 def _env(name: str, default: str = "") -> str:
     value = os.environ.get(name)
     if value not in (None, ""):
         return str(value).strip()
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value).strip()
     return default
 
 

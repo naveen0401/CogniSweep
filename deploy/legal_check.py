@@ -145,17 +145,29 @@ def is_placeholder(value: str) -> bool:
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
+
+
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
@@ -290,7 +302,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Legal Config",
         "Legal review approval flag",
         "Pass" if legal_ready else "Blocker",
-        "reviewed" if legal_ready else safe_text(env.get("ERRORSWEEP_LEGAL_REVIEWED")) or "missing",
+        "reviewed" if legal_ready else value_for(env, ["ERRORSWEEP_LEGAL_REVIEWED"]) or "missing",
         "Set ERRORSWEEP_LEGAL_REVIEWED=true only after approved Terms, Privacy, Cookie Notice, DPA, and customer processing language are live.",
     )
     add(
@@ -351,7 +363,7 @@ def collect_results(
     if env_path is not None:
         env = validate_env_config(results, env_path)
     if probe_public:
-        resolved_base_url = safe_text(base_url) or safe_text((env or {}).get("ERRORSWEEP_PUBLIC_BASE_URL"))
+        resolved_base_url = safe_text(base_url) or value_for(env or {}, ["ERRORSWEEP_PUBLIC_BASE_URL"])
         probe_public_routes(results, resolved_base_url, timeout)
     return results
 

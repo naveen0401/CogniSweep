@@ -182,17 +182,29 @@ def nonsecret_evidence(key: str, value: str) -> str:
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
+
+
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
@@ -341,8 +353,8 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         return None
 
     env = parse_env_file(env_path)
-    provider = safe_text(env.get("ERRORSWEEP_BILLING_PROVIDER")).lower()
-    webhook_url = safe_text(env.get("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"))
+    provider = value_for(env, ["ERRORSWEEP_BILLING_PROVIDER"]).lower()
+    webhook_url = value_for(env, ["ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"])
     add(
         results,
         "Billing Config",
@@ -387,7 +399,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Billing Config",
         "Webhook update mode",
         "Pass" if env_bool(env, "ERRORSWEEP_WEBHOOK_APPLY_UPDATES") else "Warn",
-        "enabled" if env_bool(env, "ERRORSWEEP_WEBHOOK_APPLY_UPDATES") else safe_text(env.get("ERRORSWEEP_WEBHOOK_APPLY_UPDATES")) or "missing",
+        "enabled" if env_bool(env, "ERRORSWEEP_WEBHOOK_APPLY_UPDATES") else value_for(env, ["ERRORSWEEP_WEBHOOK_APPLY_UPDATES"]) or "missing",
         "Enable lifecycle updates only after signature tests pass in staging.",
     )
     return env
@@ -457,7 +469,7 @@ def run_local_smoke(results: List[Dict[str, str]], timeout: int) -> None:
 
 
 def probe_receiver_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: int) -> None:
-    url = webhook_health_url(safe_text(env.get("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL")))
+    url = webhook_health_url(value_for(env, ["ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"]))
     if not url:
         add(results, "Billing Probe", "Webhook receiver health", "Blocker", "webhook URL missing", "Set ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL before probing receiver health.")
         return

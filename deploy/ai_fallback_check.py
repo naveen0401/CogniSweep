@@ -133,8 +133,26 @@ def is_placeholder(value: str) -> bool:
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
-def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
     value = safe_text(env.get(name))
+    if value:
+        return value
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = safe_text(env.get(alias))
+        if value:
+            return value
+    return default
+
+
+def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
+    value = env_value(env, name)
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
@@ -315,7 +333,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
     env = parse_env_file(env_path)
     openai_ready = openai_key_ready(env.get("OPENAI_API_KEY", ""))
     managed_enabled = env_bool(env, "ERRORSWEEP_MANAGED_AI_ENABLED")
-    managed_base_url = safe_text(env.get("ERRORSWEEP_MANAGED_AI_BASE_URL"))
+    managed_base_url = env_value(env, "ERRORSWEEP_MANAGED_AI_BASE_URL")
     managed_ready = managed_enabled and https_public_url(managed_base_url)
     add(
         results,
@@ -333,7 +351,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         nonsecret_evidence("OPENAI_API_KEY", env.get("OPENAI_API_KEY", "")),
         "Set OPENAI_API_KEY for platform fallback with --write-ai-env --ai-route openai, or keep a managed route fully configured.",
     )
-    default_model = safe_text(env.get("ERRORSWEEP_OPENAI_DEFAULT_MODEL") or env.get("OPENAI_MODEL"))
+    default_model = env_value(env, "ERRORSWEEP_OPENAI_DEFAULT_MODEL") or safe_text(env.get("OPENAI_MODEL"))
     add(
         results,
         "AI Config",
@@ -359,7 +377,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
             nonsecret_evidence("ERRORSWEEP_MANAGED_AI_BASE_URL", managed_base_url),
             "Set ERRORSWEEP_MANAGED_AI_BASE_URL to a live public HTTPS OpenAI-compatible /v1 base URL.",
         )
-        managed_api_key = safe_text(env.get("ERRORSWEEP_MANAGED_AI_API_KEY"))
+        managed_api_key = env_value(env, "ERRORSWEEP_MANAGED_AI_API_KEY")
         status = "Pass" if configured_secret(managed_api_key, min_length=8) else ("Warn" if openai_ready else "Blocker")
         add(
             results,
@@ -369,7 +387,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
             nonsecret_evidence("ERRORSWEEP_MANAGED_AI_API_KEY", managed_api_key),
             "Set the managed AI bearer/API token, especially when managed AI is the primary route.",
         )
-        managed_model = safe_text(env.get("ERRORSWEEP_MANAGED_AI_MODEL"))
+        managed_model = env_value(env, "ERRORSWEEP_MANAGED_AI_MODEL")
         add(
             results,
             "AI Config",
@@ -391,19 +409,19 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
 
 
 def route_from_env(env: Dict[str, str]) -> Dict[str, str]:
-    if env_bool(env, "ERRORSWEEP_MANAGED_AI_ENABLED") and https_public_url(env.get("ERRORSWEEP_MANAGED_AI_BASE_URL", "")):
+    if env_bool(env, "ERRORSWEEP_MANAGED_AI_ENABLED") and https_public_url(env_value(env, "ERRORSWEEP_MANAGED_AI_BASE_URL")):
         return {
             "provider": "managed_ai",
-            "base_url": normalize_openai_base_url(env.get("ERRORSWEEP_MANAGED_AI_BASE_URL", "")),
-            "api_key": safe_text(env.get("ERRORSWEEP_MANAGED_AI_API_KEY") or "errorsweep-managed-token"),
-            "model": safe_text(env.get("ERRORSWEEP_MANAGED_AI_MODEL") or "errorsweep-managed"),
+            "base_url": normalize_openai_base_url(env_value(env, "ERRORSWEEP_MANAGED_AI_BASE_URL")),
+            "api_key": env_value(env, "ERRORSWEEP_MANAGED_AI_API_KEY", "errorsweep-managed-token"),
+            "model": env_value(env, "ERRORSWEEP_MANAGED_AI_MODEL", "errorsweep-managed"),
         }
     if openai_key_ready(env.get("OPENAI_API_KEY", "")):
         return {
             "provider": "openai_platform",
             "base_url": "https://api.openai.com/v1",
             "api_key": safe_text(env.get("OPENAI_API_KEY")),
-            "model": safe_text(env.get("ERRORSWEEP_OPENAI_DEFAULT_MODEL") or env.get("OPENAI_MODEL") or "gpt-4o-mini"),
+            "model": env_value(env, "ERRORSWEEP_OPENAI_DEFAULT_MODEL") or safe_text(env.get("OPENAI_MODEL") or "gpt-4o-mini"),
         }
     return {}
 
@@ -538,7 +556,7 @@ def write_ai_env(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file) if args.env_file else DEFAULT_ENV_PATH
     route = safe_text(args.ai_route).lower()
     model = safe_text(args.model) or "gpt-4o-mini"
-    updates: Dict[str, str] = {"ERRORSWEEP_OPENAI_DEFAULT_MODEL": model}
+    updates: Dict[str, str] = {"COGNISWEEP_OPENAI_DEFAULT_MODEL": model}
     try:
         if route == "openai":
             openai_key = read_required_secret_env(args.openai_key_env, "openai-key-env")
@@ -547,9 +565,9 @@ def write_ai_env(args: argparse.Namespace) -> int:
             updates.update(
                 {
                     "OPENAI_API_KEY": openai_key,
-                    "ERRORSWEEP_MANAGED_AI_ENABLED": "false",
-                    "ERRORSWEEP_MANAGED_AI_BASE_URL": "",
-                    "ERRORSWEEP_MANAGED_AI_API_KEY": "",
+                    "COGNISWEEP_MANAGED_AI_ENABLED": "false",
+                    "COGNISWEEP_MANAGED_AI_BASE_URL": "",
+                    "COGNISWEEP_MANAGED_AI_API_KEY": "",
                 }
             )
         elif route == "managed":
@@ -565,10 +583,10 @@ def write_ai_env(args: argparse.Namespace) -> int:
             updates.update(
                 {
                     "OPENAI_API_KEY": "",
-                    "ERRORSWEEP_MANAGED_AI_ENABLED": "true",
-                    "ERRORSWEEP_MANAGED_AI_BASE_URL": managed_base_url,
-                    "ERRORSWEEP_MANAGED_AI_API_KEY": managed_api_key,
-                    "ERRORSWEEP_MANAGED_AI_MODEL": managed_model,
+                    "COGNISWEEP_MANAGED_AI_ENABLED": "true",
+                    "COGNISWEEP_MANAGED_AI_BASE_URL": managed_base_url,
+                    "COGNISWEEP_MANAGED_AI_API_KEY": managed_api_key,
+                    "COGNISWEEP_MANAGED_AI_MODEL": managed_model,
                 }
             )
         else:

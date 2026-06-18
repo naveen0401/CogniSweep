@@ -19,11 +19,31 @@ from typing import Any, Dict
 import requests
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_TIMEOUT = int(os.getenv("ERRORSWEEP_ASYNC_QUEUE_TIMEOUT", "20"))
+
+
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def _env_value(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
+DEFAULT_TIMEOUT = int(_env_value("ERRORSWEEP_ASYNC_QUEUE_TIMEOUT", "20"))
 
 
 def _secret(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
+    value = _env_value(name, "")
     if value not in (None, ""):
         return str(value)
     try:
@@ -32,6 +52,11 @@ def _secret(name: str, default: str = "") -> str:
         value = st.secrets.get(name)
         if value not in (None, ""):
             return str(value)
+        alias = _cognisweep_env_alias(name)
+        if alias:
+            value = st.secrets.get(alias)
+            if value not in (None, ""):
+                return str(value)
     except Exception as exc:
         LOGGER.debug("Unable to read secret %s: %s", name, exc)
     return default

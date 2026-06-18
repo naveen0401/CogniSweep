@@ -110,21 +110,40 @@ LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
 }
 
 
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
 def _secret(name: str, default: str = "") -> str:
     env = os.environ.get(name)
     if env not in (None, ""):
         return str(env)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        env = os.environ.get(alias)
+        if env not in (None, ""):
+            return str(env)
     if st is not None:
         try:
             value = st.session_state.get(name)
             if value not in (None, ""):
                 return str(value)
+            if alias:
+                value = st.session_state.get(alias)
+                if value not in (None, ""):
+                    return str(value)
         except Exception as exc:
             LOGGER.debug("Unable to read Streamlit session value %s: %s", name, exc)
         try:
             value = st.secrets.get(name)
             if value not in (None, ""):
                 return str(value)
+            if alias:
+                value = st.secrets.get(alias)
+                if value not in (None, ""):
+                    return str(value)
         except Exception as exc:
             LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
     return default

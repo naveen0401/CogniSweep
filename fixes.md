@@ -39,14 +39,14 @@ None currently tracked.
 **Public Launch Configuration Blockers:**
 These are not code defects; they are production values and external services that must be configured before opening public traffic.
 
-1. Production public HTTPS app URL: replace the placeholder `ERRORSWEEP_PUBLIC_BASE_URL`.
-2. Platform owner bootstrap login: set `ERRORSWEEP_OWNER_USERNAME` and `ERRORSWEEP_OWNER_PASSWORD_HASH`.
-3. Initial workspace bootstrap login: set `ERRORSWEEP_USER_USERNAME`, `ERRORSWEEP_USER_PASSWORD_HASH`, and `ERRORSWEEP_ORG_NAME`.
+1. Production public HTTPS app URL: replace the placeholder `COGNISWEEP_PUBLIC_BASE_URL`.
+2. Platform owner bootstrap login: set `COGNISWEEP_OWNER_USERNAME` and `COGNISWEEP_OWNER_PASSWORD_HASH`.
+3. Initial workspace bootstrap login: set `COGNISWEEP_USER_USERNAME`, `COGNISWEEP_USER_PASSWORD_HASH`, and `COGNISWEEP_ORG_NAME`.
 4. Supabase production project: set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, run `supabase_v42_release_schema.sql`, and verify the tables.
 5. Platform AI fallback: configure `OPENAI_API_KEY` or a managed HTTPS OpenAI-compatible endpoint.
 6. Billing provider: configure live Razorpay or Stripe credentials, plan IDs, webhook signing secret, and HTTPS webhook receiver URL.
 7. Transactional email: configure Resend, SendGrid, or SMTP credentials and a verified production sender.
-8. Legal approval: set `ERRORSWEEP_LEGAL_REVIEWED=true` only after reviewed Terms, Privacy, DPA, and Cookie Notice are live.
+8. Legal approval: set `COGNISWEEP_LEGAL_REVIEWED=true` only after reviewed Terms, Privacy, DPA, and Cookie Notice are live.
 9. Self-hosted no-key MT: configure at least one live HTTPS MT endpoint, with IndicTrans2 and OPUS-MT currently required by the launch gate.
 10. CDN/WAF and final smoke: keep Cloudflare or equivalent enabled, then run the strict launch rehearsal with live probes.
 
@@ -185,9 +185,9 @@ python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os
 *   **The Issue:** Legacy `qa_engine_global_v13.py` and `qa_engine_global_v14.py` shims used wildcard re-exports without an explicit public symbol list.
 *   **The Fix:** Both compatibility shims now expose `__all__` from the canonical v15 public surface, with regression coverage. *(Verified fixed)*.
 
-### 21. Legacy Env Prefix Documentation
-*   **The Issue:** CogniSweep docs and UI branding use the CogniSweep name, while stable production env vars and compose service names still use the legacy `ERRORSWEEP_` / `errorsweep-*` prefix.
-*   **The Fix:** Deployment docs now explicitly document that the legacy prefix is the current stable configuration contract and should not be renamed piecemeal. *(Verified fixed)*.
+### 21. CogniSweep Env Prefix Migration
+*   **The Issue:** CogniSweep docs and UI branding use the CogniSweep name, while some stable internal infrastructure still uses legacy `ERRORSWEEP_` / `errorsweep-*` identifiers.
+*   **The Fix:** Runtime code and deploy checks now accept preferred `COGNISWEEP_*` settings while keeping legacy `ERRORSWEEP_*` names compatible for existing deployments. Deployment templates now show `COGNISWEEP_*` as the preferred prefix. *(Verified fixed)*.
 
 ### 22. Subtitle Editor Opens Only In CAT Tool
 *   **The Issue:** Creating a subtitle/transcription job opened both the legacy in-page subtitle workspace and the dedicated CAT/media editor tab.
@@ -274,7 +274,7 @@ python deploy/launch_rehearsal.py --env-file deploy/.env.production --include-os
 
 ### 9. Media Preview Disk Cleanup
 *   **The Issue:** Local media preview files could accumulate in the temp directory.
-*   **The Fix:** Added TTL-based media preview cleanup using `ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS`, defaulting to 48 hours, and run cleanup before saving new media previews. *(Fixed in v46 media cleanup pass)*.
+*   **The Fix:** Added TTL-based media preview cleanup using `COGNISWEEP_MEDIA_PREVIEW_TTL_SECONDS` (legacy `ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS` still works), defaulting to 48 hours, and run cleanup before saving new media previews. *(Fixed in v46 media cleanup pass)*.
 
 ### 10. Code Duplication
 *   **The Issue:** `qa_engine_global_v13.py`, `v14.py`, and `v15.py` previously risked drift if duplicated.

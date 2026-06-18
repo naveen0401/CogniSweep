@@ -145,8 +145,19 @@ def nonsecret_evidence(key: str, value: str) -> str:
     return value
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
+
+
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on", "enabled"}
@@ -154,9 +165,10 @@ def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
@@ -187,7 +199,7 @@ def require_positive_int(
     minimum: int = 1,
     status_when_missing: str = "Blocker",
 ) -> None:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     try:
         ready = int(value) >= minimum
     except Exception:
@@ -205,7 +217,7 @@ def require_flag(
     *,
     status_when_false: str = "Blocker",
 ) -> None:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     add(results, area, check, "Pass" if env_bool(env, name) else status_when_false, "enabled" if env_bool(env, name) else value or "missing", action)
 
 

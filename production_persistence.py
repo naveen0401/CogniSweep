@@ -48,8 +48,28 @@ except Exception:  # pragma: no cover
 
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days local fallback retention
 SUPABASE_TIMEOUT = 25
-LOCAL_USAGE_MAX_BYTES = int(os.getenv("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
-LOCAL_USAGE_KEEP_LINES = int(os.getenv("ERRORSWEEP_USAGE_LOG_KEEP_LINES", "2000"))
+
+
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def _env_value(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
+LOCAL_USAGE_MAX_BYTES = int(_env_value("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOCAL_USAGE_KEEP_LINES = int(_env_value("ERRORSWEEP_USAGE_LOG_KEEP_LINES", "2000"))
 _LOCAL_WRITE_LOCK = threading.RLock()
 PLATFORM_SCOPE_VALUES = {"platform", "all", "global", "service", "system"}
 
@@ -149,7 +169,7 @@ SAAS_COLUMNS = {
 # ==========================================================
 
 def _secret(name: str, default: str = "") -> str:
-    env_val = os.environ.get(name)
+    env_val = _env_value(name, "")
     if env_val not in (None, ""):
         return str(env_val)
     if st is not None:
@@ -157,6 +177,11 @@ def _secret(name: str, default: str = "") -> str:
             val = st.secrets.get(name)
             if val not in (None, ""):
                 return str(val)
+            alias = _cognisweep_env_alias(name)
+            if alias:
+                val = st.secrets.get(alias)
+                if val not in (None, ""):
+                    return str(val)
         except Exception as exc:
             LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
     return default

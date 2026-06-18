@@ -188,8 +188,19 @@ def nonsecret_evidence(key: str, value: str) -> str:
     return value
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
+
+
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
@@ -197,9 +208,10 @@ def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
@@ -229,7 +241,7 @@ def require_flag(
     *,
     status_when_false: str = "Blocker",
 ) -> None:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     add(results, area, check, "Pass" if env_bool(env, name) else status_when_false, "enabled" if env_bool(env, name) else value or "missing", action)
 
 
@@ -378,9 +390,9 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         add(results, "Async Config", "Production env file", "Blocker", "missing", "Create deploy/.env.production from the non-secret template.")
         return None
     env = parse_env_file(env_path)
-    worker_url = safe_text(env.get("ERRORSWEEP_ASYNC_WORKER_URL"))
+    worker_url = value_for(env, ["ERRORSWEEP_ASYNC_WORKER_URL"])
     redis_url = safe_text(env.get("REDIS_URL") or env.get("CELERY_BROKER_URL"))
-    backend = safe_text(env.get("ERRORSWEEP_ASYNC_BACKEND")).lower()
+    backend = value_for(env, ["ERRORSWEEP_ASYNC_BACKEND"]).lower()
     http_ready = http_url_ready(worker_url)
     redis_ready = bool(redis_url) and not is_placeholder(redis_url)
     external_ready = http_ready or redis_ready
@@ -470,7 +482,7 @@ def health_url_for_worker(worker_url: str) -> str:
 def probe_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: int) -> None:
     import requests
 
-    worker_url = safe_text(env.get("ERRORSWEEP_ASYNC_WORKER_URL"))
+    worker_url = value_for(env, ["ERRORSWEEP_ASYNC_WORKER_URL"])
     if not http_url_ready(worker_url):
         add(results, "Async Probe", "Receiver health", "Blocker", "worker URL missing", "Set ERRORSWEEP_ASYNC_WORKER_URL before probing receiver health.")
         return

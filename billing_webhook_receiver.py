@@ -83,12 +83,30 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = os.getenv(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def env_bool(name: str, default: bool = False) -> bool:
-    value = safe_text(os.getenv(name)).lower()
+    value = safe_text(env_value(name)).lower()
     if value in {"1", "true", "yes", "on"}:
         return True
     if value in {"0", "false", "no", "off"}:
@@ -98,7 +116,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def env_int(name: str, default: int, minimum: int = 1) -> int:
     try:
-        value = int(safe_text(os.getenv(name)))
+        value = int(safe_text(env_value(name)))
     except Exception:
         value = default
     return max(minimum, value)
@@ -136,7 +154,7 @@ def webhook_secret_for_provider(provider: str) -> str:
         "ERRORSWEEP_BILLING_WEBHOOK_SECRET",
     ]
     for key in candidates:
-        value = safe_text(os.getenv(key))
+        value = safe_text(env_value(key))
         if value:
             return value
     return ""
@@ -561,7 +579,7 @@ class BillingWebhookHandler(BaseHTTPRequestHandler):
         self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Unknown route."})
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        max_bytes = int(os.getenv("ERRORSWEEP_BILLING_WEBHOOK_MAX_BYTES", str(1024 * 1024)))
+        max_bytes = int(env_value("ERRORSWEEP_BILLING_WEBHOOK_MAX_BYTES", str(1024 * 1024)))
         content_length = int(self.headers.get("Content-Length") or 0)
         if content_length <= 0:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Empty webhook payload."})
@@ -593,7 +611,7 @@ class BillingWebhookHandler(BaseHTTPRequestHandler):
 
 
 def run_server(host: str = "", port: int = 8300) -> None:
-    logging.basicConfig(level=os.getenv("ERRORSWEEP_WEBHOOK_LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=env_value("ERRORSWEEP_WEBHOOK_LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     server = ThreadingHTTPServer((host, port), BillingWebhookHandler)
     LOGGER.info("Starting %s on %s:%s", APP_NAME, host or "0.0.0.0", port)
     server.serve_forever()
@@ -601,6 +619,6 @@ def run_server(host: str = "", port: int = 8300) -> None:
 
 if __name__ == "__main__":
     run_server(
-        host=os.getenv("ERRORSWEEP_BILLING_WEBHOOK_HOST", ""),
-        port=int(os.getenv("ERRORSWEEP_BILLING_WEBHOOK_PORT", "8300")),
+        host=env_value("ERRORSWEEP_BILLING_WEBHOOK_HOST", ""),
+        port=int(env_value("ERRORSWEEP_BILLING_WEBHOOK_PORT", "8300")),
     )

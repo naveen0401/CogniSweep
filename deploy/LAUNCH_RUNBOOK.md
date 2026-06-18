@@ -58,18 +58,18 @@ Copy-Item deploy/.env.production.example deploy/.env.production
 
 Fill the real values in `deploy/.env.production`. Do not commit this file.
 
-Naming note: the legacy `ERRORSWEEP_` prefix is still the supported environment-variable prefix for CogniSweep launch settings. Keep these names unchanged unless a future migration updates the application, deployment templates, and stored secrets in one coordinated change.
+Naming note: `COGNISWEEP_*` is now the preferred environment-variable prefix for CogniSweep launch settings. Legacy `ERRORSWEEP_*` settings are still accepted for existing deployments, and internal compose service names may remain `errorsweep-*` until a separate infrastructure migration.
 
 Minimum required production identity values:
 
-- `ERRORSWEEP_ENV=production`
-- `ERRORSWEEP_PUBLIC_BASE_URL=https://<app-domain>`
-- `ERRORSWEEP_SESSION_SECRET=<long-random-secret>`
-- `ERRORSWEEP_OWNER_USERNAME=<platform-owner-email>`
-- `ERRORSWEEP_OWNER_PASSWORD_HASH=<pbkdf2-hash>`
-- `ERRORSWEEP_USER_USERNAME=<workspace-owner-email>`
-- `ERRORSWEEP_USER_PASSWORD_HASH=<pbkdf2-hash>`
-- `ERRORSWEEP_ORG_NAME=<initial-workspace-name>`
+- `COGNISWEEP_ENV=production`
+- `COGNISWEEP_PUBLIC_BASE_URL=https://<app-domain>`
+- `COGNISWEEP_SESSION_SECRET=<long-random-secret>`
+- `COGNISWEEP_OWNER_USERNAME=<platform-owner-email>`
+- `COGNISWEEP_OWNER_PASSWORD_HASH=<pbkdf2-hash>`
+- `COGNISWEEP_USER_USERNAME=<workspace-owner-email>`
+- `COGNISWEEP_USER_PASSWORD_HASH=<pbkdf2-hash>`
+- `COGNISWEEP_ORG_NAME=<initial-workspace-name>`
 
 Generate compatible bootstrap password hashes without importing the Streamlit app:
 
@@ -80,9 +80,9 @@ python deploy/auth_session_check.py --generate-password-hash
 For repeatable setup, keep plaintext passwords in your shell environment and let the checker write the ignored production env file:
 
 ```powershell
-$env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
-$env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
-python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+$env:COGNISWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
+$env:COGNISWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
+python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env COGNISWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env COGNISWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
 ```
 
 For a temporary launch credential pair, add `--generate-temporary-passwords` instead of the two `--*-password-env` options and store the printed passwords securely before closing the terminal.
@@ -122,7 +122,7 @@ Write these settings into the ignored env file without putting keys on the comma
 ```powershell
 $env:SUPABASE_ANON_KEY="<supabase-anon-key>"
 $env:SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>"
-python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket errorsweep-files
+python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket cognisweep-files
 ```
 
 Required validation:
@@ -140,7 +140,7 @@ Choose the production storage provider and create the bucket/container.
 
 Required env keys for Supabase Storage:
 
-- `ERRORSWEEP_OBJECT_STORAGE_PROVIDER=supabase`
+- `COGNISWEEP_OBJECT_STORAGE_PROVIDER=supabase`
 - `SUPABASE_STORAGE_BUCKET`
 
 Alternative providers can use the S3 or GCS keys already listed in `deploy/.env.production.example`.
@@ -171,11 +171,11 @@ Deploy the async receiver and worker processor as managed services.
 
 Required env keys:
 
-- `ERRORSWEEP_ASYNC_WORKER_URL`
-- `ERRORSWEEP_ASYNC_WORKER_TOKEN`
-- `ERRORSWEEP_ASYNC_RECEIVER_SERVICE_ENABLED=true`
-- `ERRORSWEEP_ASYNC_PROCESSOR_ENABLED=true`
-- `ERRORSWEEP_WORKER_SUPERVISOR_ENABLED=true`
+- `COGNISWEEP_ASYNC_WORKER_URL`
+- `COGNISWEEP_ASYNC_WORKER_TOKEN`
+- `COGNISWEEP_ASYNC_RECEIVER_SERVICE_ENABLED=true`
+- `COGNISWEEP_ASYNC_PROCESSOR_ENABLED=true`
+- `COGNISWEEP_WORKER_SUPERVISOR_ENABLED=true`
 
 Useful checks:
 
@@ -196,14 +196,14 @@ Configure production translation routes before public no-key Pro workflows are e
 Required platform AI fallback values:
 
 - `OPENAI_API_KEY`, or
-- `ERRORSWEEP_MANAGED_AI_ENABLED=true` with `ERRORSWEEP_MANAGED_AI_BASE_URL`
+- `COGNISWEEP_MANAGED_AI_ENABLED=true` with `COGNISWEEP_MANAGED_AI_BASE_URL`
 
 Optional platform AI values:
 
-- `ERRORSWEEP_OPENAI_DEFAULT_MODEL`
+- `COGNISWEEP_OPENAI_DEFAULT_MODEL`
 - `GEMINI_API_KEY`
-- `ERRORSWEEP_MANAGED_AI_API_KEY`
-- `ERRORSWEEP_MANAGED_AI_MODEL`
+- `COGNISWEEP_MANAGED_AI_API_KEY`
+- `COGNISWEEP_MANAGED_AI_MODEL`
 
 Write the OpenAI fallback route into the ignored env file without putting the key on the command line:
 
@@ -215,8 +215,8 @@ python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-
 Or write a managed OpenAI-compatible endpoint route:
 
 ```powershell
-$env:ERRORSWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
-python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.cognisweep.com/v1 --managed-api-key-env ERRORSWEEP_MANAGED_AI_TOKEN --managed-model your-model
+$env:COGNISWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
+python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.cognisweep.com/v1 --managed-api-key-env COGNISWEEP_MANAGED_AI_TOKEN --managed-model your-model
 ```
 
 Required no-key MT values:
@@ -250,9 +250,9 @@ Choose one production billing provider and configure live credentials, plan IDs,
 
 Required env keys:
 
-- `ERRORSWEEP_BILLING_PROVIDER`
-- `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL`
-- `ERRORSWEEP_BILLING_WEBHOOK_SECRET`
+- `COGNISWEEP_BILLING_PROVIDER`
+- `COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL`
+- `COGNISWEEP_BILLING_WEBHOOK_SECRET`
 
 Provider-specific required values:
 
@@ -276,7 +276,7 @@ $env:STRIPE_WEBHOOK_SECRET="<stripe-webhook-secret>"
 python deploy/launch_env_check.py --env-file deploy/.env.production --write-billing-env --billing-provider stripe --billing-webhook-url https://billing.cognisweep.com/webhooks/billing/stripe --stripe-secret-key-env STRIPE_SECRET_KEY --stripe-webhook-secret-env STRIPE_WEBHOOK_SECRET --pro-plan-id price_pro --agency-plan-id price_agency
 ```
 
-Keep `ERRORSWEEP_WEBHOOK_APPLY_UPDATES=false` until provider test webhooks validate signature checks and event mapping. Turn it on only after successful staging verification.
+Keep `COGNISWEEP_WEBHOOK_APPLY_UPDATES=false` until provider test webhooks validate signature checks and event mapping. Turn it on only after successful staging verification.
 
 Useful checks:
 
@@ -293,9 +293,9 @@ Configure one production email provider and verify the sender domain.
 
 Required env keys:
 
-- `ERRORSWEEP_EMAIL_PROVIDER`
-- `ERRORSWEEP_EMAIL_FROM`
-- `ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true`
+- `COGNISWEEP_EMAIL_PROVIDER`
+- `COGNISWEEP_EMAIL_FROM`
+- `COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true`
 
 Provider-specific keys:
 
@@ -321,7 +321,7 @@ Do not set the launch approval flags until reviewed legal documents are live.
 
 Required env keys:
 
-- `ERRORSWEEP_LEGAL_REVIEWED=true`
+- `COGNISWEEP_LEGAL_REVIEWED=true`
 
 Required product checks:
 
@@ -343,7 +343,7 @@ Put HTTPS/CDN/WAF in front of all public endpoints.
 
 Required env key:
 
-- `ERRORSWEEP_WAF_PROVIDER`
+- `COGNISWEEP_WAF_PROVIDER`
 
 Route targets:
 
@@ -359,8 +359,8 @@ Enable scheduled production backups and verify restore evidence.
 
 Required env keys:
 
-- `ERRORSWEEP_BACKUP_WORKER_ENABLED=true`
-- `ERRORSWEEP_BACKUP_PROVIDER`
+- `COGNISWEEP_BACKUP_WORKER_ENABLED=true`
+- `COGNISWEEP_BACKUP_PROVIDER`
 
 Useful checks:
 
@@ -416,11 +416,11 @@ Then manually verify:
 
 | Smoke-test blocker | Primary fix |
 | --- | --- |
-| Production mode | Set `ERRORSWEEP_ENV=production`. |
-| Public HTTPS URL | Set `ERRORSWEEP_PUBLIC_BASE_URL` to the live HTTPS app URL. |
-| Session secret | Set a long unique `ERRORSWEEP_SESSION_SECRET`. |
-| Owner bootstrap credentials | Set `ERRORSWEEP_OWNER_USERNAME` and PBKDF2 `ERRORSWEEP_OWNER_PASSWORD_HASH`. |
-| Workspace bootstrap credentials | Set `ERRORSWEEP_USER_USERNAME`, PBKDF2 `ERRORSWEEP_USER_PASSWORD_HASH`, and `ERRORSWEEP_ORG_NAME`. |
+| Production mode | Set `COGNISWEEP_ENV=production`. |
+| Public HTTPS URL | Set `COGNISWEEP_PUBLIC_BASE_URL` to the live HTTPS app URL. |
+| Session secret | Set a long unique `COGNISWEEP_SESSION_SECRET`. |
+| Owner bootstrap credentials | Set `COGNISWEEP_OWNER_USERNAME` and PBKDF2 `COGNISWEEP_OWNER_PASSWORD_HASH`. |
+| Workspace bootstrap credentials | Set `COGNISWEEP_USER_USERNAME`, PBKDF2 `COGNISWEEP_USER_PASSWORD_HASH`, and `COGNISWEEP_ORG_NAME`. |
 | Supabase SaaS tables | Run the release schema and configure Supabase env keys. |
 | Object storage local fallback | Configure Supabase Storage, S3, or GCS for production. |
 | Async receiver or processor | Deploy the receiver/processor services and set worker env keys. |
@@ -430,11 +430,11 @@ Then manually verify:
 | Webhook receiver URL | Set the public HTTPS billing webhook receiver URL. |
 | Webhook signature secret | Set the provider webhook signing secret. |
 | Transactional email provider | Configure Resend, SendGrid, or SMTP. |
-| Verified sender | Set and verify `ERRORSWEEP_EMAIL_FROM`. |
-| Dispatch worker enabled | Set `ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true`. |
-| Backup worker enabled | Set `ERRORSWEEP_BACKUP_WORKER_ENABLED=true` after backup provider setup. |
-| CDN/WAF provider | Put the app behind a named WAF/CDN provider and set `ERRORSWEEP_WAF_PROVIDER`. |
-| Legal review flag | Set `ERRORSWEEP_LEGAL_REVIEWED=true` only after legal approval. |
+| Verified sender | Set and verify `COGNISWEEP_EMAIL_FROM`. |
+| Dispatch worker enabled | Set `COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true`. |
+| Backup worker enabled | Set `COGNISWEEP_BACKUP_WORKER_ENABLED=true` after backup provider setup. |
+| CDN/WAF provider | Put the app behind a named WAF/CDN provider and set `COGNISWEEP_WAF_PROVIDER`. |
+| Legal review flag | Set `COGNISWEEP_LEGAL_REVIEWED=true` only after legal approval. |
 
 ## Rollback
 

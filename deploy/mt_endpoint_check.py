@@ -345,10 +345,28 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = env_value(env, name)
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
+    value = safe_text(env.get(name))
+    if value:
+        return value
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = safe_text(env.get(alias))
+        if value:
+            return value
+    return default
 
 
 def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_madlad: bool) -> Optional[Dict[str, str]]:

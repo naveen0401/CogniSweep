@@ -212,24 +212,44 @@ DEPLOY_EXPECTED_FEATURES = (
     "direct_file_url_media_source",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def runtime_env(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 # Persistent browser sessions should survive reloads and browser restarts until
 # the user explicitly clicks Logout. Browser cookies still need a finite
 # Max-Age, so use a long renewal window while the signed token itself has no
 # expiry check.
-SESSION_PERSISTENCE_SECONDS = int(os.getenv("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS", str(60 * 60 * 24 * 365 * 10)))
+SESSION_PERSISTENCE_SECONDS = int(runtime_env("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS", str(60 * 60 * 24 * 365 * 10)))
 SESSION_TTL_SECONDS = SESSION_PERSISTENCE_SECONDS
 DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
 PASSWORD_HASH_ITERATIONS = 260_000
 SESSION_HISTORY_LIMIT = 500
-RULE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_FILES", "250"))
-RULE_ZIP_MAX_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_BYTES", str(25 * 1024 * 1024)))
-RULE_ZIP_MAX_EXPANDED_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MAX_EXPANDED_BYTES", str(RULE_ZIP_MAX_BYTES * 4)))
-RULE_ZIP_MEMBER_MAX_BYTES = int(os.getenv("ERRORSWEEP_RULE_ZIP_MEMBER_MAX_BYTES", str(5 * 1024 * 1024)))
-OFFICE_ZIP_MAX_FILES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_FILES", "1500"))
-OFFICE_ZIP_MAX_EXPANDED_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_ZIP_MAX_EXPANDED_BYTES", str(120 * 1024 * 1024)))
-OFFICE_XML_MEMBER_MAX_BYTES = int(os.getenv("ERRORSWEEP_OFFICE_XML_MEMBER_MAX_BYTES", str(20 * 1024 * 1024)))
-MEDIA_PREVIEW_TTL_SECONDS = int(os.getenv("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
-MEDIA_URL_MAX_BYTES = int(os.getenv("ERRORSWEEP_MEDIA_URL_MAX_BYTES", str(200 * 1024 * 1024)))
+RULE_ZIP_MAX_FILES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_FILES", "250"))
+RULE_ZIP_MAX_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_BYTES", str(25 * 1024 * 1024)))
+RULE_ZIP_MAX_EXPANDED_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_EXPANDED_BYTES", str(RULE_ZIP_MAX_BYTES * 4)))
+RULE_ZIP_MEMBER_MAX_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MEMBER_MAX_BYTES", str(5 * 1024 * 1024)))
+OFFICE_ZIP_MAX_FILES = int(runtime_env("ERRORSWEEP_OFFICE_ZIP_MAX_FILES", "1500"))
+OFFICE_ZIP_MAX_EXPANDED_BYTES = int(runtime_env("ERRORSWEEP_OFFICE_ZIP_MAX_EXPANDED_BYTES", str(120 * 1024 * 1024)))
+OFFICE_XML_MEMBER_MAX_BYTES = int(runtime_env("ERRORSWEEP_OFFICE_XML_MEMBER_MAX_BYTES", str(20 * 1024 * 1024)))
+MEDIA_PREVIEW_TTL_SECONDS = int(runtime_env("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
+MEDIA_URL_MAX_BYTES = int(runtime_env("ERRORSWEEP_MEDIA_URL_MAX_BYTES", str(200 * 1024 * 1024)))
 RETENTION_POLICY_DEFAULTS = {
     "expired_auth_token_grace_days": 0,
     "expired_file_manifest_grace_days": 7,
@@ -350,7 +370,7 @@ SESSION_COLLECTION_LIMITS = {
     "status_incidents": 500,
     "consent_records": 1000,
 }
-SAAS_CACHE_TTL_SECONDS = int(os.getenv("ERRORSWEEP_SAAS_CACHE_TTL_SECONDS", "15"))
+SAAS_CACHE_TTL_SECONDS = int(runtime_env("ERRORSWEEP_SAAS_CACHE_TTL_SECONDS", "15"))
 SAAS_CACHE_GENERATION_KEY = "_saas_read_cache_generation"
 SAAS_CACHEABLE_COLLECTIONS = {
     "workspaces",
@@ -374,7 +394,7 @@ SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
 EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
-EDITOR_LAUNCH_TTL_SECONDS = int(os.getenv("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
+EDITOR_LAUNCH_TTL_SECONDS = int(runtime_env("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
 EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"
 AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
 AUTH_STATE_UNKNOWN = "unknown"
@@ -550,8 +570,8 @@ PLAN_CATALOG = [
         "description": "Unlimited workspace access for authorized internal use.",
     },
 ]
-EMAIL_DISPATCH_BATCH_LIMIT = int(os.getenv("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
-AUTH_TOKEN_TTL_SECONDS = int(os.getenv("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
+EMAIL_DISPATCH_BATCH_LIMIT = int(runtime_env("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
+AUTH_TOKEN_TTL_SECONDS = int(runtime_env("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
 COMPLIANCE_ACK_LABEL = "I accept the Terms of Service, Privacy Policy, and NDA/confidentiality obligations for this workspace."
 UNLIMITED_ACCESS_WORKSPACE = "Naveen Unlimited Workspace"
 UNLIMITED_ACCESS_EMAIL_SECRET = "ERRORSWEEP_UNLIMITED_ACCESS_EMAIL"
@@ -4205,13 +4225,18 @@ components.html(
 # ==========================================================
 
 def secret(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
+    value = runtime_env(name, "")
     if value:
         return value
     try:
         value = st.secrets.get(name)
         if value:
             return value
+        alias = cognisweep_env_alias(name)
+        if alias:
+            value = st.secrets.get(alias)
+            if value:
+                return value
     except Exception as exc:
         LOGGER.debug("Unable to read secret %s: %s", name, exc)
     return default
@@ -15933,7 +15958,7 @@ def save_review_session_to_store(
 
 
 def media_preview_root() -> Path:
-    configured = os.getenv("ERRORSWEEP_MEDIA_PREVIEW_DIR", "").strip()
+    configured = runtime_env("ERRORSWEEP_MEDIA_PREVIEW_DIR", "").strip()
     root = Path(configured) if configured else Path(tempfile.gettempdir()) / "errorsweep_media_previews"
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -16013,7 +16038,7 @@ def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> Tuple[str, int]:
 
 
 def job_attachment_root() -> Path:
-    configured = os.getenv("ERRORSWEEP_JOB_ATTACHMENT_DIR", "").strip()
+    configured = runtime_env("ERRORSWEEP_JOB_ATTACHMENT_DIR", "").strip()
     root = Path(configured) if configured else Path(tempfile.gettempdir()) / "errorsweep_job_attachments"
     root.mkdir(parents=True, exist_ok=True)
     return root

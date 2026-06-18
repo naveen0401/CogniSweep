@@ -484,7 +484,7 @@ def write_supabase_env(args: argparse.Namespace) -> int:
             "SUPABASE_URL": supabase_url,
             "SUPABASE_ANON_KEY": anon_key,
             "SUPABASE_SERVICE_ROLE_KEY": service_role_key,
-            "ERRORSWEEP_OBJECT_STORAGE_PROVIDER": provider,
+            "COGNISWEEP_OBJECT_STORAGE_PROVIDER": provider,
         }
         if provider == "supabase":
             updates["SUPABASE_STORAGE_BUCKET"] = storage_bucket

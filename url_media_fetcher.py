@@ -24,7 +24,27 @@ SUPPORTED_MEDIA_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mp3",
 MEDIA_CONTENT_PREFIXES = ("audio/", "video/")
 HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
 OCTET_STREAM_CONTENT_TYPES = {"application/octet-stream", "binary/octet-stream"}
-DEFAULT_MEDIA_URL_TIMEOUT_SECONDS = float(os.getenv("ERRORSWEEP_MEDIA_URL_TIMEOUT_SECONDS", "20"))
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = os.getenv(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
+DEFAULT_MEDIA_URL_TIMEOUT_SECONDS = float(env_value("ERRORSWEEP_MEDIA_URL_TIMEOUT_SECONDS", "20"))
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 # These domains host pages or proprietary streaming experiences, not direct

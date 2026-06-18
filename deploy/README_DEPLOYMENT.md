@@ -12,7 +12,7 @@ Use `deploy/LAUNCH_RUNBOOK.md` for the phase-by-phase SaaS launch sequence. This
 - `errorsweep-billing-webhook`: billing webhook receiver on port `8301`.
 - `redis`: optional profile for deployments that choose Redis/Celery style queues later.
 
-Naming note: several env vars and service names retain the legacy `ERRORSWEEP_`/`errorsweep-*` prefix. Treat these as the current stable CogniSweep deployment contract; do not rename them piecemeal in production secrets, compose files, or Streamlit Cloud settings.
+Naming note: `COGNISWEEP_*` is now the preferred deployment prefix. Existing `ERRORSWEEP_*` secrets, compose service names, database tables, and storage paths remain supported for backward compatibility, so migrate external settings gradually rather than rewriting live infrastructure in one step.
 
 ## First Setup
 
@@ -40,15 +40,15 @@ Naming note: several env vars and service names retain the legacy `ERRORSWEEP_`/
    ```
    Or write the bootstrap fields directly into the ignored env file from shell environment variables:
    ```powershell
-   $env:ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
-   $env:ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
-   python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env ERRORSWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env ERRORSWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
+   $env:COGNISWEEP_OWNER_BOOTSTRAP_PASSWORD="<owner-password>"
+   $env:COGNISWEEP_WORKSPACE_BOOTSTRAP_PASSWORD="<workspace-password>"
+   python deploy/auth_session_check.py --env-file deploy/.env.production --write-bootstrap-env --owner-email owner@cognisweep.com --workspace-email workspace-owner@cognisweep.com --workspace-name "Initial Workspace" --owner-password-env COGNISWEEP_OWNER_BOOTSTRAP_PASSWORD --workspace-password-env COGNISWEEP_WORKSPACE_BOOTSTRAP_PASSWORD
    ```
 7. Write Supabase persistence and Supabase Storage settings from shell environment variables:
    ```powershell
    $env:SUPABASE_ANON_KEY="<supabase-anon-key>"
    $env:SUPABASE_SERVICE_ROLE_KEY="<supabase-service-role-key>"
-   python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket errorsweep-files
+   python deploy/supabase_schema_check.py --env-file deploy/.env.production --write-supabase-env --supabase-url https://your-project.supabase.co --anon-key-env SUPABASE_ANON_KEY --service-role-key-env SUPABASE_SERVICE_ROLE_KEY --storage-bucket cognisweep-files
    ```
 8. Write billing provider credentials and webhook settings from shell environment variables:
    ```powershell
@@ -61,7 +61,7 @@ Naming note: several env vars and service names retain the legacy `ERRORSWEEP_`/
    - app: `http://errorsweep-app:8501`
    - async receiver: `http://errorsweep-async-receiver:8300`
    - billing webhook receiver: `http://errorsweep-billing-webhook:8301`
-10. Configure `ERRORSWEEP_PUBLIC_BASE_URL` and `ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
+10. Configure `COGNISWEEP_PUBLIC_BASE_URL` and `COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL` to the public HTTPS URLs users/providers will call.
 
 ## Run
 

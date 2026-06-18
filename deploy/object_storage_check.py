@@ -89,6 +89,15 @@ def missing_items(items: Iterable[str], text: str) -> List[str]:
     return [item for item in items if item not in text]
 
 
+def missing_env_template_items(items: Iterable[str], text: str) -> List[str]:
+    missing: List[str] = []
+    for item in items:
+        if any(candidate in text for candidate in aliases_for(item)):
+            continue
+        missing.append(item)
+    return missing
+
+
 def requirement_name(line: str) -> str:
     text = line.strip()
     if not text or text.startswith("#") or text.startswith("-"):
@@ -152,14 +161,26 @@ def parse_env_file(path: Path) -> Dict[str, str]:
 
 
 def key_present(env: Dict[str, str], names: Sequence[str]) -> bool:
-    return any(name in env and safe_text(env.get(name)) != "" and not is_placeholder(safe_text(env.get(name))) for name in names)
+    return any(candidate in env and safe_text(env.get(candidate)) != "" and not is_placeholder(safe_text(env.get(candidate))) for name in names for candidate in aliases_for(name))
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
 
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
@@ -200,8 +221,8 @@ def validate_adapter(results: List[Dict[str, str]]) -> None:
 def validate_templates(results: List[Dict[str, str]]) -> None:
     env_template = read_text(ENV_TEMPLATE_PATH)
     streamlit_template = read_text(STREAMLIT_TEMPLATE_PATH)
-    missing_env = missing_items(REQUIRED_TEMPLATE_KEYS, env_template)
-    missing_streamlit = missing_items(["ERRORSWEEP_OBJECT_STORAGE_PROVIDER", "ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS", "SUPABASE_STORAGE_BUCKET", "S3_BUCKET", "GCS_BUCKET"], streamlit_template)
+    missing_env = missing_env_template_items(REQUIRED_TEMPLATE_KEYS, env_template)
+    missing_streamlit = missing_env_template_items(["ERRORSWEEP_OBJECT_STORAGE_PROVIDER", "ERRORSWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS", "SUPABASE_STORAGE_BUCKET", "S3_BUCKET", "GCS_BUCKET"], streamlit_template)
     add(
         results,
         "Storage",
@@ -257,7 +278,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         return None
 
     env = parse_env_file(env_path)
-    provider = safe_text(env.get("ERRORSWEEP_OBJECT_STORAGE_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_OBJECT_STORAGE_PROVIDER"]).lower()
     add(
         results,
         "Storage",
@@ -354,7 +375,7 @@ def cleanup_probe_object(provider: str, env: Dict[str, str], key: str, manifest:
 
 
 def probe_write(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    provider = safe_text(env.get("ERRORSWEEP_OBJECT_STORAGE_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_OBJECT_STORAGE_PROVIDER"]).lower()
     if provider not in PRODUCTION_PROVIDERS:
         add(results, "Storage Probe", "Write/readiness probe", "Blocker", provider or "missing", "Configure a cloud object-storage provider before probing writes.")
         return

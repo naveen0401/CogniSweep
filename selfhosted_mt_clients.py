@@ -19,8 +19,26 @@ PRIVATE_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home")
 TRANSIENT_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def _env_value(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.getenv(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
-    value = str(os.getenv(name, "") or "").strip().lower()
+    value = str(_env_value(name, "") or "").strip().lower()
     if value in {"1", "true", "yes", "on"}:
         return True
     if value in {"0", "false", "no", "off"}:
@@ -30,7 +48,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
-        value = int(str(os.getenv(name, "") or default))
+        value = int(str(_env_value(name, "") or default))
     except Exception:
         value = default
     return max(minimum, min(value, maximum))
@@ -38,14 +56,14 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
 
 def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
     try:
-        value = float(str(os.getenv(name, "") or default))
+        value = float(str(_env_value(name, "") or default))
     except Exception:
         value = default
     return max(minimum, min(value, maximum))
 
 
 def _is_production() -> bool:
-    env = str(os.getenv("ERRORSWEEP_ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    env = str(_env_value("ERRORSWEEP_ENV") or _env_value("APP_ENV") or "").strip().lower()
     return env in {"prod", "production"}
 
 

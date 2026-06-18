@@ -195,8 +195,26 @@ def nonsecret_evidence(key: str, value: str) -> str:
     return value
 
 
-def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
     value = safe_text(env.get(name))
+    if value:
+        return value
+    alias = cognisweep_env_alias(name)
+    if alias:
+        value = safe_text(env.get(alias))
+        if value:
+            return value
+    return default
+
+
+def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
+    value = env_value(env, name)
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
@@ -415,7 +433,7 @@ def validate_release_wiring(results: List[Dict[str, str]]) -> None:
 
 
 def validate_email(results: List[Dict[str, str]], env: Dict[str, str], key: str, label: str) -> None:
-    value = safe_text(env.get(key))
+    value = env_value(env, key)
     ready = bool(value) and not is_placeholder(value) and bool(EMAIL_RE.match(value))
     add(
         results,
@@ -428,7 +446,7 @@ def validate_email(results: List[Dict[str, str]], env: Dict[str, str], key: str,
 
 
 def validate_password_hash(results: List[Dict[str, str]], env: Dict[str, str], key: str, label: str) -> None:
-    ready, detail = pbkdf2_hash_detail(env.get(key, ""))
+    ready, detail = pbkdf2_hash_detail(env_value(env, key))
     add(
         results,
         "Auth Config",
@@ -445,7 +463,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         return None
 
     env = parse_env_file(env_path)
-    mode = safe_text(env.get("ERRORSWEEP_ENV")).lower()
+    mode = env_value(env, "ERRORSWEEP_ENV").lower()
     add(
         results,
         "Auth Config",
@@ -455,7 +473,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Set ERRORSWEEP_ENV=production before public traffic.",
     )
 
-    public_url = safe_text(env.get("ERRORSWEEP_PUBLIC_BASE_URL"))
+    public_url = env_value(env, "ERRORSWEEP_PUBLIC_BASE_URL")
     add(
         results,
         "Auth Config",
@@ -465,7 +483,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Set ERRORSWEEP_PUBLIC_BASE_URL to the live public HTTPS app URL used in verification and reset links.",
     )
 
-    session_secret = safe_text(env.get("ERRORSWEEP_SESSION_SECRET"))
+    session_secret = env_value(env, "ERRORSWEEP_SESSION_SECRET")
     strong_session_secret = not is_placeholder(session_secret) and len(session_secret) >= 32 and len(set(session_secret)) >= 12
     add(
         results,
@@ -481,7 +499,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
     validate_email(results, env, "ERRORSWEEP_USER_USERNAME", "Workspace bootstrap email")
     validate_password_hash(results, env, "ERRORSWEEP_USER_PASSWORD_HASH", "Workspace bootstrap password hash")
 
-    workspace_name = safe_text(env.get("ERRORSWEEP_ORG_NAME"))
+    workspace_name = env_value(env, "ERRORSWEEP_ORG_NAME")
     add(
         results,
         "Auth Config",
@@ -491,7 +509,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Set ERRORSWEEP_ORG_NAME to the initial production workspace name for bootstrap login.",
     )
 
-    default_role = safe_text(env.get("ERRORSWEEP_DEFAULT_USER_ROLE") or "Workspace Owner")
+    default_role = env_value(env, "ERRORSWEEP_DEFAULT_USER_ROLE", "Workspace Owner")
     allowed_roles = {"Workspace Owner", "Company Admin", "Workspace Admin", "Project Manager", "Team Lead", "Translator", "Reviewer", "Freelancer", "Client", "Client Viewer", "Billing Admin", "Talent Manager", "Individual Owner", "Individual User", "User"}
     add(
         results,
@@ -502,7 +520,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Use a known workspace role, usually Workspace Owner, for the bootstrap workspace user.",
     )
 
-    active_legacy = [key for key in LEGACY_PASSWORD_KEYS if safe_text(env.get(key))]
+    active_legacy = [key for key in LEGACY_PASSWORD_KEYS if env_value(env, key)]
     add(
         results,
         "Auth Config",
@@ -512,7 +530,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Remove plaintext ERRORSWEEP_OWNER_PASSWORD / ERRORSWEEP_USER_PASSWORD; production login accepts only *_PASSWORD_HASH.",
     )
 
-    ttl_raw = safe_text(env.get("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS"))
+    ttl_raw = env_value(env, "ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS")
     if ttl_raw:
         try:
             ttl = int(ttl_raw)
@@ -531,7 +549,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         )
 
     if env_bool(env, "ERRORSWEEP_ENTERPRISE_SSO_ENABLED"):
-        handoff = safe_text(env.get("ERRORSWEEP_SSO_HANDOFF_SECRET"))
+        handoff = env_value(env, "ERRORSWEEP_SSO_HANDOFF_SECRET")
         ready = not is_placeholder(handoff) and len(handoff) >= 24
         add(
             results,
@@ -545,7 +563,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
 
 
 def probe_public_url(results: List[Dict[str, str]], env: Dict[str, str], timeout: int) -> None:
-    public_url = safe_text(env.get("ERRORSWEEP_PUBLIC_BASE_URL")).rstrip("/")
+    public_url = env_value(env, "ERRORSWEEP_PUBLIC_BASE_URL").rstrip("/")
     if not public_https_url(public_url):
         add(results, "Auth Probe", "Public app probe", "Blocker", "public URL not ready", "Configure a live HTTPS public URL before probing.")
         return
@@ -693,11 +711,11 @@ def write_bootstrap_env(args: argparse.Namespace) -> int:
         write_env_updates(
             env_path,
             {
-                "ERRORSWEEP_OWNER_USERNAME": owner_email,
-                "ERRORSWEEP_OWNER_PASSWORD_HASH": owner_hash,
-                "ERRORSWEEP_USER_USERNAME": workspace_email,
-                "ERRORSWEEP_USER_PASSWORD_HASH": workspace_hash,
-                "ERRORSWEEP_ORG_NAME": workspace_name,
+                "COGNISWEEP_OWNER_USERNAME": owner_email,
+                "COGNISWEEP_OWNER_PASSWORD_HASH": owner_hash,
+                "COGNISWEEP_USER_USERNAME": workspace_email,
+                "COGNISWEEP_USER_PASSWORD_HASH": workspace_hash,
+                "COGNISWEEP_ORG_NAME": workspace_name,
             },
         )
     except Exception as exc:

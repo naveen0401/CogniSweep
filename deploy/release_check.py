@@ -258,6 +258,20 @@ def missing_items(items: Iterable[str], text: str) -> List[str]:
     return [item for item in items if item not in text]
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def template_has_env_key(text: str, key: str) -> bool:
+    names = [key]
+    alias = cognisweep_env_alias(key)
+    if alias:
+        names.append(alias)
+    return any(re.search(rf"^{re.escape(name)}\s*=", text, re.MULTILINE) for name in names)
+
+
 def requirement_name(line: str) -> str:
     text = line.strip()
     if not text or text.startswith("#") or text.startswith("-"):
@@ -899,7 +913,7 @@ def check_compose(results: List[Dict[str, str]]) -> None:
 
 def check_env_template(results: List[Dict[str, str]]) -> None:
     env_text = read_text("deploy/.env.production.example")
-    missing_keys = [key for key in REQUIRED_ENV_KEYS if not re.search(rf"^{re.escape(key)}=", env_text, re.MULTILINE)]
+    missing_keys = [key for key in REQUIRED_ENV_KEYS if not template_has_env_key(env_text, key)]
     secret_hits = [pattern.pattern for pattern in SECRET_PATTERNS if pattern.search(env_text)]
     add(
         results,
@@ -923,7 +937,7 @@ def check_streamlit_secrets_template(results: List[Dict[str, str]]) -> None:
     template_text = read_text(".streamlit/secrets.toml.example")
     missing_keys = [
         key for key in REQUIRED_STREAMLIT_SECRET_KEYS
-        if not re.search(rf"^{re.escape(key)}\s*=", template_text, re.MULTILINE)
+        if not template_has_env_key(template_text, key)
     ]
     secret_hits = [pattern.pattern for pattern in SECRET_PATTERNS if pattern.search(template_text)]
     add(

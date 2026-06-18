@@ -27,8 +27,26 @@ LOGGER = logging.getLogger(__name__)
 _WRITE_LOCK = threading.RLock()
 
 
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def _env_value(name: str, default: str = "") -> str:
+    value = os.environ.get(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def _job_dir() -> Path:
-    path = os.environ.get("ERRORSWEEP_EDITOR_JOB_DIR")
+    path = _env_value("ERRORSWEEP_EDITOR_JOB_DIR")
     if path:
         root = Path(path)
     else:

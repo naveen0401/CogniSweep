@@ -68,8 +68,26 @@ def _safe_text(value: Any) -> str:
         return ""
 
 
-def _secret(name: str, default: str = "") -> str:
+def _cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def _env_value(name: str, default: str = "") -> str:
     value = os.environ.get(name)
+    if value not in (None, ""):
+        return str(value)
+    alias = _cognisweep_env_alias(name)
+    if alias:
+        value = os.environ.get(alias)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
+def _secret(name: str, default: str = "") -> str:
+    value = _env_value(name, "")
     if value:
         return value
     if st is not None:
@@ -77,6 +95,11 @@ def _secret(name: str, default: str = "") -> str:
             value = st.secrets.get(name)
             if value:
                 return value
+            alias = _cognisweep_env_alias(name)
+            if alias:
+                value = st.secrets.get(alias)
+                if value:
+                    return str(value)
         except Exception:
             return default
     return default
@@ -621,13 +644,19 @@ class AIRoute:
 
 
 def _secret(name: str, default: str = "") -> str:
-    if os.environ.get(name):
-        return os.environ[name]
+    value = _env_value(name, "")
+    if value:
+        return value
     if st is not None:
         try:
             value = st.secrets.get(name)
             if value is not None:
                 return str(value)
+            alias = _cognisweep_env_alias(name)
+            if alias:
+                value = st.secrets.get(alias)
+                if value is not None:
+                    return str(value)
         except Exception:
             pass
     return default

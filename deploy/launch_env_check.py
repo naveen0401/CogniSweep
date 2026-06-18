@@ -83,16 +83,28 @@ def add_os_env(env: Dict[str, str]) -> Dict[str, str]:
     return merged
 
 
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
+
+
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
-        value = safe_text(env.get(name))
-        if value:
-            return value
+        for candidate in aliases_for(name):
+            value = safe_text(env.get(candidate))
+            if value:
+                return value
     return ""
 
 
 def key_present(env: Dict[str, str], names: Sequence[str]) -> bool:
-    return any(name in env and safe_text(env.get(name)) != "" for name in names)
+    return any(candidate in env and safe_text(env.get(candidate)) != "" for name in names for candidate in aliases_for(name))
 
 
 def is_placeholder(value: str) -> bool:
@@ -120,7 +132,7 @@ def email_ready(value: str) -> bool:
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
@@ -144,7 +156,7 @@ def nonsecret_evidence(key: str, value: str) -> str:
 
 
 def bool_evidence(env: Dict[str, str], name: str) -> str:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     if not value:
         return "missing"
     return "enabled" if env_bool(env, name) else "disabled"
@@ -186,7 +198,7 @@ def require_https(
     *,
     status_when_missing: str = "Blocker",
 ) -> None:
-    value = safe_text(env.get(name))
+    value = value_for(env, [name])
     add(results, area, check, "Pass" if https_url(value) else status_when_missing, nonsecret_evidence(name, value), action)
 
 
@@ -248,7 +260,7 @@ def read_required_secret_env(name: str, label: str, *, min_length: int = 8) -> s
 
 
 def check_core(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    mode = safe_text(env.get("ERRORSWEEP_ENV")).lower()
+    mode = value_for(env, ["ERRORSWEEP_ENV"]).lower()
     add(results, "Core", "Production mode", "Pass" if mode == "production" else "Blocker", mode or "missing", "Set ERRORSWEEP_ENV=production.")
     require_flag(results, env, "Core", "Public launch preflight lock", "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "Keep ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true until all production blockers are cleared.")
     require_https(results, env, "Core", "Public app URL", "ERRORSWEEP_PUBLIC_BASE_URL", "Set ERRORSWEEP_PUBLIC_BASE_URL to the live HTTPS app URL.")
@@ -312,7 +324,7 @@ def check_auth(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         role or "missing",
         "Use a known workspace role, usually Workspace Owner, for the initial workspace user.",
     )
-    plaintext_passwords = [key for key in ("ERRORSWEEP_OWNER_PASSWORD", "ERRORSWEEP_USER_PASSWORD") if safe_text(env.get(key))]
+    plaintext_passwords = [key for key in ("ERRORSWEEP_OWNER_PASSWORD", "ERRORSWEEP_USER_PASSWORD") if value_for(env, [key])]
     add(
         results,
         "Auth",
@@ -330,7 +342,7 @@ def check_persistence(results: List[Dict[str, str]], env: Dict[str, str]) -> Non
 
 
 def check_storage(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    provider = safe_text(env.get("ERRORSWEEP_OBJECT_STORAGE_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_OBJECT_STORAGE_PROVIDER"]).lower()
     add(
         results,
         "Storage",
@@ -368,7 +380,7 @@ def check_workers(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
 
 def check_ai_mt(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
     openai_ready = configured(env, ["OPENAI_API_KEY"], min_length=12)
-    managed_ready = env_bool(env, "ERRORSWEEP_MANAGED_AI_ENABLED") and https_url(safe_text(env.get("ERRORSWEEP_MANAGED_AI_BASE_URL")))
+    managed_ready = env_bool(env, "ERRORSWEEP_MANAGED_AI_ENABLED") and https_url(value_for(env, ["ERRORSWEEP_MANAGED_AI_BASE_URL"]))
     add(
         results,
         "AI",
@@ -415,7 +427,7 @@ def check_ai_mt(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
 
 
 def check_billing(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    provider = safe_text(env.get("ERRORSWEEP_BILLING_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_BILLING_PROVIDER"]).lower()
     add(
         results,
         "Billing",
@@ -447,7 +459,7 @@ def check_billing(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
 
 
 def check_email(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
-    provider = safe_text(env.get("ERRORSWEEP_EMAIL_PROVIDER")).lower()
+    provider = value_for(env, ["ERRORSWEEP_EMAIL_PROVIDER"]).lower()
     add(
         results,
         "Email",
@@ -579,10 +591,10 @@ def write_billing_env(args: argparse.Namespace) -> int:
             raise ValueError("--billing-webhook-url must be a public HTTPS webhook receiver URL.")
 
         updates: Dict[str, str] = {
-            "ERRORSWEEP_BILLING_PROVIDER": provider,
-            "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL": webhook_url,
-            "ERRORSWEEP_WEBHOOK_APPLY_UPDATES": "true" if args.enable_webhook_updates else "false",
-            "ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT": "true" if args.create_provider_checkout else "false",
+            "COGNISWEEP_BILLING_PROVIDER": provider,
+            "COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL": webhook_url,
+            "COGNISWEEP_WEBHOOK_APPLY_UPDATES": "true" if args.enable_webhook_updates else "false",
+            "COGNISWEEP_BILLING_CREATE_PROVIDER_CHECKOUT": "true" if args.create_provider_checkout else "false",
         }
 
         if provider == "razorpay":
@@ -594,7 +606,7 @@ def write_billing_env(args: argparse.Namespace) -> int:
                     "RAZORPAY_KEY_ID": key_id,
                     "RAZORPAY_KEY_SECRET": key_secret,
                     "RAZORPAY_WEBHOOK_SECRET": webhook_secret,
-                    "ERRORSWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
+                    "COGNISWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
                 }
             )
             optional_update(updates, "RAZORPAY_PLAN_ID_PRO", args.pro_plan_id)
@@ -607,17 +619,17 @@ def write_billing_env(args: argparse.Namespace) -> int:
                 {
                     "STRIPE_SECRET_KEY": secret_key,
                     "STRIPE_WEBHOOK_SECRET": webhook_secret,
-                    "ERRORSWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
+                    "COGNISWEEP_BILLING_WEBHOOK_SECRET": webhook_secret,
                 }
             )
             optional_update(updates, "STRIPE_PRICE_ID_PRO", args.pro_plan_id)
             optional_update(updates, "STRIPE_PRICE_ID_AGENCY", args.agency_plan_id)
             optional_update(updates, "STRIPE_PRICE_ID_ENTERPRISE", args.enterprise_plan_id)
 
-        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_PRO", args.pro_mandate_link)
-        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_AGENCY", args.agency_mandate_link)
-        optional_update(updates, "ERRORSWEEP_MONTHLY_MANDATE_LINK_ENTERPRISE", args.enterprise_mandate_link)
-        optional_update(updates, "ERRORSWEEP_TRIAL_MANDATE_LINK", args.trial_mandate_link)
+        optional_update(updates, "COGNISWEEP_MONTHLY_MANDATE_LINK_PRO", args.pro_mandate_link)
+        optional_update(updates, "COGNISWEEP_MONTHLY_MANDATE_LINK_AGENCY", args.agency_mandate_link)
+        optional_update(updates, "COGNISWEEP_MONTHLY_MANDATE_LINK_ENTERPRISE", args.enterprise_mandate_link)
+        optional_update(updates, "COGNISWEEP_TRIAL_MANDATE_LINK", args.trial_mandate_link)
         write_env_updates(env_path, updates)
     except Exception as exc:
         print(safe_text(exc), file=sys.stderr)
