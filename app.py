@@ -3073,6 +3073,154 @@ div[class*="st-key-"][class*="_app_nav_targets"] * {
   transform: translateY(-1px);
 }
 
+.es-history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.es-history-task-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid rgba(104,137,230,.26);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(20, 25, 48, .96), rgba(9, 12, 26, .98));
+  padding: 14px 16px;
+  box-shadow: 0 14px 36px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.035);
+}
+
+.es-history-task-main {
+  min-width: 0;
+}
+
+.es-history-task-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.es-history-task-heading h4 {
+  margin: 0;
+  color: #fff;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.es-history-type,
+.es-history-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  border: 1px solid rgba(52,189,246,.22);
+  background: rgba(52,189,246,.08);
+  color: #bfeaff;
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.es-history-status {
+  border-color: rgba(255,255,255,.16);
+  color: #dfe6ff;
+  background: rgba(255,255,255,.06);
+}
+
+.es-history-status.active {
+  border-color: rgba(52,189,246,.32);
+  color: #8be7ff;
+  background: rgba(52,189,246,.10);
+}
+
+.es-history-status.complete {
+  border-color: rgba(0,217,133,.28);
+  color: #7cffc9;
+  background: rgba(0,217,133,.10);
+}
+
+.es-history-status.warning {
+  border-color: rgba(245,158,11,.34);
+  color: #ffd18a;
+  background: rgba(245,158,11,.12);
+}
+
+.es-history-status.critical {
+  border-color: rgba(255,75,51,.34);
+  color: #ffb0a5;
+  background: rgba(255,75,51,.12);
+}
+
+.es-history-meta {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.es-history-meta div {
+  min-width: 0;
+}
+
+.es-history-meta dt {
+  margin: 0 0 3px;
+  color: #97a3d8;
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.es-history-meta dd {
+  margin: 0;
+  color: #f7fbff;
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.es-history-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 170px;
+}
+
+.es-history-unavailable {
+  color: #97a3d8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+@media (max-width: 980px) {
+  .es-history-task-card {
+    grid-template-columns: 1fr;
+  }
+
+  .es-history-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .es-history-task-actions {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .es-history-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
 .es-area-chart {
   width: 100%;
   height: 76px;
@@ -20942,58 +21090,80 @@ def job_history_rows_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
     return sorted(deduped, key=job_history_sort_value, reverse=True)
 
 
+def job_history_status_class(status: Any) -> str:
+    status_key = safe_text(status).strip().lower()
+    if status_key in {"complete", "completed", "done", "delivered", "submitted", "approved", "confirmed"}:
+        return "complete"
+    if status_key in {"running", "processing", "in progress", "queued", "active"}:
+        return "active"
+    if status_key in {"blocked", "failed", "error", "cancelled", "rejected"}:
+        return "critical"
+    if status_key in {"draft", "pending", "waiting"}:
+        return "warning"
+    return "neutral"
+
+
+def job_history_detail_item(label: str, value: Any) -> str:
+    display_value = safe_text(value) or "-"
+    return (
+        "<div>"
+        f"<dt>{escape(label)}</dt>"
+        f"<dd>{escape(display_value)}</dd>"
+        "</div>"
+    )
+
+
 def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
     if not rows:
         st.info("No tasks found in this section yet.")
         return
-    table_rows = []
-    open_rows: List[Dict[str, str]] = []
-    for row in rows:
+    rendered_rows = []
+    for idx, row in enumerate(rows):
         editor_url = safe_text(row.get("editor_url"))
-        table_rows.append({
-            "Task": safe_text(row.get("label") or row.get("type") or "Task"),
-            "Type": safe_text(row.get("type")),
-            "File": safe_text(row.get("file_name")) or "-",
-            "Language": safe_text(row.get("language")) or "-",
-            "Status": safe_text(row.get("status")) or "-",
-            "Segments": int(row.get("segments") or 0),
-            "Assignee": safe_text(row.get("assignee")) or "-",
-            "Updated": format_local_time(row.get("updated_at") or row.get("created")),
-            "Open": "Available" if editor_url else "-",
-        })
+        label = safe_text(row.get("label") or row.get("type") or "Task")
+        type_label = safe_text(row.get("type")) or "Task"
+        file_name = safe_text(row.get("file_name")) or "-"
+        language = safe_text(row.get("language")) or "-"
+        status = safe_text(row.get("status")) or "Status unknown"
+        status_class = job_history_status_class(status)
+        updated_at = format_local_time(row.get("updated_at") or row.get("created"))
+        details = [
+            job_history_detail_item("File", file_name),
+            job_history_detail_item("Language", language),
+            job_history_detail_item("Segments", int(row.get("segments") or 0)),
+            job_history_detail_item("Assignee", safe_text(row.get("assignee")) or "-"),
+            job_history_detail_item("Updated", updated_at),
+            job_history_detail_item("Workspace", safe_text(row.get("workspace")) or safe_text(row.get("project")) or "-"),
+        ]
         if editor_url:
-            open_rows.append({
-                "label": safe_text(row.get("label") or row.get("type") or "Task"),
-                "file": safe_text(row.get("file_name")),
-                "url": editor_url,
-            })
-    st.dataframe(
-        pd.DataFrame(table_rows),
-        use_container_width=True,
-        hide_index=True,
-        key=key,
-        column_config={
-            "Open": st.column_config.TextColumn("Open"),
-            "Task": st.column_config.TextColumn("Task", width="medium"),
-            "File": st.column_config.TextColumn("File", width="medium"),
-        },
-    )
-    if open_rows:
-        st.markdown("#### Open workspace")
-        rendered_links = []
-        for row in open_rows[:25]:
-            label_bits = [safe_text(row.get("label")) or "Task"]
-            if safe_text(row.get("file")):
-                label_bits.append(safe_text(row.get("file")))
-            label = " - ".join(label_bits)
-            url = safe_text(row.get("url"))
-            handoff_attrs = editor_session_handoff_attrs(url)
-            href = editor_launch_url(url)
-            rendered_links.append(
+            handoff_attrs = editor_session_handoff_attrs(editor_url)
+            href = editor_launch_url(editor_url)
+            action_html = (
                 f'<a class="es-task-action-link primary" href="{escape(href, quote=True)}" '
-                f'target="_blank" rel="noopener" {handoff_attrs}>{escape(("Open " + label)[:120])}</a>'
+                f'target="_blank" rel="noopener" {handoff_attrs}>Open task</a>'
             )
-        st.markdown(f'<div class="es-task-actions">{"".join(rendered_links)}</div>', unsafe_allow_html=True)
+        else:
+            action_html = '<span class="es-history-unavailable">No workspace</span>'
+        rendered_rows.append(
+            f"""
+            <article class="es-history-task-card" data-history-key="{escape(key, quote=True)}-{idx}">
+              <div class="es-history-task-main">
+                <div class="es-history-task-heading">
+                  <span class="es-history-type">{escape(type_label)}</span>
+                  <h4>{escape(label)}</h4>
+                </div>
+                <dl class="es-history-meta">
+                  {''.join(details)}
+                </dl>
+              </div>
+              <div class="es-history-task-actions">
+                <span class="es-history-status {escape(status_class, quote=True)}">{escape(status)}</span>
+                {action_html}
+              </div>
+            </article>
+            """
+        )
+    st.markdown(f'<section class="es-history-list">{"".join(rendered_rows)}</section>', unsafe_allow_html=True)
 
 
 def page_projects() -> None:
