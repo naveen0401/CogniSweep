@@ -16809,9 +16809,17 @@ def render_reference_cat_editor_shell(
         body:has(#human-review-editor-page-marker),
         body:has(#human-review-editor-page-marker) .stApp,
         body:has(#human-review-editor-page-marker) [data-testid="stAppViewContainer"],
-        body:has(#human-review-editor-page-marker) [data-testid="stMain"] {
+        body:has(#human-review-editor-page-marker) [data-testid="stMain"],
+        body:has(#human-review-editor-page-marker) [data-testid="stMainBlockContainer"],
+        body:has(#human-review-editor-page-marker) .block-container {
+            width:100vw !important;
+            max-width:100vw !important;
+            min-width:0 !important;
             height:100dvh !important;
             max-height:100dvh !important;
+            min-height:0 !important;
+            margin:0 !important;
+            padding:0 !important;
             overflow:hidden !important;
             background:#080a12 !important;
         }
@@ -16821,8 +16829,9 @@ def render_reference_cat_editor_shell(
             display:none !important;
         }
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content {
-            width:100% !important;
-            max-width:100% !important;
+            box-sizing:border-box !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
             height:100dvh !important;
             max-height:100dvh !important;
@@ -16841,11 +16850,12 @@ def render_reference_cat_editor_shell(
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) > div,
         body:has(#human-review-editor-page-marker) div[data-testid="stIFrame"],
         body:has(#human-review-editor-page-marker) div[data-testid="stIFrame"] > div {
+            box-sizing:border-box !important;
             height:100% !important;
             max-height:100% !important;
             min-height:0 !important;
-            width:100% !important;
-            max-width:100% !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
             margin:0 !important;
             padding:0 !important;
@@ -16857,16 +16867,32 @@ def render_reference_cat_editor_shell(
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"],
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe),
         body:has(#human-review-editor-page-marker) div[data-testid="stElementContainer"]:has(iframe) {
-            height:100% !important;
-            max-height:100% !important;
-            width:100% !important;
-            max-width:100% !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-height:0 !important;
-            margin:0 auto !important;
+            margin:0 !important;
             padding:0 !important;
             overflow:hidden !important;
             border:0 !important;
             border-radius:0 !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_shell {
+            position:fixed !important;
+            inset:0 !important;
+            display:grid !important;
+            grid-template-rows:minmax(0, 1fr) !important;
+            grid-template-columns:minmax(0, 1fr) !important;
+            background:#080a12 !important;
+            z-index:10 !important;
+        }
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame,
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame > div[data-testid="stVerticalBlock"],
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame div[data-testid="stElementContainer"]:has(iframe) {
+            position:fixed !important;
+            inset:0 !important;
+            display:block !important;
         }
         body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] {
             gap:0 !important;
@@ -16879,13 +16905,15 @@ def render_reference_cat_editor_shell(
             padding:0 !important;
             overflow:hidden !important;
         }
-        body:has(#human-review-editor-page-marker) iframe {
-            width:100% !important;
-            max-width:100% !important;
+        body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_frame iframe {
+            position:absolute !important;
+            inset:0 !important;
+            width:100vw !important;
+            max-width:100vw !important;
             min-width:0 !important;
-            height:calc(100dvh - 12px) !important;
-            max-height:calc(100dvh - 12px) !important;
-            min-height:0 !important;
+            height:100dvh !important;
+            max-height:100dvh !important;
+            min-height:100dvh !important;
             display:block !important;
             border:0 !important;
             overflow:hidden !important;
@@ -16905,7 +16933,7 @@ def render_reference_cat_editor_shell(
         """,
         unsafe_allow_html=True,
     )
-    components.html(html, height=900, scrolling=False)
+    components.html(html, height=1, scrolling=False)
 
 
 def render_external_cat_editor(job_id: str) -> None:

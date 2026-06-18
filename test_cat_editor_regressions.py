@@ -717,7 +717,7 @@ def test_translation_editor_uses_supplied_html_template() -> None:
     body = active_cat_editor_body(source)
     assert 'assets" / "cat_editor_reference.html' in body
     assert "reference_path.read_text" in body
-    assert "components.html(html, height=900, scrolling=False)" in body
+    assert "components.html(html, height=1, scrolling=False)" in body
     assert "const rows =" in body
     assert "json.dumps(component_rows" in body
     assert '"done": is_segment_confirmed(row)' in body
@@ -971,18 +971,20 @@ def test_human_review_editor_density_is_scoped_to_iframe_shell() -> None:
     assert "body:has(#human-review-editor-page-marker)" in body
     assert "body:has(.human-review-editor)" not in body
     assert "iframe" in body
-    assert "height:calc(100dvh - 12px) !important" in body
-    assert "overflow-y:auto !important" in body
+    assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_shell {" in body
+    assert "position:fixed !important" in body
+    assert "inset:0 !important" in body
+    assert ".st-key-errorsweep_editor_frame iframe" in body
+    assert "height:100dvh !important" in body
     assert "overflow:hidden !important" in body
     assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(iframe)' in body
     assert '.st-key-errorsweep_editor_content > div[data-testid="stVerticalBlock"] > div:has(#human-review-editor-page-marker)' in body
     assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content" not in body
     assert "height:0 !important" in body
-    assert "width:100% !important" in body
-    assert "max-width:100% !important" in body
+    assert "margin:0 auto !important" not in body
+    assert "width:100vw !important" in body
+    assert "max-width:100vw !important" in body
     assert "min-width:0 !important" in body
-    assert "width:100vw !important" not in body
-    assert "max-width:100vw !important" not in body
     assert "zoom:" not in body
     assert "transform: scale" not in body
     assert "font-size:110%" not in body
@@ -1081,8 +1083,8 @@ def test_dashboard_and_human_review_use_separate_page_scopes() -> None:
     assert "human_review_editor_link(review_job_id)" in source
     assert "render_usage_task_links()" in source
     assert "body:has(#errorsweep-dashboard-page-marker) .stButton > button" in source
-    assert "body:has(#human-review-editor-page-marker) .block-container" not in editor_body
-    assert 'body:has(#human-review-editor-page-marker) [data-testid="stMainBlockContainer"]' not in editor_body
+    assert "body:has(#human-review-editor-page-marker) .block-container" in editor_body
+    assert 'body:has(#human-review-editor-page-marker) [data-testid="stMainBlockContainer"]' in editor_body
     assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_editor_content" in editor_body
     assert "body:has(#human-review-editor-page-marker) .st-key-errorsweep_shell_content" not in editor_body
     assert "errorsweep-dashboard-page-marker" not in editor_body
