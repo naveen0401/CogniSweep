@@ -13045,9 +13045,7 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
         link_html = (
             f'<a class="es-pricing-link" href="{escape(payment_link)}" target="_blank" rel="noopener">{escape(button_label)}</a>'
             if payment_link
-            else '<span class="es-pricing-link muted">Create below</span>'
-            if provider_checkout_ready
-            else '<span class="es-pricing-link muted">Add link below</span>'
+            else '<span class="es-pricing-link muted">Link pending</span>'
         )
         active_badge = '<span class="es-pricing-active">Current</span>' if is_active else ""
         cards.append(
@@ -24784,7 +24782,7 @@ def page_billing() -> None:
         [
             ("Overview", [
                 ("Overview", "Plan, usage, and allowance summary"),
-                ("Plans & Checkout", "Choose a plan and create a mandate intent"),
+                ("Plans & Checkout", "Choose a plan and open Razorpay checkout"),
                 ("Cancel Subscription", "Cancel trial, mandate, or active subscription"),
             ]),
             ("Records", [
@@ -24821,111 +24819,7 @@ def page_billing() -> None:
             render_pricing_graphic(subscription.get("plan", "Trial"), subscription.get("billing_cycle", "monthly"))
             billing_collection_enabled = feature_flag("billing_collection")
             if not billing_collection_enabled:
-                st.info("Billing checkout collection is currently disabled by Platform Settings. Plans and usage remain visible, but new mandate intents cannot be created.")
-
-            with st.form("billing_checkout_intent", enter_to_submit=False):
-                c1, c2 = st.columns(2)
-                plan_names = [plan["name"] for plan in public_billing_plans()]
-                current_index = plan_names.index(subscription.get("plan", "Trial")) if subscription.get("plan", "Trial") in plan_names else 0
-                selected_plan = c1.selectbox("Plan", plan_names, index=current_index)
-                paid_plan_names = [plan["name"] for plan in public_billing_plans() if plan["name"] != "Trial"]
-                post_trial_plan = ""
-                if selected_plan == "Trial":
-                    c2.text_input("Billing cycle after trial", value="monthly", disabled=True)
-                    billing_cycle = "monthly"
-                    post_trial_plan = st.selectbox("Subscription after trial", paid_plan_names, index=0)
-                    post_plan = plan_record(post_trial_plan)
-                    trial_days = configured_trial_days()
-                    if post_plan["name"] == "Enterprise":
-                        st.info(f"Trial requires a card/UPI mandate or custom payment authorization. Cancel anytime before the {trial_days}-day trial ends.")
-                    else:
-                        st.info(
-                            f"Trial requires card or UPI mandate. Nothing is charged today. "
-                            f"After {trial_days} days, {post_plan['name']} starts at {format_money(post_plan['monthly'], post_plan['currency'])}/month unless cancelled before the trial ends."
-                        )
-                    default_link = trial_mandate_link_for_plan(post_trial_plan, billing_cycle)
-                else:
-                    c2.text_input("Billing cycle", value="monthly", disabled=True)
-                    billing_cycle = "monthly"
-                    selected_paid_plan = plan_record(selected_plan)
-                    if selected_plan == "Enterprise":
-                        st.info("Enterprise uses a custom card/UPI monthly mandate or payment authorization. The agreed amount is deducted every month until cancelled.")
-                    else:
-                        st.info(
-                            f"{selected_plan} uses a card/UPI monthly mandate. "
-                            f"{format_money(selected_paid_plan['monthly'], selected_paid_plan['currency'])} will be deducted every month until cancelled."
-                        )
-                    default_link = monthly_mandate_link_for_plan(selected_plan, billing_cycle)
-                payment_link = st.text_input(
-                    "Card/UPI monthly mandate link",
-                    value="",
-                    placeholder=default_link or "https://checkout.stripe.com/... or https://rzp.io/...",
-                    help="Paste a hosted monthly mandate link, or configure ERRORSWEEP_MONTHLY_MANDATE_LINK_PRO / ERRORSWEEP_CARD_UPI_MANDATE_LINK_PRO style secrets.",
-                )
-                accept_trial_terms = True
-                if selected_plan == "Trial":
-                    accept_trial_terms = st.checkbox(
-                        f"I understand the trial can be cancelled anytime before day {configured_trial_days()}, and the selected subscription starts afterward.",
-                        value=False,
-                    )
-                create_checkout = st.form_submit_button(
-                    "Start trial with card/UPI mandate" if selected_plan == "Trial" else "Create card/UPI monthly mandate",
-                    use_container_width=True,
-                    disabled=not billing_collection_enabled,
-                )
-            if create_checkout:
-                if not billing_collection_enabled:
-                    st.error("Billing collection is disabled by Platform Settings.")
-                    return
-                allowed_attempt, throttle_message = consume_abuse_attempt("checkout_intent", f"{workspace}:{selected_plan}:{post_trial_plan or billing_cycle}")
-                if not allowed_attempt:
-                    st.error(throttle_message)
-                    return
-                if safe_text(payment_link) and not sanitize_payment_link(payment_link):
-                    st.error("Please enter a valid http(s) card/UPI monthly mandate link.")
-                    return
-                if selected_plan == "Trial":
-                    if post_trial_plan not in paid_plan_names:
-                        st.error("Please select the subscription that should start after the trial.")
-                        return
-                    if not accept_trial_terms:
-                        st.error("Please confirm the trial cancellation and post-trial subscription terms.")
-                        return
-                    if not (
-                        sanitize_payment_link(payment_link)
-                        or sanitize_payment_link(trial_mandate_link_for_plan(post_trial_plan, billing_cycle))
-                        or provider_checkout_configured(selected_plan, post_trial_plan)
-                    ):
-                        st.error("Trial requires a valid card/UPI mandate link or configured Stripe/Razorpay subscription checkout plan.")
-                        return
-                else:
-                    if not (
-                        sanitize_payment_link(payment_link)
-                        or sanitize_payment_link(monthly_mandate_link_for_plan(selected_plan, billing_cycle))
-                        or provider_checkout_configured(selected_plan)
-                    ):
-                        st.error("This subscription requires a valid card/UPI monthly mandate link or configured Stripe/Razorpay subscription checkout plan.")
-                        return
-                intent = create_checkout_intent(selected_plan, billing_cycle, payment_link=payment_link, post_trial_plan=post_trial_plan)
-                if safe_text(intent.get("checkout_url")):
-                    if selected_plan == "Trial":
-                        st.success("Trial mandate recorded. Open the link below to add card/UPI authorization. User can cancel anytime before the trial ends.")
-                        st.link_button("Open card / UPI mandate link", intent["checkout_url"], use_container_width=True)
-                    else:
-                        st.success("Monthly mandate recorded. Open it below to authorize recurring card/UPI deduction.")
-                        st.link_button("Open card / UPI monthly mandate link", intent["checkout_url"], use_container_width=True)
-                elif safe_text(intent.get("status")) == "provider_checkout_ready":
-                    st.info("Provider checkout payload is ready. Enable ERRORSWEEP_BILLING_CREATE_PROVIDER_CHECKOUT=true to let CogniSweep create the live Stripe/Razorpay subscription checkout URL, or use the payload/curl shown in Checkout intents.")
-                elif safe_text(intent.get("status")) == "provider_checkout_error":
-                    st.error("Provider checkout creation was attempted but failed. Review the provider error in the checkout intent metadata.")
-                elif safe_text(intent.get("status")) == "manual_pending":
-                    st.info("Checkout intent recorded. Add a hosted mandate link above, or configure Stripe/Razorpay mandate-link secrets to show a live link.")
-                elif safe_text(intent.get("status")) == "trial_mandate_link_missing":
-                    st.warning("Trial intent recorded, but card/UPI mandate link is missing.")
-                elif safe_text(intent.get("status")) == "monthly_mandate_link_missing":
-                    st.warning("Mandate intent recorded, but card/UPI monthly mandate link is missing.")
-                else:
-                    st.warning("Checkout intent recorded, but provider credentials are incomplete.")
+                st.info("Billing checkout collection is currently disabled by Platform Settings. Plan cards remain visible, but Razorpay buttons require configured links.")
 
         elif selected_section == "Cancel Subscription":
             st.markdown("### Cancel trial or subscription")
