@@ -1,0 +1,33 @@
+FROM python:3.11-slim@sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8300 \
+    ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true \
+    ERRORSWEEP_ASYNC_WORKER_HOST=0.0.0.0
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements.lock.txt ./
+RUN python -m pip install --upgrade pip==26.1.2 \
+    && python -m pip install -r requirements.lock.txt
+
+COPY . .
+
+RUN useradd --create-home --shell /usr/sbin/nologin errorsweep \
+    && mkdir -p /data/errorsweep /logs/errorsweep \
+    && chown -R errorsweep:errorsweep /app /data/errorsweep /logs/errorsweep
+
+USER errorsweep
+
+EXPOSE 8300
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8300'), timeout=5).read()"
+
+CMD ["python", "-c", "import os; from async_task_worker import run_server; run_server(host='0.0.0.0', port=int(os.environ.get('PORT', '8300')))"]
