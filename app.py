@@ -591,6 +591,7 @@ PLAN_CATALOG = [
         "description": "Unlimited workspace access for authorized internal use.",
     },
 ]
+PUBLIC_BILLING_PLAN_NAMES = {"Trial", "Pro", "Agency", "Enterprise"}
 EMAIL_DISPATCH_BATCH_LIMIT = int(runtime_env("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
 AUTH_TOKEN_TTL_SECONDS = int(runtime_env("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
 COMPLIANCE_ACK_LABEL = "I accept the Terms of Service, Privacy Policy, and NDA/confidentiality obligations for this workspace."
@@ -12982,6 +12983,18 @@ def trial_mandate_link_for_plan(post_trial_plan: str, billing_cycle: str = "mont
     return monthly_mandate_link_for_plan(post_trial_plan, billing_cycle)
 
 
+def public_billing_plans() -> List[Dict[str, Any]]:
+    return [plan for plan in PLAN_CATALOG if safe_text(plan.get("name")) in PUBLIC_BILLING_PLAN_NAMES]
+
+
+def pricing_card_payment_link(plan_name: str, billing_cycle: str = "monthly") -> str:
+    """Resolve the direct Razorpay/card button link shown on public pricing cards."""
+    clean_plan = safe_text(plan_name)
+    if clean_plan.lower() == "trial":
+        return monthly_mandate_link_for_plan("Trial", billing_cycle) or trial_mandate_link_for_plan("Pro", billing_cycle)
+    return monthly_mandate_link_for_plan(clean_plan, billing_cycle)
+
+
 def sanitize_payment_link(url: str) -> str:
     value = safe_text(url)
     if not value:
@@ -12999,7 +13012,7 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
         ("#f59e0b", "#34bdf6", "TEAM"),
         ("#8b5cf6", "#00d985", "SSO"),
     ]
-    for idx, plan in enumerate(PLAN_CATALOG):
+    for idx, plan in enumerate(public_billing_plans()):
         accent_a, accent_b, code = accents[idx % len(accents)]
         is_active = safe_text(plan.get("name")).lower() == safe_text(active_plan).lower()
         cycle = "annual" if safe_text(billing_cycle).lower().startswith("annual") else "monthly"
@@ -13016,11 +13029,12 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
             "<span><b>Card/UPI</b> monthly mandate</span><span><b>Recurring</b> monthly deduction</span>"
         )
         checkout_plan = "Pro" if plan["name"] == "Trial" else plan["name"]
-        payment_link = monthly_mandate_link_for_plan(checkout_plan, "monthly")
+        payment_link = pricing_card_payment_link(plan["name"], "monthly")
         provider_checkout_ready = provider_checkout_configured(plan["name"], checkout_plan if plan["name"] == "Trial" else "")
         live_checkout_ready = provider_checkout_ready and billing_live_checkout_enabled()
+        button_label = "Start trial on Razorpay" if plan["name"] == "Trial" else "Open Razorpay checkout"
         cta = (
-            "Mandate link ready"
+            "Razorpay link ready"
             if payment_link
             else "Live checkout ready"
             if live_checkout_ready
@@ -13029,7 +13043,7 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
             else "Mandate link not configured"
         )
         link_html = (
-            f'<a class="es-pricing-link" href="{escape(payment_link)}" target="_blank" rel="noopener">Open mandate link</a>'
+            f'<a class="es-pricing-link" href="{escape(payment_link)}" target="_blank" rel="noopener">{escape(button_label)}</a>'
             if payment_link
             else '<span class="es-pricing-link muted">Create below</span>'
             if provider_checkout_ready
@@ -13179,10 +13193,8 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
             color:#dce6ff;
           }}
           .es-pricing-footer {{
-            display:flex;
-            align-items:center;
-            justify-content:space-between;
-            gap:12px;
+            display:grid;
+            gap:10px;
             margin-top: 18px;
             color:#9da8d6;
             font-size:12px;
@@ -13191,10 +13203,15 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
             color:#07101c !important;
             background: linear-gradient(90deg, var(--accent-a), var(--accent-b));
             border-radius:8px;
-            padding:8px 10px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            width:100%;
+            min-height:42px;
+            padding:10px 12px;
             font-weight:900;
             text-decoration:none !important;
-            white-space:nowrap;
+            text-align:center;
           }}
           .es-pricing-link.muted {{
             color:#c7d2fe !important;
@@ -24808,10 +24825,10 @@ def page_billing() -> None:
 
             with st.form("billing_checkout_intent", enter_to_submit=False):
                 c1, c2 = st.columns(2)
-                plan_names = [plan["name"] for plan in PLAN_CATALOG]
+                plan_names = [plan["name"] for plan in public_billing_plans()]
                 current_index = plan_names.index(subscription.get("plan", "Trial")) if subscription.get("plan", "Trial") in plan_names else 0
                 selected_plan = c1.selectbox("Plan", plan_names, index=current_index)
-                paid_plan_names = [plan["name"] for plan in PLAN_CATALOG if plan["name"] != "Trial"]
+                paid_plan_names = [plan["name"] for plan in public_billing_plans() if plan["name"] != "Trial"]
                 post_trial_plan = ""
                 if selected_plan == "Trial":
                     c2.text_input("Billing cycle after trial", value="monthly", disabled=True)
@@ -25105,10 +25122,10 @@ def page_billing() -> None:
 
     with st.form("billing_checkout_intent", enter_to_submit=False):
         c1, c2 = st.columns(2)
-        plan_names = [plan["name"] for plan in PLAN_CATALOG]
+        plan_names = [plan["name"] for plan in public_billing_plans()]
         current_index = plan_names.index(subscription.get("plan", "Trial")) if subscription.get("plan", "Trial") in plan_names else 0
         selected_plan = c1.selectbox("Plan", plan_names, index=current_index)
-        paid_plan_names = [plan["name"] for plan in PLAN_CATALOG if plan["name"] != "Trial"]
+        paid_plan_names = [plan["name"] for plan in public_billing_plans() if plan["name"] != "Trial"]
         post_trial_plan = ""
         if selected_plan == "Trial":
             c2.text_input("Billing cycle after trial", value="monthly", disabled=True)
