@@ -13015,12 +13015,25 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
             if plan["name"] == "Trial" else
             "<span><b>Card/UPI</b> monthly mandate</span><span><b>Recurring</b> monthly deduction</span>"
         )
-        payment_link = monthly_mandate_link_for_plan("Pro" if plan["name"] == "Trial" else plan["name"], "monthly")
-        cta = "Mandate link ready" if payment_link else "Mandate link not configured"
+        checkout_plan = "Pro" if plan["name"] == "Trial" else plan["name"]
+        payment_link = monthly_mandate_link_for_plan(checkout_plan, "monthly")
+        provider_checkout_ready = provider_checkout_configured(plan["name"], checkout_plan if plan["name"] == "Trial" else "")
+        live_checkout_ready = provider_checkout_ready and billing_live_checkout_enabled()
+        cta = (
+            "Mandate link ready"
+            if payment_link
+            else "Live checkout ready"
+            if live_checkout_ready
+            else "Provider checkout configured"
+            if provider_checkout_ready
+            else "Mandate link not configured"
+        )
         link_html = (
             f'<a class="es-pricing-link" href="{escape(payment_link)}" target="_blank" rel="noopener">Open mandate link</a>'
-            if payment_link else
-            '<span class="es-pricing-link muted">Add link below</span>'
+            if payment_link
+            else '<span class="es-pricing-link muted">Create below</span>'
+            if provider_checkout_ready
+            else '<span class="es-pricing-link muted">Add link below</span>'
         )
         active_badge = '<span class="es-pricing-active">Current</span>' if is_active else ""
         cards.append(
