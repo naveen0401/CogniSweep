@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "cloud-canary-2026-06-18-local-time-v13"
+DEPLOY_BUILD_ID = "auth-handoff-v2-2026-06-20"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -20698,6 +20698,9 @@ def render_login() -> None:
     render_login_submit_mask_clear_bridge()
     render_public_auth_session_resume_bridge()
     if is_authenticated():
+        if st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
+            target_route = authenticated_shell_route_from_session()
+            render_login_success_handoff(target_route)
         render_logged_in_login_state()
         return
     render_login_submit_handoff_mask_bridge()
@@ -27392,6 +27395,9 @@ if __name__ == "__main__":
         logout()
 
     restore_session_from_cookie()
+    if st.session_state.get("authenticated") and st.session_state.get("user") and st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
+        target_route = authenticated_shell_route_from_session()
+        render_login_success_handoff(target_route)
     sync_browser_session_cookie()
 
     route = get_current_route()
@@ -27401,9 +27407,6 @@ if __name__ == "__main__":
         render_auth_unknown_state(route)
     if auth_state == AUTH_STATE_AUTHENTICATED:
         query_clear(AUTH_CHECK_QUERY_PARAM)
-        if st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
-            target_route = authenticated_shell_route_from_session()
-            render_login_success_handoff(target_route)
 
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
