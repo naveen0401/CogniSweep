@@ -6432,6 +6432,103 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear("es_restore_miss")
 
 
+def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
+    """Give the browser one stable render pass to persist the session token."""
+    user = st.session_state.get("user") or {}
+    if not user:
+        return
+    token = signed_session_token_for_user(user)
+    target_params = protected_query_params_from_route(target_route)
+    target_params[SESSION_HANDOFF_QUERY_PARAM] = token
+    if query_get("debug_auth") == "1":
+        target_params["debug_auth"] = "1"
+    target_url = "?" + urlencode(target_params)
+    st.session_state["_pending_session_cookie"] = token
+    sync_component_session_cookie(token)
+    set_auth_debug_state(
+        bool(browser_session_cookie()),
+        True,
+        "login_success_handoff",
+        target_route,
+        handoff_token_found=True,
+    )
+    render_auth_debug_panel(target_route, "login_success_handoff")
+    st.markdown("### Opening your workspace...")
+    st.caption("Keeping your session active for reloads.")
+    st.markdown(
+        f'<a href="{escape(target_url)}" target="_self">Continue to Dashboard</a>',
+        unsafe_allow_html=True,
+    )
+    name_json = json.dumps(SESSION_COOKIE_NAME)
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    token_json = json.dumps(token)
+    target_url_json = json.dumps(target_url)
+    domain_js = browser_cookie_domain_js_function()
+    render_parent_script(
+        f"""
+        (() => {{
+          const cookieName = {name_json};
+          const storageKey = {storage_key_json};
+          const routeStorageKey = {route_storage_key_json};
+          const token = {token_json};
+          const targetUrl = {target_url_json};
+          const candidateWindows = [window.parent, window.top, window];
+{domain_js}
+          const firstWindow = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.location) return candidate;
+              }} catch (err) {{}}
+            }}
+            return window;
+          }};
+          const firstDocument = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.document) return candidate.document;
+              }} catch (err) {{}}
+            }}
+            return document;
+          }};
+          const firstStorage = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.localStorage) return candidate.localStorage;
+              }} catch (err) {{}}
+            }}
+            try {{ return window.localStorage; }} catch (err) {{}}
+            return null;
+          }};
+          const persistSession = () => {{
+            const hostWindow = firstWindow();
+            const targetDoc = firstDocument();
+            const secure = hostWindow.location.protocol === "https:" ? "; Secure" : "";
+            try {{
+              targetDoc.cookie = cookieName + "=" + encodeURIComponent(token) +
+                "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(hostWindow.location.hostname);
+            }} catch (err) {{}}
+            try {{
+              const storage = firstStorage();
+              if (storage) {{
+                storage.setItem(storageKey, token);
+                storage.setItem(routeStorageKey, JSON.stringify({{"es_page": "Dashboard"}}));
+              }}
+            }} catch (err) {{}}
+          }};
+          persistSession();
+          [50, 200, 500].forEach((delay) => window.setTimeout(persistSession, delay));
+          window.setTimeout(() => {{
+            try {{ firstWindow().location.replace(targetUrl); }}
+            catch (err) {{ window.location.href = targetUrl; }}
+          }}, 750);
+        }})();
+        """.strip(),
+        height=0,
+    )
+    st.stop()
+
+
 LOGIN_EMAIL_KEY = "unified_login_email"
 LOGIN_PASSWORD_KEY = "unified_login_password"
 LOGIN_ACCEPT_KEY = "unified_login_compliance_ack"
@@ -27309,10 +27406,7 @@ if __name__ == "__main__":
         query_clear(AUTH_CHECK_QUERY_PARAM)
         if st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
             target_route = authenticated_shell_route_from_session()
-            target_params = protected_query_params_from_route(target_route)
-            set_route_query(target_params)
-            set_auth_debug_state(bool(browser_session_cookie()), True, "login_success_to_dashboard", target_route)
-            st.rerun()
+            render_login_success_handoff(target_route)
 
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
