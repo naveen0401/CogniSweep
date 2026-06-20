@@ -412,6 +412,7 @@ SAAS_CACHEABLE_COLLECTIONS = {
 SESSION_COOKIE_NAME = "errorsweep_session"
 SESSION_STORAGE_KEY = "errorsweep_session"
 SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
+SESSION_HANDOFF_QUERY_PARAM = "es_session"
 EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
 EDITOR_LAUNCH_TTL_SECONDS = int(runtime_env("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
 EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"
@@ -5499,9 +5500,17 @@ def render_parent_script(runtime: str, *, height: int = 0, scrolling: bool = Fal
     )
 
 
-def set_auth_debug_state(cookie_found: bool, session_valid: bool, route_decision: str = "", route: Optional[Dict[str, Any]] = None) -> None:
+def set_auth_debug_state(
+    cookie_found: bool,
+    session_valid: bool,
+    route_decision: str = "",
+    route: Optional[Dict[str, Any]] = None,
+    *,
+    handoff_token_found: bool = False,
+) -> None:
     st.session_state["_auth_debug"] = {
         "cookie_found": bool(cookie_found),
+        "handoff_token_found": bool(handoff_token_found),
         "session_valid": bool(session_valid),
         "authenticated": bool(st.session_state.get("authenticated") and st.session_state.get("user")),
         "route_decision": safe_text(route_decision),
@@ -5521,6 +5530,7 @@ def render_auth_debug_panel(route: Optional[Dict[str, Any]] = None, route_decisi
     st.info("Auth debug")
     st.json({
         "cookie_found": bool(debug.get("cookie_found")),
+        "handoff_token_found": bool(debug.get("handoff_token_found")),
         "session_valid": bool(debug.get("session_valid")),
         "authenticated": bool(debug.get("authenticated")),
         "route_decision": safe_text(debug.get("route_decision")),
@@ -5612,17 +5622,23 @@ def restore_user_from_editor_launch_token(token: str) -> bool:
 
 def restore_session_from_cookie() -> None:
     launch_token = query_get(EDITOR_LAUNCH_QUERY_PARAM)
+    handoff_token = safe_text(query_get(SESSION_HANDOFF_QUERY_PARAM))
     token = browser_session_cookie()
     cookie_found = bool(token)
+    handoff_token_found = bool(handoff_token)
+    if not token and handoff_token:
+        token = handoff_token
     session_valid = False
     editor_target = bool(query_get("es_editor") or query_get("job_id") or query_get("review_id"))
     st.session_state.pop("_editor_auth_restore_failed", None)
     if st.session_state.get("authenticated") and st.session_state.get("user"):
         session_valid = True
         st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
+        if cookie_found and handoff_token_found:
+            query_clear(SESSION_HANDOFF_QUERY_PARAM)
         query_clear(EDITOR_LAUNCH_QUERY_PARAM)
         query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
-        set_auth_debug_state(cookie_found, session_valid)
+        set_auth_debug_state(cookie_found, session_valid, handoff_token_found=handoff_token_found)
         return
     if launch_token:
         session_valid = restore_user_from_editor_launch_token(launch_token)
@@ -5634,7 +5650,7 @@ def restore_session_from_cookie() -> None:
             query_clear("es_session")
             query_clear("es_restore")
             query_clear("es_restore_miss")
-            set_auth_debug_state(cookie_found, session_valid)
+            set_auth_debug_state(cookie_found, session_valid, handoff_token_found=handoff_token_found)
             return
         if editor_target:
             st.session_state["_editor_auth_restore_failed"] = True
@@ -5645,17 +5661,20 @@ def restore_session_from_cookie() -> None:
             query_clear(AUTH_CHECK_QUERY_PARAM)
             query_clear(EDITOR_LAUNCH_QUERY_PARAM)
             query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
-            query_clear("es_session")
+            if cookie_found:
+                query_clear(SESSION_HANDOFF_QUERY_PARAM)
             query_clear("es_restore")
             query_clear("es_restore_miss")
         else:
             st.session_state.pop("user", None)
             st.session_state.pop("authenticated", None)
+            if handoff_token_found:
+                query_clear(SESSION_HANDOFF_QUERY_PARAM)
             if editor_target:
                 st.session_state["_editor_auth_restore_failed"] = True
             else:
                 st.session_state["_clear_session_cookie"] = True
-    set_auth_debug_state(cookie_found, session_valid)
+    set_auth_debug_state(cookie_found, session_valid, handoff_token_found=handoff_token_found)
 
 
 def sync_browser_session_cookie() -> None:
@@ -6397,6 +6416,7 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     launch_page = normalize_es_page(launch_params.get("es_page") or target_page or "Dashboard")
     if launch_params.get("es_page"):
         launch_params["es_page"] = launch_page
+    launch_params[SESSION_HANDOFF_QUERY_PARAM] = session_token
     st.session_state["es_page"] = launch_page
     st.session_state.page = launch_page if launch_page in known_protected_es_pages() else "Dashboard"
     if launch_params.get("review_id"):
@@ -6408,7 +6428,6 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear(AUTH_CHECK_QUERY_PARAM)
     query_clear(EDITOR_LAUNCH_QUERY_PARAM)
     query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
-    query_clear("es_session")
     query_clear("es_restore")
     query_clear("es_restore_miss")
 
@@ -7472,6 +7491,8 @@ def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> Non
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
     for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
+            if stale == SESSION_HANDOFF_QUERY_PARAM and query_get(SESSION_HANDOFF_QUERY_PARAM) and not browser_session_cookie():
+                continue
             query_clear(stale)
     for key, value in params.items():
         query_set(key, value)
