@@ -6598,7 +6598,6 @@ def handle_unified_login_submit() -> None:
         login_user(owner_user, "Platform Owner", "owner", "Platform", sync_route_storage=False)
         record_consent_acceptance(owner_user, "Platform Owner", "owner", "Platform", "unified_login")
         add_audit("Unified owner login", owner_user)
-        st.rerun()
         return
 
     if bootstrap_is_configured and hmac.compare_digest(clean_email, bootstrap_user.strip()) and verify_login_password(password, "ERRORSWEEP_USER_PASSWORD_HASH", "ERRORSWEEP_USER_PASSWORD"):
@@ -6608,7 +6607,6 @@ def handle_unified_login_submit() -> None:
         login_user(clean_email, default_role, "workspace", configured_workspace, sync_route_storage=False)
         record_consent_acceptance(clean_email, default_role, "workspace", configured_workspace, "unified_login")
         add_audit("Unified workspace login", clean_email)
-        st.rerun()
         return
 
     matched = find_user_by_email(clean_email)
@@ -6629,7 +6627,6 @@ def handle_unified_login_submit() -> None:
         login_user(clean_email, matched_role, account_type, matched_workspace, sync_route_storage=False)
         record_consent_acceptance(clean_email, matched_role, account_type, matched_workspace, "unified_login")
         add_audit("Unified login", clean_email)
-        st.rerun()
         return
 
     set_login_feedback("error", "Invalid email or password.")
