@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v3-before-timezone-2026-06-20"
+DEPLOY_BUILD_ID = "auth-handoff-v4-query-fallback-2026-06-20"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -5668,6 +5668,7 @@ def restore_session_from_cookie() -> None:
         else:
             st.session_state.pop("user", None)
             st.session_state.pop("authenticated", None)
+            st.session_state.pop("_session_query_fallback_attached", None)
             if handoff_token_found:
                 query_clear(SESSION_HANDOFF_QUERY_PARAM)
             if editor_target:
@@ -6529,6 +6530,27 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
     st.stop()
 
 
+def ensure_authenticated_session_query_fallback(route: Optional[Dict[str, Any]] = None) -> None:
+    """Keep a signed URL fallback when Streamlit Cloud cannot see browser cookies."""
+    if not (st.session_state.get("authenticated") and st.session_state.get("user")):
+        return
+    if browser_session_cookie() or query_get(SESSION_HANDOFF_QUERY_PARAM):
+        return
+    attach_key = "_session_query_fallback_attached"
+    if st.session_state.get(attach_key):
+        return
+    token = signed_session_token_for_user(st.session_state.get("user") or {})
+    params = protected_query_params_from_route(route or authenticated_shell_route_from_session())
+    params[SESSION_HANDOFF_QUERY_PARAM] = token
+    if query_get(BROWSER_TIMEZONE_QUERY_PARAM):
+        params[BROWSER_TIMEZONE_QUERY_PARAM] = query_get(BROWSER_TIMEZONE_QUERY_PARAM)
+    if query_get("debug_auth") == "1":
+        params["debug_auth"] = "1"
+    st.session_state[attach_key] = True
+    set_route_query(params, sync_storage=False)
+    st.rerun()
+
+
 LOGIN_EMAIL_KEY = "unified_login_email"
 LOGIN_PASSWORD_KEY = "unified_login_password"
 LOGIN_ACCEPT_KEY = "unified_login_compliance_ack"
@@ -6637,6 +6659,7 @@ def logout() -> None:
     st.session_state.pop("authenticated", None)
     st.session_state.pop("_saas_state_hydrated", None)
     st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
+    st.session_state.pop("_session_query_fallback_attached", None)
     st.session_state["_clear_session_cookie"] = True
     for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
@@ -27410,6 +27433,7 @@ if __name__ == "__main__":
         render_auth_unknown_state(route)
     if auth_state == AUTH_STATE_AUTHENTICATED:
         query_clear(AUTH_CHECK_QUERY_PARAM)
+        ensure_authenticated_session_query_fallback(route)
 
     route = get_current_route()
     route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
@@ -27430,6 +27454,7 @@ if __name__ == "__main__":
         render_auth_unknown_state(route)
     if auth_state == AUTH_STATE_AUTHENTICATED:
         query_clear(AUTH_CHECK_QUERY_PARAM)
+        ensure_authenticated_session_query_fallback(route)
 
     if (
         auth_state == AUTH_STATE_UNAUTHENTICATED
