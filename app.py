@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v2-2026-06-20"
+DEPLOY_BUILD_ID = "auth-handoff-v3-before-timezone-2026-06-20"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -27388,6 +27388,9 @@ def render_app() -> None:
 if __name__ == "__main__":
     render_deploy_debug_page()
     render_global_logout_listener()
+    if st.session_state.get("authenticated") and st.session_state.get("user") and st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
+        target_route = authenticated_shell_route_from_session()
+        render_login_success_handoff(target_route)
     sync_browser_timezone()
     install_local_time_render_bridge()
 
