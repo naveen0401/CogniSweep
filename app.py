@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v4-query-fallback-2026-06-20"
+DEPLOY_BUILD_ID = "auth-handoff-v5-preserve-query-session-2026-06-22"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -5669,6 +5669,7 @@ def restore_session_from_cookie() -> None:
             st.session_state.pop("user", None)
             st.session_state.pop("authenticated", None)
             st.session_state.pop("_session_query_fallback_attached", None)
+            st.session_state.pop("_session_query_fallback_attach_attempts", None)
             if handoff_token_found:
                 query_clear(SESSION_HANDOFF_QUERY_PARAM)
             if editor_target:
@@ -5955,7 +5956,8 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (localStorage) localStorage.setItem(storageKey, token);
 
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            url.searchParams.set("es_session", token);
             if (publicEntry) {{
               ["public", "route", "return_to", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
@@ -6224,8 +6226,9 @@ def render_global_logout_listener() -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-              ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+              ["public", "route", "return_to", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
+              url.searchParams.set("es_session", token);
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
@@ -6536,9 +6539,6 @@ def ensure_authenticated_session_query_fallback(route: Optional[Dict[str, Any]] 
         return
     if browser_session_cookie() or query_get(SESSION_HANDOFF_QUERY_PARAM):
         return
-    attach_key = "_session_query_fallback_attached"
-    if st.session_state.get(attach_key):
-        return
     token = signed_session_token_for_user(st.session_state.get("user") or {})
     params = protected_query_params_from_route(route or authenticated_shell_route_from_session())
     params[SESSION_HANDOFF_QUERY_PARAM] = token
@@ -6546,7 +6546,14 @@ def ensure_authenticated_session_query_fallback(route: Optional[Dict[str, Any]] 
         params[BROWSER_TIMEZONE_QUERY_PARAM] = query_get(BROWSER_TIMEZONE_QUERY_PARAM)
     if query_get("debug_auth") == "1":
         params["debug_auth"] = "1"
-    st.session_state[attach_key] = True
+    attach_key = "_session_query_fallback_attached"
+    attempts_key = "_session_query_fallback_attach_attempts"
+    signature = json.dumps(params, sort_keys=True)
+    attempts = int(st.session_state.get(attempts_key) or 0) if st.session_state.get(attach_key) == signature else 0
+    if attempts >= 3:
+        return
+    st.session_state[attach_key] = signature
+    st.session_state[attempts_key] = attempts + 1
     set_route_query(params, sync_storage=False)
     st.rerun()
 
@@ -6660,6 +6667,7 @@ def logout() -> None:
     st.session_state.pop("_saas_state_hydrated", None)
     st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
     st.session_state.pop("_session_query_fallback_attached", None)
+    st.session_state.pop("_session_query_fallback_attach_attempts", None)
     st.session_state["_clear_session_cookie"] = True
     for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
         query_clear(key)
@@ -7897,6 +7905,8 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
+    if st.session_state.get("authenticated") and st.session_state.get("user") and not browser_session_cookie():
+        st.query_params[SESSION_HANDOFF_QUERY_PARAM] = signed_session_token_for_user(st.session_state.get("user") or {})
         
     for key, value in clean_params.items():
         st.query_params[key] = str(value)
@@ -20677,11 +20687,12 @@ def render_public_auth_session_resume_bridge() -> None:
               "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
             if (storage) storage.setItem(storageKey, token);
 
-            ["public", "route", "return_to", "es_session", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
+            ["public", "route", "return_to", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "es_auth_checked", "tool_tab", "es_panel", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
             routeParamKeys.forEach((key) => url.searchParams.delete(key));
             Object.entries(finalTarget).forEach(([key, value]) => {{
               if (routeParamKeys.includes(key) && value) url.searchParams.set(key, String(value));
             }});
+            url.searchParams.set("es_session", token);
 
             const nextUrl = url.toString();
             if (nextUrl === loc.href) loc.reload();
