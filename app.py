@@ -5302,6 +5302,31 @@ def hydrate_saas_state_for_user() -> None:
     st.session_state["_saas_state_hydrated"] = True
 
 
+def refresh_task_queue_state_for_user(force: bool = False) -> None:
+    user = current_user()
+    if not user:
+        return
+    now = time.monotonic()
+    last_refresh = float(st.session_state.get("_task_queue_refresh_at") or 0)
+    if not force and now - last_refresh < 8:
+        return
+    include_all = is_owner()
+    try:
+        clear_saas_record_cache()
+        records = load_saas_records(
+            "task_queue",
+            workspace="" if include_all else user.get("workspace", ""),
+            include_all_workspaces=include_all,
+            platform_scope_reason="owner_task_queue_refresh" if include_all else "",
+            limit=SESSION_COLLECTION_LIMITS.get("task_queue", 1000),
+        )
+        if records:
+            st.session_state["task_queue"] = records
+        st.session_state["_task_queue_refresh_at"] = now
+    except Exception as exc:
+        LOGGER.warning("Unable to refresh task queue state: %s", exc)
+
+
 def b64url_decode(data: str) -> bytes:
     pad = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + pad)
@@ -5740,6 +5765,7 @@ def sync_browser_session_cookie() -> None:
     name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
     domain_js = browser_cookie_domain_js_function()
     sync_component_session_cookie(token, clear_cookie=clear_cookie)
@@ -5750,6 +5776,7 @@ def sync_browser_session_cookie() -> None:
           const name = {name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
+          const logoutKey = {logout_key_json};
           const value = {token_json};
           const candidateWindows = [window.parent, window.top, window];
           const firstWindow = () => {{
@@ -5794,7 +5821,10 @@ def sync_browser_session_cookie() -> None:
           try {{
             const storage = firstStorage();
             if (!storage) return;
-            if (value) storage.setItem(storageKey, value);
+            if (value) {{
+              storage.removeItem(logoutKey);
+              storage.setItem(storageKey, value);
+            }}
             else {{
               storage.removeItem(storageKey);
               storage.removeItem(routeStorageKey);
@@ -6181,9 +6211,7 @@ def render_global_logout_listener() -> None:
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     domain_js = browser_cookie_domain_js_function()
-    components.html(
-        f"""
-        <script>
+    logout_runtime = f"""
         (function() {{
           if (window.__errorsweepGlobalLogoutListener) return;
           window.__errorsweepGlobalLogoutListener = true;
@@ -6218,6 +6246,14 @@ def render_global_logout_listener() -> None:
             try {{ return window.localStorage; }} catch (err) {{}}
             return null;
           }};
+          const currentLogoutValue = () => {{
+            try {{
+              const storage = firstStorage();
+              return storage ? String(storage.getItem(logoutKey) || "") : "";
+            }} catch (err) {{}}
+            return "";
+          }};
+          let seenLogoutValue = currentLogoutValue();
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
           const currentPublicEntryUrl = (url) => {{
@@ -6241,6 +6277,10 @@ def render_global_logout_listener() -> None:
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               firstDocument().cookie = cookieName + "=" + encodeURIComponent(token) +
                 "; Max-Age={SESSION_PERSISTENCE_SECONDS}; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+              try {{
+                const storage = firstStorage();
+                if (storage) storage.removeItem(logoutKey);
+              }} catch (err) {{}}
               ["public", "route", "return_to", "es_restore", "es_restore_miss", "es_launch", "es_editor_auth_failed", "tool_tab", "es_app_nav"].forEach((key) => url.searchParams.delete(key));
               url.searchParams.set("es_page", "Dashboard");
               url.searchParams.set("es_session", token);
@@ -6268,8 +6308,17 @@ def render_global_logout_listener() -> None:
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
+          const checkLogoutMarker = () => {{
+            const value = currentLogoutValue();
+            if (!value || value === seenLogoutValue) return;
+            seenLogoutValue = value;
+            clearAuthAndGoLanding();
+          }};
           const handleStorageEvent = (event) => {{
-            if (event.key === logoutKey && event.newValue) clearAuthAndGoLanding();
+            if (event.key === logoutKey && event.newValue) {{
+              seenLogoutValue = String(event.newValue || "");
+              clearAuthAndGoLanding();
+            }}
             if (event.key === storageKey && event.newValue) restoreAuthAndGoDashboard(event.newValue);
           }};
           window.addEventListener("storage", handleStorageEvent);
@@ -6277,11 +6326,16 @@ def render_global_logout_listener() -> None:
           if (hostWindow !== window) {{
             try {{ hostWindow.addEventListener("storage", handleStorageEvent); }} catch (err) {{}}
           }}
+          window.setInterval(checkLogoutMarker, 1200);
+          if (hostWindow !== window) {{
+            try {{ hostWindow.setInterval(checkLogoutMarker, 1200); }} catch (err) {{}}
+          }}
+          try {{
+            firstDocument().addEventListener("visibilitychange", checkLogoutMarker);
+          }} catch (err) {{}}
         }})();
-        </script>
-        """,
-        height=0,
-    )
+        """.strip()
+    render_parent_script(logout_runtime, height=0)
 
 
 def render_logout_bridge() -> None:
@@ -6468,6 +6522,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
     name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     token_json = json.dumps(token)
     target_url_json = json.dumps(target_url)
     domain_js = browser_cookie_domain_js_function()
@@ -6477,6 +6532,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
           const cookieName = {name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
+          const logoutKey = {logout_key_json};
           const token = {token_json};
           const targetUrl = {target_url_json};
           const candidateWindows = [window.parent, window.top, window];
@@ -6517,6 +6573,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
             try {{
               const storage = firstStorage();
               if (storage) {{
+                storage.removeItem(logoutKey);
                 storage.setItem(storageKey, token);
                 storage.setItem(routeStorageKey, JSON.stringify({{"es_page": "Dashboard"}}));
               }}
@@ -12277,14 +12334,25 @@ def render_file_manifest_action(manifest: Dict[str, Any], key_prefix: str, label
 
 
 def task_review_job_id(task: Dict[str, Any]) -> str:
-    metadata = coerce_json_dict(task.get("metadata_json"))
+    metadata = job_history_metadata(task)
     pro_summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
-    return safe_text(
+    explicit_review_id = safe_text(
         metadata.get("review_job_id")
+        or metadata.get("review_id")
+        or metadata.get("human_review_job_id")
         or pro_summary.get("review_job_id")
+        or pro_summary.get("review_id")
+        or pro_summary.get("human_review_job_id")
         or task.get("review_job_id")
+        or task.get("review_id")
+        or task.get("human_review_job_id")
         or ""
     )
+    if explicit_review_id:
+        return explicit_review_id
+    if job_history_is_media_record(task):
+        return ""
+    return safe_text(metadata.get("editor_job_id") or pro_summary.get("editor_job_id") or task.get("editor_job_id") or "")
 
 
 def task_source_page(task: Dict[str, Any]) -> str:
@@ -12378,6 +12446,7 @@ def render_task_result_actions(task: Dict[str, Any], key_prefix: str) -> None:
 
 
 def render_task_queue_panel(limit: int = 12) -> None:
+    refresh_task_queue_state_for_user()
     tasks = st.session_state.get("task_queue", [])
     st.markdown("### Async task queue")
     if not tasks:
@@ -12438,6 +12507,7 @@ def render_task_queue_panel(limit: int = 12) -> None:
 
 
 def render_usage_task_links(limit: int = 8) -> None:
+    refresh_task_queue_state_for_user()
     tasks = st.session_state.get("task_queue", [])
     if not tasks:
         return
@@ -21906,6 +21976,68 @@ def job_history_metadata(record: Dict[str, Any]) -> Dict[str, Any]:
     return coerce_json_dict(metadata)
 
 
+REVIEW_EDITOR_ID_KEYS = ("review_job_id", "editor_job_id", "review_id", "human_review_job_id")
+
+
+def review_editor_id_from_mapping(mapping: Any, *, include_editor_id: bool = True) -> str:
+    if not isinstance(mapping, dict):
+        return ""
+    for key in REVIEW_EDITOR_ID_KEYS:
+        if key == "editor_job_id" and not include_editor_id:
+            continue
+        value = safe_text(mapping.get(key))
+        if value:
+            return value
+    return ""
+
+
+def review_job_id_from_record(record: Dict[str, Any], *, include_editor_id: bool = True) -> str:
+    metadata = job_history_metadata(record)
+    for source in (record, metadata):
+        candidate = review_editor_id_from_mapping(source, include_editor_id=include_editor_id)
+        if candidate:
+            return candidate
+        pro_summary = source.get("pro_summary") if isinstance(source.get("pro_summary"), dict) else {}
+        candidate = review_editor_id_from_mapping(pro_summary, include_editor_id=include_editor_id)
+        if candidate:
+            return candidate
+    return ""
+
+
+def job_history_is_media_record(record: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(record)
+    values = " ".join(
+        safe_text(value).lower()
+        for value in (
+            record.get("job_type"),
+            record.get("type"),
+            record.get("task_type"),
+            metadata.get("job_type"),
+            metadata.get("workflow"),
+            metadata.get("source"),
+        )
+    )
+    return any(term in values for term in ("media", "subtitle", "subtitling", "transcription"))
+
+
+def job_history_is_translation_review(record: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(record)
+    values = " ".join(
+        safe_text(value).lower()
+        for value in (
+            record.get("job_type"),
+            record.get("type"),
+            record.get("task_type"),
+            record.get("label"),
+            metadata.get("job_type"),
+            metadata.get("workflow"),
+            metadata.get("source"),
+            metadata.get("label"),
+        )
+    )
+    return any(term in values for term in ("translation", "translate", "human review", "cognisweep async pro", "pro translation"))
+
+
 def job_history_workspace_matches(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
     if is_owner():
         return True
@@ -21996,32 +22128,59 @@ def job_history_editor_jobs_for_user(user: Dict[str, Any], limit: int = 250) -> 
 
 
 def job_history_editor_url(record: Dict[str, Any]) -> str:
-    metadata = job_history_metadata(record)
-    job_id = safe_text(
-        record.get("editor_job_id")
-        or record.get("review_job_id")
-        or record.get("id")
-        or record.get("job_id")
-        or metadata.get("editor_job_id")
-        or metadata.get("review_job_id")
-        or metadata.get("job_id")
-    )
+    job_id = review_job_id_from_record(record)
+    if not job_id:
+        job_id = safe_text(record.get("id") or record.get("job_id"))
     if not job_id:
         return ""
-    job_type = safe_text(record.get("job_type") or metadata.get("job_type")).strip().lower()
-    workflow = safe_text(metadata.get("workflow")).strip().lower()
-    if job_type == "media" or workflow in {"subtitling", "transcription"}:
+    if job_history_is_media_record(record):
         return external_editor_url("media", job_id)
     return human_review_editor_link(job_id)
+
+
+def review_job_id_for_job_record(job: Dict[str, Any]) -> str:
+    direct_id = review_job_id_from_record(job)
+    if direct_id:
+        return direct_id
+    job_id = safe_text(job.get("id") or job.get("job_id"))
+    if not job_id:
+        return ""
+    metadata = job_history_metadata(job)
+    task_id = safe_text(job.get("task_id") or metadata.get("task_id"))
+    for task in st.session_state.get("task_queue", []):
+        if not isinstance(task, dict):
+            continue
+        task_metadata = job_history_metadata(task)
+        pro_summary = task_metadata.get("pro_summary") if isinstance(task_metadata.get("pro_summary"), dict) else {}
+        matched_by_task = bool(task_id and safe_text(task.get("id")) == task_id)
+        matched_by_job = job_id in {
+            safe_text(task.get("result_ref")),
+            safe_text(task_metadata.get("job_id")),
+            safe_text(task_metadata.get("result_ref")),
+            safe_text(pro_summary.get("job_id")),
+        }
+        if not matched_by_task and not matched_by_job:
+            continue
+        review_id = task_review_job_id(task)
+        if review_id:
+            return review_id
+    return ""
 
 
 def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
     metadata = job_history_metadata(job)
     job_id = safe_text(job.get("id"))
-    review_job_id = safe_text(job.get("review_job_id") or metadata.get("review_job_id"))
-    editor_job_id = safe_text(job.get("editor_job_id") or metadata.get("editor_job_id") or review_job_id)
+    review_job_id = review_job_id_for_job_record(job)
+    editor_job_id = review_job_id
     project_id = safe_text(job.get("project_id") or metadata.get("project_id"))
-    editor_url = human_review_editor_link(editor_job_id) if editor_job_id else job_context_link(job_id, project_id)
+    if editor_job_id and job_history_is_media_record(job):
+        editor_url = external_editor_url("media", editor_job_id)
+    elif editor_job_id:
+        editor_url = human_review_editor_link(editor_job_id)
+    elif job_history_is_translation_review(job):
+        editor_url = ""
+    else:
+        editor_url = job_context_link(job_id, project_id)
     return {
         "history_id": job_id,
         "job_id": job_id,
@@ -22082,7 +22241,12 @@ def job_history_row_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task_id = safe_text(task.get("id"))
     review_job_id = task_review_job_id(task)
     project_id = safe_text(metadata.get("project_id"))
-    editor_url = human_review_editor_link(review_job_id) if review_job_id else task_monitor_link(task_id)
+    if review_job_id:
+        editor_url = human_review_editor_link(review_job_id)
+    elif job_history_is_translation_review(task):
+        editor_url = ""
+    else:
+        editor_url = task_monitor_link(task_id)
     return {
         "history_id": task_id,
         "job_id": safe_text(task.get("result_ref")),
@@ -22121,6 +22285,7 @@ def job_history_sort_value(row: Dict[str, Any]) -> datetime:
 
 
 def job_history_rows_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+    refresh_task_queue_state_for_user()
     rows: List[Dict[str, Any]] = []
     for job in st.session_state.get("jobs", []):
         if isinstance(job, dict) and job_history_record_matches_user(job, user):

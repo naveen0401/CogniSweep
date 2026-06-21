@@ -237,6 +237,7 @@ def test_editor_links_seed_browser_session_before_new_tab_editor_open() -> None:
 
 def test_human_review_editor_uses_canonical_editor_route() -> None:
     source = read_app()
+    worker_source = Path("async_workflow_processor.py").read_text(encoding="utf-8")
     assert "def navigate_to_human_review_editor(review_id: str = \"\")" in source
     assert 'set_route_query({"es_editor": "human_review", "review_id": review_id})' in source
     assert 'return "?" + urlencode({"es_editor": "human_review", "review_id": review_id})' in source
@@ -254,6 +255,13 @@ def test_human_review_editor_uses_canonical_editor_route() -> None:
     assert "Review not found." in source
     assert "human_review_editor_link(str(review_job_id))" in source
     assert "render_editor_open_link(\"Open Human Review Editor\"" in source
+    assert "REVIEW_EDITOR_ID_KEYS = (\"review_job_id\", \"editor_job_id\", \"review_id\", \"human_review_job_id\")" in source
+    assert "def review_job_id_for_job_record(job: Dict[str, Any]) -> str" in source
+    assert "review_job_id = review_job_id_for_job_record(job)" in source
+    assert "elif job_history_is_translation_review(job):" in source
+    assert "editor_url = \"\"" in source
+    assert '"review_job_id": review_job_id' in worker_source
+    assert '"editor_job_id": review_job_id' in worker_source
 
 
 def test_cat_editor_uses_real_logo_and_route_back_button() -> None:
@@ -462,6 +470,10 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "clearAuthAndGoLanding" in source
     assert "restoreAuthAndGoDashboard" in source
     assert "event.key === storageKey && event.newValue" in source
+    assert "const checkLogoutMarker = () =>" in source
+    assert "window.setInterval(checkLogoutMarker, 1200)" in source
+    assert "render_parent_script(logout_runtime, height=0)" in source
+    assert "storage.removeItem(logoutKey);" in source
     assert "storage.setItem(logoutKey, String(Date.now()))" in source
     assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
     assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
