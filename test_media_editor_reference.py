@@ -45,7 +45,7 @@ def test_reference_media_editor_has_real_logo_slot_and_route_back_button():
     assert 'id="backBtn"' in html
     assert "payload.back_url" in html
     assert 'anchor.target = "_top"' in html
-    assert '"back_url": app_page_link("Subtitle / Transcription Editor")' in app_source
+    assert '"back_url": editor_back_link("Subtitle / Transcription Editor")' in app_source
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in app_source
 
 

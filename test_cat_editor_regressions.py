@@ -155,7 +155,7 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
     assert "es_launch" not in body
 
 
-def test_editor_links_seed_browser_session_before_same_tab_editor_open() -> None:
+def test_editor_links_seed_browser_session_before_new_tab_editor_open() -> None:
     source = read_app()
     helper_start = source.index("def current_session_token_for_links")
     helper_end = source.index("def external_editor_url", helper_start)
@@ -175,6 +175,7 @@ def test_editor_links_seed_browser_session_before_same_tab_editor_open() -> None
     assert 'query_clear(EDITOR_LAUNCH_QUERY_PARAM)' in source
     assert "def editor_launch_url(url: str) -> str:" in helper_body
     assert "clean_params[EDITOR_LAUNCH_QUERY_PARAM] = signed_editor_launch_token_for_user(user)" in helper_body
+    assert '"es_app_nav"' in helper_body
     assert 'data-es-editor-open="1"' in helper_body
     assert "document.addEventListener(\"click\", handleEditorOpen, true)" in helper_body
     assert "local.setItem(storageKey, token)" in helper_body
@@ -198,24 +199,21 @@ def test_editor_links_seed_browser_session_before_same_tab_editor_open() -> None
     task_links_body = source[task_links_start:task_links_end]
     assert "editor_session_handoff_attrs(url)" in task_links_body
     assert "href = editor_launch_url(url)" in task_links_body
-    assert 'target="_self" {handoff_attrs}' in task_links_body
-    assert 'target="_blank" rel="noopener"' not in task_links_body
+    assert 'target="_blank" rel="noopener" {handoff_attrs}' in task_links_body
 
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
     editor_open_body = source[editor_open_start:editor_open_end]
     assert "editor_session_handoff_attrs(url)" in editor_open_body
     assert "href = editor_launch_url(url)" in editor_open_body
-    assert 'target="_self" {handoff_attrs}' in editor_open_body
-    assert 'target="_blank" rel="noopener"' not in editor_open_body
+    assert 'target="_blank" rel="noopener" {handoff_attrs}' in editor_open_body
 
     external_link_start = source.index("def render_external_editor_link")
     external_link_end = source.index("def load_external_editor_payload", external_link_start)
     external_link_body = source[external_link_start:external_link_end]
     assert "editor_session_handoff_attrs(url)" in external_link_body
     assert "href = editor_launch_url(url)" in external_link_body
-    assert 'target="_self" {handoff_attrs}' in external_link_body
-    assert 'target="_blank" rel="noopener"' not in external_link_body
+    assert 'target="_blank" rel="noopener" {handoff_attrs}' in external_link_body
 
     history_start = source.index("def render_job_history_table")
     history_end = source.index("def page_projects", history_start)
@@ -229,8 +227,7 @@ def test_editor_links_seed_browser_session_before_same_tab_editor_open() -> None
     assert "Open task" in history_body
     assert "editor_session_handoff_attrs(editor_url)" in history_body
     assert "href = editor_launch_url(editor_url)" in history_body
-    assert 'target="_self" {handoff_attrs}>Open task</a>' in history_body
-    assert 'target="_blank" rel="noopener"' not in history_body
+    assert 'target="_blank" rel="noopener" {handoff_attrs}>Open task</a>' in history_body
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
@@ -261,7 +258,9 @@ def test_cat_editor_uses_real_logo_and_route_back_button() -> None:
     assert 'class="btn btn-ghost back-btn"' in html
     assert "const backUrl = __CAT_EDITOR_BACK_URL__;" in html
     assert "anchor.target = '_top'" in html
-    assert "html = html.replace(\"__CAT_EDITOR_BACK_URL__\", json.dumps(app_page_link(\"CogniSweep Pro\")))" in body
+    assert "def editor_back_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:" in source
+    assert "params[SESSION_HANDOFF_QUERY_PARAM] = signed_session_token_for_user(user)" in source
+    assert "html = html.replace(\"__CAT_EDITOR_BACK_URL__\", json.dumps(editor_back_link(\"CogniSweep Pro\")))" in body
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in body
 
 
@@ -298,12 +297,10 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "window.open" not in source
     editor_link_start = source.index("def render_external_editor_link")
     editor_link_end = source.index("def load_external_editor_payload", editor_link_start)
-    assert 'target="_self"' in source[editor_link_start:editor_link_end]
-    assert 'target="_blank"' not in source[editor_link_start:editor_link_end]
+    assert 'target="_blank" rel="noopener"' in source[editor_link_start:editor_link_end]
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
-    assert 'target="_self" {handoff_attrs}' in source[editor_open_start:editor_open_end]
-    assert 'target="_blank" rel="noopener"' not in source[editor_open_start:editor_open_end]
+    assert 'target="_blank" rel="noopener" {handoff_attrs}' in source[editor_open_start:editor_open_end]
     assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {\"landing\", \"login\", \"signup\"}" in source
     assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
@@ -887,6 +884,7 @@ def test_media_editor_uses_reference_template() -> None:
     shell_body = source[shell_start:shell_end]
     assert 'assets" / "media_editor_reference.html' in shell_body
     assert "html.replace(\"__MEDIA_EDITOR_PAYLOAD__\"" in shell_body
+    assert '"back_url": editor_back_link("Subtitle / Transcription Editor")' in shell_body
     assert "media_preview_component_payload(media_source, media_type, media_name or file_name)" in shell_body
     assert "build_editor_language_resources(workspace_rules(), component_rows, metadata)" in shell_body
     assert 'id="media-editor-page-marker"' in shell_body
@@ -1148,7 +1146,7 @@ if __name__ == "__main__":
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
-    test_editor_links_seed_browser_session_before_same_tab_editor_open()
+    test_editor_links_seed_browser_session_before_new_tab_editor_open()
     test_human_review_editor_uses_es_page_review_id_route()
     test_cat_editor_uses_real_logo_and_route_back_button()
     test_cat_editor_has_mobile_working_layout()

@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v7-transition-regression-fix-2026-06-22"
+DEPLOY_BUILD_ID = "auth-handoff-v8-editor-tab-back-fix-2026-06-22"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -7437,6 +7437,14 @@ def app_page_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:
     return "?" + urlencode(route_query_for_page(page, extra))
 
 
+def editor_back_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:
+    params = route_query_for_page(page, extra)
+    user = current_user() if st.session_state.get("authenticated") and st.session_state.get("user") else {}
+    if user:
+        params[SESSION_HANDOFF_QUERY_PARAM] = signed_session_token_for_user(user)
+    return "?" + urlencode(params)
+
+
 def native_nav_key(prefix: str, page: str, extra: Optional[Dict[str, str]] = None) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", es_page_alias_key(page)).strip("_") or "page"
     clean_extra = {key: safe_text(value) for key, value in (extra or {}).items() if safe_text(value)}
@@ -12319,7 +12327,7 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         if primary:
             handoff_attrs = editor_session_handoff_attrs(url)
             href = editor_launch_url(url)
-            rendered.append(f'<a class="{cls}" href="{escape(href, quote=True)}" target="_self" {handoff_attrs}>{escape(label)}</a>')
+            rendered.append(f'<a class="{cls}" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
@@ -12339,7 +12347,7 @@ def render_editor_open_link(label: str, url: str) -> None:
     href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a class="es-task-action-link primary" href="{escape(href, quote=True)}" target="_self" {handoff_attrs}
+        <a class="es-task-action-link primary" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
            style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
         """,
         unsafe_allow_html=True,
@@ -17393,7 +17401,10 @@ def editor_launch_url(url: str) -> str:
     clean_params = {
         key: safe_text(values[0])
         for key, values in parsed.items()
-        if values and safe_text(values[0]) and key not in {"es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM}
+        if values
+        and safe_text(values[0])
+        and key
+        not in {SESSION_HANDOFF_QUERY_PARAM, "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_app_nav"}
     }
     clean_params[EDITOR_LAUNCH_QUERY_PARAM] = signed_editor_launch_token_for_user(user)
     return "?" + urlencode(clean_params)
@@ -17529,7 +17540,7 @@ def render_external_editor_link(label: str, editor_type: str, job_id: str) -> No
     href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a href="{escape(href, quote=True)}" target="_self" {handoff_attrs} style="
+        <a href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
             display:flex; align-items:center; justify-content:center; width:100%;
             padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
             background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
@@ -17808,7 +17819,7 @@ def render_reference_cat_editor_shell(
             f'<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>',
             1,
         )
-    html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(app_page_link("CogniSweep Pro")))
+    html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(editor_back_link("CogniSweep Pro")))
     component_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(editor_rows):
         findings = qa_by_idx.get(idx, [])
@@ -18310,7 +18321,7 @@ def render_reference_media_editor_shell(
     payload = {
         "job_id": safe_text(job_id),
         "file_slug": file_slug,
-        "back_url": app_page_link("Subtitle / Transcription Editor"),
+        "back_url": editor_back_link("Subtitle / Transcription Editor"),
         "metadata": {
             "title": safe_text(metadata.get("title") or "CogniSweep Media Editor") or "CogniSweep Media Editor",
             "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
@@ -22149,7 +22160,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             href = editor_launch_url(editor_url)
             action_html = (
                 f'<a class="es-task-action-link primary" href="{escape(href, quote=True)}" '
-                f'target="_self" {handoff_attrs}>Open task</a>'
+                f'target="_blank" rel="noopener" {handoff_attrs}>Open task</a>'
             )
         else:
             action_html = '<span class="es-history-unavailable">No workspace</span>'
