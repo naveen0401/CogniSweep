@@ -7673,11 +7673,10 @@ def authenticated_shell_route_from_session(default_page: str = "Dashboard") -> D
             params["es_editor"] = editor_type
             return {"route": "human_review_editor" if editor_type == "human_review" else "cat_editor", **params}
         if is_human_review_editor_page(page):
-            route = {"route": "human_review_editor", "page": "Human Review Editor", "es_page": "Human Review Editor"}
             review_id = safe_text(current.get("review_id"))
             if review_id:
-                route["review_id"] = review_id
-            return route
+                return {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
+            return {"route": PAGE_ROUTE_SLUGS.get(default_page) or es_page_alias_key(default_page) or "dashboard", "page": normalize_es_page(default_page), "es_page": normalize_es_page(default_page)}
         if page in known_protected_es_pages() and not public_route_for_es_page(page):
             route_slug = safe_text(current.get("route")).strip().lower()
             if route_slug in PUBLIC_ROUTES or not route_slug:
@@ -7939,7 +7938,10 @@ def navigate(route: str, params: Optional[Dict[str, str]] = None, **kwargs: str)
         if not review_id:
             st.error("Cannot open Human Review Editor: missing review_id.")
             st.stop()
-        navigate_es_page("Human Review Editor", review_id=review_id)
+        st.session_state["active_review_session_id"] = review_id
+        st.session_state["current_route"] = {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
+        set_route_query({"es_editor": "human_review", "review_id": review_id})
+        st.rerun()
     if route_key in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route_key]:
         page = ROUTE_PAGE_ALIASES[route_key]
         navigate_es_page(page, **merged_params)
@@ -7957,7 +7959,10 @@ def navigate_to_human_review_editor(review_id: str = "") -> None:
     if not review_id:
         st.error("Cannot open Human Review Editor: missing review_id.")
         st.stop()
-    navigate_es_page("Human Review Editor", review_id=review_id)
+    st.session_state["active_review_session_id"] = review_id
+    st.session_state["current_route"] = {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
+    set_route_query({"es_editor": "human_review", "review_id": review_id})
+    st.rerun()
 
 
 def requested_route_params() -> Dict[str, str]:
@@ -7977,9 +7982,10 @@ def requested_route_params() -> Dict[str, str]:
             if query_get("job_id"):
                 params["job_id"] = query_get("job_id")
         elif route == "human_review_editor":
-            params["es_page"] = "Human Review Editor"
-            if query_get("review_id"):
-                params["review_id"] = query_get("review_id")
+            review_id = query_get("review_id")
+            params["es_editor"] = "human_review"
+            if review_id:
+                params["review_id"] = review_id
         elif route in ROUTE_PAGE_ALIASES:
             page = ROUTE_PAGE_ALIASES[route]
             if page:
@@ -8095,8 +8101,9 @@ def apply_return_to(return_to: str) -> bool:
     if route == "human_review_editor" or is_human_review_editor_page(page):
         review_id = safe_text(flat.get("review_id"))
         if not review_id:
-            st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor"}
-            set_route_query({"es_page": "Human Review Editor"})
+            st.session_state.page = "Dashboard"
+            st.session_state["current_route"] = {"page": "Dashboard", "es_page": "Dashboard"}
+            set_route_query({"es_page": "Dashboard"})
             return True
         st.session_state["active_review_session_id"] = review_id
         st.session_state["current_route"] = {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
@@ -20666,7 +20673,12 @@ def render_public_auth_session_resume_bridge() -> None:
             const route = normalizedPage(params && params.get ? params.get("route") : params && params.route);
             const page = normalizedPage(target.es_page);
             if (route === "human review editor" || route === "human_review_editor") {{
-              target.es_page = "Human Review Editor";
+              target.es_editor = "human_review";
+              if (!target.review_id) {{
+                const reviewId = params && params.get ? params.get("review_id") : params && params.review_id;
+                if (reviewId) target.review_id = String(reviewId);
+              }}
+              delete target.es_page;
             }}
             if (target.es_page && publicEntryPages.has(page)) delete target.es_page;
             if (target.es_editor || target.es_page || target.job_id || target.review_id) return target;

@@ -235,14 +235,19 @@ def test_editor_links_seed_browser_session_before_new_tab_editor_open() -> None:
     assert "sync_browser_route_state(current_route)\n            render_editor_session_handoff_bridge()" in app_body
 
 
-def test_human_review_editor_uses_es_page_review_id_route() -> None:
+def test_human_review_editor_uses_canonical_editor_route() -> None:
     source = read_app()
     assert "def navigate_to_human_review_editor(review_id: str = \"\")" in source
-    assert "navigate_es_page(\"Human Review Editor\", review_id=review_id)" in source
+    assert 'set_route_query({"es_editor": "human_review", "review_id": review_id})' in source
     assert 'return "?" + urlencode({"es_editor": "human_review", "review_id": review_id})' in source
     assert "if params.get(\"es_editor\") == \"human_review\" and params.get(\"review_id\"):" in source
     assert "(stored.get(\"job_id\") or stored.get(\"review_id\"))" in source
     assert "set_route_query({\"route\": \"human_review_editor\"" not in source
+    assert 'params["es_editor"] = "human_review"' in source
+    assert 'params["es_page"] = "Human Review Editor"' not in source
+    assert 'set_route_query({"es_page": "Human Review Editor"})' not in source
+    assert '"es_page": "Human Review Editor"' not in source
+    assert 'target.es_editor = "human_review";' in source
     assert "route.get(\"route\") == \"human_review_editor\"" in source
     assert "requested_page in HUMAN_REVIEW_EDITOR_PAGES" in source
     assert "render_external_cat_editor(review_id)" in source
@@ -1155,7 +1160,7 @@ if __name__ == "__main__":
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
     test_editor_links_seed_browser_session_before_new_tab_editor_open()
-    test_human_review_editor_uses_es_page_review_id_route()
+    test_human_review_editor_uses_canonical_editor_route()
     test_cat_editor_uses_real_logo_and_route_back_button()
     test_cat_editor_has_mobile_working_layout()
     test_reload_session_restore_uses_cookie_not_url_only()
