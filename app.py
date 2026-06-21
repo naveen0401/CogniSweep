@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v6-smooth-session-transitions-2026-06-22"
+DEPLOY_BUILD_ID = "auth-handoff-v7-transition-regression-fix-2026-06-22"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -422,6 +422,7 @@ AUTH_STATE_AUTHENTICATED = "authenticated"
 AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
+LOGOUT_DONE_QUERY_PARAM = "es_signed_out"
 BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
 BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
@@ -6162,13 +6163,15 @@ def render_editor_auth_restore_failed(route: Optional[Dict[str, Any]] = None) ->
     st.stop()
 
 
-def landing_redirect_url_js(include_logout_marker: bool = False) -> str:
+def landing_redirect_url_js(include_logout_marker: bool = False, include_signed_out_marker: bool = False) -> str:
     logout_marker_js = 'url.searchParams.set("es_logout", "1");' if include_logout_marker else 'url.searchParams.delete("es_logout");'
+    signed_out_marker_js = f'url.searchParams.set("{LOGOUT_DONE_QUERY_PARAM}", "1");' if include_signed_out_marker else f'url.searchParams.delete("{LOGOUT_DONE_QUERY_PARAM}");'
     return f"""
             const url = new URL(loc.href);
-            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"].forEach((key) => url.searchParams.delete(key));
+            ["es_session", "es_restore", "es_restore_miss", "es_auth_checked", "es_launch", "es_editor_auth_failed", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", "{LOGOUT_DONE_QUERY_PARAM}"].forEach((key) => url.searchParams.delete(key));
             url.searchParams.set("es_page", "Landing");
             {logout_marker_js}
+            {signed_out_marker_js}
     """
 
 
@@ -6261,7 +6264,7 @@ def render_global_logout_listener() -> None:
             }} catch (err) {{}}
             try {{
               const loc = firstWindow().location;
-              {landing_redirect_url_js(include_logout_marker=True)}
+              {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
@@ -6339,8 +6342,10 @@ def render_logout_bridge() -> None:
               }}
             }} catch (err) {{}}
             const loc = firstWindow().location;
-            {landing_redirect_url_js()}
-            loc.replace(url.toString());
+            {landing_redirect_url_js(include_signed_out_marker=True)}
+            const nextUrl = url.toString();
+            if (loc.href === nextUrl) loc.reload();
+            else loc.replace(nextUrl);
           }} catch (err) {{}}
         }})();
         </script>
@@ -6680,9 +6685,10 @@ def logout() -> None:
     st.session_state.pop("_session_query_fallback_attached", None)
     st.session_state.pop("_session_query_fallback_attach_attempts", None)
     st.session_state["_clear_session_cookie"] = True
-    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout"):
+    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
         query_clear(key)
     query_set("es_page", "Landing")
+    query_set(LOGOUT_DONE_QUERY_PARAM, "1")
     render_logout_bridge()
     render_auth_transition_shell("Signing out...")
     st.stop()
@@ -12313,7 +12319,7 @@ def render_task_navigation_links(task: Dict[str, Any]) -> None:
         if primary:
             handoff_attrs = editor_session_handoff_attrs(url)
             href = editor_launch_url(url)
-            rendered.append(f'<a class="{cls}" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}>{escape(label)}</a>')
+            rendered.append(f'<a class="{cls}" href="{escape(href, quote=True)}" target="_self" {handoff_attrs}>{escape(label)}</a>')
             continue
         action_attr = app_nav_target_from_href(nav_targets, target_prefix, url, label)
         if action_attr:
@@ -12333,7 +12339,7 @@ def render_editor_open_link(label: str, url: str) -> None:
     href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a class="es-task-action-link primary" href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs}
+        <a class="es-task-action-link primary" href="{escape(href, quote=True)}" target="_self" {handoff_attrs}
            style="width:100%;min-height:44px;font-size:14px;">{escape(label)}</a>
         """,
         unsafe_allow_html=True,
@@ -17523,7 +17529,7 @@ def render_external_editor_link(label: str, editor_type: str, job_id: str) -> No
     href = editor_launch_url(url)
     st.markdown(
         f"""
-        <a href="{escape(href, quote=True)}" target="_blank" rel="noopener" {handoff_attrs} style="
+        <a href="{escape(href, quote=True)}" target="_self" {handoff_attrs} style="
             display:flex; align-items:center; justify-content:center; width:100%;
             padding: 0.78rem 1rem; border-radius:14px; text-decoration:none;
             background: linear-gradient(90deg,#00d985,#34bdf6); color:#061018;
@@ -19945,6 +19951,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         render_login()
         return
 
+    render_public_auth_session_resume_bridge()
     review_id = query_get("review_id") or safe_text(st.session_state.get("active_review_session_id", ""))
     LOGGER.warning(
         "LANDING_RENDERED reason=%s query_params=%s route=%s session_route=%s authenticated=%s review_id=%s user=%s",
@@ -20484,6 +20491,7 @@ def render_public_auth_session_resume_bridge() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
+    logout_done_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
     domain_js = browser_cookie_domain_js_function()
     st.html(
         dedent(f"""
@@ -20518,10 +20526,12 @@ def render_public_auth_session_resume_bridge() -> None:
           padding: 18px 22px;
         }}
 
+        body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid="stAppViewContainer"],
         body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"] {{
           visibility: hidden !important;
         }}
 
+        body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID},
         body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID} {{
           display: grid !important;
           visibility: visible !important;
@@ -20540,6 +20550,7 @@ def render_public_auth_session_resume_bridge() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const routeParamKeys = {route_param_keys_json};
+          const logoutDoneParam = {logout_done_param_json};
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
 {domain_js}
 
@@ -20603,6 +20614,16 @@ def render_public_auth_session_resume_bridge() -> None:
             }} catch (err) {{}}
           }};
 
+          const clearLogoutDoneParam = () => {{
+            try {{
+              const loc = parentWin.location;
+              const url = new URL(loc.href);
+              if (!url.searchParams.has(logoutDoneParam)) return;
+              url.searchParams.delete(logoutDoneParam);
+              parentWin.history.replaceState({{}}, "", url.toString());
+            }} catch (err) {{}}
+          }};
+
           const cleanTargetParams = (params) => {{
             const target = {{}};
             routeParamKeys.forEach((key) => {{
@@ -20642,6 +20663,18 @@ def render_public_auth_session_resume_bridge() -> None:
           try {{
             const storage = safeStorage();
             const resumeSessionStorage = safeSessionStorage();
+            const loc = parentWin.location;
+            const currentUrl = new URL(loc.href);
+            if (currentUrl.searchParams.get(logoutDoneParam) === "1") {{
+              clearBrowserSessionToken(storage, "");
+              try {{
+                if (storage) storage.removeItem(routeStorageKey);
+              }} catch (err) {{}}
+              clearResumeState(resumeSessionStorage);
+              clearLogoutDoneParam();
+              revealPublicAuthPage();
+              return;
+            }}
             const cookieToken = readCookie();
             const storageToken = storage ? String(storage.getItem(storageKey) || "") : "";
             const token = cookieToken || storageToken;
@@ -20686,7 +20719,6 @@ def render_public_auth_session_resume_bridge() -> None:
               }} catch (err) {{}}
             }}
 
-            const loc = parentWin.location;
             const url = new URL(loc.href);
             const target = targetFromReturnTo(url);
             const savedTarget = Object.keys(target).length ? {{}} : targetFromSavedRoute(storage);
@@ -22117,7 +22149,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             href = editor_launch_url(editor_url)
             action_html = (
                 f'<a class="es-task-action-link primary" href="{escape(href, quote=True)}" '
-                f'target="_blank" rel="noopener" {handoff_attrs}>Open task</a>'
+                f'target="_self" {handoff_attrs}>Open task</a>'
             )
         else:
             action_html = '<span class="es-history-unavailable">No workspace</span>'

@@ -97,7 +97,7 @@ def test_login_success_opens_target_route_in_current_tab() -> None:
         : callback_body.index("if bootstrap_is_configured")
     ]
     assert owner_branch.index('st.session_state[LOGIN_SUCCESS_PENDING_KEY] = True') < owner_branch.index('login_user(owner_user')
-    assert "st.rerun()" in callback_body
+    assert "st.rerun()" not in callback_body
     assert "Platform owner login is not configured." in callback_body
     assert "Platform owner password does not match the configured owner hash." in callback_body
 
@@ -155,7 +155,7 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
     assert "es_launch" not in body
 
 
-def test_editor_links_seed_browser_session_before_new_tab() -> None:
+def test_editor_links_seed_browser_session_before_same_tab_editor_open() -> None:
     source = read_app()
     helper_start = source.index("def current_session_token_for_links")
     helper_end = source.index("def external_editor_url", helper_start)
@@ -179,8 +179,8 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     assert "document.addEventListener(\"click\", handleEditorOpen, true)" in helper_body
     assert "local.setItem(storageKey, token)" in helper_body
     assert "local.setItem(routeStorageKey, JSON.stringify(route))" in helper_body
-    assert "url.searchParams.set(\"es_session\", token)" not in source
-    assert "url.searchParams.set(\"es_restore\", token)" not in source
+    assert "url.searchParams.set(\"es_session\", token)" not in helper_body
+    assert "url.searchParams.set(\"es_restore\", token)" not in helper_body
     bootstrap_start = source.index("def render_browser_session_bootstrap")
     bootstrap_end = source.index("def auth_bootstrap_pending", bootstrap_start)
     bootstrap_body = source[bootstrap_start:bootstrap_end]
@@ -198,21 +198,24 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     task_links_body = source[task_links_start:task_links_end]
     assert "editor_session_handoff_attrs(url)" in task_links_body
     assert "href = editor_launch_url(url)" in task_links_body
-    assert 'target="_blank" rel="noopener"' in task_links_body
+    assert 'target="_self" {handoff_attrs}' in task_links_body
+    assert 'target="_blank" rel="noopener"' not in task_links_body
 
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
     editor_open_body = source[editor_open_start:editor_open_end]
     assert "editor_session_handoff_attrs(url)" in editor_open_body
     assert "href = editor_launch_url(url)" in editor_open_body
-    assert 'target="_blank" rel="noopener"' in editor_open_body
+    assert 'target="_self" {handoff_attrs}' in editor_open_body
+    assert 'target="_blank" rel="noopener"' not in editor_open_body
 
     external_link_start = source.index("def render_external_editor_link")
     external_link_end = source.index("def load_external_editor_payload", external_link_start)
     external_link_body = source[external_link_start:external_link_end]
     assert "editor_session_handoff_attrs(url)" in external_link_body
     assert "href = editor_launch_url(url)" in external_link_body
-    assert 'target="_blank" rel="noopener"' in external_link_body
+    assert 'target="_self" {handoff_attrs}' in external_link_body
+    assert 'target="_blank" rel="noopener"' not in external_link_body
 
     history_start = source.index("def render_job_history_table")
     history_end = source.index("def page_projects", history_start)
@@ -226,7 +229,8 @@ def test_editor_links_seed_browser_session_before_new_tab() -> None:
     assert "Open task" in history_body
     assert "editor_session_handoff_attrs(editor_url)" in history_body
     assert "href = editor_launch_url(editor_url)" in history_body
-    assert 'target="_blank" rel="noopener"' in history_body
+    assert 'target="_self" {handoff_attrs}>Open task</a>' in history_body
+    assert 'target="_blank" rel="noopener"' not in history_body
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
@@ -294,10 +298,12 @@ def test_public_login_and_authenticated_entry_routes_open_dashboard() -> None:
     assert "window.open" not in source
     editor_link_start = source.index("def render_external_editor_link")
     editor_link_end = source.index("def load_external_editor_payload", editor_link_start)
-    assert 'target="_blank"' in source[editor_link_start:editor_link_end]
+    assert 'target="_self"' in source[editor_link_start:editor_link_end]
+    assert 'target="_blank"' not in source[editor_link_start:editor_link_end]
     editor_open_start = source.index("def render_editor_open_link")
     editor_open_end = source.index("def render_task_result_actions", editor_open_start)
-    assert 'target="_blank" rel="noopener"' in source[editor_open_start:editor_open_end]
+    assert 'target="_self" {handoff_attrs}' in source[editor_open_start:editor_open_end]
+    assert 'target="_blank" rel="noopener"' not in source[editor_open_start:editor_open_end]
     assert "AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {\"landing\", \"login\", \"signup\"}" in source
     assert "def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:" in source
     assert "url.searchParams.set(\"es_page\", \"Landing\")" in source
@@ -387,9 +393,13 @@ def test_public_auth_pages_resume_saved_session_before_showing_form() -> None:
     assert 'AUTH_RESUME_MASK_ID = "errorsweep-auth-resume-mask"' in source
     assert "AUTH_RESUME_MARKER_ID" in bridge_body
     assert "AUTH_RESUME_MASK_ID" in bridge_body
-    assert "body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid=\"stAppViewContainer\"]" not in bridge_body
+    assert "body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid=\"stAppViewContainer\"]" in bridge_body
+    assert "body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID}" in bridge_body
     assert "body.{AUTH_RESUME_MASK_CLASS} [data-testid=\"stAppViewContainer\"]" in bridge_body
     assert "const routeStorageKey" in bridge_body
+    assert "const logoutDoneParam" in bridge_body
+    assert "clearLogoutDoneParam();" in bridge_body
+    assert "currentUrl.searchParams.get(logoutDoneParam) === \"1\"" in bridge_body
     assert "targetFromReturnTo(url)" in bridge_body
     assert "targetFromSavedRoute(storage)" in bridge_body
     assert "parentDoc.cookie = cookieName + \"=\" + encodeURIComponent(token)" in bridge_body
@@ -403,6 +413,11 @@ def test_public_auth_pages_resume_saved_session_before_showing_form() -> None:
     resume_idx = login_body.index("render_public_auth_session_resume_bridge()")
     form_idx = login_body.index('with st.form("unified_login"')
     assert marker_idx < clear_idx < resume_idx < form_idx
+
+    landing_start = source.index("def render_landing_page")
+    landing_end = source.index("LOGIN_SUBMIT_MASK_ID", landing_start)
+    landing_body = source[landing_start:landing_end]
+    assert "render_public_auth_session_resume_bridge()" in landing_body
 
 
 def test_streamlit_theme_and_visual_tokens_are_high_contrast() -> None:
@@ -433,15 +448,19 @@ def test_login_stays_in_current_streamlit_session() -> None:
 def test_logout_routes_every_window_to_landing() -> None:
     source = read_app()
     assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
+    assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "restoreAuthAndGoDashboard" in source
     assert "event.key === storageKey && event.newValue" in source
     assert "storage.setItem(logoutKey, String(Date.now()))" in source
-    assert "landing_redirect_url_js(include_logout_marker=True)" in source
+    assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
+    assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
+    assert 'url.searchParams.set("es_signed_out", "1");' in source
     assert 'url.searchParams.set("es_page", "Landing")' in source
+    assert "if (loc.href === nextUrl) loc.reload();" in source
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)
@@ -451,6 +470,15 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "logout()" in app_body
     assert app_body.index('if query_get("es_logout") == "1":') < app_body.index("restore_session_from_cookie()")
     assert app_body.index("restore_session_from_cookie()") < app_body.index("sync_browser_session_cookie()")
+
+    logout_start = source.index("def logout()")
+    logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
+    logout_body = source[logout_start:logout_end]
+    assert "LOGOUT_DONE_QUERY_PARAM" in logout_body
+    assert 'query_set("es_page", "Landing")' in logout_body
+    assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in logout_body
+    assert "render_logout_bridge()" in logout_body
+    assert 'render_auth_transition_shell("Signing out...")' in logout_body
 
 
 def test_reload_session_restore_uses_cookie_not_url_only() -> None:
@@ -485,7 +513,10 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert "def browser_cookie_domain_js_function()" in source
     assert "cookieDomainAttribute" in source
     assert 'url.searchParams.set("es_restore", token)' not in source
-    assert 'url.searchParams.set("es_session", token)' not in source
+    bootstrap_restore_start = source.index("def render_browser_session_bootstrap")
+    bootstrap_restore_end = source.index("def auth_bootstrap_pending", bootstrap_restore_start)
+    bootstrap_restore_body = source[bootstrap_restore_start:bootstrap_restore_end]
+    assert 'url.searchParams.set("es_session", token)' in bootstrap_restore_body
     assert 'targetDoc.cookie = name + "=" + encodeURIComponent(value)' in source
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
     assert 'const token = cookieToken || storageToken;' in source
@@ -502,13 +533,16 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert '"auth_unknown_landing_fallback"' in auth_unknown_body
     assert '"auth_unknown_editor_restore"' in auth_unknown_body
     assert "Opening editor..." in auth_unknown_body
-    assert "es-editor-auth-resolver" in auth_unknown_body
+    assert "render_auth_transition_shell(\"Opening editor...\")" in auth_unknown_body
+    assert "es-editor-auth-resolver" not in auth_unknown_body
     assert "def render_editor_auth_restore_failed" in source
     assert "Your main CogniSweep session was not cleared." in source
     assert "editor_route_target_requested(route)" in source
     assert "render_editor_auth_restore_failed(route)" in source
-    assert "render_login()" in auth_unknown_body
-    assert "render_landing_page(\"auth_unknown_landing_fallback\")" in auth_unknown_body
+    assert "render_login()" not in auth_unknown_body
+    assert "render_landing_page(\"auth_unknown_landing_fallback\")" not in auth_unknown_body
+    assert "render_auth_transition_shell(\"Opening your workspace...\")" in auth_unknown_body
+    assert "render_auth_transition_shell(\"Opening CogniSweep...\")" in auth_unknown_body
     editor_restore_idx = auth_unknown_body.index('"auth_unknown_editor_restore"')
     login_fallback_idx = auth_unknown_body.index('"auth_unknown_login_fallback"')
     assert editor_restore_idx < login_fallback_idx
@@ -642,7 +676,7 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
 
 def test_login_session_persists_until_explicit_logout() -> None:
     source = read_app()
-    assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified")' in source
+    assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")' in source
     assert "SESSION_COOKIE_MAX_BYTES = 3800" in source
     assert "def compact_session_user_payload" in source
 
@@ -682,8 +716,10 @@ def test_login_session_persists_until_explicit_logout() -> None:
     assert 'st.session_state["_clear_session_cookie"] = True' in logout_body
     assert 'query_clear(key)' in logout_body
     assert 'query_set("es_page", "Landing")' in logout_body
+    assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in logout_body
     assert "render_logout_bridge()" in logout_body
-    assert 'render_landing_page("logout")' in logout_body
+    assert 'render_auth_transition_shell("Signing out...")' in logout_body
+    assert 'render_landing_page("logout")' not in logout_body
     assert "st.rerun()" not in logout_body
 
 
@@ -852,7 +888,7 @@ def test_media_editor_uses_reference_template() -> None:
     assert 'assets" / "media_editor_reference.html' in shell_body
     assert "html.replace(\"__MEDIA_EDITOR_PAYLOAD__\"" in shell_body
     assert "media_preview_component_payload(media_source, media_type, media_name or file_name)" in shell_body
-    assert "build_editor_language_resources(workspace_rules())" in shell_body
+    assert "build_editor_language_resources(workspace_rules(), component_rows, metadata)" in shell_body
     assert 'id="media-editor-page-marker"' in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content" in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" not in shell_body
@@ -1112,7 +1148,7 @@ if __name__ == "__main__":
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()
-    test_editor_links_seed_browser_session_before_new_tab()
+    test_editor_links_seed_browser_session_before_same_tab_editor_open()
     test_human_review_editor_uses_es_page_review_id_route()
     test_cat_editor_uses_real_logo_and_route_back_button()
     test_cat_editor_has_mobile_working_layout()
