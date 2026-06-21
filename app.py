@@ -6290,68 +6290,54 @@ def render_logout_bridge() -> None:
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     domain_js = browser_cookie_domain_js_function()
-    components.html(
-        f"""
-        <script>
+    logout_runtime = f"""
         (function() {{
           try {{
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
-            const candidateWindows = [window.parent, window.top, window];
 {domain_js}
-            const firstWindow = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.location) return candidate;
-                }} catch (err) {{}}
-              }}
-              return window;
-            }};
-            const firstDocument = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.document) return candidate.document;
-                }} catch (err) {{}}
-              }}
-              return document;
-            }};
-            const firstStorage = () => {{
-              for (const candidate of candidateWindows) {{
-                try {{
-                  if (candidate && candidate.localStorage) return candidate.localStorage;
-                }} catch (err) {{}}
-              }}
-              try {{ return window.localStorage; }} catch (err) {{}}
-              return null;
-            }};
-            try {{
-              const loc = firstWindow().location;
+            const clearBrowserAuth = () => {{
+              const loc = window.location;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
-              const targetDoc = firstDocument();
-              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
-              targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
-            }} catch (err) {{}}
-            try {{
-              const storage = firstStorage();
-              if (storage) {{
-                storage.removeItem(storageKey);
-                storage.removeItem(routeStorageKey);
-                storage.setItem(logoutKey, String(Date.now()));
-              }}
-            }} catch (err) {{}}
-            const loc = firstWindow().location;
-            {landing_redirect_url_js(include_signed_out_marker=True)}
-            const nextUrl = url.toString();
-            if (loc.href === nextUrl) loc.reload();
-            else loc.replace(nextUrl);
+              try {{
+                document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+                document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+              }} catch (err) {{}}
+              try {{
+                const storage = window.localStorage;
+                if (storage) {{
+                  storage.removeItem(storageKey);
+                  storage.removeItem(routeStorageKey);
+                  storage.setItem(logoutKey, String(Date.now()));
+                }}
+              }} catch (err) {{}}
+              try {{
+                const scoped = window.sessionStorage;
+                if (scoped) {{
+                  scoped.removeItem(storageKey + "_bootstrap_attempted");
+                  scoped.removeItem(storageKey + "_bootstrap_attempts");
+                  scoped.removeItem(storageKey + "_bootstrap_token");
+                  scoped.removeItem(storageKey + "_public_resume_attempts");
+                  scoped.removeItem(storageKey + "_public_resume_token");
+                }}
+              }} catch (err) {{}}
+            }};
+            const goLanding = () => {{
+              clearBrowserAuth();
+              const loc = window.location;
+              {landing_redirect_url_js(include_signed_out_marker=True)}
+              const nextUrl = url.toString();
+              if (loc.href === nextUrl) loc.reload();
+              else loc.replace(nextUrl);
+            }};
+            goLanding();
+            [150, 500, 1200].forEach((delay) => window.setTimeout(goLanding, delay));
           }} catch (err) {{}}
         }})();
-        </script>
-        """,
-        height=0,
-    )
+    """
+    render_parent_script(logout_runtime, height=1, scrolling=False)
 
 
 def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dict[str, str]:
@@ -6372,7 +6358,7 @@ def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dic
         return fallback
     if route == "human_review_editor" or is_human_review_editor_page(page):
         review_id = safe_text(flat.get("review_id"))
-        return route_query_for_page("Human Review Editor", {"review_id": review_id}) if review_id else fallback
+        return {"es_editor": "human_review", "review_id": review_id} if review_id else fallback
     if flat.get("es_editor"):
         editor_params = {key: value for key, value in flat.items() if key in ROUTE_STORAGE_PARAM_KEYS and safe_text(value)}
         return editor_params or fallback
@@ -7630,7 +7616,8 @@ def render_app_navigation_bridge() -> None:
 
 
 def human_review_editor_link(review_id: str) -> str:
-    return app_page_link("Human Review Editor", {"review_id": review_id})
+    review_id = safe_text(review_id)
+    return "?" + urlencode({"es_editor": "human_review", "review_id": review_id}) if review_id else app_page_link("Human Review Editor")
 
 
 def task_monitor_link(task_id: str) -> str:
@@ -7714,6 +7701,9 @@ def protected_query_params_from_route(route: Dict[str, Any]) -> Dict[str, str]:
         for key in ROUTE_STORAGE_PARAM_KEYS
         if safe_text(route.get(key))
     }
+    if params.get("es_editor") == "human_review" and params.get("review_id"):
+        params.pop("es_page", None)
+        return params
     page = normalize_es_page(params.get("es_page") or route.get("page") or "Dashboard")
     if not page or public_route_for_es_page(page):
         page = "Dashboard"
@@ -7732,7 +7722,7 @@ def browser_route_storage_params(params: Optional[Dict[str, Any]] = None) -> Dic
         value = safe_text(params.get(key) or query_get(key))
         if value:
             stored[key] = value
-    if stored.get("es_page") or (stored.get("es_editor") and stored.get("job_id")):
+    if stored.get("es_page") or (stored.get("es_editor") and (stored.get("job_id") or stored.get("review_id"))):
         return stored
     return {}
 
@@ -8109,8 +8099,8 @@ def apply_return_to(return_to: str) -> bool:
             set_route_query({"es_page": "Human Review Editor"})
             return True
         st.session_state["active_review_session_id"] = review_id
-        st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor", "review_id": review_id}
-        set_route_query({"es_page": "Human Review Editor", "review_id": review_id})
+        st.session_state["current_route"] = {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
+        set_route_query({"es_editor": "human_review", "review_id": review_id})
         return True
     if route in ROUTE_PAGE_ALIASES and ROUTE_PAGE_ALIASES[route]:
         page = normalize_es_page(ROUTE_PAGE_ALIASES[route])
@@ -8122,8 +8112,8 @@ def apply_return_to(return_to: str) -> bool:
     if flat.get("es_editor") == "human_review" and flat.get("review_id"):
         review_id = safe_text(flat.get("review_id"))
         st.session_state["active_review_session_id"] = review_id
-        st.session_state["current_route"] = {"page": "Human Review Editor", "es_page": "Human Review Editor", "review_id": review_id}
-        set_route_query({"es_page": "Human Review Editor", "review_id": review_id})
+        st.session_state["current_route"] = {"route": "human_review_editor", "es_editor": "human_review", "review_id": review_id}
+        set_route_query({"es_editor": "human_review", "review_id": review_id})
         return True
     if flat.get("es_editor") and flat.get("job_id"):
         for key, value in flat.items():
@@ -17561,6 +17551,34 @@ def render_last_media_editor_link() -> None:
     render_external_editor_link(label, "media", job_id)
 
 
+def render_editor_back_navigation_bridge(back_url: str) -> None:
+    """Let isolated editor iframes ask the parent app shell to navigate back."""
+    back_url_json = json.dumps(safe_text(back_url) or app_page_link("Dashboard"))
+    render_parent_script(
+        f"""
+        (() => {{
+          window.__errorsweepEditorBackUrl = {back_url_json};
+          if (window.__errorsweepEditorBackBridgeInstalled) return;
+          window.__errorsweepEditorBackBridgeInstalled = true;
+          window.addEventListener("message", (event) => {{
+            const data = event && event.data ? event.data : {{}};
+            if (!data || data.type !== "errorsweep-editor-back") return;
+            const rawTarget = String(data.url || window.__errorsweepEditorBackUrl || "?es_page=Dashboard");
+            try {{
+              const targetUrl = new URL(rawTarget, window.location.href);
+              ["es_editor", "job_id", "review_id", "es_launch", "es_editor_auth_failed"].forEach((key) => targetUrl.searchParams.delete(key));
+              window.location.assign(targetUrl.toString());
+            }} catch (err) {{
+              window.location.assign(rawTarget || "?es_page=Dashboard");
+            }}
+          }}, false);
+        }})();
+        """,
+        height=1,
+        scrolling=False,
+    )
+
+
 def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
     if not job_id:
         return None
@@ -17819,7 +17837,8 @@ def render_reference_cat_editor_shell(
             f'<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>',
             1,
         )
-    html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(editor_back_link("CogniSweep Pro")))
+    back_url = editor_back_link("CogniSweep Pro")
+    html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(back_url))
     component_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(editor_rows):
         findings = qa_by_idx.get(idx, [])
@@ -18031,6 +18050,7 @@ def render_reference_cat_editor_shell(
         """,
         unsafe_allow_html=True,
     )
+    render_editor_back_navigation_bridge(back_url)
     components.html(html, height=1, scrolling=False)
 
 
@@ -18318,10 +18338,11 @@ def render_reference_media_editor_shell(
 
     file_name = safe_text(metadata.get("file_name") or media_name or "media_editor") or "media_editor"
     file_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", file_name).strip("_") or "errorsweep_media_editor"
+    back_url = editor_back_link("Subtitle / Transcription Editor")
     payload = {
         "job_id": safe_text(job_id),
         "file_slug": file_slug,
-        "back_url": editor_back_link("Subtitle / Transcription Editor"),
+        "back_url": back_url,
         "metadata": {
             "title": safe_text(metadata.get("title") or "CogniSweep Media Editor") or "CogniSweep Media Editor",
             "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
@@ -18469,6 +18490,7 @@ def render_reference_media_editor_shell(
         """,
         unsafe_allow_html=True,
     )
+    render_editor_back_navigation_bridge(back_url)
     components.html(html, height=1, scrolling=False)
 
 

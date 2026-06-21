@@ -239,7 +239,9 @@ def test_human_review_editor_uses_es_page_review_id_route() -> None:
     source = read_app()
     assert "def navigate_to_human_review_editor(review_id: str = \"\")" in source
     assert "navigate_es_page(\"Human Review Editor\", review_id=review_id)" in source
-    assert "set_route_query({\"es_page\": \"Human Review Editor\", \"review_id\": review_id})" in source
+    assert 'return "?" + urlencode({"es_editor": "human_review", "review_id": review_id})' in source
+    assert "if params.get(\"es_editor\") == \"human_review\" and params.get(\"review_id\"):" in source
+    assert "(stored.get(\"job_id\") or stored.get(\"review_id\"))" in source
     assert "set_route_query({\"route\": \"human_review_editor\"" not in source
     assert "route.get(\"route\") == \"human_review_editor\"" in source
     assert "requested_page in HUMAN_REVIEW_EDITOR_PAGES" in source
@@ -257,10 +259,14 @@ def test_cat_editor_uses_real_logo_and_route_back_button() -> None:
     assert ".logo img" in html
     assert 'class="btn btn-ghost back-btn"' in html
     assert "const backUrl = __CAT_EDITOR_BACK_URL__;" in html
-    assert "anchor.target = '_top'" in html
+    assert "window.parent.postMessage({ type: 'errorsweep-editor-back', url: target }, '*')" in html
+    assert "def render_editor_back_navigation_bridge(back_url: str) -> None:" in source
+    assert 'data.type !== "errorsweep-editor-back"' in source
     assert "def editor_back_link(page: str, extra: Optional[Dict[str, str]] = None) -> str:" in source
     assert "params[SESSION_HANDOFF_QUERY_PARAM] = signed_session_token_for_user(user)" in source
-    assert "html = html.replace(\"__CAT_EDITOR_BACK_URL__\", json.dumps(editor_back_link(\"CogniSweep Pro\")))" in body
+    assert 'back_url = editor_back_link("CogniSweep Pro")' in body
+    assert "html = html.replace(\"__CAT_EDITOR_BACK_URL__\", json.dumps(back_url))" in body
+    assert "render_editor_back_navigation_bridge(back_url)" in body
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in body
 
 
@@ -884,7 +890,9 @@ def test_media_editor_uses_reference_template() -> None:
     shell_body = source[shell_start:shell_end]
     assert 'assets" / "media_editor_reference.html' in shell_body
     assert "html.replace(\"__MEDIA_EDITOR_PAYLOAD__\"" in shell_body
-    assert '"back_url": editor_back_link("Subtitle / Transcription Editor")' in shell_body
+    assert 'back_url = editor_back_link("Subtitle / Transcription Editor")' in shell_body
+    assert '"back_url": back_url' in shell_body
+    assert "render_editor_back_navigation_bridge(back_url)" in shell_body
     assert "media_preview_component_payload(media_source, media_type, media_name or file_name)" in shell_body
     assert "build_editor_language_resources(workspace_rules(), component_rows, metadata)" in shell_body
     assert 'id="media-editor-page-marker"' in shell_body

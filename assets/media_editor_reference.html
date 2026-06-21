@@ -2033,18 +2033,22 @@
       el("backBtn").addEventListener("click", () => {
         const target = safe(payload.back_url) || "?es_page=Subtitle+%2F+Transcription+Editor&es_app_nav=1";
         try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: "errorsweep-editor-back", url: target }, "*");
+            return;
+          }
+        } catch (error) {
+          // Fall through to same-window navigation below.
+        }
+        try {
+          window.location.assign(target);
+        } catch (fallbackError) {
           const anchor = document.createElement("a");
           anchor.href = target;
-          anchor.target = "_top";
+          anchor.target = "_self";
           document.body.appendChild(anchor);
           anchor.click();
           anchor.remove();
-        } catch (error) {
-          try {
-            window.top.location.assign(target);
-          } catch (fallbackError) {
-            window.location.assign(target);
-          }
         }
       });
       window.addEventListener("beforeunload", () => saveCurrentDraft("draft"));
