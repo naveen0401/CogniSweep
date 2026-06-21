@@ -466,15 +466,21 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
+    assert 'const listenerVersion = "logout-sync-v3-2026-06-22";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "restoreAuthAndGoDashboard" in source
     assert "event.key === storageKey && event.newValue" in source
     assert "const checkLogoutMarker = () =>" in source
+    assert "const sessionValue = currentSessionValue();" in source
+    assert "if (sawSessionToken) clearAuthAndGoLanding();" in source
     assert "window.setInterval(checkLogoutMarker, 1200)" in source
     assert "render_parent_script(logout_runtime, height=0)" in source
     assert "storage.removeItem(logoutKey);" in source
-    assert "storage.setItem(logoutKey, String(Date.now()))" in source
+    assert 'new BroadcastChannel(logoutKey)' in source
+    assert 'channel.postMessage({type: "logout", value: logoutMarker});' in source
+    assert "const logoutMarker = String(Date.now()) +" in source
+    assert "storage.setItem(logoutKey, logoutMarker)" in source
     assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
     assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
@@ -729,6 +735,7 @@ def test_login_session_persists_until_explicit_logout() -> None:
     assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in sync_body
     assert "max_age = SESSION_PERSISTENCE_SECONDS if token else 0" in sync_body
     assert "storage.removeItem(storageKey)" in sync_body
+    assert "storage.removeItem(logoutKey)" not in sync_body
 
     logout_start = source.index("def logout")
     logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)

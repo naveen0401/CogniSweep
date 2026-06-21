@@ -5765,7 +5765,6 @@ def sync_browser_session_cookie() -> None:
     name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
-    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
     domain_js = browser_cookie_domain_js_function()
     sync_component_session_cookie(token, clear_cookie=clear_cookie)
@@ -5776,7 +5775,6 @@ def sync_browser_session_cookie() -> None:
           const name = {name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
-          const logoutKey = {logout_key_json};
           const value = {token_json};
           const candidateWindows = [window.parent, window.top, window];
           const firstWindow = () => {{
@@ -5822,7 +5820,6 @@ def sync_browser_session_cookie() -> None:
             const storage = firstStorage();
             if (!storage) return;
             if (value) {{
-              storage.removeItem(logoutKey);
               storage.setItem(storageKey, value);
             }}
             else {{
@@ -6213,8 +6210,15 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          if (window.__errorsweepGlobalLogoutListener) return;
-          window.__errorsweepGlobalLogoutListener = true;
+          const listenerVersion = "logout-sync-v3-2026-06-22";
+          const previousListener = window.__errorsweepGlobalLogoutListener;
+          if (previousListener && previousListener.version === listenerVersion) return;
+          if (previousListener && typeof previousListener.dispose === "function") {{
+            try {{ previousListener.dispose(); }} catch (err) {{}}
+          }}
+          const cleanup = [];
+          const intervals = [];
+          let broadcastChannel = null;
           const cookieName = {cookie_name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
@@ -6246,6 +6250,13 @@ def render_global_logout_listener() -> None:
             try {{ return window.localStorage; }} catch (err) {{}}
             return null;
           }};
+          const currentSessionValue = () => {{
+            try {{
+              const storage = firstStorage();
+              return storage ? String(storage.getItem(storageKey) || "") : "";
+            }} catch (err) {{}}
+            return "";
+          }};
           const currentLogoutValue = () => {{
             try {{
               const storage = firstStorage();
@@ -6254,6 +6265,7 @@ def render_global_logout_listener() -> None:
             return "";
           }};
           let seenLogoutValue = currentLogoutValue();
+          let sawSessionToken = !!currentSessionValue();
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
           const currentPublicEntryUrl = (url) => {{
@@ -6310,9 +6322,17 @@ def render_global_logout_listener() -> None:
           }};
           const checkLogoutMarker = () => {{
             const value = currentLogoutValue();
-            if (!value || value === seenLogoutValue) return;
-            seenLogoutValue = value;
-            clearAuthAndGoLanding();
+            if (value && value !== seenLogoutValue) {{
+              seenLogoutValue = value;
+              clearAuthAndGoLanding();
+              return;
+            }}
+            const sessionValue = currentSessionValue();
+            if (sessionValue) {{
+              sawSessionToken = true;
+              return;
+            }}
+            if (sawSessionToken) clearAuthAndGoLanding();
           }};
           const handleStorageEvent = (event) => {{
             if (event.key === logoutKey && event.newValue) {{
@@ -6322,17 +6342,41 @@ def render_global_logout_listener() -> None:
             if (event.key === storageKey && event.newValue) restoreAuthAndGoDashboard(event.newValue);
           }};
           window.addEventListener("storage", handleStorageEvent);
+          cleanup.push(() => window.removeEventListener("storage", handleStorageEvent));
           const hostWindow = firstWindow();
           if (hostWindow !== window) {{
-            try {{ hostWindow.addEventListener("storage", handleStorageEvent); }} catch (err) {{}}
+            try {{
+              hostWindow.addEventListener("storage", handleStorageEvent);
+              cleanup.push(() => hostWindow.removeEventListener("storage", handleStorageEvent));
+            }} catch (err) {{}}
           }}
-          window.setInterval(checkLogoutMarker, 1200);
+          intervals.push(window.setInterval(checkLogoutMarker, 1200));
           if (hostWindow !== window) {{
-            try {{ hostWindow.setInterval(checkLogoutMarker, 1200); }} catch (err) {{}}
+            try {{ intervals.push(hostWindow.setInterval(checkLogoutMarker, 1200)); }} catch (err) {{}}
           }}
           try {{
-            firstDocument().addEventListener("visibilitychange", checkLogoutMarker);
+            const targetDoc = firstDocument();
+            targetDoc.addEventListener("visibilitychange", checkLogoutMarker);
+            cleanup.push(() => targetDoc.removeEventListener("visibilitychange", checkLogoutMarker));
           }} catch (err) {{}}
+          try {{
+            if ("BroadcastChannel" in window) {{
+              broadcastChannel = new BroadcastChannel(logoutKey);
+              broadcastChannel.onmessage = (event) => {{
+                const value = event && event.data ? String(event.data.value || event.data || "") : String(Date.now());
+                seenLogoutValue = value;
+                clearAuthAndGoLanding();
+              }};
+            }}
+          }} catch (err) {{}}
+          window.__errorsweepGlobalLogoutListener = {{
+            version: listenerVersion,
+            dispose: () => {{
+              cleanup.forEach((fn) => {{ try {{ fn(); }} catch (err) {{}} }});
+              intervals.forEach((id) => {{ try {{ window.clearInterval(id); hostWindow.clearInterval(id); }} catch (err) {{}} }});
+              try {{ if (broadcastChannel) broadcastChannel.close(); }} catch (err) {{}}
+            }},
+          }};
         }})();
         """.strip()
     render_parent_script(logout_runtime, height=0)
@@ -6355,6 +6399,7 @@ def render_logout_bridge() -> None:
             const clearBrowserAuth = () => {{
               const loc = window.location;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
+              const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
               try {{
                 document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
                 document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
@@ -6364,7 +6409,14 @@ def render_logout_bridge() -> None:
                 if (storage) {{
                   storage.removeItem(storageKey);
                   storage.removeItem(routeStorageKey);
-                  storage.setItem(logoutKey, String(Date.now()));
+                  storage.setItem(logoutKey, logoutMarker);
+                }}
+              }} catch (err) {{}}
+              try {{
+                if ("BroadcastChannel" in window) {{
+                  const channel = new BroadcastChannel(logoutKey);
+                  channel.postMessage({{type: "logout", value: logoutMarker}});
+                  channel.close();
                 }}
               }} catch (err) {{}}
               try {{
