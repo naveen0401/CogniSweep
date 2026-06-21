@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v5-preserve-query-session-2026-06-22"
+DEPLOY_BUILD_ID = "auth-handoff-v6-smooth-session-transitions-2026-06-22"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -5542,6 +5542,49 @@ def render_auth_debug_panel(route: Optional[Dict[str, Any]] = None, route_decisi
     })
 
 
+def render_auth_transition_shell(message: str = "Opening your workspace...") -> None:
+    st.markdown(
+        dedent(f"""
+        <style>
+        [data-testid="stHeader"], footer {{
+          display: none !important;
+        }}
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        .stApp {{
+          background:
+            radial-gradient(circle at 12% 14%, rgba(17,245,181,.18), transparent 32%),
+            radial-gradient(circle at 88% 10%, rgba(76,201,255,.16), transparent 30%),
+            #050713 !important;
+        }}
+        .block-container {{
+          max-width: none !important;
+          padding: 0 !important;
+          margin: 0 !important;
+        }}
+        .es-auth-transition-shell {{
+          min-height: 100dvh;
+          display: grid;
+          place-items: center;
+          color: #f8fbff;
+          font: 800 16px Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        .es-auth-transition-shell__card {{
+          border: 1px solid rgba(104,137,230,.42);
+          border-radius: 12px;
+          background: rgba(18,24,48,.94);
+          box-shadow: 0 24px 68px rgba(0,0,0,.36), inset 0 1px 0 rgba(255,255,255,.08);
+          padding: 18px 22px;
+        }}
+        </style>
+        <div class="es-auth-transition-shell" role="status" aria-live="polite">
+          <div class="es-auth-transition-shell__card">{escape(message)}</div>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+
 def runtime_commit_hint() -> str:
     for key in ("STREAMLIT_GIT_COMMIT", "GIT_COMMIT", "SOURCE_COMMIT", "COMMIT_SHA", "RENDER_GIT_COMMIT"):
         value = safe_text(os.getenv(key))
@@ -6023,48 +6066,17 @@ def render_auth_unknown_state(route: Optional[Dict[str, Any]] = None) -> None:
     )
     if protected_fallback:
         st.session_state["auth_return_to"] = encode_return_to()
-        if (
-            safe_text(route.get("es_editor") or query_get("es_editor"))
-            or safe_text(route.get("job_id") or query_get("job_id"))
-            or safe_text(route.get("review_id") or query_get("review_id"))
-        ):
+        if editor_route_target_requested(route):
             render_auth_debug_panel(route, "auth_unknown_editor_restore")
-            st.markdown(
-                """
-                <style>
-                .es-editor-auth-resolver {
-                    min-height: 100dvh;
-                    display: grid;
-                    place-items: center;
-                    background:
-                        radial-gradient(circle at 0% 0%, rgba(17,245,181,.16), transparent 32%),
-                        radial-gradient(circle at 100% 0%, rgba(90,142,255,.16), transparent 34%),
-                        #080a12;
-                    color: #f8fbff;
-                }
-                .es-editor-auth-resolver__card {
-                    border: 1px solid rgba(148,163,184,.26);
-                    border-radius: 12px;
-                    background: rgba(18,24,48,.92);
-                    padding: 18px 22px;
-                    font-weight: 900;
-                    box-shadow: 0 20px 70px rgba(0,0,0,.38);
-                }
-                </style>
-                <div class="es-editor-auth-resolver">
-                    <div class="es-editor-auth-resolver__card">Opening editor...</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.stop()
-        login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
-        render_auth_debug_panel(login_route, "auth_unknown_login_fallback")
-        render_login()
+            render_auth_transition_shell("Opening editor...")
+        else:
+            login_route = {"route": "login", "public": "login", "page": "Login", "es_page": "Login"}
+            render_auth_debug_panel(login_route, "auth_unknown_login_fallback")
+            render_auth_transition_shell("Opening your workspace...")
     else:
         landing_route = {"route": "landing", "public": "landing", "page": "Landing", "es_page": "Landing"}
         render_auth_debug_panel(landing_route, "auth_unknown_landing_fallback")
-        render_landing_page("auth_unknown_landing_fallback")
+        render_auth_transition_shell("Opening CogniSweep...")
     st.stop()
 
 
@@ -6457,8 +6469,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
         handoff_token_found=True,
     )
     render_auth_debug_panel(target_route, "login_success_handoff")
-    st.markdown("### Opening your workspace...")
-    st.caption("Keeping your session active for reloads.")
+    render_auth_transition_shell("Opening your workspace...")
     st.markdown(
         f'<a href="{escape(target_url)}" target="_self">Continue to Dashboard</a>',
         unsafe_allow_html=True,
@@ -6525,7 +6536,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
           window.setTimeout(() => {{
             try {{ firstWindow().location.replace(targetUrl); }}
             catch (err) {{ window.location.href = targetUrl; }}
-          }}, 750);
+          }}, 180);
         }})();
         """.strip(),
         height=0,
@@ -6673,7 +6684,7 @@ def logout() -> None:
         query_clear(key)
     query_set("es_page", "Landing")
     render_logout_bridge()
-    render_landing_page("logout")
+    render_auth_transition_shell("Signing out...")
     st.stop()
 
 
@@ -20629,7 +20640,6 @@ def render_public_auth_session_resume_bridge() -> None:
           }};
 
           try {{
-            parentDoc.body.classList.add(maskClass);
             const storage = safeStorage();
             const resumeSessionStorage = safeSessionStorage();
             const cookieToken = readCookie();
@@ -20640,6 +20650,7 @@ def render_public_auth_session_resume_bridge() -> None:
               revealPublicAuthPage();
               return;
             }}
+            parentDoc.body.classList.add(maskClass);
             const attemptKey = storageKey + "_public_resume_attempts";
             const attemptTokenKey = storageKey + "_public_resume_token";
             const maxResumeAttempts = 2;
@@ -27454,6 +27465,8 @@ if __name__ == "__main__":
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
         for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
+            if stale == SESSION_HANDOFF_QUERY_PARAM and auth_state == AUTH_STATE_AUTHENTICATED and query_get(SESSION_HANDOFF_QUERY_PARAM) and not browser_session_cookie():
+                continue
             if stale in st.query_params:
                 del st.query_params[stale]
         route = {"route": route_public, "public": route_public, "page": page_name, "es_page": page_name}
