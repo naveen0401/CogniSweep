@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v11-cross-tab-login-logout-sync-2026-06-23"
+DEPLOY_BUILD_ID = "auth-handoff-v12-parent-tab-logout-sync-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -6495,7 +6495,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "auth-sync-v6-stable-markers-2026-06-23";
+          const listenerVersion = "auth-sync-v7-parent-tab-logout-2026-06-23";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6658,7 +6658,7 @@ def render_global_logout_listener() -> None:
             const loc = firstWindow().location;
             const currentUrl = new URL(loc.href);
             const sessionValue = currentSessionValue();
-            const alreadyPublicWithoutSession = !sessionValue && currentPublicEntryUrl(currentUrl);
+            const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && currentPublicEntryUrl(currentUrl);
             if (alreadyPublicWithoutSession) {{
               markHandled(handledLogoutKey, marker);
               return;

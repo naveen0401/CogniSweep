@@ -476,7 +476,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "auth-sync-v6-stable-markers-2026-06-23";' in source
+    assert 'const listenerVersion = "auth-sync-v7-parent-tab-logout-2026-06-23";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "handleLogoutValue" in source
@@ -489,6 +489,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "if (sawSessionToken) clearAuthAndGoLanding(currentLogoutValue());" in source
     assert "let seenLogoutValue = handledValue(handledLogoutKey);" in source
     assert "let seenLoginValue = handledValue(handledLoginKey);" in source
+    assert "const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && currentPublicEntryUrl(currentUrl);" in source
     assert "const firstSessionStorage = () =>" in source
     assert 'const handledLogoutKey = logoutKey + ":handled";' in source
     assert 'const handledLoginKey = loginKey + ":handled";' in source
