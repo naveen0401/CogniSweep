@@ -346,6 +346,10 @@ def test_public_pages_are_lifted_to_top_without_global_shell_changes() -> None:
     assert "gap: 0 !important;" in source
     assert "margin: 54px auto 0;" in source
     assert "margin: 100px auto 0;" not in source
+    assert ".es-lp-mega-shell" in source
+    assert "CogniSweep resources and use cases" in source
+    assert 'body:has(#errorsweep-landing-page-marker) .es-lp-hero-top' in source
+    assert "position: fixed !important;" in source
 
 
 def test_public_entry_routes_use_cookie_provider_not_restore_miss_gate() -> None:
@@ -498,16 +502,25 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "logout()" in app_body
     assert app_body.index('if query_get("es_logout") == "1":') < app_body.index("restore_session_from_cookie()")
     assert app_body.index("restore_session_from_cookie()") < app_body.index("sync_browser_session_cookie()")
+    assert app_body.index("sync_browser_session_cookie()") < app_body.index("render_pending_logout_cleanup()")
 
     logout_start = source.index("def logout()")
     logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
     logout_body = source[logout_start:logout_end]
     assert "record_session_logout(logout_user)" in logout_body
     assert "LOGOUT_DONE_QUERY_PARAM" in logout_body
+    assert "LOGOUT_BROWSER_CLEANUP_KEY" in logout_body
+    assert "LOGOUT_SKIP_RESTORE_KEY" in logout_body
     assert 'query_set("es_page", "Landing")' in logout_body
     assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in logout_body
-    assert "render_logout_bridge()" in logout_body
-    assert 'render_auth_transition_shell("Signing out...")' in logout_body
+    assert "render_logout_bridge()" not in logout_body
+    assert 'render_auth_transition_shell("Signing out...")' not in logout_body
+    assert "st.rerun()" in logout_body
+
+    cleanup_start = source.index("def render_pending_logout_cleanup")
+    cleanup_end = source.index("def login_launch_params", cleanup_start)
+    cleanup_body = source[cleanup_start:cleanup_end]
+    assert "render_logout_bridge(redirect_to_landing=False)" in cleanup_body
 
 
 def test_logout_revokes_stale_server_sessions() -> None:
@@ -794,13 +807,15 @@ def test_login_session_persists_until_explicit_logout() -> None:
     logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
     logout_body = source[logout_start:logout_end]
     assert 'st.session_state["_clear_session_cookie"] = True' in logout_body
+    assert "LOGOUT_BROWSER_CLEANUP_KEY" in logout_body
+    assert "LOGOUT_SKIP_RESTORE_KEY" in logout_body
     assert 'query_clear(key)' in logout_body
     assert 'query_set("es_page", "Landing")' in logout_body
     assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in logout_body
-    assert "render_logout_bridge()" in logout_body
-    assert 'render_auth_transition_shell("Signing out...")' in logout_body
+    assert "render_logout_bridge()" not in logout_body
+    assert 'render_auth_transition_shell("Signing out...")' not in logout_body
     assert 'render_landing_page("logout")' not in logout_body
-    assert "st.rerun()" not in logout_body
+    assert "st.rerun()" in logout_body
 
 
 def test_refresh_restores_last_authenticated_route() -> None:

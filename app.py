@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v9-server-logout-revocation-2026-06-22"
+DEPLOY_BUILD_ID = "auth-handoff-v10-logout-sync-landing-mega-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -424,6 +424,8 @@ AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
 LOGOUT_DONE_QUERY_PARAM = "es_signed_out"
+LOGOUT_BROWSER_CLEANUP_KEY = "_logout_browser_cleanup_pending"
+LOGOUT_SKIP_RESTORE_KEY = "_logout_skip_restore_once"
 BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
 BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
@@ -2152,6 +2154,103 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   max-width: 680px;
   margin: 20px auto 0;
   font-size: 18px;
+}
+
+.es-lp-mega {
+  padding: 28px 0 72px;
+}
+
+.es-lp-mega-shell {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr .95fr;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(124, 92, 255, .42);
+  border-radius: 28px;
+  background:
+    linear-gradient(90deg, rgba(248, 251, 255, .96), rgba(240, 247, 255, .96) 72%, rgba(229, 232, 255, .94));
+  color: #11162c;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, .24);
+}
+
+.es-lp-mega-col {
+  min-height: 430px;
+  padding: 26px 24px;
+  border-right: 1px solid rgba(39, 47, 83, .16);
+}
+
+.es-lp-mega-kicker {
+  color: rgba(17, 22, 44, .48);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.es-lp-mega-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.es-lp-mega-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #eef3ff;
+  color: #6d28ff;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.es-lp-mega-item h3 {
+  margin: 0;
+  color: #10152b;
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.es-lp-mega-item p {
+  margin: 8px 0 0;
+  color: rgba(17, 22, 44, .72);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.es-lp-mega-feature {
+  padding: 28px 26px;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(17,245,181,.22), transparent 34%),
+    linear-gradient(160deg, #eef2ff, #e9efff 62%, #e7e1ff);
+}
+
+.es-lp-mega-feature .es-lp-mega-kicker {
+  color: #6d28ff;
+}
+
+.es-lp-mega-feature h2 {
+  margin: 18px 0 12px;
+  color: #6d28ff;
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 950;
+}
+
+.es-lp-mega-feature p {
+  color: rgba(17, 22, 44, .72);
+  line-height: 1.45;
+}
+
+.es-lp-mega-feature .es-lp-btn {
+  width: fit-content;
+  margin-top: 20px;
+  background: linear-gradient(90deg, #6d28ff, #b000ff);
+  border-color: transparent;
+  color: #ffffff !important;
 }
 
 .es-lp-footer {
@@ -6364,6 +6463,7 @@ def render_global_logout_listener() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    signed_out_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
@@ -6380,6 +6480,7 @@ def render_global_logout_listener() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const signedOutParam = {signed_out_param_json};
           const candidateWindows = [window.parent, window.top, window];
 {domain_js}
           const firstWindow = () => {{
@@ -6473,6 +6574,12 @@ def render_global_logout_listener() -> None:
             }} catch (err) {{}}
             try {{
               const loc = firstWindow().location;
+              const currentUrl = new URL(loc.href);
+              const alreadySignedOutLanding = (
+                currentUrl.searchParams.get(signedOutParam) === "1"
+                && normalizedPage(currentUrl.searchParams.get("es_page")) === "landing"
+              );
+              if (alreadySignedOutLanding) return;
               {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
@@ -6540,11 +6647,12 @@ def render_global_logout_listener() -> None:
     render_parent_script(logout_runtime, height=0)
 
 
-def render_logout_bridge() -> None:
+def render_logout_bridge(redirect_to_landing: bool = True) -> None:
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    redirect_to_landing_json = json.dumps(bool(redirect_to_landing))
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
@@ -6553,6 +6661,7 @@ def render_logout_bridge() -> None:
             const storageKey = {storage_key_json};
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
+            const redirectToLanding = {redirect_to_landing_json};
             const candidateWindows = [window.parent, window.top, window];
 {domain_js}
             const firstWindow = () => {{
@@ -6619,6 +6728,7 @@ def render_logout_bridge() -> None:
             }};
             const goLanding = () => {{
               clearBrowserAuth();
+              if (!redirectToLanding) return;
               const loc = firstWindow().location;
               {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
@@ -6631,6 +6741,11 @@ def render_logout_bridge() -> None:
         }})();
     """
     render_parent_script(logout_runtime, height=1, scrolling=False)
+
+
+def render_pending_logout_cleanup() -> None:
+    if st.session_state.pop(LOGOUT_BROWSER_CLEANUP_KEY, False):
+        render_logout_bridge(redirect_to_landing=False)
 
 
 def login_launch_params(return_to: str, fallback_page: str = "Dashboard") -> Dict[str, str]:
@@ -6973,13 +7088,13 @@ def logout() -> None:
     st.session_state.pop("_session_query_fallback_attached", None)
     st.session_state.pop("_session_query_fallback_attach_attempts", None)
     st.session_state["_clear_session_cookie"] = True
-    for key in ("es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
+    st.session_state[LOGOUT_BROWSER_CLEANUP_KEY] = True
+    st.session_state[LOGOUT_SKIP_RESTORE_KEY] = True
+    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
         query_clear(key)
     query_set("es_page", "Landing")
     query_set(LOGOUT_DONE_QUERY_PARAM, "1")
-    render_logout_bridge()
-    render_auth_transition_shell("Signing out...")
-    st.stop()
+    st.rerun()
 
 
 # ==========================================================
@@ -20367,6 +20482,30 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           margin-top: 0 !important;
         }
 
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero {
+          padding-top: 118px !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
+          position: fixed !important;
+          inset: 0 0 auto 0 !important;
+          z-index: 2147482000 !important;
+          width: 100% !important;
+          max-width: none !important;
+          min-height: 96px !important;
+          margin: 0 !important;
+          padding: 18px clamp(18px, 8vw, 184px) !important;
+          border-bottom: 1px solid rgba(255,255,255,.12);
+          background:
+            linear-gradient(90deg, rgba(0,65,57,.95), rgba(7,11,25,.96) 48%, rgba(61,24,99,.95));
+          box-shadow: 0 18px 56px rgba(0,0,0,.32);
+          backdrop-filter: blur(18px);
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-content {
+          margin-top: 26px !important;
+        }
+
         body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
         body:has(#errorsweep-landing-page-marker) .block-container::-webkit-scrollbar {
           width: 11px;
@@ -20609,6 +20748,68 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
             </div>
           </section>
 
+          <section class="es-lp-mega" aria-label="CogniSweep resources and use cases">
+            <div class="es-lp-inner">
+              <div class="es-lp-mega-shell">
+                <div class="es-lp-mega-col">
+                  <div class="es-lp-mega-kicker">Teams</div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">PM</span>
+                    <div><h3>Project teams</h3><p>Keep client files, rules, jobs, invoices, and delivery status in one workspace.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">L10N</span>
+                    <div><h3>Localization teams</h3><p>Run QA, translation, review, and scorecard workflows without spreadsheet drift.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">REV</span>
+                    <div><h3>Reviewer teams</h3><p>Open focused editors with source, target, TM, glossary, DNT, and issue context.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">OPS</span>
+                    <div><h3>Operations teams</h3><p>Track access, audits, billing readiness, storage, email, and production checks.</p></div>
+                  </div>
+                </div>
+                <div class="es-lp-mega-col">
+                  <div class="es-lp-mega-kicker">Use cases</div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">QA</span>
+                    <div><h3>Localization QA</h3><p>Catch placeholders, numbers, terminology, DNT, length, and rule issues before delivery.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">MT</span>
+                    <div><h3>Machine translation</h3><p>Route through managed AI or self-hosted MT, then gate risky rows for human review.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">APP</span>
+                    <div><h3>App localization</h3><p>Translate product strings with rules, review thresholds, and clean exports.</p></div>
+                  </div>
+                </div>
+                <div class="es-lp-mega-col">
+                  <div class="es-lp-mega-kicker">Workflows</div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">HR</span>
+                    <div><h3>Human Review</h3><p>Approve rows in dedicated workspaces with assist panels and status tracking.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">SRT</span>
+                    <div><h3>Subtitle localization</h3><p>Edit timed rows, export SRT bundles, and preserve review controls.</p></div>
+                  </div>
+                  <div class="es-lp-mega-item">
+                    <span class="es-lp-mega-icon">CSV</span>
+                    <div><h3>Scorecards</h3><p>Compare translator and reviewer work with anonymized Excel-ready reports.</p></div>
+                  </div>
+                </div>
+                <aside class="es-lp-mega-feature">
+                  <div class="es-lp-mega-kicker">Featured</div>
+                  <h2>AI-powered localization operations without losing human control.</h2>
+                  <p>CogniSweep keeps automation, review evidence, and delivery readiness connected from upload to export.</p>
+                  <a class="es-lp-btn" href="{public_page_link('signup')}" target="_self">Start free trial</a>
+                </aside>
+              </div>
+            </div>
+          </section>
+
           <footer id="resources" class="es-lp-footer">
             <div class="es-lp-inner es-lp-footer-row">
               <span>Copyright 2026 CogniSweep. All rights reserved.</span>
@@ -20632,8 +20833,18 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           .es-lp-workflow, .es-lp-feature-grid { grid-template-columns: 1fr; }
           .es-lp-logo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
           .es-lp-stats, .es-lp-card-grid { grid-template-columns: 1fr; }
+          .es-lp-mega-shell { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .es-lp-mega-col:nth-child(2) { border-right: 0; }
+          .es-lp-mega-feature { grid-column: span 2; }
         }
         @media (max-width: 640px) {
+          body:has(#errorsweep-landing-page-marker) .es-lp-hero {
+            padding-top: 196px !important;
+          }
+          body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
+            min-height: 176px !important;
+            padding: 18px 20px !important;
+          }
           .es-lp-hero-top { flex-direction: column; align-items: flex-start; }
           .es-lp-actions { flex-direction: column; align-items: stretch; }
           .es-lp-btn { width: 100%; }
@@ -20644,6 +20855,13 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           .es-lp-findings, .es-lp-mini-grid, .es-lp-three { grid-template-columns: 1fr; }
           .es-lp-logo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .es-lp-cta { padding: 28px; }
+          .es-lp-mega-shell,
+          .es-lp-mega-feature { grid-template-columns: 1fr; grid-column: auto; }
+          .es-lp-mega-col {
+            min-height: auto;
+            border-right: 0;
+            border-bottom: 1px solid rgba(39, 47, 83, .16);
+          }
         }
         </style>
         """).strip(),
@@ -27929,11 +28147,22 @@ if __name__ == "__main__":
     if query_get("es_logout") == "1":
         logout()
 
-    restore_session_from_cookie()
+    skip_session_restore = bool(st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, False))
+    if skip_session_restore:
+        st.session_state.pop("_pending_session_cookie", None)
+        set_auth_debug_state(
+            bool(browser_session_cookie()),
+            False,
+            "logout_skip_restore_once",
+            handoff_token_found=bool(query_get(SESSION_HANDOFF_QUERY_PARAM)),
+        )
+    else:
+        restore_session_from_cookie()
     if st.session_state.get("authenticated") and st.session_state.get("user") and st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
         target_route = authenticated_shell_route_from_session()
         render_login_success_handoff(target_route)
     sync_browser_session_cookie()
+    render_pending_logout_cleanup()
 
     route = get_current_route()
     explicit_route_target = route_query_has_explicit_target()
