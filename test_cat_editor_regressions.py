@@ -417,8 +417,13 @@ def test_public_auth_pages_resume_saved_session_before_showing_form() -> None:
     assert "body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID}" in bridge_body
     assert "body.{AUTH_RESUME_MASK_CLASS} [data-testid=\"stAppViewContainer\"]" in bridge_body
     assert "const routeStorageKey" in bridge_body
+    assert "const logoutKey" in bridge_body
+    assert 'const handledLogoutKey = logoutKey + ":handled";' in bridge_body
     assert "const logoutDoneParam" in bridge_body
     assert "clearLogoutDoneParam();" in bridge_body
+    assert "const logoutValue = storage ? String(storage.getItem(logoutKey) || \"\") : \"\";" in bridge_body
+    assert "if (logoutValue || currentUrl.searchParams.get(logoutDoneParam) === \"1\")" in bridge_body
+    assert "markHandled(resumeSessionStorage, handledLogoutKey, logoutValue);" in bridge_body
     assert "currentUrl.searchParams.get(logoutDoneParam) === \"1\"" in bridge_body
     assert "targetFromReturnTo(url)" in bridge_body
     assert "targetFromSavedRoute(storage)" in bridge_body
@@ -468,31 +473,41 @@ def test_login_stays_in_current_streamlit_session() -> None:
 def test_logout_routes_every_window_to_landing() -> None:
     source = read_app()
     assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
+    assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "logout-sync-v5-server-revocation-2026-06-22";' in source
+    assert 'const listenerVersion = "auth-sync-v6-stable-markers-2026-06-23";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
+    assert "handleLogoutValue" in source
+    assert "handleLoginValue" in source
     assert "restoreAuthAndGoDashboard" in source
     assert "event.key === storageKey && event.newValue" in source
+    assert "event.key === loginKey && event.newValue" in source
     assert "const checkLogoutMarker = () =>" in source
     assert "const sessionValue = currentSessionValue();" in source
-    assert "if (sawSessionToken) clearAuthAndGoLanding();" in source
-    assert 'let seenLogoutValue = "";' in source
+    assert "if (sawSessionToken) clearAuthAndGoLanding(currentLogoutValue());" in source
+    assert "let seenLogoutValue = handledValue(handledLogoutKey);" in source
+    assert "let seenLoginValue = handledValue(handledLoginKey);" in source
+    assert "const firstSessionStorage = () =>" in source
+    assert 'const handledLogoutKey = logoutKey + ":handled";' in source
+    assert 'const handledLoginKey = loginKey + ":handled";' in source
     assert "checkLogoutMarker();" in source
     assert "window.setInterval(checkLogoutMarker, 1200)" in source
     assert "render_parent_script(logout_runtime, height=0)" in source
     assert "storage.removeItem(logoutKey);" in source
+    assert "storage.setItem(loginKey, loginMarker)" in source
     assert 'new BroadcastChannel(logoutKey)' in source
     assert 'channel.postMessage({{type: "logout", value: logoutMarker}});' in source
     assert "const logoutMarker = String(Date.now()) +" in source
     assert "storage.setItem(logoutKey, logoutMarker)" in source
+    assert "storage.removeItem(loginKey);" in source
     assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
     assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
     assert 'signed_out_marker_js = f\'url.searchParams.set("{LOGOUT_DONE_QUERY_PARAM}", "1");\'' in source
     assert 'url.searchParams.set("es_page", "Landing")' in source
-    assert "if (loc.href === nextUrl) loc.reload();" in source
+    assert "if (loc.href !== nextUrl) loc.replace(nextUrl);" in source
 
     app_start = source.index('if __name__ == "__main__"')
     app_end = source.index('render_router_debug_panel(decision="render_complete")', app_start)

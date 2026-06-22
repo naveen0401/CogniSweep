@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v10-logout-sync-landing-mega-2026-06-23"
+DEPLOY_BUILD_ID = "auth-handoff-v11-cross-tab-login-logout-sync-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -223,6 +223,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "direct_file_url_media_source",
     "browser_timezone_local_time_display",
     "server_side_logout_revocation",
+    "stable_cross_tab_login_logout_markers",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -423,6 +424,7 @@ AUTH_STATE_AUTHENTICATED = "authenticated"
 AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
 ROUTE_STORAGE_KEY = "errorsweep_route"
 LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
+LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"
 LOGOUT_DONE_QUERY_PARAM = "es_signed_out"
 LOGOUT_BROWSER_CLEANUP_KEY = "_logout_browser_cleanup_pending"
 LOGOUT_SKIP_RESTORE_KEY = "_logout_skip_restore_once"
@@ -2157,7 +2159,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 }
 
 .es-lp-mega {
-  padding: 28px 0 72px;
+  padding: 12px 0 72px;
 }
 
 .es-lp-mega-shell {
@@ -2165,23 +2167,22 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   grid-template-columns: 1fr 1fr 1fr .95fr;
   gap: 0;
   overflow: hidden;
-  border: 1px solid rgba(124, 92, 255, .42);
-  border-radius: 28px;
-  background:
-    linear-gradient(90deg, rgba(248, 251, 255, .96), rgba(240, 247, 255, .96) 72%, rgba(229, 232, 255, .94));
-  color: #11162c;
-  box-shadow: 0 24px 90px rgba(0, 0, 0, .24);
+  border: 1px solid rgba(170, 184, 214, .34);
+  border-radius: 22px;
+  background: #f7f9ff;
+  color: #15192f;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .20);
 }
 
 .es-lp-mega-col {
-  min-height: 430px;
-  padding: 26px 24px;
-  border-right: 1px solid rgba(39, 47, 83, .16);
+  min-height: 380px;
+  padding: 30px 28px;
+  border-right: 1px solid rgba(37, 48, 77, .12);
 }
 
 .es-lp-mega-kicker {
-  color: rgba(17, 22, 44, .48);
-  font-size: 11px;
+  color: rgba(21, 25, 47, .54);
+  font-size: 12px;
   font-weight: 900;
   line-height: 1.2;
   text-transform: uppercase;
@@ -2189,68 +2190,81 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-lp-mega-item {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 14px;
-  margin-top: 24px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 26px;
 }
 
 .es-lp-mega-icon {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   display: inline-grid;
   place-items: center;
-  border-radius: 8px;
+  border: 1px solid rgba(109, 40, 255, .16);
+  border-radius: 7px;
   background: #eef3ff;
-  color: #6d28ff;
-  font-size: 12px;
-  font-weight: 950;
+}
+
+.es-lp-mega-icon::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00c7a8, #6d28ff);
 }
 
 .es-lp-mega-item h3 {
   margin: 0;
-  color: #10152b;
-  font-size: 20px;
+  color: #15192f;
+  font-size: 18px;
   line-height: 1.2;
   font-weight: 900;
 }
 
 .es-lp-mega-item p {
   margin: 8px 0 0;
-  color: rgba(17, 22, 44, .72);
+  color: rgba(21, 25, 47, .68);
   font-size: 14px;
   line-height: 1.4;
 }
 
 .es-lp-mega-feature {
-  padding: 28px 26px;
-  background:
-    radial-gradient(circle at 88% 12%, rgba(17,245,181,.22), transparent 34%),
-    linear-gradient(160deg, #eef2ff, #e9efff 62%, #e7e1ff);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 30px 30px;
+  background: linear-gradient(160deg, #eef5ff, #f5f2ff);
 }
 
 .es-lp-mega-feature .es-lp-mega-kicker {
-  color: #6d28ff;
+  color: #5b21b6;
 }
 
 .es-lp-mega-feature h2 {
   margin: 18px 0 12px;
-  color: #6d28ff;
-  font-size: 30px;
-  line-height: 1.15;
+  color: #15192f;
+  font-size: 24px;
+  line-height: 1.18;
   font-weight: 950;
 }
 
 .es-lp-mega-feature p {
-  color: rgba(17, 22, 44, .72);
+  margin: 0;
+  color: rgba(21, 25, 47, .68);
   line-height: 1.45;
 }
 
 .es-lp-mega-feature .es-lp-btn {
   width: fit-content;
-  margin-top: 20px;
-  background: linear-gradient(90deg, #6d28ff, #b000ff);
+  min-height: 44px;
+  padding: 0 20px;
+  margin-top: 0;
+  background: linear-gradient(90deg, #5b21b6, #8b5cf6);
   border-color: transparent;
   color: #ffffff !important;
+  font-size: 15px;
 }
 
 .es-lp-footer {
@@ -6048,8 +6062,7 @@ def sync_browser_session_cookie() -> None:
               const loc = hostWindow.location;
               {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
               const nextUrl = url.toString();
-              if (loc.href === nextUrl) loc.reload();
-              else loc.replace(nextUrl);
+              if (loc.href !== nextUrl) loc.replace(nextUrl);
             }} catch (err) {{}}
             return;
           }}
@@ -6105,6 +6118,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     editor_auth_failed_param_json = json.dumps(EDITOR_AUTH_FAILED_QUERY_PARAM)
+    signed_out_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
     domain_js = browser_cookie_domain_js_function()
     bootstrap_runtime = f"""
@@ -6115,6 +6129,8 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const logoutKey = {logout_key_json};
             const routeParamKeys = {route_param_keys_json};
             const editorAuthFailedParam = {editor_auth_failed_param_json};
+            const signedOutParam = {signed_out_param_json};
+            const handledLogoutKey = logoutKey + ":handled";
             const publicEntryPages = new Set({public_entry_pages_json});
             const candidateWindows = [window.parent, window.top, window];
 {domain_js}
@@ -6222,12 +6238,23 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               }}
               loc.replace(url.toString());
             }};
+            const routeToSignedOutLanding = () => {{
+              Array.from(url.searchParams.keys()).forEach((key) => url.searchParams.delete(key));
+              url.searchParams.set("es_page", "Landing");
+              url.searchParams.set(signedOutParam, "1");
+              const nextUrl = url.toString();
+              if (loc.href !== nextUrl) loc.replace(nextUrl);
+            }};
             const cookieToken = readCookie(targetDoc);
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const logoutValue = localStorage ? String(localStorage.getItem(logoutKey) || "") : "";
             if (logoutValue) {{
               clearBrowserSessionToken("");
-              routeToAuthFallback();
+              try {{
+                if (sessionStorage) sessionStorage.setItem(handledLogoutKey, logoutValue);
+              }} catch (err) {{}}
+              if (publicEntry && !hasProtectedTarget) return;
+              routeToSignedOutLanding();
               return;
             }}
             const token = cookieToken || storageToken;
@@ -6463,11 +6490,12 @@ def render_global_logout_listener() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    login_key_json = json.dumps(LOGIN_BROADCAST_KEY)
     signed_out_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "logout-sync-v5-server-revocation-2026-06-22";
+          const listenerVersion = "auth-sync-v6-stable-markers-2026-06-23";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6480,6 +6508,9 @@ def render_global_logout_listener() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const loginKey = {login_key_json};
+          const handledLogoutKey = logoutKey + ":handled";
+          const handledLoginKey = loginKey + ":handled";
           const signedOutParam = {signed_out_param_json};
           const candidateWindows = [window.parent, window.top, window];
 {domain_js}
@@ -6508,6 +6539,15 @@ def render_global_logout_listener() -> None:
             try {{ return window.localStorage; }} catch (err) {{}}
             return null;
           }};
+          const firstSessionStorage = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.sessionStorage) return candidate.sessionStorage;
+              }} catch (err) {{}}
+            }}
+            try {{ return window.sessionStorage; }} catch (err) {{}}
+            return null;
+          }};
           const currentSessionValue = () => {{
             try {{
               const storage = firstStorage();
@@ -6522,7 +6562,29 @@ def render_global_logout_listener() -> None:
             }} catch (err) {{}}
             return "";
           }};
-          let seenLogoutValue = "";
+          const currentLoginValue = () => {{
+            try {{
+              const storage = firstStorage();
+              return storage ? String(storage.getItem(loginKey) || "") : "";
+            }} catch (err) {{}}
+            return "";
+          }};
+          const handledValue = (key) => {{
+            try {{
+              const storage = firstSessionStorage();
+              return storage ? String(storage.getItem(key) || "") : "";
+            }} catch (err) {{}}
+            return "";
+          }};
+          const markHandled = (key, value) => {{
+            if (!value) return;
+            try {{
+              const storage = firstSessionStorage();
+              if (storage) storage.setItem(key, String(value));
+            }} catch (err) {{}}
+          }};
+          let seenLogoutValue = handledValue(handledLogoutKey);
+          let seenLoginValue = handledValue(handledLoginKey);
           let sawSessionToken = !!currentSessionValue();
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
@@ -6557,7 +6619,8 @@ def render_global_logout_listener() -> None:
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
-          const clearAuthAndGoLanding = () => {{
+          const clearAuthAndGoLanding = (logoutValue) => {{
+            const marker = String(logoutValue || currentLogoutValue() || "");
             try {{
               const loc = firstWindow().location;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
@@ -6579,16 +6642,46 @@ def render_global_logout_listener() -> None:
                 currentUrl.searchParams.get(signedOutParam) === "1"
                 && normalizedPage(currentUrl.searchParams.get("es_page")) === "landing"
               );
-              if (alreadySignedOutLanding) return;
+              if (alreadySignedOutLanding) {{
+                markHandled(handledLogoutKey, marker);
+                return;
+              }}
+              markHandled(handledLogoutKey, marker);
               {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
+          const handleLogoutValue = (value) => {{
+            const marker = String(value || "");
+            if (!marker || marker === handledValue(handledLogoutKey)) return;
+            seenLogoutValue = marker;
+            const loc = firstWindow().location;
+            const currentUrl = new URL(loc.href);
+            const sessionValue = currentSessionValue();
+            const alreadyPublicWithoutSession = !sessionValue && currentPublicEntryUrl(currentUrl);
+            if (alreadyPublicWithoutSession) {{
+              markHandled(handledLogoutKey, marker);
+              return;
+            }}
+            clearAuthAndGoLanding(marker);
+          }};
+          const handleLoginValue = (value) => {{
+            const marker = String(value || "");
+            if (!marker || marker === handledValue(handledLoginKey)) return;
+            seenLoginValue = marker;
+            markHandled(handledLoginKey, marker);
+            const token = currentSessionValue();
+            if (token) restoreAuthAndGoDashboard(token);
+          }};
           const checkLogoutMarker = () => {{
             const value = currentLogoutValue();
-            if (value && value !== seenLogoutValue) {{
-              seenLogoutValue = value;
-              clearAuthAndGoLanding();
+            if (value && value !== seenLogoutValue && value !== handledValue(handledLogoutKey)) {{
+              handleLogoutValue(value);
+              return;
+            }}
+            const loginValue = currentLoginValue();
+            if (loginValue && loginValue !== seenLoginValue && loginValue !== handledValue(handledLoginKey)) {{
+              handleLoginValue(loginValue);
               return;
             }}
             const sessionValue = currentSessionValue();
@@ -6596,14 +6689,18 @@ def render_global_logout_listener() -> None:
               sawSessionToken = true;
               return;
             }}
-            if (sawSessionToken) clearAuthAndGoLanding();
+            if (sawSessionToken) clearAuthAndGoLanding(currentLogoutValue());
           }};
           const handleStorageEvent = (event) => {{
             if (event.key === logoutKey && event.newValue) {{
-              seenLogoutValue = String(event.newValue || "");
-              clearAuthAndGoLanding();
+              handleLogoutValue(event.newValue);
+              return;
             }}
-            if (event.key === storageKey && event.newValue) restoreAuthAndGoDashboard(event.newValue);
+            if (event.key === loginKey && event.newValue) {{
+              handleLoginValue(event.newValue);
+              return;
+            }}
+            if (event.key === storageKey && event.newValue && !currentLogoutValue()) restoreAuthAndGoDashboard(event.newValue);
           }};
           window.addEventListener("storage", handleStorageEvent);
           cleanup.push(() => window.removeEventListener("storage", handleStorageEvent));
@@ -6628,8 +6725,7 @@ def render_global_logout_listener() -> None:
               broadcastChannel = new BroadcastChannel(logoutKey);
               broadcastChannel.onmessage = (event) => {{
                 const value = event && event.data ? String(event.data.value || event.data || "") : String(Date.now());
-                seenLogoutValue = value;
-                clearAuthAndGoLanding();
+                handleLogoutValue(value);
               }};
             }}
           }} catch (err) {{}}
@@ -6652,6 +6748,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    login_key_json = json.dumps(LOGIN_BROADCAST_KEY)
     redirect_to_landing_json = json.dumps(bool(redirect_to_landing))
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
@@ -6661,7 +6758,11 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
             const storageKey = {storage_key_json};
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
+            const loginKey = {login_key_json};
             const redirectToLanding = {redirect_to_landing_json};
+            const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
+            const handledLogoutKey = logoutKey + ":handled";
+            const handledLoginKey = loginKey + ":handled";
             const candidateWindows = [window.parent, window.top, window];
 {domain_js}
             const firstWindow = () => {{
@@ -6693,7 +6794,6 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
               const hostWindow = firstWindow();
               const loc = hostWindow.location;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
-              const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
               try {{
                 const targetDoc = firstDocument();
                 targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
@@ -6704,6 +6804,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
                 if (storage) {{
                   storage.removeItem(storageKey);
                   storage.removeItem(routeStorageKey);
+                  storage.removeItem(loginKey);
                   storage.setItem(logoutKey, logoutMarker);
                 }}
               }} catch (err) {{}}
@@ -6718,6 +6819,8 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
               try {{
                 const scoped = firstStorage("sessionStorage");
                 if (scoped) {{
+                  scoped.setItem(handledLogoutKey, logoutMarker);
+                  scoped.removeItem(handledLoginKey);
                   scoped.removeItem(storageKey + "_bootstrap_attempted");
                   scoped.removeItem(storageKey + "_bootstrap_attempts");
                   scoped.removeItem(storageKey + "_bootstrap_token");
@@ -6732,8 +6835,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
               const loc = firstWindow().location;
               {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
-              if (loc.href === nextUrl) loc.reload();
-              else loc.replace(nextUrl);
+              if (loc.href !== nextUrl) loc.replace(nextUrl);
             }};
             goLanding();
             [150, 500, 1200].forEach((delay) => window.setTimeout(goLanding, delay));
@@ -6881,6 +6983,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    login_key_json = json.dumps(LOGIN_BROADCAST_KEY)
     token_json = json.dumps(token)
     target_url_json = json.dumps(target_url)
     domain_js = browser_cookie_domain_js_function()
@@ -6891,8 +6994,12 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const loginKey = {login_key_json};
           const token = {token_json};
           const targetUrl = {target_url_json};
+          const loginMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
+          const handledLogoutKey = logoutKey + ":handled";
+          const handledLoginKey = loginKey + ":handled";
           const candidateWindows = [window.parent, window.top, window];
 {domain_js}
           const firstWindow = () => {{
@@ -6920,6 +7027,15 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
             try {{ return window.localStorage; }} catch (err) {{}}
             return null;
           }};
+          const firstSessionStorage = () => {{
+            for (const candidate of candidateWindows) {{
+              try {{
+                if (candidate && candidate.sessionStorage) return candidate.sessionStorage;
+              }} catch (err) {{}}
+            }}
+            try {{ return window.sessionStorage; }} catch (err) {{}}
+            return null;
+          }};
           const persistSession = () => {{
             const hostWindow = firstWindow();
             const targetDoc = firstDocument();
@@ -6934,6 +7050,14 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
                 storage.removeItem(logoutKey);
                 storage.setItem(storageKey, token);
                 storage.setItem(routeStorageKey, JSON.stringify({{"es_page": "Dashboard"}}));
+                storage.setItem(loginKey, loginMarker);
+              }}
+            }} catch (err) {{}}
+            try {{
+              const scoped = firstSessionStorage();
+              if (scoped) {{
+                scoped.removeItem(handledLogoutKey);
+                scoped.setItem(handledLoginKey, loginMarker);
               }}
             }} catch (err) {{}}
           }};
@@ -20754,56 +20878,56 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                 <div class="es-lp-mega-col">
                   <div class="es-lp-mega-kicker">Teams</div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">PM</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Project teams</h3><p>Keep client files, rules, jobs, invoices, and delivery status in one workspace.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">L10N</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Localization teams</h3><p>Run QA, translation, review, and scorecard workflows without spreadsheet drift.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">REV</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Reviewer teams</h3><p>Open focused editors with source, target, TM, glossary, DNT, and issue context.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">OPS</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Operations teams</h3><p>Track access, audits, billing readiness, storage, email, and production checks.</p></div>
                   </div>
                 </div>
                 <div class="es-lp-mega-col">
                   <div class="es-lp-mega-kicker">Use cases</div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">QA</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Localization QA</h3><p>Catch placeholders, numbers, terminology, DNT, length, and rule issues before delivery.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">MT</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Machine translation</h3><p>Route through managed AI or self-hosted MT, then gate risky rows for human review.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">APP</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>App localization</h3><p>Translate product strings with rules, review thresholds, and clean exports.</p></div>
                   </div>
                 </div>
                 <div class="es-lp-mega-col">
                   <div class="es-lp-mega-kicker">Workflows</div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">HR</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Human Review</h3><p>Approve rows in dedicated workspaces with assist panels and status tracking.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">SRT</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Subtitle localization</h3><p>Edit timed rows, export SRT bundles, and preserve review controls.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
-                    <span class="es-lp-mega-icon">CSV</span>
+                    <span class="es-lp-mega-icon" aria-hidden="true"></span>
                     <div><h3>Scorecards</h3><p>Compare translator and reviewer work with anonymized Excel-ready reports.</p></div>
                   </div>
                 </div>
                 <aside class="es-lp-mega-feature">
                   <div class="es-lp-mega-kicker">Featured</div>
-                  <h2>AI-powered localization operations without losing human control.</h2>
-                  <p>CogniSweep keeps automation, review evidence, and delivery readiness connected from upload to export.</p>
+                  <h2>Automation, review evidence, and delivery readiness in one flow.</h2>
+                  <p>Move from upload to export with the same project context, quality signals, and approval trail.</p>
                   <a class="es-lp-btn" href="{public_page_link('signup')}" target="_self">Start free trial</a>
                 </aside>
               </div>
@@ -21063,6 +21187,7 @@ def render_public_auth_session_resume_bridge() -> None:
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     logout_done_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
     domain_js = browser_cookie_domain_js_function()
@@ -21122,8 +21247,10 @@ def render_public_auth_session_resume_bridge() -> None:
           const cookieName = {cookie_name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
+          const logoutKey = {logout_key_json};
           const routeParamKeys = {route_param_keys_json};
           const logoutDoneParam = {logout_done_param_json};
+          const handledLogoutKey = logoutKey + ":handled";
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
 {domain_js}
 
@@ -21162,6 +21289,11 @@ def render_public_auth_session_resume_bridge() -> None:
           const safeSessionStorage = () => {{
             try {{ return parentWin.sessionStorage || window.sessionStorage; }} catch (err) {{}}
             return null;
+          }};
+
+          const markHandled = (store, key, value) => {{
+            if (!store || !value) return;
+            try {{ store.setItem(key, String(value)); }} catch (err) {{}}
           }};
 
           const clearResumeState = (store) => {{
@@ -21243,8 +21375,10 @@ def render_public_auth_session_resume_bridge() -> None:
             const resumeSessionStorage = safeSessionStorage();
             const loc = parentWin.location;
             const currentUrl = new URL(loc.href);
-            if (currentUrl.searchParams.get(logoutDoneParam) === "1") {{
+            const logoutValue = storage ? String(storage.getItem(logoutKey) || "") : "";
+            if (logoutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
               clearBrowserSessionToken(storage, "");
+              markHandled(resumeSessionStorage, handledLogoutKey, logoutValue);
               try {{
                 if (storage) storage.removeItem(routeStorageKey);
               }} catch (err) {{}}
