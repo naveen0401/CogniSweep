@@ -466,7 +466,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "logout-sync-v4-2026-06-22";' in source
+    assert 'const listenerVersion = "logout-sync-v5-server-revocation-2026-06-22";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "restoreAuthAndGoDashboard" in source
@@ -480,13 +480,13 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "render_parent_script(logout_runtime, height=0)" in source
     assert "storage.removeItem(logoutKey);" in source
     assert 'new BroadcastChannel(logoutKey)' in source
-    assert 'channel.postMessage({type: "logout", value: logoutMarker});' in source
+    assert 'channel.postMessage({{type: "logout", value: logoutMarker}});' in source
     assert "const logoutMarker = String(Date.now()) +" in source
     assert "storage.setItem(logoutKey, logoutMarker)" in source
     assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
     assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
-    assert 'url.searchParams.set("es_signed_out", "1");' in source
+    assert 'signed_out_marker_js = f\'url.searchParams.set("{LOGOUT_DONE_QUERY_PARAM}", "1");\'' in source
     assert 'url.searchParams.set("es_page", "Landing")' in source
     assert "if (loc.href === nextUrl) loc.reload();" in source
 
@@ -502,11 +502,54 @@ def test_logout_routes_every_window_to_landing() -> None:
     logout_start = source.index("def logout()")
     logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
     logout_body = source[logout_start:logout_end]
+    assert "record_session_logout(logout_user)" in logout_body
     assert "LOGOUT_DONE_QUERY_PARAM" in logout_body
     assert 'query_set("es_page", "Landing")' in logout_body
     assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in logout_body
     assert "render_logout_bridge()" in logout_body
     assert 'render_auth_transition_shell("Signing out...")' in logout_body
+
+
+def test_logout_revokes_stale_server_sessions() -> None:
+    source = read_app()
+    assert 'SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"' in source
+    assert "def session_logout_registry() -> Dict[str, int]:" in source
+    assert "def record_session_logout(user: Dict[str, Any]) -> None:" in source
+    assert "def session_token_revoked(payload: Dict[str, Any]) -> bool:" in source
+    assert "def active_session_revoked(user: Dict[str, Any]) -> bool:" in source
+
+    sign_start = source.index("def signed_session_token_for_user")
+    sign_end = source.index("def signed_editor_launch_token_for_user", sign_start)
+    sign_body = source[sign_start:sign_end]
+    assert "SESSION_STARTED_AT_MS_FIELD: ensure_session_started_at_ms(user)" in sign_body
+
+    editor_sign_start = source.index("def signed_editor_launch_token_for_user")
+    editor_sign_end = source.index("def browser_cookie_controller", editor_sign_start)
+    editor_sign_body = source[editor_sign_start:editor_sign_end]
+    assert "SESSION_STARTED_AT_MS_FIELD: ensure_session_started_at_ms(user)" in editor_sign_body
+
+    restore_start = source.index("def restore_user_from_signed_session")
+    editor_restore_start = source.index("def restore_user_from_editor_launch_token", restore_start)
+    restore_body = source[restore_start:editor_restore_start]
+    assert "if session_token_revoked(data):" in restore_body
+    assert "user[SESSION_STARTED_AT_MS_FIELD] = session_started_at_ms_from_payload(data)" in restore_body
+
+    editor_restore_end = source.index("def restore_session_from_cookie", editor_restore_start)
+    editor_restore_body = source[editor_restore_start:editor_restore_end]
+    assert "if session_token_revoked(data):" in editor_restore_body
+    assert "user[SESSION_STARTED_AT_MS_FIELD] = session_started_at_ms_from_payload(data)" in editor_restore_body
+
+    restore_cookie_end = source.index("def sync_browser_session_cookie", editor_restore_end)
+    restore_cookie_body = source[editor_restore_end:restore_cookie_end]
+    assert "if active_session_revoked(st.session_state.get(\"user\") or {}):" in restore_cookie_body
+    assert 'st.session_state["_clear_session_cookie"] = True' in restore_cookie_body
+    assert '"session_revoked"' in restore_cookie_body
+
+    logout_start = source.index("def logout()")
+    logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
+    logout_body = source[logout_start:logout_end]
+    assert "logout_user = st.session_state.get(\"user\") or {}" in logout_body
+    assert "record_session_logout(logout_user)" in logout_body
 
 
 def test_reload_session_restore_uses_cookie_not_url_only() -> None:
@@ -716,7 +759,9 @@ def test_login_session_persists_until_explicit_logout() -> None:
     sign_body = source[sign_start:sign_end]
     assert "compact_session_user_payload(user)" in sign_body
     assert "\"persistent\": True" in sign_body
-    assert "\"iat\": int(time.time())" in sign_body
+    assert "issued_at_ms = session_epoch_ms()" in sign_body
+    assert '"iat": issued_at_ms // 1000' in sign_body
+    assert "SESSION_STARTED_AT_MS_FIELD: ensure_session_started_at_ms(user)" in sign_body
     assert "\"exp\"" not in sign_body
 
     restore_start = source.index("def restore_user_from_signed_session")
@@ -1183,6 +1228,8 @@ if __name__ == "__main__":
     test_public_auth_pages_resume_saved_session_before_showing_form()
     test_streamlit_theme_and_visual_tokens_are_high_contrast()
     test_login_stays_in_current_streamlit_session()
+    test_logout_routes_every_window_to_landing()
+    test_logout_revokes_stale_server_sessions()
     test_unknown_and_unauthorized_routes_are_separate()
     test_navigation_uses_central_route_helpers()
     test_editor_urls_are_clean_routes_without_session_tokens()

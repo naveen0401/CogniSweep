@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v8-editor-tab-back-fix-2026-06-22"
+DEPLOY_BUILD_ID = "auth-handoff-v9-server-logout-revocation-2026-06-22"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -222,6 +222,7 @@ DEPLOY_EXPECTED_FEATURES = (
     "server_side_editor_launch_token",
     "direct_file_url_media_source",
     "browser_timezone_local_time_display",
+    "server_side_logout_revocation",
 )
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -428,6 +429,8 @@ BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
 ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM)
 SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")
+SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"
+SESSION_LOGOUT_REGISTRY_LIMIT = 2000
 SESSION_COOKIE_MAX_BYTES = 3800
 LANGUAGE_CATALOG = [
     "English",
@@ -5410,8 +5413,109 @@ def compact_session_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def session_epoch_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def session_ms_from_value(value: Any) -> int:
+    if value in (None, ""):
+        return 0
+    text = safe_text(value).strip()
+    if not text:
+        return 0
+    try:
+        number = float(text)
+        if number <= 0:
+            return 0
+        if number < 100_000_000_000:
+            number *= 1000
+        return int(number)
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def session_started_at_ms_from_payload(payload: Dict[str, Any]) -> int:
+    return (
+        session_ms_from_value(payload.get(SESSION_STARTED_AT_MS_FIELD))
+        or session_ms_from_value(payload.get("session_started_at"))
+        or session_ms_from_value(payload.get("login_at"))
+        or session_ms_from_value(payload.get("iat"))
+    )
+
+
+def ensure_session_started_at_ms(user: Dict[str, Any]) -> int:
+    started_at_ms = session_started_at_ms_from_payload(user or {})
+    if not started_at_ms:
+        started_at_ms = session_epoch_ms()
+    if isinstance(user, dict):
+        user[SESSION_STARTED_AT_MS_FIELD] = started_at_ms
+    return started_at_ms
+
+
+def session_identity_key(value: Any) -> str:
+    email = safe_text(value.get("email") if isinstance(value, dict) else value).strip().lower()
+    if not email:
+        return ""
+    return hashlib.sha256(email.encode("utf-8")).hexdigest()
+
+
+@st.cache_resource(show_spinner=False)
+def session_logout_registry() -> Dict[str, int]:
+    return {}
+
+
+def session_logout_after_ms(value: Any) -> int:
+    key = session_identity_key(value)
+    if not key:
+        return 0
+    try:
+        return int(session_logout_registry().get(key, 0) or 0)
+    except Exception:
+        return 0
+
+
+def record_session_logout(user: Dict[str, Any]) -> None:
+    key = session_identity_key(user)
+    if not key:
+        return
+    registry = session_logout_registry()
+    registry[key] = max(int(registry.get(key, 0) or 0), session_epoch_ms())
+    if len(registry) > SESSION_LOGOUT_REGISTRY_LIMIT:
+        for stale_key, _ in sorted(registry.items(), key=lambda item: item[1])[: len(registry) - SESSION_LOGOUT_REGISTRY_LIMIT]:
+            registry.pop(stale_key, None)
+
+
+def session_token_revoked(payload: Dict[str, Any]) -> bool:
+    if not payload:
+        return False
+    logout_after_ms = session_logout_after_ms(payload)
+    if not logout_after_ms:
+        return False
+    started_at_ms = session_started_at_ms_from_payload(payload)
+    if not started_at_ms:
+        return True
+    return started_at_ms <= logout_after_ms
+
+
+def active_session_revoked(user: Dict[str, Any]) -> bool:
+    return session_token_revoked(user or {})
+
+
 def signed_session_token_for_user(user: Dict[str, Any]) -> str:
-    payload = {**compact_session_user_payload(user), "iat": int(time.time()), "persistent": True}
+    issued_at_ms = session_epoch_ms()
+    payload = {
+        **compact_session_user_payload(user),
+        "iat": issued_at_ms // 1000,
+        SESSION_STARTED_AT_MS_FIELD: ensure_session_started_at_ms(user),
+        "persistent": True,
+    }
     token = sign_payload(payload)
     if len(token.encode("utf-8")) > SESSION_COOKIE_MAX_BYTES:
         LOGGER.warning("Signed session token is larger than the browser cookie budget: %s bytes", len(token.encode("utf-8")))
@@ -5419,10 +5523,12 @@ def signed_session_token_for_user(user: Dict[str, Any]) -> str:
 
 
 def signed_editor_launch_token_for_user(user: Dict[str, Any]) -> str:
-    issued_at = int(time.time())
+    issued_at_ms = session_epoch_ms()
+    issued_at = issued_at_ms // 1000
     payload = {
         **compact_session_user_payload(user),
         "iat": issued_at,
+        SESSION_STARTED_AT_MS_FIELD: ensure_session_started_at_ms(user),
         "exp": issued_at + EDITOR_LAUNCH_TTL_SECONDS,
         "purpose": "editor_launch",
         "v": 1,
@@ -5646,6 +5752,8 @@ def restore_user_from_signed_session(token: str) -> bool:
     data = verify_payload(token)
     if not data:
         return False
+    if session_token_revoked(data):
+        return False
     token_user = safe_user_session_record({key: value for key, value in data.items() if key not in {"iat", "persistent", "v"}})
     stored_user = find_user_by_email(safe_text(token_user.get("email"))) or {}
     user = safe_user_session_record(stored_user or token_user)
@@ -5657,6 +5765,7 @@ def restore_user_from_signed_session(token: str) -> bool:
     user.setdefault("account_type", "user")
     user.setdefault("workspace", "Demo Workspace")
     user.setdefault("login_at", "")
+    user[SESSION_STARTED_AT_MS_FIELD] = session_started_at_ms_from_payload(data) or ensure_session_started_at_ms(user)
     st.session_state["user"] = user
     st.session_state["authenticated"] = True
     return True
@@ -5673,6 +5782,8 @@ def restore_user_from_editor_launch_token(token: str) -> bool:
     expires_at = int(data.get("exp") or 0)
     if not expires_at or expires_at < int(time.time()):
         return False
+    if session_token_revoked(data):
+        return False
     token_user = safe_user_session_record({key: value for key, value in data.items() if key in SESSION_TOKEN_USER_FIELDS})
     stored_user = find_user_by_email(safe_text(token_user.get("email"))) or {}
     user = safe_user_session_record(stored_user or token_user)
@@ -5684,6 +5795,7 @@ def restore_user_from_editor_launch_token(token: str) -> bool:
     user.setdefault("account_type", "user")
     user.setdefault("workspace", "Demo Workspace")
     user.setdefault("login_at", "")
+    user[SESSION_STARTED_AT_MS_FIELD] = session_started_at_ms_from_payload(data) or ensure_session_started_at_ms(user)
     st.session_state["user"] = user
     st.session_state["authenticated"] = True
     return True
@@ -5701,6 +5813,13 @@ def restore_session_from_cookie() -> None:
     editor_target = bool(query_get("es_editor") or query_get("job_id") or query_get("review_id"))
     st.session_state.pop("_editor_auth_restore_failed", None)
     if st.session_state.get("authenticated") and st.session_state.get("user"):
+        if active_session_revoked(st.session_state.get("user") or {}):
+            st.session_state.pop("user", None)
+            st.session_state.pop("authenticated", None)
+            st.session_state["_clear_session_cookie"] = True
+            set_auth_debug_state(cookie_found, False, "session_revoked", handoff_token_found=handoff_token_found)
+            return
+        ensure_session_started_at_ms(st.session_state.get("user") or {})
         session_valid = True
         st.session_state["_pending_session_cookie"] = signed_session_token_for_user(st.session_state.get("user") or {})
         if cookie_found and handoff_token_found:
@@ -6248,7 +6367,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "logout-sync-v4-2026-06-22";
+          const listenerVersion = "logout-sync-v5-server-revocation-2026-06-22";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6434,17 +6553,45 @@ def render_logout_bridge() -> None:
             const storageKey = {storage_key_json};
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
+            const candidateWindows = [window.parent, window.top, window];
 {domain_js}
+            const firstWindow = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.location) return candidate;
+                }} catch (err) {{}}
+              }}
+              return window;
+            }};
+            const firstDocument = () => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate.document) return candidate.document;
+                }} catch (err) {{}}
+              }}
+              return document;
+            }};
+            const firstStorage = (kind) => {{
+              for (const candidate of candidateWindows) {{
+                try {{
+                  if (candidate && candidate[kind]) return candidate[kind];
+                }} catch (err) {{}}
+              }}
+              try {{ return window[kind]; }} catch (err) {{}}
+              return null;
+            }};
             const clearBrowserAuth = () => {{
-              const loc = window.location;
+              const hostWindow = firstWindow();
+              const loc = hostWindow.location;
               const secure = loc.protocol === "https:" ? "; Secure" : "";
               const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
               try {{
-                document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
-                document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+                const targetDoc = firstDocument();
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
               }} catch (err) {{}}
               try {{
-                const storage = window.localStorage;
+                const storage = firstStorage("localStorage");
                 if (storage) {{
                   storage.removeItem(storageKey);
                   storage.removeItem(routeStorageKey);
@@ -6452,14 +6599,15 @@ def render_logout_bridge() -> None:
                 }}
               }} catch (err) {{}}
               try {{
-                if ("BroadcastChannel" in window) {{
-                  const channel = new BroadcastChannel(logoutKey);
+                const Channel = hostWindow.BroadcastChannel || window.BroadcastChannel;
+                if (Channel) {{
+                  const channel = new Channel(logoutKey);
                   channel.postMessage({{type: "logout", value: logoutMarker}});
                   channel.close();
                 }}
               }} catch (err) {{}}
               try {{
-                const scoped = window.sessionStorage;
+                const scoped = firstStorage("sessionStorage");
                 if (scoped) {{
                   scoped.removeItem(storageKey + "_bootstrap_attempted");
                   scoped.removeItem(storageKey + "_bootstrap_attempts");
@@ -6471,7 +6619,7 @@ def render_logout_bridge() -> None:
             }};
             const goLanding = () => {{
               clearBrowserAuth();
-              const loc = window.location;
+              const loc = firstWindow().location;
               {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
               if (loc.href === nextUrl) loc.reload();
@@ -6543,16 +6691,20 @@ def render_logged_in_login_state(opened_elsewhere: bool = False) -> None:
 def login_user(email: str, role: str, account_type: str, workspace: str = "Demo Workspace", *, sync_route_storage: bool = True) -> None:
     stored_user = find_user_by_email(email) or {}
     resolved_account_type = "owner" if safe_text(account_type).lower() == "owner" else safe_text(stored_user.get("account_type") or account_type or "workspace")
+    login_time = datetime.now(timezone.utc)
+    session_started_at_ms = session_epoch_ms()
     user = {
         "email": email,
         "role": safe_text(stored_user.get("role") or role or "User"),
         "account_type": resolved_account_type,
         "workspace": safe_text(stored_user.get("workspace") or workspace or "Demo Workspace"),
-        "login_at": datetime.now(timezone.utc).isoformat(),
+        "login_at": login_time.isoformat(),
+        SESSION_STARTED_AT_MS_FIELD: session_started_at_ms,
     }
     user.update(safe_user_session_record(stored_user))
     user["account_type"] = resolved_account_type
-    user["login_at"] = datetime.now(timezone.utc).isoformat()
+    user["login_at"] = login_time.isoformat()
+    user[SESSION_STARTED_AT_MS_FIELD] = session_started_at_ms
     return_to = query_get("return_to") or safe_text(st.session_state.get("auth_return_to", ""))
     target_page = "Dashboard"
     if return_to:
@@ -6812,6 +6964,8 @@ def handle_unified_login_submit() -> None:
 
 
 def logout() -> None:
+    logout_user = st.session_state.get("user") or {}
+    record_session_logout(logout_user)
     st.session_state.pop("user", None)
     st.session_state.pop("authenticated", None)
     st.session_state.pop("_saas_state_hydrated", None)
