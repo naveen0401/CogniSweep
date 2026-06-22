@@ -466,7 +466,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "logout-sync-v3-2026-06-22";' in source
+    assert 'const listenerVersion = "logout-sync-v4-2026-06-22";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "restoreAuthAndGoDashboard" in source
@@ -474,6 +474,8 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "const checkLogoutMarker = () =>" in source
     assert "const sessionValue = currentSessionValue();" in source
     assert "if (sawSessionToken) clearAuthAndGoLanding();" in source
+    assert 'let seenLogoutValue = "";' in source
+    assert "checkLogoutMarker();" in source
     assert "window.setInterval(checkLogoutMarker, 1200)" in source
     assert "render_parent_script(logout_runtime, height=0)" in source
     assert "storage.removeItem(logoutKey);" in source
@@ -546,6 +548,9 @@ def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     assert 'targetDoc.cookie = name + "=" + encodeURIComponent(value)' in source
     assert 'firstDocument().cookie = cookieName + "=" + encodeURIComponent(token)' in source
     assert 'const token = cookieToken || storageToken;' in source
+    assert "const logoutValue = localStorage ? String(localStorage.getItem(logoutKey) || \"\") : \"\";" in source
+    assert "if (logoutValue) {" in bootstrap_restore_body
+    assert "clearBrowserSessionToken(\"\");" in bootstrap_restore_body
     assert 'url.searchParams.set("es_auth_checked"' not in source
     assert 'url.searchParams.set(authCheckedKey' not in source
     assert 'query_get(AUTH_CHECK_QUERY_PARAM) == "1"' not in source
@@ -734,6 +739,9 @@ def test_login_session_persists_until_explicit_logout() -> None:
     sync_body = source[sync_start:sync_end]
     assert "sync_component_session_cookie(token, clear_cookie=clear_cookie)" in sync_body
     assert "max_age = SESSION_PERSISTENCE_SECONDS if token else 0" in sync_body
+    assert "const pendingLogout = (() =>" in sync_body
+    assert "if (value && pendingLogout)" in sync_body
+    assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in sync_body
     assert "storage.removeItem(storageKey)" in sync_body
     assert "storage.removeItem(logoutKey)" not in sync_body
 

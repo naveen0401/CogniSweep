@@ -5765,6 +5765,7 @@ def sync_browser_session_cookie() -> None:
     name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
     domain_js = browser_cookie_domain_js_function()
     sync_component_session_cookie(token, clear_cookie=clear_cookie)
@@ -5775,6 +5776,7 @@ def sync_browser_session_cookie() -> None:
           const name = {name_json};
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
+          const logoutKey = {logout_key_json};
           const value = {token_json};
           const candidateWindows = [window.parent, window.top, window];
           const firstWindow = () => {{
@@ -5805,6 +5807,34 @@ def sync_browser_session_cookie() -> None:
             try {{ return window.localStorage; }} catch (err) {{}}
             return null;
           }};
+          let sharedStorage = null;
+          try {{ sharedStorage = firstStorage(); }} catch (err) {{}}
+          const pendingLogout = (() => {{
+            try {{ return sharedStorage ? String(sharedStorage.getItem(logoutKey) || "") : ""; }}
+            catch (err) {{ return ""; }}
+          }})();
+          if (value && pendingLogout) {{
+            try {{
+              if (sharedStorage) {{
+                sharedStorage.removeItem(storageKey);
+                sharedStorage.removeItem(routeStorageKey);
+              }}
+            }} catch (err) {{}}
+            try {{
+              const targetDoc = firstDocument();
+              const domainAttr = cookieDomainAttribute(hostWindow.location.hostname);
+              targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+              targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + domainAttr;
+            }} catch (err) {{}}
+            try {{
+              const loc = hostWindow.location;
+              {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
+              const nextUrl = url.toString();
+              if (loc.href === nextUrl) loc.reload();
+              else loc.replace(nextUrl);
+            }} catch (err) {{}}
+            return;
+          }}
           try {{
             const targetDoc = firstDocument();
             const domainAttr = cookieDomainAttribute(hostWindow.location.hostname);
@@ -5817,7 +5847,7 @@ def sync_browser_session_cookie() -> None:
             }}
           }} catch (err) {{}}
           try {{
-            const storage = firstStorage();
+            const storage = sharedStorage || firstStorage();
             if (!storage) return;
             if (value) {{
               storage.setItem(storageKey, value);
@@ -5854,6 +5884,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
     cookie_name_json = json.dumps(SESSION_COOKIE_NAME)
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     editor_auth_failed_param_json = json.dumps(EDITOR_AUTH_FAILED_QUERY_PARAM)
     public_entry_pages_json = json.dumps(["", "landing", "login", "signup", "sign up"])
@@ -5863,6 +5894,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
           try {{
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
+            const logoutKey = {logout_key_json};
             const routeParamKeys = {route_param_keys_json};
             const editorAuthFailedParam = {editor_auth_failed_param_json};
             const publicEntryPages = new Set({public_entry_pages_json});
@@ -5974,6 +6006,12 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             }};
             const cookieToken = readCookie(targetDoc);
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
+            const logoutValue = localStorage ? String(localStorage.getItem(logoutKey) || "") : "";
+            if (logoutValue) {{
+              clearBrowserSessionToken("");
+              routeToAuthFallback();
+              return;
+            }}
             const token = cookieToken || storageToken;
             if (!token) {{
               if (!hasEditorTarget) clearBrowserSessionToken("");
@@ -6210,7 +6248,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "logout-sync-v3-2026-06-22";
+          const listenerVersion = "logout-sync-v4-2026-06-22";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6264,7 +6302,7 @@ def render_global_logout_listener() -> None:
             }} catch (err) {{}}
             return "";
           }};
-          let seenLogoutValue = currentLogoutValue();
+          let seenLogoutValue = "";
           let sawSessionToken = !!currentSessionValue();
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
@@ -6377,6 +6415,7 @@ def render_global_logout_listener() -> None:
               try {{ if (broadcastChannel) broadcastChannel.close(); }} catch (err) {{}}
             }},
           }};
+          checkLogoutMarker();
         }})();
         """.strip()
     render_parent_script(logout_runtime, height=0)
