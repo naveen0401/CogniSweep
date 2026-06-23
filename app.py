@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v13-parent-tab-shell-logout-sync-2026-06-23"
+DEPLOY_BUILD_ID = "auth-handoff-v14-logout-broadcast-before-clear-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -6010,6 +6010,7 @@ def sync_browser_session_cookie() -> None:
     """
     token = safe_text(st.session_state.pop("_pending_session_cookie", ""))
     clear_cookie = bool(st.session_state.pop("_clear_session_cookie", False))
+    defer_storage_clear_for_logout = bool(clear_cookie and st.session_state.get(LOGOUT_BROWSER_CLEANUP_KEY))
     if not token and not clear_cookie and st.session_state.get("authenticated") and st.session_state.get("user"):
         token = signed_session_token_for_user(st.session_state.get("user") or {})
     if not token and not clear_cookie:
@@ -6019,6 +6020,7 @@ def sync_browser_session_cookie() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     route_storage_key_json = json.dumps(ROUTE_STORAGE_KEY)
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
+    defer_storage_clear_json = json.dumps(defer_storage_clear_for_logout)
     max_age = SESSION_PERSISTENCE_SECONDS if token else 0
     domain_js = browser_cookie_domain_js_function()
     sync_component_session_cookie(token, clear_cookie=clear_cookie)
@@ -6031,6 +6033,7 @@ def sync_browser_session_cookie() -> None:
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
           const value = {token_json};
+          const deferStorageClearForLogout = {defer_storage_clear_json};
           const candidateWindows = [window.parent, window.top, window];
           const firstWindow = () => {{
             for (const candidate of candidateWindows) {{
@@ -6104,7 +6107,7 @@ def sync_browser_session_cookie() -> None:
             if (value) {{
               storage.setItem(storageKey, value);
             }}
-            else {{
+            else if (!deferStorageClearForLogout) {{
               storage.removeItem(storageKey);
               storage.removeItem(routeStorageKey);
             }}
@@ -6516,7 +6519,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "auth-sync-v8-parent-shell-marker-2026-06-23";
+          const listenerVersion = "auth-sync-v9-focus-logout-marker-2026-06-23";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6666,6 +6669,7 @@ def render_global_logout_listener() -> None:
               if (storage) {{
                 storage.removeItem(storageKey);
                 storage.removeItem(routeStorageKey);
+                storage.removeItem(loginKey);
               }}
             }} catch (err) {{}}
             try {{
@@ -6757,6 +6761,12 @@ def render_global_logout_listener() -> None:
             targetDoc.addEventListener("visibilitychange", checkLogoutMarker);
             cleanup.push(() => targetDoc.removeEventListener("visibilitychange", checkLogoutMarker));
           }} catch (err) {{}}
+          ["focus", "pageshow", "pointerdown", "keydown"].forEach((eventName) => {{
+            try {{
+              hostWindow.addEventListener(eventName, checkLogoutMarker, true);
+              cleanup.push(() => hostWindow.removeEventListener(eventName, checkLogoutMarker, true));
+            }} catch (err) {{}}
+          }});
           try {{
             if ("BroadcastChannel" in window) {{
               broadcastChannel = new BroadcastChannel(logoutKey);
@@ -6828,23 +6838,28 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
               try {{ return window[kind]; }} catch (err) {{}}
               return null;
             }};
-            const clearBrowserAuth = () => {{
-              const hostWindow = firstWindow();
-              const loc = hostWindow.location;
-              const secure = loc.protocol === "https:" ? "; Secure" : "";
+            let sharedStorage = null;
+            const getSharedStorage = () => {{
               try {{
-                const targetDoc = firstDocument();
-                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
-                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+                if (!sharedStorage) sharedStorage = firstStorage("localStorage");
+                return sharedStorage;
               }} catch (err) {{}}
+              return null;
+            }};
+            const clearSharedSessionState = () => {{
               try {{
-                const storage = firstStorage("localStorage");
+                const storage = getSharedStorage();
                 if (storage) {{
                   storage.removeItem(storageKey);
                   storage.removeItem(routeStorageKey);
                   storage.removeItem(loginKey);
-                  storage.setItem(logoutKey, logoutMarker);
                 }}
+              }} catch (err) {{}}
+            }};
+            const broadcastLogout = (hostWindow) => {{
+              try {{
+                const storage = getSharedStorage();
+                if (storage) storage.setItem(logoutKey, logoutMarker);
               }} catch (err) {{}}
               try {{
                 const Channel = hostWindow.BroadcastChannel || window.BroadcastChannel;
@@ -6854,6 +6869,18 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
                   channel.close();
                 }}
               }} catch (err) {{}}
+            }};
+            const clearBrowserAuth = () => {{
+              const hostWindow = firstWindow();
+              const loc = hostWindow.location;
+              const secure = loc.protocol === "https:" ? "; Secure" : "";
+              try {{
+                const targetDoc = firstDocument();
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
+                targetDoc.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(loc.hostname);
+              }} catch (err) {{}}
+              broadcastLogout(hostWindow);
+              [900, 2400].forEach((delay) => window.setTimeout(clearSharedSessionState, delay));
               try {{
                 const scoped = firstStorage("sessionStorage");
                 if (scoped) {{

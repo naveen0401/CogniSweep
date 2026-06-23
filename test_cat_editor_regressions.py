@@ -476,7 +476,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "auth-sync-v8-parent-shell-marker-2026-06-23";' in source
+    assert 'const listenerVersion = "auth-sync-v9-focus-logout-marker-2026-06-23";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "handleLogoutValue" in source
@@ -498,6 +498,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'const handledLoginKey = loginKey + ":handled";' in source
     assert "checkLogoutMarker();" in source
     assert "window.setInterval(checkLogoutMarker, 1200)" in source
+    assert '["focus", "pageshow", "pointerdown", "keydown"].forEach((eventName)' in source
     assert "render_parent_script(logout_runtime, height=0)" in source
     assert "storage.removeItem(logoutKey);" in source
     assert "storage.setItem(loginKey, loginMarker)" in source
@@ -506,6 +507,8 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "const logoutMarker = String(Date.now()) +" in source
     assert "storage.setItem(logoutKey, logoutMarker)" in source
     assert "storage.removeItem(loginKey);" in source
+    assert "defer_storage_clear_for_logout = bool(clear_cookie and st.session_state.get(LOGOUT_BROWSER_CLEANUP_KEY))" in source
+    assert "else if (!deferStorageClearForLogout)" in source
     assert "landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)" in source
     assert "landing_redirect_url_js(include_signed_out_marker=True)" in source
     assert 'url.searchParams.set("es_logout", "1");' in source
@@ -540,6 +543,17 @@ def test_logout_routes_every_window_to_landing() -> None:
     cleanup_end = source.index("def login_launch_params", cleanup_start)
     cleanup_body = source[cleanup_start:cleanup_end]
     assert "render_logout_bridge(redirect_to_landing=False)" in cleanup_body
+
+    logout_bridge_start = source.index("def render_logout_bridge")
+    logout_bridge_end = source.index("def render_pending_logout_cleanup", logout_bridge_start)
+    logout_bridge_body = source[logout_bridge_start:logout_bridge_end]
+    assert "const clearSharedSessionState = () =>" in logout_bridge_body
+    assert "const broadcastLogout = (hostWindow) =>" in logout_bridge_body
+    assert "storage.setItem(logoutKey, logoutMarker)" in logout_bridge_body
+    assert "[900, 2400].forEach((delay) => window.setTimeout(clearSharedSessionState, delay));" in logout_bridge_body
+    clear_auth_start = logout_bridge_body.index("const clearBrowserAuth = () =>")
+    clear_auth_body = logout_bridge_body[clear_auth_start:]
+    assert clear_auth_body.index("broadcastLogout(hostWindow);") < clear_auth_body.index("window.setTimeout(clearSharedSessionState")
 
     root_shell_start = source.index("def render_root_app_shell")
     root_shell_end = source.index("def render_app", root_shell_start)
