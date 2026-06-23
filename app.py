@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v12-parent-tab-logout-sync-2026-06-23"
+DEPLOY_BUILD_ID = "auth-handoff-v13-parent-tab-shell-logout-sync-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -5745,6 +5745,27 @@ def render_parent_script(runtime: str, *, height: int = 0, scrolling: bool = Fal
     )
 
 
+def render_authenticated_shell_seen_bridge() -> None:
+    storage_key_json = json.dumps(SESSION_STORAGE_KEY)
+    render_parent_script(
+        f"""
+        (() => {{
+          const authShellSeenKey = {storage_key_json} + ":authenticated_shell_seen";
+          const candidateWindows = [window.parent, window.top, window];
+          for (const candidate of candidateWindows) {{
+            try {{
+              if (candidate && candidate.sessionStorage) {{
+                candidate.sessionStorage.setItem(authShellSeenKey, "1");
+                return;
+              }}
+            }} catch (err) {{}}
+          }}
+        }})();
+        """.strip(),
+        height=0,
+    )
+
+
 def set_auth_debug_state(
     cookie_found: bool,
     session_valid: bool,
@@ -6495,7 +6516,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "auth-sync-v7-parent-tab-logout-2026-06-23";
+          const listenerVersion = "auth-sync-v8-parent-shell-marker-2026-06-23";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6511,6 +6532,7 @@ def render_global_logout_listener() -> None:
           const loginKey = {login_key_json};
           const handledLogoutKey = logoutKey + ":handled";
           const handledLoginKey = loginKey + ":handled";
+          const authShellSeenKey = storageKey + ":authenticated_shell_seen";
           const signedOutParam = {signed_out_param_json};
           const candidateWindows = [window.parent, window.top, window];
 {domain_js}
@@ -6583,6 +6605,17 @@ def render_global_logout_listener() -> None:
               if (storage) storage.setItem(key, String(value));
             }} catch (err) {{}}
           }};
+          const authenticatedShellSeen = () => {{
+            try {{
+              const storage = firstSessionStorage();
+              if (storage && storage.getItem(authShellSeenKey) === "1") return true;
+            }} catch (err) {{}}
+            try {{
+              const doc = firstDocument();
+              return !!(doc && doc.querySelector("#errorsweep-root-shell-marker,#errorsweep-editor-shell-marker"));
+            }} catch (err) {{}}
+            return false;
+          }};
           let seenLogoutValue = handledValue(handledLogoutKey);
           let seenLoginValue = handledValue(handledLoginKey);
           let sawSessionToken = !!currentSessionValue();
@@ -6636,6 +6669,10 @@ def render_global_logout_listener() -> None:
               }}
             }} catch (err) {{}}
             try {{
+              const scoped = firstSessionStorage();
+              if (scoped) scoped.removeItem(authShellSeenKey);
+            }} catch (err) {{}}
+            try {{
               const loc = firstWindow().location;
               const currentUrl = new URL(loc.href);
               const alreadySignedOutLanding = (
@@ -6658,7 +6695,7 @@ def render_global_logout_listener() -> None:
             const loc = firstWindow().location;
             const currentUrl = new URL(loc.href);
             const sessionValue = currentSessionValue();
-            const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && currentPublicEntryUrl(currentUrl);
+            const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && !authenticatedShellSeen() && currentPublicEntryUrl(currentUrl);
             if (alreadyPublicWithoutSession) {{
               markHandled(handledLogoutKey, marker);
               return;
@@ -6763,6 +6800,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
             const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
             const handledLogoutKey = logoutKey + ":handled";
             const handledLoginKey = loginKey + ":handled";
+            const authShellSeenKey = storageKey + ":authenticated_shell_seen";
             const candidateWindows = [window.parent, window.top, window];
 {domain_js}
             const firstWindow = () => {{
@@ -6826,6 +6864,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
                   scoped.removeItem(storageKey + "_bootstrap_token");
                   scoped.removeItem(storageKey + "_public_resume_attempts");
                   scoped.removeItem(storageKey + "_public_resume_token");
+                  scoped.removeItem(authShellSeenKey);
                 }}
               }} catch (err) {{}}
             }};
@@ -28187,6 +28226,7 @@ def render_editor_shell_bridge() -> None:
 
 def render_editor_app_shell(content_renderer) -> None:
     """Render standalone editor routes in a shell that normal pages never mount."""
+    render_authenticated_shell_seen_bridge()
     st.markdown('<div id="errorsweep-editor-shell-marker" class="errorsweep_editor_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
     render_editor_shell_bridge()
     with st.container(key="errorsweep_editor_shell", gap=None):
@@ -28199,6 +28239,7 @@ def render_editor_app_shell(content_renderer) -> None:
 def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
     """Render the authenticated app as a fixed two-row shell."""
     render_login_submit_mask_clear_bridge()
+    render_authenticated_shell_seen_bridge()
     st.markdown('<div id="errorsweep-root-shell-marker" class="errorsweep_root_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
     with st.container(key="errorsweep_app_shell", gap=None):
         with st.container(key="errorsweep_shell_top", gap=None):

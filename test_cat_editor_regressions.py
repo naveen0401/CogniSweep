@@ -476,7 +476,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in source
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "auth-sync-v7-parent-tab-logout-2026-06-23";' in source
+    assert 'const listenerVersion = "auth-sync-v8-parent-shell-marker-2026-06-23";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "handleLogoutValue" in source
@@ -489,7 +489,10 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert "if (sawSessionToken) clearAuthAndGoLanding(currentLogoutValue());" in source
     assert "let seenLogoutValue = handledValue(handledLogoutKey);" in source
     assert "let seenLoginValue = handledValue(handledLoginKey);" in source
-    assert "const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && currentPublicEntryUrl(currentUrl);" in source
+    assert 'const authShellSeenKey = storageKey + ":authenticated_shell_seen";' in source
+    assert "const authenticatedShellSeen = () =>" in source
+    assert 'doc.querySelector("#errorsweep-root-shell-marker,#errorsweep-editor-shell-marker")' in source
+    assert "const alreadyPublicWithoutSession = !sessionValue && !sawSessionToken && !authenticatedShellSeen() && currentPublicEntryUrl(currentUrl);" in source
     assert "const firstSessionStorage = () =>" in source
     assert 'const handledLogoutKey = logoutKey + ":handled";' in source
     assert 'const handledLoginKey = loginKey + ":handled";' in source
@@ -537,6 +540,16 @@ def test_logout_routes_every_window_to_landing() -> None:
     cleanup_end = source.index("def login_launch_params", cleanup_start)
     cleanup_body = source[cleanup_start:cleanup_end]
     assert "render_logout_bridge(redirect_to_landing=False)" in cleanup_body
+
+    root_shell_start = source.index("def render_root_app_shell")
+    root_shell_end = source.index("def render_app", root_shell_start)
+    root_shell_body = source[root_shell_start:root_shell_end]
+    assert "render_authenticated_shell_seen_bridge()" in root_shell_body
+
+    editor_shell_start = source.index("def render_editor_app_shell")
+    editor_shell_end = source.index("def render_root_app_shell", editor_shell_start)
+    editor_shell_body = source[editor_shell_start:editor_shell_end]
+    assert "render_authenticated_shell_seen_bridge()" in editor_shell_body
 
 
 def test_logout_revokes_stale_server_sessions() -> None:
