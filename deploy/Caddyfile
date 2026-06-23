@@ -1,0 +1,8 @@
+{$COGNISWEEP_DOMAIN:cognisweep.com} {
+    encode gzip zstd
+
+    @billing path /webhooks/billing/*
+    reverse_proxy @billing errorsweep-billing-webhook:8301
+
+    reverse_proxy errorsweep-app:8501
+}

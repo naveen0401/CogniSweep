@@ -70,6 +70,35 @@ docker compose --env-file deploy/.env.production -f docker-compose.production.ym
 docker compose --env-file deploy/.env.production -f docker-compose.production.yml up -d
 ```
 
+## Single VPS With cognisweep.com
+
+Use this mode when `cognisweep.com` points to one server and the app, async
+worker, billing webhook, OPUS-MT, and IndicTrans2 should communicate on the
+private Docker network.
+
+Required DNS/server setup:
+
+- Point `cognisweep.com` A/AAAA records to the VPS public IP.
+- Open ports `80` and `443` on the VPS firewall.
+- Set `COGNISWEEP_DOMAIN=cognisweep.com` in `deploy/.env.production`.
+- Set `COGNISWEEP_PUBLIC_BASE_URL=https://cognisweep.com`.
+- Set `COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL=https://cognisweep.com/webhooks/billing/razorpay`.
+- Set `SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS=true`.
+- Set `SELF_HOSTED_MT_ACTIVE_ENGINES=indictrans2,opus`.
+- Set `INDICTRANS2_ENDPOINT=http://errorsweep-indictrans2:8000/translate`.
+- Set `OPUS_MT_ENDPOINT=http://errorsweep-opus-mt:8100/translate`.
+
+Run the full stack:
+
+```powershell
+docker compose --env-file deploy/.env.production -f docker-compose.vps.yml build
+docker compose --env-file deploy/.env.production -f docker-compose.vps.yml up -d
+```
+
+Caddy terminates HTTPS and routes `/webhooks/billing/*` to the billing webhook;
+all other traffic goes to the Streamlit app. The MT services are not published
+to the public internet in this mode.
+
 ## Verify
 
 ```powershell
