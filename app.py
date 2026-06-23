@@ -12759,6 +12759,39 @@ def create_task_record(
     return record
 
 
+def async_enqueue_failure_can_continue_inline(workflow: str, reason: str) -> bool:
+    """Allow Pro translation to continue only when the worker clearly rejected the handoff."""
+    if safe_text(workflow) != "pro_translation":
+        return False
+    lowered = safe_text(reason).lower()
+    rejected_before_accept = (
+        "http 400",
+        "http 401",
+        "http 403",
+        "http 404",
+        "http 405",
+        "http 409",
+        "http 422",
+        "http 429",
+        "missing or invalid worker token",
+        "connection refused",
+        "failed to establish a new connection",
+        "name or service not known",
+        "nodename nor servname",
+        "temporary failure in name resolution",
+    )
+    return any(fragment in lowered for fragment in rejected_before_accept)
+
+
+def rewind_uploads_for_inline_retry(*uploads: Any) -> None:
+    for upload in uploads:
+        try:
+            if upload is not None and hasattr(upload, "seek"):
+                upload.seek(0)
+        except Exception as exc:
+            LOGGER.debug("Unable to rewind uploaded file before inline retry: %s", exc)
+
+
 def queue_external_workflow_if_configured(
     task: Dict[str, Any],
     workflow: str,
@@ -12805,6 +12838,25 @@ def queue_external_workflow_if_configured(
     except Exception as exc:
         LOGGER.warning("External async enqueue failed for task %s: %s", task_id, exc)
         reason = safe_text(exc)[:500]
+        if async_enqueue_failure_can_continue_inline(workflow, reason):
+            rewind_uploads_for_inline_retry(primary_file, rules_file)
+            update_task_record(
+                task_id,
+                status="running",
+                progress=8,
+                error="",
+                metadata_json={
+                    **(task.get("metadata_json") or {}),
+                    "async_enqueue_failed": reason,
+                    "async_inline_fallback": True,
+                },
+            )
+            st.warning(
+                "External worker handoff failed before the task was accepted: "
+                f"{reason or 'unknown error'}. Continuing here so the Human Review workspace can still be prepared. "
+                "Fix ERRORSWEEP_ASYNC_WORKER_TOKEN for background processing."
+            )
+            return False
         update_task_record(task_id, status="failed", progress=100, error=f"External queue failed: {reason}")
         st.error(
             "External worker queue is configured, but enqueue failed: "
