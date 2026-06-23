@@ -2161,7 +2161,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 }
 
 .es-lp-mega {
-  padding: 12px 0 72px;
+  padding: 8px 0 80px;
 }
 
 .es-lp-mega-shell {
@@ -2169,21 +2169,22 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   grid-template-columns: 1fr 1fr 1fr .95fr;
   gap: 0;
   overflow: hidden;
-  border: 1px solid rgba(170, 184, 214, .34);
-  border-radius: 22px;
-  background: #f7f9ff;
-  color: #15192f;
-  box-shadow: 0 22px 70px rgba(0, 0, 0, .20);
+  border: 1px solid rgba(120, 137, 194, .24);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(15, 24, 50, .96), rgba(18, 16, 38, .98) 58%, rgba(44, 19, 73, .92));
+  color: #f7fbff;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .34);
 }
 
 .es-lp-mega-col {
-  min-height: 380px;
-  padding: 30px 28px;
-  border-right: 1px solid rgba(37, 48, 77, .12);
+  min-height: 340px;
+  padding: 28px 26px;
+  border-right: 1px solid rgba(170, 184, 214, .14);
 }
 
 .es-lp-mega-kicker {
-  color: rgba(21, 25, 47, .54);
+  color: rgba(155, 245, 219, .82);
   font-size: 12px;
   font-weight: 900;
   line-height: 1.2;
@@ -2193,8 +2194,8 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 .es-lp-mega-item {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
-  gap: 16px;
-  margin-top: 26px;
+  gap: 14px;
+  margin-top: 22px;
 }
 
 .es-lp-mega-icon {
@@ -2202,9 +2203,9 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   height: 28px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid rgba(109, 40, 255, .16);
+  border: 1px solid rgba(17, 245, 181, .20);
   border-radius: 7px;
-  background: #eef3ff;
+  background: rgba(255,255,255,.07);
 }
 
 .es-lp-mega-icon::before {
@@ -2217,7 +2218,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-lp-mega-item h3 {
   margin: 0;
-  color: #15192f;
+  color: #ffffff;
   font-size: 18px;
   line-height: 1.2;
   font-weight: 900;
@@ -2225,7 +2226,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-lp-mega-item p {
   margin: 8px 0 0;
-  color: rgba(21, 25, 47, .68);
+  color: rgba(222, 231, 255, .72);
   font-size: 14px;
   line-height: 1.4;
 }
@@ -2236,17 +2237,18 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   align-items: flex-start;
   justify-content: space-between;
   gap: 22px;
-  padding: 30px 30px;
-  background: linear-gradient(160deg, #eef5ff, #f5f2ff);
+  padding: 30px;
+  background:
+    linear-gradient(160deg, rgba(17, 245, 181, .13), rgba(74, 168, 255, .12), rgba(156, 92, 255, .18));
 }
 
 .es-lp-mega-feature .es-lp-mega-kicker {
-  color: #5b21b6;
+  color: #11f5b5;
 }
 
 .es-lp-mega-feature h2 {
   margin: 18px 0 12px;
-  color: #15192f;
+  color: #ffffff;
   font-size: 24px;
   line-height: 1.18;
   font-weight: 950;
@@ -2254,7 +2256,7 @@ body:has(#errorsweep-root-shell-marker) .block-container {
 
 .es-lp-mega-feature p {
   margin: 0;
-  color: rgba(21, 25, 47, .68);
+  color: rgba(222, 231, 255, .78);
   line-height: 1.45;
 }
 
@@ -2263,9 +2265,9 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   min-height: 44px;
   padding: 0 20px;
   margin-top: 0;
-  background: linear-gradient(90deg, #5b21b6, #8b5cf6);
+  background: linear-gradient(90deg, #11f5b5, #4aa8ff);
   border-color: transparent;
-  color: #ffffff !important;
+  color: #06111f !important;
   font-size: 15px;
 }
 
@@ -4419,7 +4421,7 @@ def is_production_mode() -> bool:
 
 
 FEATURE_FLAG_META = {
-    "main_api_translation": ("Main API translation", "Allow Pro/QA workflows to call BYO AI or built-in MT translation routes."),
+    "main_api_translation": ("AI draft translation", "Allow Pro/QA workflows to call customer BYO AI translation routes."),
     "pro_human_review": ("Translation Studio Human Review", "Allow Translation Studio runs to open the Human Review workspace."),
     "scorecards": ("Scorecards", "Allow translator/reviewer scorecard generation workflows."),
     "subtitle_editor": ("Subtitle / Transcription Editor", "Allow subtitle and transcription workspace tools."),
@@ -4466,10 +4468,10 @@ def feature_flag(key: str, default: Optional[bool] = None) -> bool:
 
 
 def built_in_mt_enabled_for_no_key() -> bool:
-    """Return True only when self-hosted MT is intentionally enabled for no-key users.
+    """Return True only when legacy MT is intentionally enabled.
 
     Production defaults to manual Human Review unless the owner explicitly opts in.
-    This keeps hosted OPUS/IndicTrans outages from blocking editor creation.
+    This keeps external worker outages from blocking editor creation.
     """
     configured = secret("ERRORSWEEP_ENABLE_BUILT_IN_MT", "")
     if configured == "":
@@ -10460,10 +10462,6 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
     async_active = async_health.get("mode") == "external" and bool(async_health.get("ready") or secret_is_configured("ERRORSWEEP_ASYNC_WORKER_URL") or secret_is_configured("REDIS_URL") or secret_is_configured("CELERY_BROKER_URL"))
     email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
     billing_active = billing_provider in {"stripe", "razorpay"} and billing_provider_ready(billing_provider)
-    self_hosted_active = built_in_mt_enabled_for_no_key() and (
-        any_secret_configured(["INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT", "OPUS_MT_ENDPOINT"])
-        or not is_production_mode()
-    )
     language_tool_active = safe_text(secret("ERRORSWEEP_LANGUAGETOOL_PUBLIC", "")).lower() in {"1", "true", "yes", "on"}
 
     base_rows = [
@@ -10518,14 +10516,14 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
             "runtime_status": "Configured" if billing_active else "Manual/local billing records",
         },
         {
-            "id": "self_hosted_mt",
-            "service": "Self-hosted MT",
-            "provider": current_builtin_engine_label() if current_builtin_engine_label is not None else "IndicTrans2/MADLAD/OPUS",
-            "purpose": "No-key machine translation fallback inside approved infrastructure",
+            "id": "manual_review_route",
+            "service": "Manual review route",
+            "provider": "CogniSweep editor workflow",
+            "purpose": "No-key workflow that prepares blank Human Review rows for direct translation",
             "data_categories": "Source text, target-language metadata, protected placeholders",
             "route_type": "internal",
-            "active": self_hosted_active,
-            "runtime_status": "Enabled" if self_hosted_active else "Disabled",
+            "active": True,
+            "runtime_status": "Active",
         },
         {
             "id": "byo_ai",
@@ -12873,7 +12871,7 @@ def queue_external_workflow_if_configured(
                 },
             )
             st.warning(
-                "External worker handoff failed before the task was accepted: "
+                "Background processing did not accept the task: "
                 f"{reason or 'unknown error'}. Continuing here so the Human Review workspace can still be prepared. "
                 "Fix ERRORSWEEP_ASYNC_WORKER_TOKEN for background processing."
             )
@@ -13385,7 +13383,7 @@ def render_topology_map(health: Optional[Dict[str, Any]] = None) -> None:
     nodes = [
         ("Streamlit App", "Ready", ""),
         ("Supabase Persistence", "Connected" if supabase_ready and jobs_ready and usage_ready else "Fallback mode", "" if supabase_ready else "warn"),
-        ("Self-hosted MT", "Configured" if current_builtin_engine_label else "Available when worker is running", "" if current_builtin_engine_label else "warn"),
+        ("Manual Review", "Ready for no-key workflows", ""),
     ]
     html = "".join(
         f'<div class="es-topology-node {cls}"><b>{escape(name)}</b><br><span class="es-small">{escape(status)}</span></div>'
@@ -15407,15 +15405,15 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     active_opus_mt = mt_engine_secret_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS")
     active_indictrans2 = mt_engine_secret_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC")
     active_madlad = mt_engine_secret_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD")
-    add("MT", "OPUS_MT_ENDPOINT", (not active_opus_mt) or secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "No-key MT" if active_opus_mt else "Inactive", "Lightweight fallback for tested European language pairs.")
-    add("MT", "OPUS_MT_API_KEY", (not active_opus_mt) or secret_is_configured("OPUS_MT_API_KEY") or not is_production_mode(), "No-key MT auth" if active_opus_mt else "Inactive", "Must match the OPUS_MT_API_KEY configured on the OPUS-MT worker.")
-    add("MT", "INDICTRANS2_ENDPOINT", (not active_indictrans2) or secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Indian-language no-key MT" if active_indictrans2 else "Inactive", "Required only when IndicTrans2 is included in SELF_HOSTED_MT_ACTIVE_ENGINES.")
-    add("MT", "INDICTRANS2_API_KEY", (not active_indictrans2) or secret_is_configured("INDICTRANS2_API_KEY") or not is_production_mode(), "Indian-language no-key MT auth" if active_indictrans2 else "Inactive", "Must match the INDICTRANS2_API_KEY configured on the IndicTrans2 worker.")
-    add("MT", "MADLAD_ENDPOINT", (not active_madlad) or secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Broad no-key MT fallback" if active_madlad else "Inactive", "Use only when production GPU capacity is approved and MADLAD is active.")
-    add("MT", "MADLAD_API_KEY", (not active_madlad) or secret_is_configured("MADLAD_API_KEY") or not is_production_mode(), "Broad no-key MT auth" if active_madlad else "Inactive", "Must match the MADLAD_API_KEY configured on the MADLAD worker.")
+    add("Legacy MT", "OPUS_MT_ENDPOINT", (not active_opus_mt) or secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "Legacy route" if active_opus_mt else "Inactive", "Optional legacy route. Standard production uses BYO AI keys or manual Human Review.")
+    add("Legacy MT", "OPUS_MT_API_KEY", (not active_opus_mt) or secret_is_configured("OPUS_MT_API_KEY") or not is_production_mode(), "Legacy auth" if active_opus_mt else "Inactive", "Must match the OPUS_MT_API_KEY only if the legacy OPUS-MT worker remains enabled.")
+    add("Legacy MT", "INDICTRANS2_ENDPOINT", (not active_indictrans2) or secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Legacy route" if active_indictrans2 else "Inactive", "Optional legacy route. Keep disabled unless you run a dedicated IndicTrans2 worker.")
+    add("Legacy MT", "INDICTRANS2_API_KEY", (not active_indictrans2) or secret_is_configured("INDICTRANS2_API_KEY") or not is_production_mode(), "Legacy auth" if active_indictrans2 else "Inactive", "Must match INDICTRANS2_API_KEY only if the legacy worker remains enabled.")
+    add("Legacy MT", "MADLAD_ENDPOINT", (not active_madlad) or secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Legacy route" if active_madlad else "Inactive", "Optional GPU route. Keep disabled unless production GPU capacity is approved.")
+    add("Legacy MT", "MADLAD_API_KEY", (not active_madlad) or secret_is_configured("MADLAD_API_KEY") or not is_production_mode(), "Legacy auth" if active_madlad else "Inactive", "Must match MADLAD_API_KEY only if the legacy worker remains enabled.")
     add("Feature flags", "public_registration", feature_flag("public_registration"), "Trial signup", "Controls public workspace creation.")
     add("Feature flags", "billing_collection", feature_flag("billing_collection"), "Paid plans", "Controls checkout/mandate creation.")
-    add("Feature flags", "self_hosted_engines", feature_flag("self_hosted_engines"), "No-key MT", "Controls built-in MT routing when users do not provide API keys.")
+    add("Feature flags", "self_hosted_engines", feature_flag("self_hosted_engines"), "Legacy MT", "Keep disabled for the standard no-key manual review workflow.")
     return rows
 
 
@@ -15547,7 +15545,7 @@ def production_env_template() -> str:
         ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
         ERRORSWEEP_BACKUP_OUTPUT_DIR=
 
-        # Self-hosted MT endpoints for no-key translation
+        # Optional legacy MT endpoints. Standard no-key production uses manual Human Review.
         INDICTRANS2_ENDPOINT=https://mt.cognisweep.com/indictrans2/translate
         MADLAD_ENDPOINT=https://mt.cognisweep.com/madlad/translate
         OPUS_MT_ENDPOINT=https://mt.cognisweep.com/opus/translate
@@ -15886,28 +15884,28 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_li
         "Enable before accepting paid plan mandates.",
     )
     add(
-        "Self-hosted MT flag",
-        "Pass" if feature_flag("self_hosted_engines") else "Warn",
-        "No-key MT enabled" if feature_flag("self_hosted_engines") else "No-key MT disabled",
-        "Enable only when MT workers are deployed or keep disabled and rely on BYO keys/human review.",
+        "Manual review fallback",
+        "Pass",
+        "No-key workflows create editor rows",
+        "Users without an AI API key can still translate directly in Human Review and media editors.",
     )
 
     if include_live_checks:
         if builtin_engine_status is None:
-            add("Self-hosted MT", "Warn", "MT diagnostics unavailable", "Verify IndicTrans2/MADLAD/OPUS workers manually.")
+            add("Legacy MT", "Warn", "MT diagnostics unavailable", "Legacy workers are optional; keep disabled for manual review mode.")
         else:
             try:
                 mt_rows = builtin_engine_status(timeout=2)
                 ready_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled") and row.get("ready")]
                 enabled_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled")]
                 add(
-                    "Self-hosted MT",
+                    "Legacy MT",
                     "Pass" if ready_engines else "Warn",
                     ", ".join(ready_engines) if ready_engines else f"Enabled but not ready: {', '.join(enabled_engines) or 'none'}",
-                    "Start or deploy MT workers for no-key translation coverage.",
+                    "Legacy workers are optional; standard no-key production stays in manual Human Review.",
                 )
             except Exception as exc:
-                add("Self-hosted MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Check MT worker endpoints and logs.")
+                add("Legacy MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Disable legacy MT or check worker endpoints and logs.")
 
     return rows
 
@@ -16692,6 +16690,66 @@ def persist_translation_memory_entry(
     trim_session_list("translation_memory")
     trim_session_list("tm")
     return persisted
+
+
+def translation_memory_row_is_learnable(row: Dict[str, Any]) -> bool:
+    status = safe_text(row.get("status", "")).strip().lower()
+    if status in {"approved", "complete", "completed", "confirmed", "reviewed", "final", "100%", "101%"}:
+        return True
+    raw = row.get("confirmed", row.get("segment_confirmed", row.get("done", "")))
+    if isinstance(raw, bool):
+        return raw
+    return safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved"}
+
+
+def learn_translation_memory_from_rows(
+    rows: List[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    job_id: str = "",
+    source_type: str = "human_review",
+) -> int:
+    """Learn approved human translations into tenant-scoped workspace memory."""
+    meta = metadata if isinstance(metadata, dict) else {}
+    source_language = safe_text(meta.get("source_language") or meta.get("source_lang") or "en")
+    target_language = safe_text(meta.get("target_language") or meta.get("language") or "")
+    domain = safe_text(meta.get("domain") or meta.get("workflow") or meta.get("source") or "Human Review")
+    project_id = safe_text(meta.get("project_id") or meta.get("project"))
+    review_id = safe_text(meta.get("review_id") or meta.get("review_job_id") or job_id)
+    learned = 0
+    for idx, row in enumerate(rows or [], start=1):
+        if not isinstance(row, dict) or not translation_memory_row_is_learnable(row):
+            continue
+        source_text = row.get("source", "")
+        target_text = row.get("target", row.get("translation", ""))
+        source_norm = normalize_translation_memory_text(source_text)
+        target_norm = normalize_translation_memory_text(target_text)
+        if not source_norm or not target_norm or source_norm.lower() == target_norm.lower():
+            continue
+        try:
+            persisted = persist_translation_memory_entry(
+                source_norm,
+                target_norm,
+                source_language=source_language,
+                target_language=target_language,
+                domain=domain,
+                origin=source_type,
+                project_id=project_id,
+                job_id=job_id,
+                review_id=review_id,
+                status=safe_text(row.get("status") or "approved"),
+                metadata={
+                    "row_id": safe_text(row.get("id") or idx),
+                    "location": safe_text(row.get("location")),
+                    "file_name": safe_text(meta.get("file_name")),
+                    "learned_from": source_type,
+                },
+            )
+            if persisted:
+                learned += 1
+        except Exception as exc:
+            LOGGER.warning("Unable to learn translation memory row %s for job %s: %s", idx, job_id, exc)
+    return learned
 
 
 def translation_memory_matches(
@@ -18523,6 +18581,8 @@ def render_last_media_editor_link() -> None:
     workflow = safe_text(st.session_state.get("last_media_editor_workflow", "Subtitling"))
     label = "Open Transcription Editor" if workflow.lower().startswith("transcription") else "Open Subtitle Editor"
     st.info("Your latest media job opens in the CAT editor tab only. The older in-page subtitle workspace is no longer used.")
+    if manual_review_mode_active():
+        render_no_ai_key_editor_notice("Media Studio")
     render_external_editor_link(label, "media", job_id)
 
 
@@ -18598,12 +18658,21 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
         LOGGER.warning("Denied external editor job update outside caller scope: %s", job_id)
         return
     rows = payload.get("rows") or []
-    metadata = payload.get("metadata") or {
+    raw_metadata = payload.get("metadata")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {
         "title": payload.get("title", "CogniSweep CAT"),
         "target_language": payload.get("target_language", ""),
         "file_name": payload.get("file_name", ""),
     }
     export_source = metadata.get("export_source") or payload.get("export_source") or {}
+    learned_count = learn_translation_memory_from_rows(
+        rows,
+        metadata,
+        job_id=job_id,
+        source_type=safe_text(payload.get("job_type") or metadata.get("source") or "human_review"),
+    )
+    if learned_count:
+        metadata = {**metadata, "translation_memory_learned": learned_count}
     get_review_session_store()[job_id] = {
         "rows": rows,
         "metadata": {**metadata, "export_source": export_source},
@@ -20123,16 +20192,16 @@ def current_ai_route_label() -> str:
         provider = safe_text(st.session_state.get("byo_ai_provider", "Custom API"))
         model = safe_text(st.session_state.get("byo_openai_model", ""))
         return f"BYO {provider} active" + (f" ({model})" if model else "")
-    if built_in_mt_enabled_for_no_key() and current_builtin_engine_label is not None:
-        try:
-            return current_builtin_engine_label()
-        except Exception as exc:
-            LOGGER.warning("Unable to read built-in translation engine label: %s", exc)
     return "Manual Human Review - add a user AI API key for draft translations"
 
 
 def user_ai_api_key_available() -> bool:
     return bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
+
+
+def manual_review_mode_active() -> bool:
+    """No AI/MT draft route is active; prepare blank rows for human translation."""
+    return not user_ai_api_key_available()
 
 
 def render_no_ai_key_editor_notice(workflow_label: str = "this workflow") -> None:
@@ -20145,7 +20214,7 @@ def render_no_ai_key_editor_notice(workflow_label: str = "this workflow") -> Non
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
     """Log AI/translation usage in session and, when configured, Supabase.
 
-    Persists self-hosted MT usage and BYO/Managed AI events for owner reporting.
+    Persists BYO/platform AI events for owner reporting.
     """
     st.session_state.setdefault("ai_usage_events", [])
     user = current_user() or {}
@@ -20244,7 +20313,7 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str,
         Use the selected OpenAI-compatible provider/base URL/model from Account.
 
     User has no key:
-        Return blank Human Review rows by default. Self-hosted MT is an explicit opt-in only.
+        Return blank Human Review rows for manual translation.
     """
     if not texts:
         return []
@@ -20325,52 +20394,9 @@ Output shape:
         return repair_translation_batch(texts, result)
 
     # ----------------------------------------------------------
-    # NO USER KEY PATH: manual Human Review by default.
+    # NO USER KEY PATH: prepare manual Human Review rows.
     # ----------------------------------------------------------
-    if not built_in_mt_enabled_for_no_key():
-        st.info(
-            "No AI API key is active, so AI translations were not generated. "
-            "CogniSweep prepared blank Human Review rows for manual translation; connected TM, glossary, and DNT resources will still appear in the editor."
-        )
-        return ["" for _ in texts]
-    if builtin_translate_batch is None:
-        st.error("Built-in translation router is missing. Add translator_router.py and selfhosted_mt_clients.py beside app.py.")
-        return ["" for _ in texts]
-
-    try:
-        translations, usage = builtin_translate_batch(
-            source_language="English",
-            target_language=target_language,
-            texts=texts,
-            user_api_key="",
-            protected_terms=protected_terms_from_rules(rules),
-            metadata={
-                "domain": domain,
-                "rules_glossary_terms": len((rules or {}).get("glossary", [])),
-                "rules_dnt_terms": len((rules or {}).get("dnt", [])),
-                "rules_instruction_count": len((rules or {}).get("instructions", [])),
-            },
-        )
-        # Store usage in the same owner-console log format.
-        log_ai_usage_event({
-            "provider": usage.get("provider", "built_in_translation"),
-            "model": usage.get("engine", "built_in_translation"),
-            "managed": True,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "success": usage.get("success", True),
-            "error": usage.get("error", ""),
-            "characters": usage.get("characters", 0),
-            "requests": usage.get("requests", 0),
-        }, "translate", len(texts))
-        return repair_translation_batch(texts, [safe_text(t) for t in translations])
-    except Exception as exc:
-        st.warning(
-            "Machine translation is currently unavailable, so CogniSweep will create "
-            f"Human Review draft rows without MT output. Route detail: {str(exc)}"
-        )
-        return ["" for _ in texts]
+    return ["" for _ in texts]
 
 
 
@@ -20379,7 +20405,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
 
     v32 policy:
     - Auto transcription is available only when the user provides a BYO OpenAI-compatible API key.
-    - Built-in self-hosted MT is text-only in CogniSweep and is NOT used for transcription.
+    - Translation providers are not used for transcription.
     - If no user API key is available, return blank starter rows for manual human editing.
     """
     if video_file is None:
@@ -20440,7 +20466,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
 
 
 def translate_subtitle_sources(rows: List[Dict[str, Any]], target_language: str, domain: str = "Subtitling", rules: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict[str, Any]], int]:
-    """Translate source rows into target subtitle rows using BYO key or built-in self-hosted MT."""
+    """Translate source rows into target subtitle rows when a user AI key is active."""
     source_texts = [safe_text(r.get("source", "")) for r in rows]
     translations = call_main_api_translate(source_texts, target_language, domain, rules=rules)
     missing = 0
@@ -20552,7 +20578,7 @@ def render_privacy_route_notice(context: str = "translation") -> None:
     if st.session_state.get("byo_openai_api_key"):
         st.warning(f"{context}: BYO external AI key is active. Confirm client approval before sending confidential or NDA text.")
     else:
-        st.success(f"{context}: built-in self-hosted MT route is active for no-key workflows.")
+        st.info(f"{context}: no user AI key is active, so CogniSweep will prepare manual Human Review rows.")
 
 
 def run_global_qa_for_row(row: Dict[str, Any], target_language: str, domain: str, rules: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -21128,7 +21154,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                 <div class="es-lp-hero-content">
                   <h1 class="es-lp-title">Localization QA, translation review, media, and scorecards in one workspace.</h1>
                   <p class="es-lp-copy">
-                    Upload product files, apply client rules, run AI QA, translate with managed or self-hosted MT,
+                    Upload product files, apply client rules, use your own AI key when drafts are needed,
                     open Human Review, and export delivery-ready reports without juggling scattered spreadsheets.
                   </p>
                 </div>
@@ -21218,7 +21244,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
               <div class="es-lp-awards">
                 <span class="es-lp-award es-lp-yellow">Projects & Jobs</span>
                 <span class="es-lp-award es-lp-sky">Team Access</span>
-                <span class="es-lp-award es-lp-green">Self-hosted MT</span>
+                <span class="es-lp-award es-lp-green">Manual Review</span>
                 <span class="es-lp-award es-lp-violet">Billing & Admin</span>
               </div>
             </div>
@@ -21358,7 +21384,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
                   </div>
                   <div class="es-lp-mega-item">
                     <span class="es-lp-mega-icon" aria-hidden="true"></span>
-                    <div><h3>Machine translation</h3><p>Route through managed AI or self-hosted MT, then gate risky rows for human review.</p></div>
+                    <div><h3>AI-assisted drafting</h3><p>Use a customer-provided AI API key for drafts, or continue directly in Human Review without one.</p></div>
                   </div>
                   <div class="es-lp-mega-item">
                     <span class="es-lp-mega-icon" aria-hidden="true"></span>
@@ -22364,7 +22390,7 @@ def render_public_document(kind: str) -> None:
             "body": [
                 "Passwords are stored as PBKDF2 hashes, and production deployments require a custom session secret.",
                 "Editor jobs and SaaS records persist through Supabase when configured, with local atomic JSON fallback for development.",
-                "Built-in no-key MT can run through local/self-hosted engines, reducing reliance on user API keys.",
+                "Draft AI translation is user-key controlled; when no AI key is active, CogniSweep opens manual review editors instead of routing content externally.",
                 "Sensitive-text indicators help reviewers identify emails, phone-like values, and credential-like content before routing externally.",
             ],
         },
@@ -23862,38 +23888,11 @@ def page_pro() -> None:
     if not feature_flag("pro_human_review"):
         st.warning("Translation Studio and Human Review are currently disabled by Platform Settings.")
         return
+    manual_no_ai_mode = manual_review_mode_active()
     st.caption(f"AI access: {current_ai_route_label()}")
-    render_privacy_route_notice("Translation route")
+    if user_ai_api_key_available():
+        render_privacy_route_notice("Translation route")
     render_stepper(["Upload source", "Translate with rules", "Open Human Review"], active_idx=0)
-    with st.expander("Built-in MT engine diagnostics", expanded=False):
-        if not feature_flag("self_hosted_engines"):
-            st.info("Self-hosted MT diagnostics are hidden because self-hosted engines are disabled by Platform Settings.")
-        elif builtin_engine_status is None:
-            st.warning("Built-in MT router diagnostics are unavailable.")
-        else:
-            status_rows = builtin_engine_status()
-            display_rows = []
-            for row in status_rows:
-                detail = row.get("detail", "")
-                if isinstance(detail, dict):
-                    detail = f"{detail.get('provider', row.get('engine'))} on {detail.get('device', 'unknown')}"
-                display_rows.append({
-                    "Engine": row.get("engine"),
-                    "Role": row.get("priority"),
-                    "Endpoint": row.get("endpoint"),
-                    "Enabled": bool(row.get("enabled")),
-                    "Auth": "configured" if row.get("auth_configured") else "missing",
-                    "Ready": bool(row.get("ready")),
-                    "Detail": safe_text(detail)[:180],
-                })
-            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
-            if st.button("Run no-key MT smoke tests", use_container_width=True):
-                if smoke_test_builtin_engines is None:
-                    st.warning("Smoke tests are unavailable.")
-                else:
-                    with st.spinner("Testing local MT engines..."):
-                        smoke_rows = smoke_test_builtin_engines()
-                    st.dataframe(pd.DataFrame(smoke_rows), use_container_width=True, hide_index=True)
 
     # If a translation review session already exists, keep the action visible even after reruns.
     # This prevents the user from losing access to the post-editing workspace.
@@ -23902,6 +23901,8 @@ def page_pro() -> None:
         st.success("A Human Review session is ready.")
         review_job_id = safe_text(st.session_state.get("active_review_session_id") or query_get("review_id"))
         if review_job_id:
+            if manual_no_ai_mode:
+                render_no_ai_key_editor_notice("Translation Studio")
             render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
         else:
             st.error("Missing review_id. Run Translation Studio before opening Human Review.")
@@ -23951,7 +23952,7 @@ def page_pro() -> None:
             return
         if usage_message:
             st.warning(usage_message)
-        if queue_external_workflow_if_configured(
+        if not manual_no_ai_mode and queue_external_workflow_if_configured(
             task,
             "pro_translation",
             uploaded,
@@ -23968,24 +23969,29 @@ def page_pro() -> None:
             return
         update_task_record(task["id"], progress=12, total_units=len(rows), processed_units=0)
         sensitive = sensitive_rows_summary(rows)
-        if sensitive["matches"]:
+        if sensitive["matches"] and user_ai_api_key_available():
             labels = ", ".join(f"row {m['row']} ({', '.join(m['kinds'])})" for m in sensitive["matches"])
             st.warning(f"Sensitive text indicators found before translation: {labels}. Check client approval before using external BYO AI routes.")
         sample = " ".join([r.get("source", "") for r in rows[:20]])
         domain = auto_detect_domain(sample) if domain_choice == "Auto-detect" else domain_choice
         client_rules = workspace_rules(rules_zip)
-        st.info(f"Detected domain: {domain}")
-        st.info(
-            "Rules applied: "
-            f"{len(client_rules.get('glossary', []))} glossary terms, "
-            f"{len(client_rules.get('dnt', []))} DNT terms, "
-            f"{len(client_rules.get('instructions', []))} instructions."
-        )
+        if query_get("debug_translation") == "1" and is_owner():
+            with st.expander("Translation run details", expanded=False):
+                st.write(f"Detected domain: {domain}")
+                st.write(
+                    "Rules applied: "
+                    f"{len(client_rules.get('glossary', []))} glossary terms, "
+                    f"{len(client_rules.get('dnt', []))} DNT terms, "
+                    f"{len(client_rules.get('instructions', []))} instructions."
+                )
 
         source_texts = [r.get("source", "") or r.get("target", "") for r in rows]
         update_task_record(task["id"], progress=25, processed_units=0)
-        with st.spinner("Translating with available AI route..."):
-            translations = call_main_api_translate(source_texts, target_language, domain, rules=client_rules)
+        if manual_no_ai_mode:
+            translations = ["" for _ in source_texts]
+        else:
+            with st.spinner("Translating with available AI route..."):
+                translations = call_main_api_translate(source_texts, target_language, domain, rules=client_rules)
         update_task_record(task["id"], progress=55, processed_units=len(translations), total_units=len(rows))
 
         review_rows = []
@@ -23998,12 +24004,13 @@ def page_pro() -> None:
                 missing += 1
                 r["status"] = "Needs Review"
                 r["match"] = "Untranslated"
-            qa_findings = run_global_qa_for_row(r, target_language=target_language, domain=domain, rules=client_rules)
-            if qa_findings:
-                r["qa_findings"] = qa_findings[:10]
-                r["qa_summary"] = summarize_qa_findings(qa_findings)
-                if r["status"] in {"MT", "Existing"}:
-                    r["status"] = "Needs Review"
+            if not manual_no_ai_mode:
+                qa_findings = run_global_qa_for_row(r, target_language=target_language, domain=domain, rules=client_rules)
+                if qa_findings:
+                    r["qa_findings"] = qa_findings[:10]
+                    r["qa_summary"] = summarize_qa_findings(qa_findings)
+                    if r["status"] in {"MT", "Existing"}:
+                        r["status"] = "Needs Review"
             review_rows.append(r)
             if idx == len(rows) or idx % 25 == 0:
                 update_task_record(
@@ -24046,7 +24053,7 @@ def page_pro() -> None:
                     if r["status"] in {"MT", "Existing"}:
                         r["status"] = "Needs Review"
 
-        gate_findings = delivery_quality_findings(review_rows, target_language, domain, client_rules)
+        gate_findings = [] if manual_no_ai_mode else delivery_quality_findings(review_rows, target_language, domain, client_rules)
         gate_summary = delivery_gate_summary(review_rows, gate_findings)
         findings_by_location: Dict[str, List[Dict[str, Any]]] = {}
         for finding in gate_findings:
@@ -24073,7 +24080,10 @@ def page_pro() -> None:
             context=uploaded_context,
             export_source=pro_export_source,
         )
-        status = "Completed" if missing == 0 else ("Needs Human Review" if missing_rate <= threshold / 100 else "Blocked")
+        if manual_no_ai_mode:
+            status = "Manual Review Ready"
+        else:
+            status = "Completed" if missing == 0 else ("Needs Human Review" if missing_rate <= threshold / 100 else "Blocked")
         review_session_id = safe_text(st.session_state.get("active_review_session_id", ""))
         pro_job = persist_saas_record("jobs", {
             "created": now_stamp(),
@@ -24103,7 +24113,7 @@ def page_pro() -> None:
         add_audit("Translation run", f"{target_language}: {status}")
         update_task_record(
             task["id"],
-            status="completed" if status != "Blocked" else "needs_review",
+            status="needs_review" if status in {"Blocked", "Needs Human Review", "Manual Review Ready"} else "completed",
             progress=100,
             processed_units=len(review_rows),
             total_units=len(review_rows),
@@ -24130,7 +24140,9 @@ def page_pro() -> None:
             },
         )
 
-        if status == "Blocked":
+        if manual_no_ai_mode:
+            st.success(f"Human Review editor is ready with {len(review_rows)} blank target rows for manual translation.")
+        elif status == "Blocked":
             st.warning(f"Translation incomplete: {missing}/{len(review_rows)} rows need review. Output is blocked until review, but the Human Review editor is ready.")
         elif status == "Needs Human Review":
             st.warning(f"Translation mostly completed. {missing}/{len(review_rows)} rows need Human Review.")
@@ -24142,6 +24154,8 @@ def page_pro() -> None:
         with cta1:
             review_job_id = st.session_state.get("active_review_session_id") or query_get("review_id")
             if review_job_id:
+                if manual_no_ai_mode:
+                    render_no_ai_key_editor_notice("Translation Studio")
                 render_editor_open_link("Open Human Review Editor", human_review_editor_link(str(review_job_id)))
             else:
                 st.error("Review job was not created. Please rerun Translation Studio.")
@@ -24151,10 +24165,11 @@ def page_pro() -> None:
                 st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
             else:
                 st.info("Same-format export is available from Human Review after every segment is confirmed.")
-        st.info("Human Review now opens in a separate full-window CAT editor. Target editing happens directly in the main grid; the right panel is only for TM, glossary, DNT, QA, issues, and history.")
+        st.caption("Human Review opens in the full-window CAT editor with TM, glossary, DNT, QA, issues, and history in the assist panel.")
 
-        render_delivery_gate(review_rows, gate_findings, "Draft delivery gate")
-        st.dataframe(pd.DataFrame(rows_for_display(review_rows)), use_container_width=True, hide_index=True)
+        if not manual_no_ai_mode:
+            render_delivery_gate(review_rows, gate_findings, "Draft delivery gate")
+            st.dataframe(pd.DataFrame(rows_for_display(review_rows)), use_container_width=True, hide_index=True)
 
 
 # Pro post-editing and Subtitle/Transcription editors
@@ -24410,7 +24425,7 @@ def render_subtitle_transcription_setup() -> None:
             auto_generate = st.checkbox(
                 "Generate draft target subtitles",
                 value=True,
-                help="If source rows exist, target subtitles use BYO API key or built-in self-hosted MT translation. If no source file is uploaded, speech-to-text requires a user API key; otherwise blank rows are created for manual editing.",
+                help="If source rows exist and a user AI API key is active, CogniSweep generates draft target subtitles. Without a key, blank target rows are created for manual editing.",
             )
 
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None or not media_compliance_ack):
@@ -24476,6 +24491,8 @@ def render_subtitle_transcription_setup() -> None:
             st.session_state.subtitle_editor_active = False
             st.session_state.subtitle_segments = []
             st.success("Subtitling editor job created. Open it in the separate editor window below.")
+            if manual_review_mode_active():
+                render_no_ai_key_editor_notice("Media Studio")
             render_external_editor_link("Open Subtitle Editor", "media", job_id)
     else:
         with st.container(key="media_transcription_options"):
@@ -24516,6 +24533,8 @@ def render_subtitle_transcription_setup() -> None:
             st.session_state.subtitle_editor_active = False
             st.session_state.subtitle_segments = []
             st.success("Transcription editor job created. Open it in the separate editor window below.")
+            if manual_review_mode_active():
+                render_no_ai_key_editor_notice("Media Studio")
             render_external_editor_link("Open Transcription Editor", "media", job_id)
 
     render_last_media_editor_link()
@@ -27039,8 +27058,8 @@ def render_language_resource_connections_panel() -> None:
 
 
 def render_ai_mt_providers_panel() -> None:
-    st.markdown("### AI & MT providers")
-    st.caption("Use included AI/MT, or add an OpenAI-compatible API key for translation generation. Language-resource connections are managed separately.")
+    st.markdown("### AI providers")
+    st.caption("Add an OpenAI-compatible API key for draft translations. Without a key, CogniSweep opens manual review editors; language-resource connections are managed separately.")
     current_mode = current_ai_route_label()
     st.info(f"Current route: {current_mode}")
     with st.form("byo_key_form"):
@@ -27061,7 +27080,7 @@ def render_ai_mt_providers_panel() -> None:
             value=st.session_state.get("byo_ai_base_url", default_base) or default_base,
             help="Use any OpenAI-compatible chat/completions endpoint. Examples: Groq, OpenRouter, Together, Fireworks, Gemini OpenAI-compatible, vLLM, LM Studio.",
         )
-        byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to use included/self-hosted routes if configured.")
+        byo_key = st.text_input("Your API key", type="password", placeholder="Paste provider API key", help="Leave blank to keep manual review mode.")
         byo_model = st.text_input("Model name", value=st.session_state.get("byo_openai_model", secret("ERRORSWEEP_OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)))
         col_a, col_b = st.columns(2)
         save_key = col_a.form_submit_button("Use this key", use_container_width=True)
@@ -27074,13 +27093,13 @@ def render_ai_mt_providers_panel() -> None:
             st.session_state["byo_ai_base_url"] = byo_base_url.strip()
             st.success(f"BYO {provider} key activated for this session.")
         else:
-            st.warning("No key entered. Included AI will be used if configured.")
+            st.warning("No key entered. Manual review mode will remain active.")
     if clear_key:
         st.session_state.pop("byo_openai_api_key", None)
         st.session_state.pop("byo_openai_model", None)
         st.session_state.pop("byo_ai_provider", None)
         st.session_state.pop("byo_ai_base_url", None)
-        st.success("BYO key cleared. Included AI will be used if configured.")
+        st.success("BYO key cleared. Manual review mode is active until a new key is added.")
 
 
 def page_account() -> None:
@@ -27109,7 +27128,7 @@ def page_account() -> None:
                 ("Professional Profile", "Talent profile used for job matching"),
             ]),
             ("Integrations", [
-                ("AI & MT Providers", "Bring your own AI provider for this session"),
+                ("AI & MT Providers", "Bring your own AI provider for draft translations"),
                 ("Language Resource Connections", "Connect external TM, glossary, and DNT APIs"),
             ]),
             ("Preferences", [
@@ -27167,7 +27186,7 @@ def page_account() -> None:
                     st.session_state.pop("_profile_completion_force", None)
                     st.rerun()
 
-        elif selected_section in {"AI Access", "AI & MT Providers"}:
+        elif selected_section in {"AI Access", "AI & MT Providers", "AI Providers"}:
             render_ai_mt_providers_panel()
 
         elif selected_section == "Language Resource Connections":
@@ -28673,6 +28692,43 @@ def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_nav
             render_shell_scroll_bridge()
 
 
+def language_resource_connections_ready() -> bool:
+    blocked_statuses = {"disabled", "revoked", "deleted", "failed"}
+    for item in visible_language_resource_connections(include_disabled=False):
+        status = safe_text(item.get("status") or "active").strip().lower()
+        if status not in blocked_statuses:
+            return True
+    return False
+
+
+def render_post_login_setup_prompt(page: str) -> None:
+    if page == "Account" or st.session_state.get("integration_setup_prompt_dismissed"):
+        return
+    if not current_user():
+        return
+    has_ai_key = user_ai_api_key_available()
+    has_language_resources = language_resource_connections_ready()
+    if has_ai_key and has_language_resources:
+        return
+    missing = []
+    if not has_ai_key:
+        missing.append("an AI API key for draft translations")
+    if not has_language_resources:
+        missing.append("TM, glossary, or DNT resource connections for editor matches")
+    st.info(
+        "For richer review, add "
+        + " and ".join(missing)
+        + ". Without these, CogniSweep keeps your files in manual editor workflows."
+    )
+    action_col, dismiss_col = st.columns(2)
+    if action_col.button("Open Account settings", key="open_account_setup_prompt", use_container_width=True):
+        st.session_state["account_active_section"] = "AI & MT Providers"
+        navigate("Account")
+    if dismiss_col.button("Not now", key="dismiss_setup_prompt", use_container_width=True):
+        st.session_state["integration_setup_prompt_dismissed"] = True
+        st.rerun()
+
+
 def render_app() -> None:
     route = get_current_route()
     requested_page = safe_text(route.get("page") or route.get("es_page"))
@@ -28719,6 +28775,7 @@ def render_app() -> None:
 
     def render_page_content() -> None:
         render_status_incident_banner()
+        render_post_login_setup_prompt(page)
         if renderer:
             renderer()
         else:

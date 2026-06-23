@@ -667,6 +667,37 @@ create index if not exists idx_errorsweep_integration_audit_user_email on public
 create index if not exists idx_errorsweep_integration_audit_connection_id on public.errorsweep_integration_audit(connection_id);
 create index if not exists idx_errorsweep_integration_audit_created_at on public.errorsweep_integration_audit(created_at desc);
 
+create table if not exists public.errorsweep_translation_memory (
+    id text primary key,
+    workspace text,
+    user_email text,
+    source_language text,
+    target_language text,
+    domain text,
+    source_text text not null,
+    target_text text not null,
+    source_hash text,
+    target_hash text,
+    status text,
+    origin text,
+    project_id text,
+    job_id text,
+    review_id text,
+    approved_by text,
+    usage_count integer not null default 1,
+    last_used_at timestamptz,
+    metadata_json jsonb,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_errorsweep_translation_memory_workspace on public.errorsweep_translation_memory(workspace);
+create index if not exists idx_errorsweep_translation_memory_user_email on public.errorsweep_translation_memory(user_email);
+create index if not exists idx_errorsweep_translation_memory_target_language on public.errorsweep_translation_memory(target_language);
+create index if not exists idx_errorsweep_translation_memory_source_hash on public.errorsweep_translation_memory(source_hash);
+create index if not exists idx_errorsweep_translation_memory_scope_hash on public.errorsweep_translation_memory(workspace, source_language, target_language, source_hash, target_hash);
+create index if not exists idx_errorsweep_translation_memory_updated_at on public.errorsweep_translation_memory(updated_at desc);
+
 alter table public.errorsweep_editor_jobs enable row level security;
 alter table public.errorsweep_usage_events enable row level security;
 alter table public.errorsweep_users enable row level security;
@@ -692,6 +723,7 @@ alter table public.errorsweep_integration_connections enable row level security;
 alter table public.errorsweep_resource_bindings enable row level security;
 alter table public.errorsweep_resource_lookup_cache enable row level security;
 alter table public.errorsweep_integration_audit enable row level security;
+alter table public.errorsweep_translation_memory enable row level security;
 
 create or replace function public.errorsweep_jwt_workspace()
 returns text
@@ -911,6 +943,12 @@ create policy errorsweep_integration_audit_tenant_access on public.errorsweep_in
 for all to authenticated
 using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(user_id))
 with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email) or public.errorsweep_email_matches(user_id));
+
+drop policy if exists errorsweep_translation_memory_tenant_access on public.errorsweep_translation_memory;
+create policy errorsweep_translation_memory_tenant_access on public.errorsweep_translation_memory
+for all to authenticated
+using (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email))
+with check (public.errorsweep_workspace_matches(workspace) or public.errorsweep_email_matches(user_email));
 
 create or replace view public.errorsweep_usage_daily as
 select

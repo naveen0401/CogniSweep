@@ -97,6 +97,7 @@ SAAS_TABLES = {
     "resource_bindings": "errorsweep_resource_bindings",
     "resource_lookup_cache": "errorsweep_resource_lookup_cache",
     "integration_audit": "errorsweep_integration_audit",
+    "translation_memory": "errorsweep_translation_memory",
 }
 
 SAAS_COLUMNS = {
@@ -185,6 +186,12 @@ SAAS_COLUMNS = {
     "integration_audit": {
         "id", "workspace", "user_email", "audit_id", "connection_id", "user_id", "action", "success",
         "provider_status_code", "latency_ms", "metadata_json", "created_at", "updated_at",
+    },
+    "translation_memory": {
+        "id", "workspace", "user_email", "source_language", "target_language", "domain",
+        "source_text", "target_text", "source_hash", "target_hash", "status", "origin",
+        "project_id", "job_id", "review_id", "approved_by", "usage_count", "last_used_at",
+        "metadata_json", "created_at", "updated_at",
     },
 }
 
