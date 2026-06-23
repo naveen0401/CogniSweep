@@ -48,7 +48,7 @@ INDIC_LANGS = {
 DEFAULT_OPUS_MT_ENDPOINT = "http://127.0.0.1:8100/translate"
 DEFAULT_MADLAD_ENDPOINT = "http://127.0.0.1:8200/translate"
 DEFAULT_INDICTRANS2_ENDPOINT = "http://127.0.0.1:8000/translate"
-DEFAULT_ACTIVE_MT_ENGINES = "indictrans2,opus"
+DEFAULT_ACTIVE_MT_ENGINES = "opus"
 
 LANGUAGE_MAP: Dict[str, Dict[str, str]] = {
     "english": {"iso": "en", "indic": "eng_Latn"}, "en": {"iso": "en", "indic": "eng_Latn"}, "eng_latn": {"iso": "en", "indic": "eng_Latn"},
@@ -179,7 +179,7 @@ def _active_engine_names() -> Set[str]:
         name = aliases.get(raw_name.strip())
         if name:
             active.add(name)
-    return active or {"indictrans2", "opus"}
+    return active or {"opus"}
 
 
 def _engine_enabled(engine: str, disable_env: str) -> bool:
@@ -236,18 +236,21 @@ def builtin_engine_status(timeout: int = 3) -> List[Dict[str, Any]]:
         {
             "engine": "IndicTrans2",
             "endpoint": _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT),
+            "api_key_name": "INDICTRANS2_API_KEY",
             "enabled": _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"),
             "priority": "Indian languages",
         },
         {
             "engine": "OPUS-MT",
             "endpoint": _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT),
+            "api_key_name": "OPUS_MT_API_KEY",
             "enabled": _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"),
             "priority": "Lightweight global fallback",
         },
         {
             "engine": "MADLAD-400",
             "endpoint": _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT),
+            "api_key_name": "MADLAD_API_KEY",
             "enabled": _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"),
             "priority": "Optional broad fallback",
         },
@@ -256,8 +259,13 @@ def builtin_engine_status(timeout: int = 3) -> List[Dict[str, Any]]:
     for item in engines:
         row = dict(item)
         row["ready"] = False
+        row["auth_configured"] = bool(_secret(str(item.get("api_key_name", "")), "").strip())
         row["detail"] = "disabled" if not item["enabled"] else "not checked"
         if item["enabled"] and item["endpoint"]:
+            if not row["auth_configured"]:
+                row["detail"] = f"{item['api_key_name']} missing"
+                rows.append(row)
+                continue
             try:
                 res = requests.get(_endpoint_health_url(item["endpoint"]), timeout=timeout)
                 row["ready"] = res.status_code < 400
@@ -330,6 +338,10 @@ def smoke_test_builtin_engines(timeout: int = 120) -> List[Dict[str, Any]]:
             "error": "disabled" if not test["enabled"] else "",
         }
         if not test["enabled"]:
+            rows.append(row)
+            continue
+        if not str(test.get("api_key") or "").strip():
+            row["error"] = f"{test['engine']} API key is missing"
             rows.append(row)
             continue
         try:
@@ -461,21 +473,25 @@ def translate_batch(
     try:
         if should_use_indic and _engine_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC"):
             endpoint = _secret("INDICTRANS2_ENDPOINT", DEFAULT_INDICTRANS2_ENDPOINT)
+            api_key = _secret("INDICTRANS2_API_KEY", "")
             if endpoint:
-                try:
-                    translations, engine_usage = translate_with_indictrans2(
-                        endpoint=endpoint,
-                        api_key=_secret("INDICTRANS2_API_KEY", ""),
-                        source_language=source_info.get("indic") or "eng_Latn",
-                        target_language=target_info.get("indic") or target_language,
-                        texts=texts,
-                        protected_terms=protected_terms,
-                        timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
-                    )
-                    _apply_engine_usage(usage, "indictrans2", engine_usage)
-                    return translations, usage
-                except Exception as exc:
-                    route_errors.append(f"IndicTrans2 failed: {exc}")
+                if not api_key:
+                    route_errors.append("IndicTrans2 API key is missing.")
+                else:
+                    try:
+                        translations, engine_usage = translate_with_indictrans2(
+                            endpoint=endpoint,
+                            api_key=api_key,
+                            source_language=source_info.get("indic") or "eng_Latn",
+                            target_language=target_info.get("indic") or target_language,
+                            texts=texts,
+                            protected_terms=protected_terms,
+                            timeout=int(_secret("SELF_HOSTED_MT_TIMEOUT", "180")),
+                        )
+                        _apply_engine_usage(usage, "indictrans2", engine_usage)
+                        return translations, usage
+                    except Exception as exc:
+                        route_errors.append(f"IndicTrans2 failed: {exc}")
 
             if _indic_in_process_fallback_enabled():
                 try:
@@ -492,13 +508,16 @@ def translate_batch(
 
         if _engine_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS"):
             endpoint = _secret("OPUS_MT_ENDPOINT", DEFAULT_OPUS_MT_ENDPOINT)
+            api_key = _secret("OPUS_MT_API_KEY", "")
             if not endpoint:
                 route_errors.append("OPUS-MT endpoint is not configured.")
+            elif not api_key:
+                route_errors.append("OPUS-MT API key is missing.")
             else:
                 try:
                     translations, engine_usage = translate_with_opus_mt(
                         endpoint=endpoint,
-                        api_key=_secret("OPUS_MT_API_KEY", ""),
+                        api_key=api_key,
                         source_language=source_info.get("iso", "en"),
                         target_language=target_info.get("iso") or target_language,
                         texts=texts,
@@ -512,21 +531,25 @@ def translate_batch(
 
         if _engine_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD"):
             endpoint = _secret("MADLAD_ENDPOINT", DEFAULT_MADLAD_ENDPOINT)
+            api_key = _secret("MADLAD_API_KEY", "")
             if endpoint:
-                try:
-                    translations, engine_usage = translate_with_madlad(
-                        endpoint=endpoint,
-                        api_key=_secret("MADLAD_API_KEY", ""),
-                        source_language=source_info.get("iso", "en"),
-                        target_language=target_info.get("iso") or target_language,
-                        texts=texts,
-                        protected_terms=protected_terms,
-                        timeout=int(_secret("MADLAD_TIMEOUT", _secret("SELF_HOSTED_MT_TIMEOUT", "300"))),
-                    )
-                    _apply_engine_usage(usage, "madlad400", engine_usage)
-                    return translations, usage
-                except Exception as exc:
-                    route_errors.append(f"MADLAD-400 failed: {exc}")
+                if not api_key:
+                    route_errors.append("MADLAD-400 API key is missing.")
+                else:
+                    try:
+                        translations, engine_usage = translate_with_madlad(
+                            endpoint=endpoint,
+                            api_key=api_key,
+                            source_language=source_info.get("iso", "en"),
+                            target_language=target_info.get("iso") or target_language,
+                            texts=texts,
+                            protected_terms=protected_terms,
+                            timeout=int(_secret("MADLAD_TIMEOUT", _secret("SELF_HOSTED_MT_TIMEOUT", "300"))),
+                        )
+                        _apply_engine_usage(usage, "madlad400", engine_usage)
+                        return translations, usage
+                    except Exception as exc:
+                        route_errors.append(f"MADLAD-400 failed: {exc}")
 
         raise TranslationRouteError("No active MT route succeeded. " + " | ".join(route_errors))
     except Exception as exc:

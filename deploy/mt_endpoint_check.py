@@ -103,6 +103,10 @@ REQUIREMENT_FILES = {
     "MADLAD-400": "requirements_madlad_mt_server.txt",
 }
 REQUIRED_TEMPLATE_KEYS = [
+    "SELF_HOSTED_MT_ACTIVE_ENGINES",
+    "SELF_HOSTED_MT_DISABLE_INDIC",
+    "SELF_HOSTED_MT_DISABLE_OPUS",
+    "SELF_HOSTED_MT_DISABLE_MADLAD",
     "INDICTRANS2_ENDPOINT",
     "INDICTRANS2_API_KEY",
     "MADLAD_ENDPOINT",
@@ -126,29 +130,47 @@ SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|KEY|API_KEY)", re.IGNOREC
 
 ENGINE_ENV = {
     "OPUS-MT": {
+        "engine_key": "opus",
         "endpoint": "OPUS_MT_ENDPOINT",
         "api_key": "OPUS_MT_API_KEY",
         "required": True,
+        "disable_env": "SELF_HOSTED_MT_DISABLE_OPUS",
         "source_language": "English",
         "target_language": "Spanish",
         "texts": ["Save changes"],
     },
     "IndicTrans2": {
+        "engine_key": "indictrans2",
         "endpoint": "INDICTRANS2_ENDPOINT",
         "api_key": "INDICTRANS2_API_KEY",
         "required": True,
+        "disable_env": "SELF_HOSTED_MT_DISABLE_INDIC",
         "source_language": "eng_Latn",
         "target_language": "tel_Telu",
         "texts": ["Save changes"],
     },
     "MADLAD-400": {
+        "engine_key": "madlad",
         "endpoint": "MADLAD_ENDPOINT",
         "api_key": "MADLAD_API_KEY",
         "required": False,
+        "disable_env": "SELF_HOSTED_MT_DISABLE_MADLAD",
         "source_language": "English",
         "target_language": "Spanish",
         "texts": ["Save changes"],
     },
+}
+
+ACTIVE_ENGINE_ALIASES = {
+    "indic": "indictrans2",
+    "indictrans": "indictrans2",
+    "indictrans2": "indictrans2",
+    "opus": "opus",
+    "opus-mt": "opus",
+    "opus_mt": "opus",
+    "madlad": "madlad",
+    "madlad400": "madlad",
+    "madlad-400": "madlad",
 }
 
 
@@ -369,6 +391,25 @@ def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
     return default
 
 
+def active_engine_names(env: Dict[str, str]) -> set[str]:
+    configured = env_value(env, "SELF_HOSTED_MT_ACTIVE_ENGINES", "opus").lower()
+    if configured in {"*", "all"}:
+        return {"indictrans2", "opus", "madlad"}
+    active: set[str] = set()
+    for raw_name in re.split(r"[,;\s]+", configured):
+        name = ACTIVE_ENGINE_ALIASES.get(raw_name.strip())
+        if name:
+            active.add(name)
+    return active or {"opus"}
+
+
+def engine_is_active(env: Dict[str, str], config: Dict[str, Any], require_madlad: bool = False) -> bool:
+    engine_key = safe_text(config.get("engine_key"))
+    if engine_key == "madlad" and require_madlad:
+        return not env_bool(env, safe_text(config.get("disable_env")), False)
+    return engine_key in active_engine_names(env) and not env_bool(env, safe_text(config.get("disable_env")), False)
+
+
 def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_madlad: bool) -> Optional[Dict[str, str]]:
     if not env_path.exists():
         add(results, "MT Config", "Production env file", "Blocker", "missing", "Create deploy/.env.production from the non-secret template.")
@@ -377,10 +418,20 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_m
     for engine, config in ENGINE_ENV.items():
         endpoint_key = config["endpoint"]
         api_key = config["api_key"]
-        endpoint = safe_text(env.get(endpoint_key))
-        key_value = safe_text(env.get(api_key))
-        required = bool(config["required"]) or (engine == "MADLAD-400" and require_madlad)
+        endpoint = env_value(env, endpoint_key)
+        key_value = env_value(env, api_key)
+        required = engine_is_active(env, config, require_madlad=require_madlad)
         status_when_missing = "Blocker" if required else "Warn"
+        if not required:
+            add(
+                results,
+                "MT Config",
+                f"{engine} endpoint",
+                "Pass",
+                "inactive",
+                f"Include {config['engine_key']} in SELF_HOSTED_MT_ACTIVE_ENGINES when this worker is deployed.",
+            )
+            continue
         add(
             results,
             "MT Config",
@@ -428,9 +479,12 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_m
 
 def probe_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: int, require_madlad: bool) -> None:
     for engine, config in ENGINE_ENV.items():
-        endpoint = safe_text(env.get(config["endpoint"]))
-        required = bool(config["required"]) or (engine == "MADLAD-400" and require_madlad)
+        endpoint = env_value(env, config["endpoint"])
+        required = engine_is_active(env, config, require_madlad=require_madlad)
         status_when_failed = "Blocker" if required else "Warn"
+        if not required:
+            add(results, "MT Probe", f"{engine} health", "Pass", "inactive", f"Enable {config['engine_key']} before probing health.")
+            continue
         if not https_url(endpoint):
             add(results, "MT Probe", f"{engine} health", status_when_failed, "endpoint not configured", f"Configure {config['endpoint']} before probing health.")
             continue
@@ -450,14 +504,20 @@ def probe_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: in
 
 def probe_translate(results: List[Dict[str, str]], env: Dict[str, str], timeout: int, require_madlad: bool) -> None:
     for engine, config in ENGINE_ENV.items():
-        endpoint = safe_text(env.get(config["endpoint"]))
-        required = bool(config["required"]) or (engine == "MADLAD-400" and require_madlad)
+        endpoint = env_value(env, config["endpoint"])
+        required = engine_is_active(env, config, require_madlad=require_madlad)
         status_when_failed = "Blocker" if required else "Warn"
+        if not required:
+            add(results, "MT Probe", f"{engine} translation", "Pass", "inactive", f"Enable {config['engine_key']} before probing translation.")
+            continue
         if not https_url(endpoint):
             add(results, "MT Probe", f"{engine} translation", status_when_failed, "endpoint not configured", f"Configure {config['endpoint']} before probing translation.")
             continue
         headers = {"Content-Type": "application/json"}
-        api_key = safe_text(env.get(config["api_key"]))
+        api_key = env_value(env, config["api_key"])
+        if not api_key or is_placeholder(api_key):
+            add(results, "MT Probe", f"{engine} translation", status_when_failed, "API key not configured", f"Set {config['api_key']} before probing translation.")
+            continue
         if api_key and not is_placeholder(api_key):
             headers["Authorization"] = f"Bearer {api_key}"
         payload = {
@@ -479,8 +539,10 @@ def probe_translate(results: List[Dict[str, str]], env: Dict[str, str], timeout:
             add(results, "MT Probe", f"{engine} translation", status_when_failed, safe_text(exc)[:220], f"Check {engine} /translate contract, auth token, model loading, and timeout.")
 
 
-def run_router_smoke(results: List[Dict[str, str]], timeout: int) -> None:
+def run_router_smoke(results: List[Dict[str, str]], timeout: int, env_path: Optional[Path] = None) -> None:
     command = [sys.executable, "test_builtin_mt_engines.py"]
+    if env_path is not None:
+        command.extend(["--env-file", str(env_path)])
     try:
         completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout, check=False)
         output = completed.stdout or completed.stderr or ""
@@ -526,7 +588,7 @@ def collect_results(
         else:
             probe_translate(results, env, timeout, require_madlad=require_madlad)
     if run_router_smoke_enabled:
-        run_router_smoke(results, timeout)
+        run_router_smoke(results, timeout, env_path=env_path)
     return results
 
 

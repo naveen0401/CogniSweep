@@ -4382,6 +4382,35 @@ def secret(name: str, default: str = "") -> str:
     return default
 
 
+MT_ENGINE_ALIASES = {
+    "indic": "indictrans2",
+    "indictrans": "indictrans2",
+    "indictrans2": "indictrans2",
+    "opus": "opus",
+    "opus-mt": "opus",
+    "opus_mt": "opus",
+    "madlad": "madlad",
+    "madlad400": "madlad",
+    "madlad-400": "madlad",
+}
+
+
+def active_mt_engine_names() -> Set[str]:
+    configured = safe_text(secret("SELF_HOSTED_MT_ACTIVE_ENGINES", "opus")).lower()
+    if configured in {"*", "all"}:
+        return {"indictrans2", "opus", "madlad"}
+    active: Set[str] = set()
+    for raw_name in re.split(r"[,;\s]+", configured):
+        name = MT_ENGINE_ALIASES.get(raw_name.strip())
+        if name:
+            active.add(name)
+    return active or {"opus"}
+
+
+def mt_engine_secret_enabled(engine: str, disable_secret_name: str) -> bool:
+    return engine in active_mt_engine_names() and not parse_bool_flag(secret(disable_secret_name, "false"), False)
+
+
 def is_production_mode() -> bool:
     mode = secret("ERRORSWEEP_ENV", secret("ENVIRONMENT", secret("APP_ENV", ""))).strip().lower()
     return mode in {"prod", "production"}
@@ -15298,9 +15327,15 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     managed_ai_ready = managed_ai_enabled and secret_is_configured("ERRORSWEEP_MANAGED_AI_BASE_URL")
     add("AI", "OPENAI_API_KEY or managed AI endpoint", secret_is_configured("OPENAI_API_KEY") or managed_ai_ready, "Production AI fallback", "BYO user keys are preferred, but public launch needs a platform fallback or live managed OpenAI-compatible/vLLM endpoint.")
     add("AI", "GEMINI_API_KEY", secret_is_configured("GEMINI_API_KEY"), "Optional platform route", "Configure if Gemini OpenAI-compatible routing will be offered as a platform-managed option.")
-    add("MT", "OPUS_MT_ENDPOINT", secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "No-key MT", "Lightweight fallback for tested European language pairs.")
-    add("MT", "INDICTRANS2_ENDPOINT", secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Indian-language no-key MT", "Required for Indian-language built-in MT coverage.")
-    add("MT", "MADLAD_ENDPOINT", secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Broad no-key MT fallback", "Use when production GPU capacity is approved.")
+    active_opus_mt = mt_engine_secret_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS")
+    active_indictrans2 = mt_engine_secret_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC")
+    active_madlad = mt_engine_secret_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD")
+    add("MT", "OPUS_MT_ENDPOINT", (not active_opus_mt) or secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "No-key MT" if active_opus_mt else "Inactive", "Lightweight fallback for tested European language pairs.")
+    add("MT", "OPUS_MT_API_KEY", (not active_opus_mt) or secret_is_configured("OPUS_MT_API_KEY") or not is_production_mode(), "No-key MT auth" if active_opus_mt else "Inactive", "Must match the OPUS_MT_API_KEY configured on the OPUS-MT worker.")
+    add("MT", "INDICTRANS2_ENDPOINT", (not active_indictrans2) or secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Indian-language no-key MT" if active_indictrans2 else "Inactive", "Required only when IndicTrans2 is included in SELF_HOSTED_MT_ACTIVE_ENGINES.")
+    add("MT", "INDICTRANS2_API_KEY", (not active_indictrans2) or secret_is_configured("INDICTRANS2_API_KEY") or not is_production_mode(), "Indian-language no-key MT auth" if active_indictrans2 else "Inactive", "Must match the INDICTRANS2_API_KEY configured on the IndicTrans2 worker.")
+    add("MT", "MADLAD_ENDPOINT", (not active_madlad) or secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Broad no-key MT fallback" if active_madlad else "Inactive", "Use only when production GPU capacity is approved and MADLAD is active.")
+    add("MT", "MADLAD_API_KEY", (not active_madlad) or secret_is_configured("MADLAD_API_KEY") or not is_production_mode(), "Broad no-key MT auth" if active_madlad else "Inactive", "Must match the MADLAD_API_KEY configured on the MADLAD worker.")
     add("Feature flags", "public_registration", feature_flag("public_registration"), "Trial signup", "Controls public workspace creation.")
     add("Feature flags", "billing_collection", feature_flag("billing_collection"), "Paid plans", "Controls checkout/mandate creation.")
     add("Feature flags", "self_hosted_engines", feature_flag("self_hosted_engines"), "No-key MT", "Controls built-in MT routing when users do not provide API keys.")
@@ -23519,6 +23554,7 @@ def page_pro() -> None:
                     "Role": row.get("priority"),
                     "Endpoint": row.get("endpoint"),
                     "Enabled": bool(row.get("enabled")),
+                    "Auth": "configured" if row.get("auth_configured") else "missing",
                     "Ready": bool(row.get("ready")),
                     "Detail": safe_text(detail)[:180],
                 })
