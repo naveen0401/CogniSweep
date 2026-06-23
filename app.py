@@ -28704,29 +28704,50 @@ def language_resource_connections_ready() -> bool:
 def render_post_login_setup_prompt(page: str) -> None:
     if page == "Account" or st.session_state.get("integration_setup_prompt_dismissed"):
         return
-    if not current_user():
+    user = current_user()
+    if not user:
+        return
+    if profile_completion_prompt_due(user):
         return
     has_ai_key = user_ai_api_key_available()
     has_language_resources = language_resource_connections_ready()
     if has_ai_key and has_language_resources:
         return
-    missing = []
+
+    missing: List[str] = []
     if not has_ai_key:
         missing.append("an AI API key for draft translations")
     if not has_language_resources:
         missing.append("TM, glossary, or DNT resource connections for editor matches")
-    st.info(
-        "For richer review, add "
-        + " and ".join(missing)
-        + ". Without these, CogniSweep keeps your files in manual editor workflows."
-    )
-    action_col, dismiss_col = st.columns(2)
-    if action_col.button("Open Account settings", key="open_account_setup_prompt", use_container_width=True):
-        st.session_state["account_active_section"] = "AI & MT Providers"
-        navigate("Account")
-    if dismiss_col.button("Not now", key="dismiss_setup_prompt", use_container_width=True):
-        st.session_state["integration_setup_prompt_dismissed"] = True
-        st.rerun()
+
+    target_section = "AI & MT Providers" if not has_ai_key else "Language Resource Connections"
+
+    def render_prompt_body() -> None:
+        st.write("Add your own AI and language-resource connections when you want CogniSweep to prepare richer review workspaces.")
+        st.caption(
+            "Missing: "
+            + " and ".join(missing)
+            + ". Without these, CogniSweep keeps files in manual editor workflows."
+        )
+        action_col, dismiss_col = st.columns(2)
+        if action_col.button("Set up now", key="open_account_setup_prompt", use_container_width=True):
+            st.session_state["account_active_section"] = target_section
+            navigate("Account")
+        if dismiss_col.button("Skip for now", key="dismiss_setup_prompt", use_container_width=True):
+            st.session_state["integration_setup_prompt_dismissed"] = True
+            st.rerun()
+
+    if hasattr(st, "dialog"):
+        @st.dialog("Connect AI and language resources")
+        def integration_setup_dialog() -> None:
+            render_prompt_body()
+
+        integration_setup_dialog()
+    else:
+        with st.container(border=True):
+            st.markdown("### Connect AI and language resources")
+            render_prompt_body()
+        st.stop()
 
 
 def render_app() -> None:
