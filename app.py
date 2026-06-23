@@ -12804,8 +12804,12 @@ def queue_external_workflow_if_configured(
         queued = enqueue_async_task(task, payload)
     except Exception as exc:
         LOGGER.warning("External async enqueue failed for task %s: %s", task_id, exc)
-        update_task_record(task_id, status="failed", progress=100, error=f"External queue failed: {exc}")
-        st.warning("External worker queue is configured, but enqueue failed. The task was not run inline to avoid duplicate production processing.")
+        reason = safe_text(exc)[:500]
+        update_task_record(task_id, status="failed", progress=100, error=f"External queue failed: {reason}")
+        st.error(
+            "External worker queue is configured, but enqueue failed: "
+            f"{reason or 'unknown error'}. The task was not run inline to avoid duplicate production processing."
+        )
         return True
 
     if queued.get("queued"):

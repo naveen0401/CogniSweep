@@ -15,6 +15,7 @@ import os
 import time
 import uuid
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import requests
 
@@ -40,6 +41,29 @@ def _env_value(name: str, default: str = "") -> str:
 
 
 DEFAULT_TIMEOUT = int(_env_value("ERRORSWEEP_ASYNC_QUEUE_TIMEOUT", "20"))
+
+
+def _safe_response_text(response: requests.Response) -> str:
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            detail = data.get("error") or data.get("message") or data.get("detail")
+            if detail:
+                return str(detail)[:500]
+        return json.dumps(data, ensure_ascii=False)[:500]
+    except Exception:
+        return (response.text or "")[:500]
+
+
+def _internal_only_worker_url(worker_url: str) -> bool:
+    hostname = (urlparse(worker_url).hostname or "").lower()
+    return hostname in {
+        "errorsweep-async-receiver",
+        "async-receiver",
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+    }
 
 
 def _secret(name: str, default: str = "") -> str:
@@ -78,10 +102,17 @@ def async_backend_status() -> Dict[str, Any]:
     ready = provider == "local" or bool(worker_url if provider == "http" else redis_url if provider == "redis" else False)
     mode = "external" if provider in {"http", "redis"} and ready else "local_inline"
     message = ""
+    if provider == "http" and worker_url and is_production_mode() and _internal_only_worker_url(worker_url):
+        ready = False
+        mode = "blocked"
+        message = (
+            "ERRORSWEEP_ASYNC_WORKER_URL points to an internal/local host. "
+            "Use the public worker URL, for example https://cognisweep-async-worker.onrender.com/tasks."
+        )
     if is_production_mode() and mode != "external":
         ready = False
         mode = "blocked"
-        message = "Production requires ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL."
+        message = message or "Production requires ERRORSWEEP_ASYNC_WORKER_URL or REDIS_URL/CELERY_BROKER_URL."
     return {
         "provider": provider,
         "ready": ready,
@@ -100,7 +131,9 @@ def _enqueue_http(payload: Dict[str, Any], worker_url: str) -> Dict[str, Any]:
     token = _secret("ERRORSWEEP_ASYNC_WORKER_TOKEN", "").strip()
     headers = {"Authorization": f"Bearer {token}"} if token else None
     response = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
+    if response.status_code >= 400:
+        detail = _safe_response_text(response)
+        raise RuntimeError(f"HTTP worker rejected enqueue: HTTP {response.status_code}. {detail}")
     data = response.json() if response.content else {}
     return {
         "queued": True,
