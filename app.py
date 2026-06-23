@@ -366,6 +366,7 @@ SESSION_COLLECTION_LIMITS = {
     "invoices": 500,
     "projects": 500,
     "files": 1000,
+    "translation_memory": 5000,
     "tm": 5000,
     "glossary": 5000,
     "dnt": 5000,
@@ -409,6 +410,7 @@ SAAS_CACHEABLE_COLLECTIONS = {
     "consent_records",
     "integration_connections",
     "resource_bindings",
+    "translation_memory",
     "integration_audit",
 }
 SESSION_COOKIE_NAME = "errorsweep_session"
@@ -4424,7 +4426,7 @@ FEATURE_FLAG_META = {
     "public_registration": ("Public registration", "Allow unauthenticated users to create a trial workspace."),
     "demo_access": ("Demo access", "Allow unauthenticated demo workspace sign-in on local builds."),
     "billing_collection": ("Billing collection", "Allow checkout/mandate intents from the Billing page."),
-    "self_hosted_engines": ("Self-hosted engines", "Allow no-key translation through configured IndicTrans2/MADLAD/OPUS workers."),
+    "self_hosted_engines": ("Self-hosted engines", "Allow explicitly enabled no-key translation through configured IndicTrans2/MADLAD/OPUS workers."),
 }
 
 
@@ -4438,7 +4440,7 @@ def feature_flag_defaults() -> Dict[str, bool]:
         "public_registration": local_mode,
         "demo_access": local_mode,
         "billing_collection": local_mode,
-        "self_hosted_engines": True,
+        "self_hosted_engines": local_mode,
     }
 
 
@@ -4461,6 +4463,20 @@ def feature_flag(key: str, default: Optional[bool] = None) -> bool:
     if key not in flags:
         flags[key] = fallback
     return parse_bool_flag(flags.get(key), fallback)
+
+
+def built_in_mt_enabled_for_no_key() -> bool:
+    """Return True only when self-hosted MT is intentionally enabled for no-key users.
+
+    Production defaults to manual Human Review unless the owner explicitly opts in.
+    This keeps hosted OPUS/IndicTrans outages from blocking editor creation.
+    """
+    configured = secret("ERRORSWEEP_ENABLE_BUILT_IN_MT", "")
+    if configured == "":
+        configured = secret("COGNISWEEP_ENABLE_BUILT_IN_MT", "")
+    if configured == "":
+        return not is_production_mode() and feature_flag("self_hosted_engines")
+    return parse_bool_flag(configured, False) and feature_flag("self_hosted_engines")
 
 
 def set_feature_flags(updates: Dict[str, bool]) -> List[str]:
@@ -7405,6 +7421,7 @@ def init_state() -> None:
         "page": "Dashboard",
         "projects": [],
         "jobs": [],
+        "translation_memory": [],
         "tm": [],
         "glossary": [
             {"source": "Docflow", "target": "Docflow", "notes": "Product name / DNT"},
@@ -9995,6 +10012,7 @@ EXPORT_COLLECTIONS = [
     "users",
     "projects",
     "jobs",
+    "translation_memory",
     "tm",
     "glossary",
     "dnt",
@@ -10032,6 +10050,7 @@ BACKUP_DEFAULT_COLLECTIONS = [
     "users",
     "projects",
     "jobs",
+    "translation_memory",
     "tm",
     "glossary",
     "dnt",
@@ -10048,6 +10067,7 @@ BACKUP_PERSISTABLE_COLLECTIONS = {
     "workspaces",
     "projects",
     "jobs",
+    "translation_memory",
     "payments",
     "invoices",
     "subscriptions",
@@ -10066,6 +10086,7 @@ TENANT_SCOPED_COLLECTIONS = {
     "users",
     "projects",
     "jobs",
+    "translation_memory",
     "payments",
     "invoices",
     "subscriptions",
@@ -10143,7 +10164,7 @@ def export_record_belongs_to_workspace(collection: str, record: Any, workspace: 
     values = [safe_text(record.get(key)) for key in candidate_keys if safe_text(record.get(key))]
     if values:
         return workspace in values
-    if collection in {"tm", "glossary", "rule_instructions", "review_segments", "subtitle_segments"}:
+    if collection in {"tm", "translation_memory", "glossary", "rule_instructions", "review_segments", "subtitle_segments"}:
         return workspace == safe_text((current_user() or {}).get("workspace", workspace))
     return False
 
@@ -10439,7 +10460,7 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
     async_active = async_health.get("mode") == "external" and bool(async_health.get("ready") or secret_is_configured("ERRORSWEEP_ASYNC_WORKER_URL") or secret_is_configured("REDIS_URL") or secret_is_configured("CELERY_BROKER_URL"))
     email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
     billing_active = billing_provider in {"stripe", "razorpay"} and billing_provider_ready(billing_provider)
-    self_hosted_active = feature_flag("self_hosted_engines") and (
+    self_hosted_active = built_in_mt_enabled_for_no_key() and (
         any_secret_configured(["INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT", "OPUS_MT_ENDPOINT"])
         or not is_production_mode()
     )
@@ -16515,6 +16536,215 @@ def enrich_rules_from_chunks(rules: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return enriched
 
 
+def normalize_translation_memory_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", safe_text(value)).strip()
+
+
+def translation_memory_hash(value: Any) -> str:
+    normalized = normalize_translation_memory_text(value).lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else ""
+
+
+def translation_memory_record_to_tm_item(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "source": safe_text(record.get("source_text") or record.get("source")),
+        "target": safe_text(record.get("target_text") or record.get("target")),
+        "language": safe_text(record.get("target_language") or record.get("language")),
+        "source_language": safe_text(record.get("source_language")),
+        "domain": safe_text(record.get("domain")),
+        "status": safe_text(record.get("status") or "approved"),
+        "approved_by": safe_text(record.get("approved_by") or record.get("user_email")),
+        "created": safe_text(record.get("created_at") or record.get("created")),
+        "origin": safe_text(record.get("origin")),
+    }
+
+
+def translation_memory_scope() -> Dict[str, str]:
+    user = current_user() or {}
+    return {
+        "workspace": safe_text(user.get("workspace") or "Demo Workspace"),
+        "user_email": safe_text(user.get("email")).lower(),
+    }
+
+
+def load_workspace_translation_memory(limit: int = 1000) -> List[Dict[str, Any]]:
+    """Load tenant-scoped translation memory and merge it with session memory."""
+    scope = translation_memory_scope()
+    persisted = load_saas_records(
+        "translation_memory",
+        workspace=scope["workspace"],
+        limit=limit,
+    )
+    records: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+
+    def add_record(raw: Dict[str, Any], persisted_shape: bool = True) -> None:
+        if not isinstance(raw, dict):
+            return
+        source = normalize_translation_memory_text(raw.get("source_text") if persisted_shape else raw.get("source"))
+        target = normalize_translation_memory_text(raw.get("target_text") if persisted_shape else raw.get("target"))
+        target_language = safe_text(raw.get("target_language") or raw.get("language"))
+        if not source or not target:
+            return
+        key = (source.lower(), target.lower(), target_language.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        if persisted_shape:
+            records.append(dict(raw))
+        else:
+            records.append(
+                {
+                    "id": f"session_tm_{len(records) + 1}",
+                    "workspace": scope["workspace"],
+                    "user_email": scope["user_email"],
+                    "source_text": source,
+                    "target_text": target,
+                    "source_language": safe_text(raw.get("source_language")),
+                    "target_language": target_language,
+                    "domain": safe_text(raw.get("domain")),
+                    "status": safe_text(raw.get("status") or "approved"),
+                    "origin": safe_text(raw.get("origin") or "session"),
+                    "approved_by": safe_text(raw.get("approved_by")),
+                    "created_at": safe_text(raw.get("created") or raw.get("created_at")),
+                    "updated_at": safe_text(raw.get("updated_at") or raw.get("created")),
+                }
+            )
+
+    for row in persisted:
+        add_record(row, persisted_shape=True)
+    for row in st.session_state.get("translation_memory", []):
+        add_record(row, persisted_shape=True)
+    for row in st.session_state.get("tm", []):
+        add_record(row, persisted_shape=False)
+
+    st.session_state["translation_memory"] = records[:limit]
+    session_tm: List[Dict[str, Any]] = []
+    seen_session: Set[Tuple[str, str, str]] = set()
+    for record in records[:limit]:
+        item = translation_memory_record_to_tm_item(record)
+        key = (item["source"].lower(), item["target"].lower(), item["language"].lower())
+        if key in seen_session:
+            continue
+        seen_session.add(key)
+        session_tm.append(item)
+    st.session_state["tm"] = session_tm[:SESSION_COLLECTION_LIMITS.get("tm", 5000)]
+    return records[:limit]
+
+
+def persist_translation_memory_entry(
+    source: Any,
+    target: Any,
+    *,
+    source_language: str = "",
+    target_language: str = "",
+    domain: str = "",
+    origin: str = "manual",
+    project_id: str = "",
+    job_id: str = "",
+    review_id: str = "",
+    status: str = "approved",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    source_text = normalize_translation_memory_text(source)
+    target_text = normalize_translation_memory_text(target)
+    if not source_text or not target_text:
+        return None
+    scope = translation_memory_scope()
+    source_hash = translation_memory_hash(source_text)
+    target_hash = translation_memory_hash(target_text)
+    identity = "|".join(
+        [
+            scope["workspace"].lower(),
+            safe_text(source_language).lower(),
+            safe_text(target_language).lower(),
+            source_hash,
+            target_hash,
+        ]
+    )
+    now = now_stamp()
+    record = {
+        "id": f"tm_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}",
+        "workspace": scope["workspace"],
+        "user_email": scope["user_email"],
+        "source_language": safe_text(source_language),
+        "target_language": safe_text(target_language),
+        "domain": safe_text(domain),
+        "source_text": source_text,
+        "target_text": target_text,
+        "source_hash": source_hash,
+        "target_hash": target_hash,
+        "status": safe_text(status or "approved"),
+        "origin": safe_text(origin or "manual"),
+        "project_id": safe_text(project_id),
+        "job_id": safe_text(job_id),
+        "review_id": safe_text(review_id),
+        "approved_by": scope["user_email"],
+        "usage_count": 1,
+        "last_used_at": now,
+        "metadata_json": metadata or {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    persisted = persist_saas_record("translation_memory", record)
+    upsert_session_record("translation_memory", persisted, identity_key="id")
+    upsert_session_record("tm", translation_memory_record_to_tm_item(persisted), identity_key="source")
+    trim_session_list("translation_memory")
+    trim_session_list("tm")
+    return persisted
+
+
+def translation_memory_matches(
+    source: str,
+    source_language: str = "",
+    target_language: str = "",
+    limit: int = 8,
+) -> List[Dict[str, Any]]:
+    source_text = normalize_translation_memory_text(source)
+    if not source_text:
+        return []
+    source_l = source_text.lower()
+    target_l = safe_text(target_language).lower()
+    source_lang_l = safe_text(source_language).lower()
+    hits: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for record in load_workspace_translation_memory(limit=1000):
+        record_source = normalize_translation_memory_text(record.get("source_text") or record.get("source"))
+        record_target = normalize_translation_memory_text(record.get("target_text") or record.get("target"))
+        if not record_source or not record_target:
+            continue
+        record_target_lang = safe_text(record.get("target_language") or record.get("language")).lower()
+        record_source_lang = safe_text(record.get("source_language")).lower()
+        if target_l and record_target_lang and record_target_lang != target_l:
+            continue
+        if source_lang_l and record_source_lang and record_source_lang != source_lang_l:
+            continue
+        record_source_l = record_source.lower()
+        match_type = ""
+        if record_source_l == source_l:
+            match_type = "TM 100%"
+        elif record_source_l in source_l or source_l in record_source_l:
+            match_type = "TM fuzzy"
+        if not match_type:
+            continue
+        key = (record_source_l, record_target.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        hits.append(
+            {
+                "type": match_type,
+                "source": record_source,
+                "target": record_target,
+                "provider": "CogniSweep Memory",
+                "resource_name": safe_text(record.get("domain") or "Workspace TM"),
+            }
+        )
+        if len(hits) >= limit:
+            break
+    return hits
+
+
 def workspace_rules(uploaded_rules=None) -> Dict[str, Any]:
     """Merge uploaded rules with saved workspace memory so every workflow sees one rule pack."""
     rules = enrich_rules_from_chunks(parse_rules_zip(uploaded_rules) if uploaded_rules is not None else {})
@@ -16535,7 +16765,7 @@ def workspace_rules(uploaded_rules=None) -> Dict[str, Any]:
         if safe_text(term):
             dnt.append({"term": safe_text(term), "source": "Saved DNT"})
 
-    if st.session_state.get("tm"):
+    if load_workspace_translation_memory(limit=500):
         instructions.append({"text": "Prefer saved translation memory matches where applicable.", "source": "Saved TM"})
 
     for item in st.session_state.get("rule_instructions", []):
@@ -18484,6 +18714,24 @@ def build_editor_language_resources(
                 "note": safe_text(item.get("notes") or item.get("status") or item.get("approved_by")),
             }
         )
+    for record in load_workspace_translation_memory(limit=500):
+        item = translation_memory_record_to_tm_item(record)
+        source = safe_text(item.get("source"))
+        target = safe_text(item.get("target"))
+        if not source and not target:
+            continue
+        key = (source.lower(), target.lower())
+        if key in seen_tm:
+            continue
+        seen_tm.add(key)
+        tm.append(
+            {
+                "source": source,
+                "target": target,
+                "language": safe_text(item.get("language")),
+                "note": "CogniSweep Memory",
+            }
+        )
 
     status: List[Dict[str, str]] = []
     meta = metadata if isinstance(metadata, dict) else {}
@@ -19385,12 +19633,22 @@ def compute_review_completion(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def compute_matches(source: str, source_language: str = "", target_language: str = "", project_id: str = "") -> Dict[str, List[Dict[str, Any]]]:
     source_l = source.lower()
-    tm_hits: List[Dict[str, Any]] = []
+    tm_hits: List[Dict[str, Any]] = translation_memory_matches(source, source_language, target_language, limit=8)
+    seen_tm_hits: Set[Tuple[str, str]] = {
+        (safe_text(item.get("source")).lower(), safe_text(item.get("target")).lower())
+        for item in tm_hits
+    }
     for item in st.session_state.tm:
         if item.get("source", "").lower() == source_l:
-            tm_hits.append({"type": "TM 100%", "source": item.get("source",""), "target": item.get("target","")})
+            key = (safe_text(item.get("source")).lower(), safe_text(item.get("target")).lower())
+            if key not in seen_tm_hits:
+                seen_tm_hits.add(key)
+                tm_hits.append({"type": "TM 100%", "source": item.get("source",""), "target": item.get("target","")})
         elif source_l and item.get("source", "").lower() in source_l:
-            tm_hits.append({"type": "TM fuzzy", "source": item.get("source",""), "target": item.get("target","")})
+            key = (safe_text(item.get("source")).lower(), safe_text(item.get("target")).lower())
+            if key not in seen_tm_hits:
+                seen_tm_hits.add(key)
+                tm_hits.append({"type": "TM fuzzy", "source": item.get("source",""), "target": item.get("target","")})
 
     gloss_hits: List[Dict[str, Any]] = []
     for item in st.session_state.glossary:
@@ -19865,14 +20123,23 @@ def current_ai_route_label() -> str:
         provider = safe_text(st.session_state.get("byo_ai_provider", "Custom API"))
         model = safe_text(st.session_state.get("byo_openai_model", ""))
         return f"BYO {provider} active" + (f" ({model})" if model else "")
-    if not feature_flag("self_hosted_engines"):
-        return "Self-hosted MT disabled by Platform Settings"
-    if current_builtin_engine_label is not None:
+    if built_in_mt_enabled_for_no_key() and current_builtin_engine_label is not None:
         try:
             return current_builtin_engine_label()
         except Exception as exc:
             LOGGER.warning("Unable to read built-in translation engine label: %s", exc)
-    return "Translation engine not configured"
+    return "Manual Human Review - add a user AI API key for draft translations"
+
+
+def user_ai_api_key_available() -> bool:
+    return bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
+
+
+def render_no_ai_key_editor_notice(workflow_label: str = "this workflow") -> None:
+    st.info(
+        f"No AI API key is active for {workflow_label}, so CogniSweep will not generate AI translations. "
+        "The editor will still open for manual translation/post-editing, and connected TM, glossary, and DNT resources remain available."
+    )
 
 
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
@@ -19977,7 +20244,7 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str,
         Use the selected OpenAI-compatible provider/base URL/model from Account.
 
     User has no key:
-        Use commercial-safe self-hosted MT: IndicTrans2 for Indian languages, OPUS-MT for supported global pairs.
+        Return blank Human Review rows by default. Self-hosted MT is an explicit opt-in only.
     """
     if not texts:
         return []
@@ -20058,11 +20325,13 @@ Output shape:
         return repair_translation_batch(texts, result)
 
     # ----------------------------------------------------------
-    # NO USER KEY PATH: commercial-safe self-hosted MT.
-    # IndicTrans2 for Indian languages, MADLAD-400 when enabled, and OPUS-MT fallback.
+    # NO USER KEY PATH: manual Human Review by default.
     # ----------------------------------------------------------
-    if not feature_flag("self_hosted_engines"):
-        st.warning("No API key was provided and self-hosted MT is disabled by Platform Settings. Use Human Review for translation.")
+    if not built_in_mt_enabled_for_no_key():
+        st.info(
+            "No AI API key is active, so AI translations were not generated. "
+            "CogniSweep prepared blank Human Review rows for manual translation; connected TM, glossary, and DNT resources will still appear in the editor."
+        )
         return ["" for _ in texts]
     if builtin_translate_batch is None:
         st.error("Built-in translation router is missing. Add translator_router.py and selfhosted_mt_clients.py beside app.py.")
