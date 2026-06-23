@@ -207,7 +207,7 @@ except Exception as exc:
 # ==========================================================
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
-DEPLOY_BUILD_ID = "auth-handoff-v14-logout-broadcast-before-clear-2026-06-23"
+DEPLOY_BUILD_ID = "auth-handoff-v15-server-logout-watchdog-2026-06-23"
 DEPLOY_EXPECTED_BRANCH = "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
@@ -5764,6 +5764,33 @@ def render_authenticated_shell_seen_bridge() -> None:
         """.strip(),
         height=0,
     )
+
+
+@st.fragment(run_every="2s")
+def render_authenticated_logout_watchdog() -> None:
+    """Force authenticated shells to leave when another tab revoked the session."""
+    if not (st.session_state.get("authenticated") and st.session_state.get("user")):
+        st.empty()
+        return
+    user = st.session_state.get("user") or {}
+    if not active_session_revoked(user):
+        st.empty()
+        return
+
+    st.session_state.pop("user", None)
+    st.session_state.pop("authenticated", None)
+    st.session_state.pop("_saas_state_hydrated", None)
+    st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
+    st.session_state.pop("_session_query_fallback_attached", None)
+    st.session_state.pop("_session_query_fallback_attach_attempts", None)
+    st.session_state["_clear_session_cookie"] = True
+    st.session_state[LOGOUT_BROWSER_CLEANUP_KEY] = True
+    st.session_state[LOGOUT_SKIP_RESTORE_KEY] = True
+    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
+        query_clear(key)
+    query_set("es_page", "Landing")
+    query_set(LOGOUT_DONE_QUERY_PARAM, "1")
+    st.rerun(scope="app")
 
 
 def set_auth_debug_state(
@@ -28253,6 +28280,7 @@ def render_editor_shell_bridge() -> None:
 
 def render_editor_app_shell(content_renderer) -> None:
     """Render standalone editor routes in a shell that normal pages never mount."""
+    render_authenticated_logout_watchdog()
     render_authenticated_shell_seen_bridge()
     st.markdown('<div id="errorsweep-editor-shell-marker" class="errorsweep_editor_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)
     render_editor_shell_bridge()
@@ -28265,6 +28293,7 @@ def render_editor_app_shell(content_renderer) -> None:
 
 def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
     """Render the authenticated app as a fixed two-row shell."""
+    render_authenticated_logout_watchdog()
     render_login_submit_mask_clear_bridge()
     render_authenticated_shell_seen_bridge()
     st.markdown('<div id="errorsweep-root-shell-marker" class="errorsweep_root_app_shell" aria-hidden="true"></div>', unsafe_allow_html=True)

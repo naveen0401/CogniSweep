@@ -558,11 +558,13 @@ def test_logout_routes_every_window_to_landing() -> None:
     root_shell_start = source.index("def render_root_app_shell")
     root_shell_end = source.index("def render_app", root_shell_start)
     root_shell_body = source[root_shell_start:root_shell_end]
+    assert "render_authenticated_logout_watchdog()" in root_shell_body
     assert "render_authenticated_shell_seen_bridge()" in root_shell_body
 
     editor_shell_start = source.index("def render_editor_app_shell")
     editor_shell_end = source.index("def render_root_app_shell", editor_shell_start)
     editor_shell_body = source[editor_shell_start:editor_shell_end]
+    assert "render_authenticated_logout_watchdog()" in editor_shell_body
     assert "render_authenticated_shell_seen_bridge()" in editor_shell_body
 
 
@@ -600,6 +602,18 @@ def test_logout_revokes_stale_server_sessions() -> None:
     assert "if active_session_revoked(st.session_state.get(\"user\") or {}):" in restore_cookie_body
     assert 'st.session_state["_clear_session_cookie"] = True' in restore_cookie_body
     assert '"session_revoked"' in restore_cookie_body
+
+    watchdog_start = source.index("def render_authenticated_logout_watchdog")
+    watchdog_end = source.index("def set_auth_debug_state", watchdog_start)
+    watchdog_body = source[watchdog_start:watchdog_end]
+    assert '@st.fragment(run_every="2s")' in source[:watchdog_start]
+    assert "active_session_revoked(user)" in watchdog_body
+    assert 'st.session_state["_clear_session_cookie"] = True' in watchdog_body
+    assert "LOGOUT_BROWSER_CLEANUP_KEY" in watchdog_body
+    assert "LOGOUT_SKIP_RESTORE_KEY" in watchdog_body
+    assert 'query_set("es_page", "Landing")' in watchdog_body
+    assert 'query_set(LOGOUT_DONE_QUERY_PARAM, "1")' in watchdog_body
+    assert 'st.rerun(scope="app")' in watchdog_body
 
     logout_start = source.index("def logout()")
     logout_end = source.index("# ==========================================================\n# Data initialization", logout_start)
