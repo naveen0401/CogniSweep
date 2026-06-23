@@ -20097,7 +20097,10 @@ Output shape:
         }, "translate", len(texts))
         return repair_translation_batch(texts, [safe_text(t) for t in translations])
     except Exception as exc:
-        st.error(f"Translation service error: {str(exc)}")
+        st.warning(
+            "Machine translation is currently unavailable, so CogniSweep will create "
+            f"Human Review draft rows without MT output. Route detail: {str(exc)}"
+        )
         return ["" for _ in texts]
 
 
@@ -23859,18 +23862,12 @@ def page_pro() -> None:
         )
 
         if status == "Blocked":
-            st.error(f"Translation incomplete: {missing}/{len(review_rows)} rows need review. Output blocked, but segments are available in Human Review.")
+            st.warning(f"Translation incomplete: {missing}/{len(review_rows)} rows need review. Output is blocked until review, but the Human Review editor is ready.")
         elif status == "Needs Human Review":
             st.warning(f"Translation mostly completed. {missing}/{len(review_rows)} rows need Human Review.")
         else:
             st.success("Translation completed. Review is ready for approval.")
 
-        render_delivery_gate(review_rows, gate_findings, "Draft delivery gate")
-        st.dataframe(pd.DataFrame(rows_for_display(review_rows)), use_container_width=True, hide_index=True)
-
-        # v41: External editor launcher. The CAT editor opens in a new browser tab
-        # by job_id, so it feels like a professional editor window instead of a
-        # normal Streamlit dashboard page.
         st.markdown("### Next step")
         cta1, cta2 = st.columns([1, 1])
         with cta1:
@@ -23886,6 +23883,9 @@ def page_pro() -> None:
             else:
                 st.info("Same-format export is available from Human Review after every segment is confirmed.")
         st.info("Human Review now opens in a separate full-window CAT editor. Target editing happens directly in the main grid; the right panel is only for TM, glossary, DNT, QA, issues, and history.")
+
+        render_delivery_gate(review_rows, gate_findings, "Draft delivery gate")
+        st.dataframe(pd.DataFrame(rows_for_display(review_rows)), use_container_width=True, hide_index=True)
 
 
 # Pro post-editing and Subtitle/Transcription editors

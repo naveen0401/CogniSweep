@@ -34,6 +34,7 @@ import os
 import re
 import time
 import hmac
+import gc
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
@@ -58,13 +59,15 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(value, maximum))
 
 
-MAX_SEGMENTS = _bounded_int_env("OPUS_MT_MAX_SEGMENTS", 96, 1, 256)
-MAX_CHARS_PER_TEXT = _bounded_int_env("OPUS_MT_MAX_CHARS_PER_TEXT", 3000, 1, 8000)
-MAX_TOTAL_CHARS = _bounded_int_env("OPUS_MT_MAX_TOTAL_CHARS", 60000, 1, 120000)
-MAX_INPUT_LENGTH = _bounded_int_env("OPUS_MT_MAX_INPUT_LENGTH", 256, 32, 512)
-MAX_NEW_TOKENS = _bounded_int_env("OPUS_MT_MAX_NEW_TOKENS", 256, 8, 512)
-MAX_BATCH_SIZE = _bounded_int_env("OPUS_MT_BATCH_SIZE", 8, 1, 32)
-MAX_NUM_BEAMS = _bounded_int_env("OPUS_MT_NUM_BEAMS", 4, 1, 8)
+MAX_SEGMENTS = _bounded_int_env("OPUS_MT_MAX_SEGMENTS", 48, 1, 256)
+MAX_CHARS_PER_TEXT = _bounded_int_env("OPUS_MT_MAX_CHARS_PER_TEXT", 2000, 1, 8000)
+MAX_TOTAL_CHARS = _bounded_int_env("OPUS_MT_MAX_TOTAL_CHARS", 25000, 1, 120000)
+MAX_INPUT_LENGTH = _bounded_int_env("OPUS_MT_MAX_INPUT_LENGTH", 192, 32, 512)
+MAX_NEW_TOKENS = _bounded_int_env("OPUS_MT_MAX_NEW_TOKENS", 192, 8, 512)
+MAX_BATCH_SIZE = _bounded_int_env("OPUS_MT_BATCH_SIZE", 2, 1, 32)
+MAX_NUM_BEAMS = _bounded_int_env("OPUS_MT_NUM_BEAMS", 1, 1, 8)
+MODEL_CACHE_SIZE = _bounded_int_env("OPUS_MT_MODEL_CACHE_SIZE", 1, 1, 2)
+UNLOAD_AFTER_REQUEST = os.getenv("OPUS_MT_UNLOAD_AFTER_REQUEST", "false").strip().lower() in {"1", "true", "yes", "on"}
 RATE_LIMIT_REQUESTS = _bounded_int_env("OPUS_MT_RATE_LIMIT_REQUESTS", 120, 1, 10000)
 RATE_LIMIT_WINDOW_SECONDS = _bounded_int_env("OPUS_MT_RATE_LIMIT_WINDOW_SECONDS", 60, 1, 3600)
 RATE_LIMIT_MAX_BUCKETS = _bounded_int_env("OPUS_MT_RATE_LIMIT_MAX_BUCKETS", 1024, 8, 100000)
@@ -205,9 +208,10 @@ def restore_text(text: str, mapping: Dict[str, str]) -> str:
 def clear_cuda_cache() -> None:
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
+    gc.collect()
 
 
-@lru_cache(maxsize=int(os.getenv("OPUS_MT_MODEL_CACHE_SIZE", "2")))
+@lru_cache(maxsize=MODEL_CACHE_SIZE)
 def load_pair_model(src_code: str, tgt_code: str):
     model_name = SUPPORTED_PAIRS.get((src_code, tgt_code))
     if not model_name:
@@ -304,7 +308,12 @@ def translate(req: TranslateRequest, request: Request, authorization: Optional[s
     tgt = normalize_language(req.target_language)
 
     started = time.time()
-    translations, model_name = translate_texts(texts, src, tgt)
+    try:
+        translations, model_name = translate_texts(texts, src, tgt)
+    finally:
+        if UNLOAD_AFTER_REQUEST:
+            load_pair_model.cache_clear()
+            clear_cuda_cache()
     elapsed_ms = int((time.time() - started) * 1000)
 
     return {
