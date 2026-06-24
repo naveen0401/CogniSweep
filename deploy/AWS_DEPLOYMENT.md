@@ -14,6 +14,7 @@ Start with a single Amazon EC2 host running the existing Docker Compose VPS stac
 | AWS credentials | EC2 instance profile IAM role |
 | DNS | Route 53 or your existing DNS provider |
 | Edge protection | CloudFront plus AWS WAF, or an Application Load Balancer plus AWS WAF |
+| Future managed machine translation | Amazon Translate |
 | Persistent local container data | EBS volume mounted on the EC2 host |
 | Production database/auth tables | Keep the existing Supabase production setup unless you deliberately migrate persistence code |
 
@@ -102,6 +103,61 @@ OPUS_MT_ENDPOINT=http://errorsweep-opus-mt:8100/translate
 ```
 
 The code and launch checks still accept legacy `ERRORSWEEP_*` aliases, but new AWS config should use `COGNISWEEP_*`.
+
+## Future AWS Machine Translation
+
+When you are ready to move managed MT onto AWS, use Amazon Translate as the first managed provider to evaluate.
+
+Current state:
+
+- CogniSweep's built-in MT route is implemented in `translator_router.py`.
+- The live route currently supports self-hosted IndicTrans2, OPUS-MT, and MADLAD-compatible HTTP endpoints.
+- AWS MT is not active yet; do not add Amazon Translate env values to production expecting the app to use them until an adapter is implemented and tested.
+
+Recommended future implementation:
+
+- Add an `amazon_translate` provider branch behind the existing `translate_batch(...)` API.
+- Use `boto3.client("translate")` with the EC2/ECS IAM role, not long-lived AWS keys.
+- Map CogniSweep language names to Amazon Translate language codes from `normalize_language(...)`.
+- Keep placeholder protection from `selfhosted_mt_clients.py` before calling Amazon Translate.
+- Use `TranslateText` for short segments and UI strings.
+- Use S3-backed asynchronous batch translation only for large document batches where delayed completion is acceptable.
+- Support custom terminology for brand names, product terms, and do-not-translate terms after the base route is stable.
+- Keep IndicTrans2 as an optional fallback for Indian-language pairs if Amazon Translate quality is not acceptable for your target workflows.
+
+Future production env names should be added only when the adapter lands. Suggested names:
+
+```dotenv
+COGNISWEEP_MT_PROVIDER=amazon_translate
+COGNISWEEP_AWS_TRANSLATE_REGION=ap-south-1
+COGNISWEEP_AWS_TRANSLATE_USE_BATCH=false
+# Optional, after terminology import support exists:
+# COGNISWEEP_AWS_TRANSLATE_TERMINOLOGY_NAMES=brand-terms,product-terms
+```
+
+Add these IAM actions to the EC2/ECS role when the adapter is implemented:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CogniSweepAmazonTranslateRealtime",
+      "Effect": "Allow",
+      "Action": ["translate:TranslateText"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CogniSweepAmazonTranslateTerminologyRead",
+      "Effect": "Allow",
+      "Action": ["translate:GetTerminology", "translate:ListTerminologies"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+For asynchronous batch translation, also create an Amazon Translate service role with read access to the S3 input prefix and write access to the S3 output prefix, then allow the app role to start and inspect translation jobs.
 
 ## EC2 Host Setup
 
@@ -192,6 +248,7 @@ Move from EC2 Compose to ECS/Fargate when you need more than one app instance or
 - Keep S3 for object storage.
 - Move secrets into Secrets Manager or SSM Parameter Store.
 - Keep MT workers separate, especially if you move IndicTrans2/MADLAD to GPU EC2 capacity.
+- Replace or augment self-hosted MT with Amazon Translate after an adapter, language-pair tests, terminology tests, and cost controls are in place.
 
 ## AWS References
 
@@ -200,3 +257,7 @@ Move from EC2 Compose to ECS/Fargate when you need more than one app instance or
 - CloudFront WebSocket support: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-working-with.websockets.html
 - AWS WAF: https://docs.aws.amazon.com/waf/latest/developerguide/waf-chapter.html
 - ECS load balancing: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html
+- Amazon Translate real-time translation: https://docs.aws.amazon.com/translate/latest/dg/sync.html
+- Amazon Translate batch translation: https://docs.aws.amazon.com/translate/latest/dg/async.html
+- Amazon Translate language codes: https://docs.aws.amazon.com/translate/latest/dg/what-is-languages.html
+- Amazon Translate quotas: https://docs.aws.amazon.com/translate/latest/dg/what-is-limits.html

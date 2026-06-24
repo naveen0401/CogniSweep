@@ -193,6 +193,12 @@ python production_smoke_test.py --markdown --probe-endpoints
 
 Configure production translation routes before public no-key Pro workflows are enabled.
 
+AWS MT note: the launch route currently expects self-hosted MT endpoints. If you
+later move managed MT to AWS, add an Amazon Translate adapter behind
+`translator_router.translate_batch(...)`, keep the current placeholder
+protection, and update the AWS deployment runbook before enabling it in
+production.
+
 Required platform AI fallback values:
 
 - `OPENAI_API_KEY`, or
