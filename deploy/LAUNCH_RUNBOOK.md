@@ -341,6 +341,10 @@ python deploy/legal_check.py --env-file deploy/.env.production --probe-public --
 
 Put HTTPS/CDN/WAF in front of all public endpoints.
 
+For AWS hosting, follow `deploy/AWS_DEPLOYMENT.md`: start with the existing
+VPS Compose stack on EC2 plus private S3 object storage, then add CloudFront
+and AWS WAF before public launch traffic.
+
 Required env key:
 
 - `COGNISWEEP_WAF_PROVIDER`

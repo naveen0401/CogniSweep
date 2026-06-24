@@ -57,6 +57,7 @@ Use the deployment pack and runbook:
 
 - `deploy/README_DEPLOYMENT.md`
 - `deploy/LAUNCH_RUNBOOK.md`
+- `deploy/AWS_DEPLOYMENT.md` for EC2 + S3 + CloudFront/AWS WAF hosting
 - `deploy/launch_env_check.py`
 - `production_smoke_test.py`
 

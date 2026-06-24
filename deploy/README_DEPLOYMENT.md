@@ -76,6 +76,9 @@ Use this mode when `cognisweep.com` points to one server and the app, async
 worker, billing webhook, OPUS-MT, and IndicTrans2 should communicate on the
 private Docker network.
 
+For an AWS deployment that uses this same Compose topology on EC2 with S3
+object storage and optional CloudFront/AWS WAF, use `deploy/AWS_DEPLOYMENT.md`.
+
 Required DNS/server setup:
 
 - Point `cognisweep.com` A/AAAA records to the VPS public IP.
