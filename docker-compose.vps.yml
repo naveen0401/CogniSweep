@@ -33,19 +33,11 @@ services:
       ERRORSWEEP_JOB_ATTACHMENT_DIR: /data/errorsweep/job_attachments
       ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
       ERRORSWEEP_ASYNC_WORKER_URL: http://errorsweep-async-receiver:8300/tasks
-      SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS: "true"
-      SELF_HOSTED_MT_ACTIVE_ENGINES: ${SELF_HOSTED_MT_ACTIVE_ENGINES:-indictrans2,opus}
-      INDICTRANS2_ENDPOINT: http://errorsweep-indictrans2:8000/translate
-      OPUS_MT_ENDPOINT: http://errorsweep-opus-mt:8100/translate
     volumes:
       - errorsweep-data:/data/errorsweep
       - errorsweep-logs:/logs/errorsweep
     depends_on:
       errorsweep-async-receiver:
-        condition: service_healthy
-      errorsweep-opus-mt:
-        condition: service_healthy
-      errorsweep-indictrans2:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5).read()"]
@@ -124,66 +116,8 @@ services:
       retries: 3
       start_period: 15s
 
-  errorsweep-opus-mt:
-    build:
-      context: .
-      dockerfile: Dockerfile.opus-mt
-    image: errorsweep/opus-mt:latest
-    restart: unless-stopped
-    env_file:
-      - ./deploy/.env.production
-    environment:
-      OPUS_MT_API_KEY: ${OPUS_MT_API_KEY:?Set OPUS_MT_API_KEY}
-      OPUS_MT_FORCE_CPU: ${OPUS_MT_FORCE_CPU:-true}
-      OPUS_MT_BATCH_SIZE: ${OPUS_MT_BATCH_SIZE:-2}
-      OPUS_MT_MAX_INPUT_LENGTH: ${OPUS_MT_MAX_INPUT_LENGTH:-192}
-      OPUS_MT_MAX_NEW_TOKENS: ${OPUS_MT_MAX_NEW_TOKENS:-192}
-      OPUS_MT_MAX_SEGMENTS: ${OPUS_MT_MAX_SEGMENTS:-48}
-      OPUS_MT_MAX_TOTAL_CHARS: ${OPUS_MT_MAX_TOTAL_CHARS:-25000}
-      OPUS_MT_MODEL_CACHE_SIZE: ${OPUS_MT_MODEL_CACHE_SIZE:-1}
-      HF_HOME: /models/huggingface
-      TRANSFORMERS_CACHE: /models/huggingface
-    volumes:
-      - opus-mt-models:/models/huggingface
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=5).read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  errorsweep-indictrans2:
-    build:
-      context: .
-      dockerfile: Dockerfile.indictrans2
-    image: errorsweep/indictrans2:latest
-    restart: unless-stopped
-    env_file:
-      - ./deploy/.env.production
-    environment:
-      INDICTRANS2_API_KEY: ${INDICTRANS2_API_KEY:?Set INDICTRANS2_API_KEY}
-      INDICTRANS2_FORCE_CPU: ${INDICTRANS2_FORCE_CPU:-true}
-      INDICTRANS2_PRELOAD: ${INDICTRANS2_PRELOAD:-false}
-      INDICTRANS2_BATCH_SIZE: ${INDICTRANS2_BATCH_SIZE:-2}
-      INDICTRANS2_MAX_INPUT_LENGTH: ${INDICTRANS2_MAX_INPUT_LENGTH:-192}
-      INDICTRANS2_MAX_NEW_TOKENS: ${INDICTRANS2_MAX_NEW_TOKENS:-192}
-      INDICTRANS2_MAX_SEGMENTS: ${INDICTRANS2_MAX_SEGMENTS:-48}
-      INDICTRANS2_MAX_TOTAL_CHARS: ${INDICTRANS2_MAX_TOTAL_CHARS:-25000}
-      HF_HOME: /models/huggingface
-      TRANSFORMERS_CACHE: /models/huggingface
-    volumes:
-      - indictrans2-models:/models/huggingface
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
 volumes:
   errorsweep-data:
   errorsweep-logs:
-  opus-mt-models:
-  indictrans2-models:
   caddy-data:
   caddy-config:

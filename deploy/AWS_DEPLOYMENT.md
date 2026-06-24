@@ -18,7 +18,7 @@ Start with a single Amazon EC2 host running the existing Docker Compose VPS stac
 | Persistent local container data | EBS volume mounted on the EC2 host |
 | Production database/auth tables | Keep the existing Supabase production setup unless you deliberately migrate persistence code |
 
-This is simpler than ECS/App Runner for the first launch because this repo already includes multiple cooperating containers: Streamlit app, async receiver, worker supervisor, billing webhook receiver, and optional MT workers.
+This is simpler than ECS/App Runner for the first launch because this repo already includes multiple cooperating containers: Streamlit app, async receiver, worker supervisor, and billing webhook receiver.
 
 Use ECS/Fargate later when you want managed multi-instance scaling, ALB path routing, service autoscaling, ECR image promotion, and Secrets Manager/SSM Parameter Store managed runtime secrets.
 
@@ -96,10 +96,10 @@ COGNISWEEP_BACKUP_PROVIDER=s3
 COGNISWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
 COGNISWEEP_WAF_PROVIDER=aws-waf
 
-SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS=true
-SELF_HOSTED_MT_ACTIVE_ENGINES=indictrans2,opus
-INDICTRANS2_ENDPOINT=http://errorsweep-indictrans2:8000/translate
-OPUS_MT_ENDPOINT=http://errorsweep-opus-mt:8100/translate
+# Future managed MT. Leave disabled until the Amazon Translate adapter is implemented.
+COGNISWEEP_MT_PROVIDER=disabled
+# COGNISWEEP_AWS_TRANSLATE_REGION=ap-south-1
+# COGNISWEEP_AWS_TRANSLATE_USE_BATCH=false
 ```
 
 The code and launch checks still accept legacy `ERRORSWEEP_*` aliases, but new AWS config should use `COGNISWEEP_*`.
@@ -111,7 +111,7 @@ When you are ready to move managed MT onto AWS, use Amazon Translate as the firs
 Current state:
 
 - CogniSweep's built-in MT route is implemented in `translator_router.py`.
-- The live route currently supports self-hosted IndicTrans2, OPUS-MT, and MADLAD-compatible HTTP endpoints.
+- Bundled local/self-hosted MT engines have been removed from this repository.
 - AWS MT is not active yet; do not add Amazon Translate env values to production expecting the app to use them until an adapter is implemented and tested.
 
 Recommended future implementation:
@@ -119,11 +119,11 @@ Recommended future implementation:
 - Add an `amazon_translate` provider branch behind the existing `translate_batch(...)` API.
 - Use `boto3.client("translate")` with the EC2/ECS IAM role, not long-lived AWS keys.
 - Map CogniSweep language names to Amazon Translate language codes from `normalize_language(...)`.
-- Keep placeholder protection from `selfhosted_mt_clients.py` before calling Amazon Translate.
+- Implement placeholder protection before calling Amazon Translate so variables, tags, URLs, and do-not-translate terms survive MT output.
 - Use `TranslateText` for short segments and UI strings.
 - Use S3-backed asynchronous batch translation only for large document batches where delayed completion is acceptable.
 - Support custom terminology for brand names, product terms, and do-not-translate terms after the base route is stable.
-- Keep IndicTrans2 as an optional fallback for Indian-language pairs if Amazon Translate quality is not acceptable for your target workflows.
+- Validate key language pairs with your own production samples before enabling managed MT for customer workflows.
 
 Future production env names should be added only when the adapter lands. Suggested names:
 
@@ -247,8 +247,7 @@ Move from EC2 Compose to ECS/Fargate when you need more than one app instance or
 - Put the app and public webhook behind an Application Load Balancer.
 - Keep S3 for object storage.
 - Move secrets into Secrets Manager or SSM Parameter Store.
-- Keep MT workers separate, especially if you move IndicTrans2/MADLAD to GPU EC2 capacity.
-- Replace or augment self-hosted MT with Amazon Translate after an adapter, language-pair tests, terminology tests, and cost controls are in place.
+- Add Amazon Translate only after an adapter, language-pair tests, terminology tests, and cost controls are in place.
 
 ## AWS References
 

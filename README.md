@@ -45,7 +45,7 @@ python deploy/launch_env_check.py --env-file deploy/.env.production --strict
 ```
 
 Required launch providers include Supabase persistence, cloud object storage, async workers, billing/webhooks, transactional email, legal approval, CDN/WAF, and scheduled backups.
-Production translation also needs either `OPENAI_API_KEY` or a live managed OpenAI-compatible endpoint for platform fallback, plus self-hosted MT endpoints for no-key Pro workflows.
+Production translation needs either `OPENAI_API_KEY` or a live managed OpenAI-compatible endpoint for platform fallback. Bundled local/self-hosted MT engines have been removed; Amazon Translate can be added later through a dedicated adapter.
 
 Naming note: some production environment variables and Docker service names still use the legacy `ERRORSWEEP_`/`errorsweep-*` prefix. They are the stable configuration keys for CogniSweep deployments and should stay as-is until a deliberate migration plan updates code, docs, secrets, and existing production environments together.
 
@@ -92,26 +92,9 @@ Configure at minimum:
 
 Local JSON fallback is for development only. Public launch must use production Supabase persistence.
 
-## Built-In Machine Translation
+## Managed Machine Translation
 
-No-key Pro translation can use self-hosted MT endpoints:
-
-- OPUS-MT for lightweight tested European pairs.
-- IndicTrans2 for Indian languages.
-- MADLAD-400 for broad global fallback when production GPU capacity is available.
-
-Worker setup references:
-
-- `README_v45_opus_mt_endpoint.md`
-- `README_indictrans2_setup.md`
-- `README_madlad400_endpoint.md`
-
-Local worker smoke test:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start_builtin_mt.ps1
-.\.venv\Scripts\python.exe test_builtin_mt_engines.py
-```
+Bundled local/self-hosted MT engines are retired. Keep `COGNISWEEP_MT_PROVIDER=disabled` for launch. Add Amazon Translate later behind `translator_router.translate_batch(...)` after language-pair tests, terminology tests, IAM permissions, and cost controls are ready.
 
 ## Platform AI Fallback
 

@@ -46,7 +46,7 @@ python deploy/supabase_schema_check.py --strict
 
 Expected result: no blockers.
 
-This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, GitHub Actions release gate, AI fallback readiness, auth/session readiness, async worker readiness, backup worker readiness, billing/webhook readiness, transactional email readiness, legal/compliance route readiness, built-in MT endpoint contracts, object-storage adapter readiness, Supabase schema drift, and Python syntax for production entry points. The GitHub workflow also installs production dependencies, runs launch-safe regression tests, runs `deploy/release_check.py --strict`, and exercises the launch rehearsal runner without external probes.
+This verifies the deployment pack, compose service split, env template coverage, secret ignore rules, GitHub Actions release gate, AI fallback readiness, auth/session readiness, async worker readiness, backup worker readiness, billing/webhook readiness, transactional email readiness, legal/compliance route readiness, managed MT posture, object-storage adapter readiness, Supabase schema drift, and Python syntax for production entry points. The GitHub workflow also installs production dependencies, runs launch-safe regression tests, runs `deploy/release_check.py --strict`, and exercises the launch rehearsal runner without external probes.
 
 ## Phase 1: Production Environment File
 
@@ -189,15 +189,15 @@ python worker_supervisor.py --status
 python production_smoke_test.py --markdown --probe-endpoints
 ```
 
-## Phase 5: AI Fallback And Built-In MT
+## Phase 5: AI Fallback And Future Managed MT
 
-Configure production translation routes before public no-key Pro workflows are enabled.
+Configure the production AI fallback route before public workflows are enabled.
 
-AWS MT note: the launch route currently expects self-hosted MT endpoints. If you
+AWS MT note: bundled local/self-hosted MT engines have been removed. If you
 later move managed MT to AWS, add an Amazon Translate adapter behind
-`translator_router.translate_batch(...)`, keep the current placeholder
-protection, and update the AWS deployment runbook before enabling it in
-production.
+`translator_router.translate_batch(...)`, add language-pair and terminology
+tests, and update the AWS deployment runbook before setting
+`COGNISWEEP_MT_PROVIDER=amazon_translate`.
 
 Required platform AI fallback values:
 
@@ -225,14 +225,9 @@ $env:COGNISWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
 python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.cognisweep.com/v1 --managed-api-key-env COGNISWEEP_MANAGED_AI_TOKEN --managed-model your-model
 ```
 
-Required no-key MT values:
+Managed MT is intentionally disabled for launch:
 
-- `OPUS_MT_ENDPOINT`
-- `INDICTRANS2_ENDPOINT`
-
-Recommended after GPU capacity approval:
-
-- `MADLAD_ENDPOINT`
+- `COGNISWEEP_MT_PROVIDER=disabled`
 
 Useful checks:
 
@@ -243,10 +238,6 @@ python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-mod
 python deploy/ai_fallback_check.py --env-file deploy/.env.production --probe-chat --strict
 python deploy/mt_endpoint_check.py --strict
 python deploy/mt_endpoint_check.py --env-file deploy/.env.production --strict
-python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-health --strict
-python deploy/mt_endpoint_check.py --env-file deploy/.env.production --probe-translate --strict
-python deploy/mt_endpoint_check.py --run-router-smoke --strict
-python test_builtin_mt_engines.py
 python deploy/launch_env_check.py --env-file deploy/.env.production
 ```
 
@@ -435,7 +426,7 @@ Then manually verify:
 | Object storage local fallback | Configure Supabase Storage, S3, or GCS for production. |
 | Async receiver or processor | Deploy the receiver/processor services and set worker env keys. |
 | Production AI fallback route | Configure `OPENAI_API_KEY` or a live managed OpenAI-compatible/vLLM endpoint. |
-| No-key MT minimum route | Configure live HTTPS OPUS-MT and IndicTrans2 endpoints before enabling public no-key Pro workflows. |
+| Managed MT provider | Leave `COGNISWEEP_MT_PROVIDER=disabled` until the Amazon Translate adapter is implemented and tested. |
 | Billing provider credentials | Configure live Razorpay or Stripe credentials. |
 | Webhook receiver URL | Set the public HTTPS billing webhook receiver URL. |
 | Webhook signature secret | Set the provider webhook signing secret. |

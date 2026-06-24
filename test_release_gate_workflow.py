@@ -47,10 +47,6 @@ def test_github_actions_release_gate_contract():
         "python test_process_file_locks.py",
         "python test_async_docx_security.py",
         "python test_async_manifest_security.py",
-        "python test_selfhosted_mt_client_security.py",
-        "python test_mt_server_hardening.py",
-        "python test_local_translation_engine_routes.py",
-        "python test_model_download_integrity.py",
         "python test_async_fail_closed.py",
         "python test_dependency_locking.py",
         "python test_persistence_cache_hardening.py",
@@ -77,6 +73,10 @@ def test_github_actions_release_gate_contract():
         "test_opus_mt_endpoint.py",
         "test_indictrans2_worker.py",
         "test_madlad_endpoint.py",
+        "test_selfhosted_mt_client_security.py",
+        "test_mt_server_hardening.py",
+        "test_local_translation_engine_routes.py",
+        "test_model_download_integrity.py",
     ]:
         assert endpoint_test not in workflow
 

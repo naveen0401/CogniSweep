@@ -55,23 +55,6 @@ except Exception as exc:
     ai_json_items = None
     select_ai_route = None
 
-# CogniSweep backend-only translation router:
-# Built-in route = self-hosted commercial-safe MT router
-# IndicTrans2 for Indian languages + OPUS-MT for supported global pairs
-try:
-    from translator_router import (
-        translate_batch as builtin_translate_batch,
-        current_builtin_engine_label,
-        builtin_engine_status,
-        smoke_test_builtin_engines,
-    )
-except Exception as exc:
-    LOGGER.warning("translator_router import failed: %s", exc)
-    builtin_translate_batch = None
-    current_builtin_engine_label = None
-    builtin_engine_status = None
-    smoke_test_builtin_engines = None
-
 # Speech-to-text helper for subtitle/transcription editor.
 # v32 policy: auto transcription only uses the user's own API key; no-key users get blank manual rows.
 try:
@@ -202,7 +185,6 @@ except Exception as exc:
 # ==========================================================
 # CogniSweep Platform
 # Security hardening + production persistence + usage tracking + external CAT/media editor launcher
-# Built-in MT: self-hosted IndicTrans2, MADLAD-400 when enabled, and OPUS-MT fallback.
 # Editor jobs and usage persist to Supabase when configured, with local JSON fallback
 # ==========================================================
 
@@ -334,12 +316,6 @@ SUBPROCESSOR_DEFAULT_REGISTER = {
         "dpa_status": "Needs DPA",
         "customer_notice": "Covered in policy",
         "notes": "",
-    },
-    "self_hosted_mt": {
-        "approval_status": "Approved",
-        "dpa_status": "Not applicable",
-        "customer_notice": "Covered in policy",
-        "notes": "Self-hosted/local MT should stay inside CogniSweep-controlled infrastructure.",
     },
     "byo_ai": {
         "approval_status": "Customer controlled",
@@ -4386,35 +4362,6 @@ def secret(name: str, default: str = "") -> str:
     return default
 
 
-MT_ENGINE_ALIASES = {
-    "indic": "indictrans2",
-    "indictrans": "indictrans2",
-    "indictrans2": "indictrans2",
-    "opus": "opus",
-    "opus-mt": "opus",
-    "opus_mt": "opus",
-    "madlad": "madlad",
-    "madlad400": "madlad",
-    "madlad-400": "madlad",
-}
-
-
-def active_mt_engine_names() -> Set[str]:
-    configured = safe_text(secret("SELF_HOSTED_MT_ACTIVE_ENGINES", "opus")).lower()
-    if configured in {"*", "all"}:
-        return {"indictrans2", "opus", "madlad"}
-    active: Set[str] = set()
-    for raw_name in re.split(r"[,;\s]+", configured):
-        name = MT_ENGINE_ALIASES.get(raw_name.strip())
-        if name:
-            active.add(name)
-    return active or {"opus"}
-
-
-def mt_engine_secret_enabled(engine: str, disable_secret_name: str) -> bool:
-    return engine in active_mt_engine_names() and not parse_bool_flag(secret(disable_secret_name, "false"), False)
-
-
 def is_production_mode() -> bool:
     mode = secret("ERRORSWEEP_ENV", secret("ENVIRONMENT", secret("APP_ENV", ""))).strip().lower()
     return mode in {"prod", "production"}
@@ -4428,7 +4375,6 @@ FEATURE_FLAG_META = {
     "public_registration": ("Public registration", "Allow unauthenticated users to create a trial workspace."),
     "demo_access": ("Demo access", "Allow unauthenticated demo workspace sign-in on local builds."),
     "billing_collection": ("Billing collection", "Allow checkout/mandate intents from the Billing page."),
-    "self_hosted_engines": ("Self-hosted engines", "Allow explicitly enabled no-key translation through configured IndicTrans2/MADLAD/OPUS workers."),
 }
 
 
@@ -4442,7 +4388,6 @@ def feature_flag_defaults() -> Dict[str, bool]:
         "public_registration": local_mode,
         "demo_access": local_mode,
         "billing_collection": local_mode,
-        "self_hosted_engines": local_mode,
     }
 
 
@@ -4465,20 +4410,6 @@ def feature_flag(key: str, default: Optional[bool] = None) -> bool:
     if key not in flags:
         flags[key] = fallback
     return parse_bool_flag(flags.get(key), fallback)
-
-
-def built_in_mt_enabled_for_no_key() -> bool:
-    """Return True only when legacy MT is intentionally enabled.
-
-    Production defaults to manual Human Review unless the owner explicitly opts in.
-    This keeps external worker outages from blocking editor creation.
-    """
-    configured = secret("ERRORSWEEP_ENABLE_BUILT_IN_MT", "")
-    if configured == "":
-        configured = secret("COGNISWEEP_ENABLE_BUILT_IN_MT", "")
-    if configured == "":
-        return not is_production_mode() and feature_flag("self_hosted_engines")
-    return parse_bool_flag(configured, False) and feature_flag("self_hosted_engines")
 
 
 def set_feature_flags(updates: Dict[str, bool]) -> List[str]:
@@ -15402,18 +15333,9 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     managed_ai_ready = managed_ai_enabled and secret_is_configured("ERRORSWEEP_MANAGED_AI_BASE_URL")
     add("AI", "OPENAI_API_KEY or managed AI endpoint", secret_is_configured("OPENAI_API_KEY") or managed_ai_ready, "Production AI fallback", "BYO user keys are preferred, but public launch needs a platform fallback or live managed OpenAI-compatible/vLLM endpoint.")
     add("AI", "GEMINI_API_KEY", secret_is_configured("GEMINI_API_KEY"), "Optional platform route", "Configure if Gemini OpenAI-compatible routing will be offered as a platform-managed option.")
-    active_opus_mt = mt_engine_secret_enabled("opus", "SELF_HOSTED_MT_DISABLE_OPUS")
-    active_indictrans2 = mt_engine_secret_enabled("indictrans2", "SELF_HOSTED_MT_DISABLE_INDIC")
-    active_madlad = mt_engine_secret_enabled("madlad", "SELF_HOSTED_MT_DISABLE_MADLAD")
-    add("Legacy MT", "OPUS_MT_ENDPOINT", (not active_opus_mt) or secret_is_configured("OPUS_MT_ENDPOINT") or not is_production_mode(), "Legacy route" if active_opus_mt else "Inactive", "Optional legacy route. Standard production uses BYO AI keys or manual Human Review.")
-    add("Legacy MT", "OPUS_MT_API_KEY", (not active_opus_mt) or secret_is_configured("OPUS_MT_API_KEY") or not is_production_mode(), "Legacy auth" if active_opus_mt else "Inactive", "Must match the OPUS_MT_API_KEY only if the legacy OPUS-MT worker remains enabled.")
-    add("Legacy MT", "INDICTRANS2_ENDPOINT", (not active_indictrans2) or secret_is_configured("INDICTRANS2_ENDPOINT") or not is_production_mode(), "Legacy route" if active_indictrans2 else "Inactive", "Optional legacy route. Keep disabled unless you run a dedicated IndicTrans2 worker.")
-    add("Legacy MT", "INDICTRANS2_API_KEY", (not active_indictrans2) or secret_is_configured("INDICTRANS2_API_KEY") or not is_production_mode(), "Legacy auth" if active_indictrans2 else "Inactive", "Must match INDICTRANS2_API_KEY only if the legacy worker remains enabled.")
-    add("Legacy MT", "MADLAD_ENDPOINT", (not active_madlad) or secret_is_configured("MADLAD_ENDPOINT") or not is_production_mode(), "Legacy route" if active_madlad else "Inactive", "Optional GPU route. Keep disabled unless production GPU capacity is approved.")
-    add("Legacy MT", "MADLAD_API_KEY", (not active_madlad) or secret_is_configured("MADLAD_API_KEY") or not is_production_mode(), "Legacy auth" if active_madlad else "Inactive", "Must match MADLAD_API_KEY only if the legacy worker remains enabled.")
+    add("MT", "Amazon Translate adapter", True, "Future route not enabled", "No bundled MT engine is required for launch. Add the Amazon Translate adapter later before setting COGNISWEEP_MT_PROVIDER=amazon_translate.")
     add("Feature flags", "public_registration", feature_flag("public_registration"), "Trial signup", "Controls public workspace creation.")
     add("Feature flags", "billing_collection", feature_flag("billing_collection"), "Paid plans", "Controls checkout/mandate creation.")
-    add("Feature flags", "self_hosted_engines", feature_flag("self_hosted_engines"), "Legacy MT", "Keep disabled for the standard no-key manual review workflow.")
     return rows
 
 
@@ -15545,11 +15467,10 @@ def production_env_template() -> str:
         ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
         ERRORSWEEP_BACKUP_OUTPUT_DIR=
 
-        # Optional legacy MT endpoints. Standard no-key production uses manual Human Review.
-        INDICTRANS2_ENDPOINT=https://mt.cognisweep.com/indictrans2/translate
-        MADLAD_ENDPOINT=https://mt.cognisweep.com/madlad/translate
-        OPUS_MT_ENDPOINT=https://mt.cognisweep.com/opus/translate
-        SELF_HOSTED_MT_TIMEOUT=300
+        # Future managed MT. Leave disabled until the Amazon Translate adapter is implemented.
+        ERRORSWEEP_MT_PROVIDER=disabled
+        # ERRORSWEEP_AWS_TRANSLATE_REGION=ap-south-1
+        # ERRORSWEEP_AWS_TRANSLATE_USE_BATCH=false
         """
     ).strip() + "\n"
 
@@ -15891,21 +15812,12 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_li
     )
 
     if include_live_checks:
-        if builtin_engine_status is None:
-            add("Legacy MT", "Warn", "MT diagnostics unavailable", "Legacy workers are optional; keep disabled for manual review mode.")
-        else:
-            try:
-                mt_rows = builtin_engine_status(timeout=2)
-                ready_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled") and row.get("ready")]
-                enabled_engines = [safe_text(row.get("engine")) for row in mt_rows if row.get("enabled")]
-                add(
-                    "Legacy MT",
-                    "Pass" if ready_engines else "Warn",
-                    ", ".join(ready_engines) if ready_engines else f"Enabled but not ready: {', '.join(enabled_engines) or 'none'}",
-                    "Legacy workers are optional; standard no-key production stays in manual Human Review.",
-                )
-            except Exception as exc:
-                add("Legacy MT", "Warn", f"MT check failed: {safe_text(exc)[:160]}", "Disable legacy MT or check worker endpoints and logs.")
+        add(
+            "MT",
+            "Pass",
+            "Managed MT is not enabled; no bundled local/self-hosted MT workers are deployed.",
+            "Future Amazon Translate work should add a new adapter and launch check.",
+        )
 
     return rows
 

@@ -1,121 +1,74 @@
-"""Validate CogniSweep built-in MT endpoint launch readiness.
+"""Validate CogniSweep managed-MT posture.
 
-Offline mode checks the router, clients, worker servers, templates, tests, and
-requirements. Use --env-file for production endpoint validation, --probe-health
-for live /health checks, and --probe-translate after hosted endpoints are
-reachable.
+Bundled local/self-hosted MT engines were retired. This checker keeps launch
+docs honest by verifying the legacy engine files and env keys are gone while
+leaving a clear placeholder for a future Amazon Translate adapter.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
-from urllib.parse import urlparse
-
-import requests
+from typing import Any, Dict, Iterable, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
 STREAMLIT_TEMPLATE_PATH = ROOT / ".streamlit" / "secrets.toml.example"
+ROUTER_PATH = ROOT / "translator_router.py"
 
-REQUIRED_FILES = [
-    "translator_router.py",
-    "selfhosted_mt_clients.py",
-    "opus_mt_server_v45.py",
-    "indictrans2_worker.py",
-    "madlad_mt_server.py",
+RETIRED_FILES = [
+    "Dockerfile.opus-mt",
+    "Dockerfile.indictrans2",
+    "docker-compose.opus-mt.yml",
+    "docker-compose.indictrans2.yml",
     "start_builtin_mt.ps1",
+    "selfhosted_mt_clients.py",
+    "local_translation_engine.py",
+    "indictrans2_worker.py",
+    "indictrans2_client.py",
+    "opus_mt_server_v45.py",
+    "opus_mt_client.py",
+    "madlad_mt_server.py",
+    "download_models.ps1",
+    "model_checksums.sha256.example",
+    "errorsweep_v44_self_hosted_mt_no_nllb_media_fix.zip",
+    "README_v45_opus_mt_endpoint.md",
+    "README_indictrans2_setup.md",
+    "README_madlad400_endpoint.md",
+    "requirements_opus_mt_server.txt",
+    "requirements_indictrans2_worker.txt",
+    "requirements_madlad_mt_server.txt",
     "test_builtin_mt_engines.py",
     "test_opus_mt_endpoint.py",
     "test_indictrans2_worker.py",
     "test_madlad_endpoint.py",
+    "test_mt_server_hardening.py",
+    "test_selfhosted_mt_client_security.py",
+    "test_local_translation_engine_routes.py",
 ]
-REQUIRED_DOCS = [
-    "README_v45_opus_mt_endpoint.md",
-    "README_indictrans2_setup.md",
-    "README_madlad400_endpoint.md",
+
+RETIRED_TOKENS = [
+    "SELF_HOSTED_MT",
+    "INDICTRANS2",
+    "OPUS_MT",
+    "MADLAD",
+    "LIBRETRANSLATE",
+    "LibreTranslate",
+    "translate_with_generic_endpoint",
+    "self_hosted_translate_batch",
 ]
+
 REQUIRED_ROUTER_SYMBOLS = [
-    "builtin_engine_status",
-    "smoke_test_builtin_engines",
-    "translate_batch",
-    "_endpoint_health_url",
+    "class TranslationRouteError",
+    "def current_builtin_engine_label",
+    "def builtin_engine_status",
+    "def smoke_test_builtin_engines",
+    "def translate_batch",
 ]
-REQUIRED_CLIENT_SYMBOLS = [
-    "translate_with_indictrans2",
-    "translate_with_madlad",
-    "translate_with_opus_mt",
-    "normalize_endpoint",
-    "validate_endpoint_for_request",
-    "protect_text",
-    "restore_text",
-]
-REQUIRED_CLIENT_TOKENS = [
-    "SELF_HOSTED_MT_RETRIES",
-    "SELF_HOSTED_MT_RETRY_BACKOFF_SECONDS",
-    "TRANSIENT_HTTP_STATUS_CODES",
-]
-SERVER_CONTRACT_TOKENS = {
-    "opus_mt_server_v45.py": [
-        "FastAPI",
-        '@app.get("/health")',
-        '@app.post("/translate")',
-        "SERVER_API_KEY",
-        "require_server_api_key_configured",
-        "validate_translate_request",
-        "MAX_NEW_TOKENS",
-        "RATE_LIMIT_REQUESTS",
-        "enforce_rate_limit",
-    ],
-    "indictrans2_worker.py": [
-        "FastAPI",
-        '@app.get("/health")',
-        '@app.post("/translate")',
-        "SERVER_API_KEY",
-        "require_server_api_key_configured",
-        "validate_translate_request",
-        "MAX_NEW_TOKENS",
-        "RATE_LIMIT_REQUESTS",
-        "enforce_rate_limit",
-    ],
-    "madlad_mt_server.py": [
-        "FastAPI",
-        '@app.get("/health")',
-        '@app.post("/translate")',
-        "SERVER_API_KEY",
-        "require_server_api_key_configured",
-        "validate_translate_request",
-        "MAX_NEW_TOKENS",
-        "RATE_LIMIT_REQUESTS",
-        "enforce_rate_limit",
-    ],
-}
-REQUIREMENT_FILES = {
-    "OPUS-MT": "requirements_opus_mt_server.txt",
-    "IndicTrans2": "requirements_indictrans2_worker.txt",
-    "MADLAD-400": "requirements_madlad_mt_server.txt",
-}
-REQUIRED_TEMPLATE_KEYS = [
-    "SELF_HOSTED_MT_ACTIVE_ENGINES",
-    "SELF_HOSTED_MT_DISABLE_INDIC",
-    "SELF_HOSTED_MT_DISABLE_OPUS",
-    "SELF_HOSTED_MT_DISABLE_MADLAD",
-    "INDICTRANS2_ENDPOINT",
-    "INDICTRANS2_API_KEY",
-    "MADLAD_ENDPOINT",
-    "MADLAD_API_KEY",
-    "OPUS_MT_ENDPOINT",
-    "OPUS_MT_API_KEY",
-    "SELF_HOSTED_MT_TIMEOUT",
-    "SELF_HOSTED_MT_ALLOW_PRIVATE_ENDPOINTS",
-]
+
 PLACEHOLDER_MARKERS = (
     "replace-with",
     "your-domain.com",
@@ -126,52 +79,6 @@ PLACEHOLDER_MARKERS = (
     "changeme",
     "change-me",
 )
-SENSITIVE_KEY_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|KEY|API_KEY)", re.IGNORECASE)
-
-ENGINE_ENV = {
-    "OPUS-MT": {
-        "engine_key": "opus",
-        "endpoint": "OPUS_MT_ENDPOINT",
-        "api_key": "OPUS_MT_API_KEY",
-        "required": True,
-        "disable_env": "SELF_HOSTED_MT_DISABLE_OPUS",
-        "source_language": "English",
-        "target_language": "Spanish",
-        "texts": ["Save changes"],
-    },
-    "IndicTrans2": {
-        "engine_key": "indictrans2",
-        "endpoint": "INDICTRANS2_ENDPOINT",
-        "api_key": "INDICTRANS2_API_KEY",
-        "required": True,
-        "disable_env": "SELF_HOSTED_MT_DISABLE_INDIC",
-        "source_language": "eng_Latn",
-        "target_language": "tel_Telu",
-        "texts": ["Save changes"],
-    },
-    "MADLAD-400": {
-        "engine_key": "madlad",
-        "endpoint": "MADLAD_ENDPOINT",
-        "api_key": "MADLAD_API_KEY",
-        "required": False,
-        "disable_env": "SELF_HOSTED_MT_DISABLE_MADLAD",
-        "source_language": "English",
-        "target_language": "Spanish",
-        "texts": ["Save changes"],
-    },
-}
-
-ACTIVE_ENGINE_ALIASES = {
-    "indic": "indictrans2",
-    "indictrans": "indictrans2",
-    "indictrans2": "indictrans2",
-    "opus": "opus",
-    "opus-mt": "opus",
-    "opus_mt": "opus",
-    "madlad": "madlad",
-    "madlad400": "madlad",
-    "madlad-400": "madlad",
-}
 
 
 def safe_text(value: Any) -> str:
@@ -198,20 +105,6 @@ def read_text(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="ignore")
-
-
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
-def requirement_name(line: str) -> str:
-    text = line.strip()
-    if not text or text.startswith("#") or text.startswith("-"):
-        return ""
-    text = text.split(";", 1)[0].strip()
-    text = re.split(r"\s*(?:===|==|~=|>=|<=|>|<|!=)\s*", text, maxsplit=1)[0]
-    text = text.split("[", 1)[0].strip().lower()
-    return text.replace("_", "-")
 
 
 def strip_env_value(raw_value: str) -> str:
@@ -249,346 +142,115 @@ def is_placeholder(value: str) -> bool:
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
-def https_url(value: str) -> bool:
-    if is_placeholder(value):
-        return False
-    parsed = urlparse(value)
-    return parsed.scheme == "https" and bool(parsed.netloc)
+def missing_items(items: Iterable[str], text: str) -> List[str]:
+    return [item for item in items if item not in text]
 
 
-def nonsecret_evidence(key: str, value: str) -> str:
-    if not safe_text(value):
-        return "missing"
-    if is_placeholder(value):
-        return "placeholder"
-    if SENSITIVE_KEY_RE.search(key):
-        return "configured"
-    return value
+def legacy_keys_in_env(env: Dict[str, str]) -> List[str]:
+    keys: List[str] = []
+    patterns = ("SELF_HOSTED_MT", "INDICTRANS2", "OPUS_MT", "MADLAD")
+    for key, value in env.items():
+        upper_key = key.upper()
+        if any(pattern in upper_key for pattern in patterns) and safe_text(value) and not is_placeholder(value):
+            keys.append(key)
+    return sorted(keys)
 
 
-def endpoint_health_url(endpoint: str) -> str:
-    endpoint = safe_text(endpoint).rstrip("/")
-    return endpoint[:-10] + "/health" if endpoint.endswith("/translate") else endpoint + "/health"
-
-
-def validate_files(results: List[Dict[str, str]]) -> None:
-    missing = [path for path in REQUIRED_FILES if not (ROOT / path).exists()]
+def validate_router(results: List[Dict[str, str]]) -> None:
+    text = read_text(ROUTER_PATH)
+    missing = missing_items(REQUIRED_ROUTER_SYMBOLS, text)
     add(
         results,
         "MT",
-        "MT source/test files",
-        "Pass" if not missing else "Blocker",
-        "router + clients + workers + tests present" if not missing else ", ".join(missing),
-        "Keep router, client, worker, startup, and endpoint test files in the release branch.",
+        "Router compatibility API",
+        "Pass" if text and not missing else "Blocker",
+        "stable API present" if text and not missing else ", ".join(missing) or "missing",
+        "Keep translator_router.py import-compatible until the Amazon Translate adapter lands.",
     )
-    missing_docs = [path for path in REQUIRED_DOCS if not (ROOT / path).exists()]
+    forbidden_imports = [token for token in ("selfhosted_mt_clients", "local_translation_engine", "indictrans2_worker", "opus_mt", "madlad") if token in text]
     add(
         results,
         "MT",
-        "MT setup docs",
-        "Pass" if not missing_docs else "Warn",
-        "OPUS, IndicTrans2, MADLAD setup docs present" if not missing_docs else ", ".join(missing_docs),
-        "Keep setup docs for each self-hosted MT worker with the deployment pack.",
+        "Retired engine imports",
+        "Pass" if not forbidden_imports else "Blocker",
+        "none" if not forbidden_imports else ", ".join(forbidden_imports),
+        "Do not reintroduce retired local/self-hosted MT engine imports.",
     )
 
 
-def validate_contracts(results: List[Dict[str, str]]) -> None:
-    router = read_text(ROOT / "translator_router.py")
-    client = read_text(ROOT / "selfhosted_mt_clients.py")
-    missing_router = [symbol for symbol in REQUIRED_ROUTER_SYMBOLS if f"def {symbol}" not in router]
-    missing_client = [symbol for symbol in REQUIRED_CLIENT_SYMBOLS if f"def {symbol}" not in client]
-    missing_client.extend(token for token in REQUIRED_CLIENT_TOKENS if token not in client)
+def validate_retired_files(results: List[Dict[str, str]]) -> None:
+    present = [path for path in RETIRED_FILES if (ROOT / path).exists()]
     add(
         results,
         "MT",
-        "Router API",
-        "Pass" if not missing_router else "Blocker",
-        "required functions present" if not missing_router else ", ".join(missing_router),
-        "Keep built-in MT diagnostics, smoke tests, and translate_batch routing APIs stable.",
+        "Retired engine files removed",
+        "Pass" if not present else "Blocker",
+        "removed" if not present else ", ".join(present),
+        "Keep deleted IndicTrans2, OPUS-MT, MADLAD, Libre/local MT, model-download, and endpoint-test artifacts out of the release branch.",
     )
-    add(
-        results,
-        "MT",
-        "Self-hosted client API",
-        "Pass" if not missing_client else "Blocker",
-        "required functions present" if not missing_client else ", ".join(missing_client),
-        "Keep endpoint normalization, placeholder protection, and provider clients available.",
-    )
-    for rel_path, tokens in SERVER_CONTRACT_TOKENS.items():
-        text = read_text(ROOT / rel_path)
-        missing = missing_items(tokens, text)
-        add(
-            results,
-            "MT",
-            f"{rel_path} HTTP contract",
-            "Pass" if not missing else "Blocker",
-            "/health + /translate + required auth + request caps" if not missing else ", ".join(missing),
-            "Keep every self-hosted MT worker exposing /health and /translate with required bearer auth, startup API-key enforcement, and request/generation caps.",
-        )
-
-
-def validate_requirements(results: List[Dict[str, str]]) -> None:
-    for engine, rel_path in REQUIREMENT_FILES.items():
-        path = ROOT / rel_path
-        packages = {requirement_name(line) for line in read_text(path).splitlines()}
-        packages.discard("")
-        missing = [package for package in ["fastapi", "uvicorn", "pydantic", "transformers", "requests"] if package not in packages]
-        add(
-            results,
-            "MT",
-            f"{engine} requirements",
-            "Pass" if path.exists() and not missing else "Blocker",
-            f"{len(packages)} package(s)" if path.exists() and not missing else "missing file" if not path.exists() else ", ".join(missing),
-            "Keep worker-specific requirements files complete for separate MT deployments.",
-        )
 
 
 def validate_templates(results: List[Dict[str, str]]) -> None:
-    env_template = read_text(ENV_TEMPLATE_PATH)
-    streamlit_template = read_text(STREAMLIT_TEMPLATE_PATH)
-    missing_env = missing_items(REQUIRED_TEMPLATE_KEYS, env_template)
-    missing_streamlit = missing_items(REQUIRED_TEMPLATE_KEYS, streamlit_template)
+    combined = "\n".join([read_text(ENV_TEMPLATE_PATH), read_text(STREAMLIT_TEMPLATE_PATH)])
+    active_text = "\n".join(
+        line
+        for line in combined.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
+    leaked_tokens = [token for token in RETIRED_TOKENS if token in active_text]
     add(
         results,
         "MT",
-        "Production env MT keys",
-        "Pass" if not missing_env else "Warn",
-        "endpoint keys listed" if not missing_env else ", ".join(missing_env),
-        "Keep deploy/.env.production.example aligned with self-hosted MT endpoint settings.",
+        "Retired env keys removed",
+        "Pass" if not leaked_tokens else "Blocker",
+        "removed" if not leaked_tokens else ", ".join(leaked_tokens),
+        "Keep production templates free of retired local/self-hosted MT endpoint settings.",
     )
+    future_markers = ["COGNISWEEP_MT_PROVIDER", "COGNISWEEP_AWS_TRANSLATE_REGION"]
+    missing = [marker for marker in future_markers if marker not in combined]
     add(
         results,
         "MT",
-        "Streamlit MT secret keys",
-        "Pass" if not missing_streamlit else "Warn",
-        "endpoint keys listed" if not missing_streamlit else ", ".join(missing_streamlit),
-        "Keep Streamlit-hosted deployments aware of self-hosted MT endpoint settings.",
+        "Future Amazon Translate placeholders",
+        "Pass" if not missing else "Warn",
+        "present" if not missing else ", ".join(missing),
+        "Keep disabled Amazon Translate placeholders documented for the future adapter.",
     )
 
 
-def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
-    value = env_value(env, name)
-    if not value:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
-    value = safe_text(env.get(name))
-    if value:
-        return value
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = safe_text(env.get(alias))
-        if value:
-            return value
-    return default
-
-
-def active_engine_names(env: Dict[str, str]) -> set[str]:
-    configured = env_value(env, "SELF_HOSTED_MT_ACTIVE_ENGINES", "opus").lower()
-    if configured in {"*", "all"}:
-        return {"indictrans2", "opus", "madlad"}
-    active: set[str] = set()
-    for raw_name in re.split(r"[,;\s]+", configured):
-        name = ACTIVE_ENGINE_ALIASES.get(raw_name.strip())
-        if name:
-            active.add(name)
-    return active or {"opus"}
-
-
-def engine_is_active(env: Dict[str, str], config: Dict[str, Any], require_madlad: bool = False) -> bool:
-    engine_key = safe_text(config.get("engine_key"))
-    if engine_key == "madlad" and require_madlad:
-        return not env_bool(env, safe_text(config.get("disable_env")), False)
-    return engine_key in active_engine_names(env) and not env_bool(env, safe_text(config.get("disable_env")), False)
-
-
-def validate_env_config(results: List[Dict[str, str]], env_path: Path, require_madlad: bool) -> Optional[Dict[str, str]]:
+def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Optional[Dict[str, str]]:
     if not env_path.exists():
-        add(results, "MT Config", "Production env file", "Blocker", "missing", "Create deploy/.env.production from the non-secret template.")
+        add(results, "MT Config", "Production env file", "Warn", "missing", "Skip live MT validation until a production env file exists.")
         return None
     env = parse_env_file(env_path)
-    for engine, config in ENGINE_ENV.items():
-        endpoint_key = config["endpoint"]
-        api_key = config["api_key"]
-        endpoint = env_value(env, endpoint_key)
-        key_value = env_value(env, api_key)
-        required = engine_is_active(env, config, require_madlad=require_madlad)
-        status_when_missing = "Blocker" if required else "Warn"
-        if not required:
-            add(
-                results,
-                "MT Config",
-                f"{engine} endpoint",
-                "Pass",
-                "inactive",
-                f"Include {config['engine_key']} in SELF_HOSTED_MT_ACTIVE_ENGINES when this worker is deployed.",
-            )
-            continue
-        add(
-            results,
-            "MT Config",
-            f"{engine} endpoint",
-            "Pass" if https_url(endpoint) else status_when_missing,
-            nonsecret_evidence(endpoint_key, endpoint),
-            f"Set {endpoint_key} to a live HTTPS /translate endpoint.",
-        )
-        if endpoint and not is_placeholder(endpoint):
-            add(
-                results,
-                "MT Config",
-                f"{engine} API key",
-                "Pass" if key_value and not is_placeholder(key_value) else status_when_missing,
-                nonsecret_evidence(api_key, key_value),
-                f"Set {api_key}; self-hosted MT workers refuse to start with an empty API key.",
-            )
-    timeout_value = safe_text(env.get("SELF_HOSTED_MT_TIMEOUT"))
-    try:
-        timeout_ok = int(timeout_value or "0") >= 120
-    except Exception:
-        timeout_ok = False
+    legacy_keys = legacy_keys_in_env(env)
     add(
         results,
         "MT Config",
-        "Self-hosted MT timeout",
-        "Pass" if timeout_ok else "Warn",
-        timeout_value or "missing",
-        "Set SELF_HOSTED_MT_TIMEOUT to at least 120 seconds for model-backed workers.",
+        "Retired production MT keys",
+        "Warn" if legacy_keys else "Pass",
+        "configured: " + ", ".join(legacy_keys) if legacy_keys else "none",
+        "Remove retired MT endpoint/key variables from deploy/.env.production; they are ignored by the app now.",
     )
-    madlad_endpoint_ready = https_url(safe_text(env.get("MADLAD_ENDPOINT")))
-    madlad_disabled = env_bool(env, "SELF_HOSTED_MT_DISABLE_MADLAD", False)
-    madlad_gpu_approved = env_bool(env, "ERRORSWEEP_MADLAD_GPU_APPROVED", False)
-    if madlad_endpoint_ready and not madlad_disabled:
-        add(
-            results,
-            "MT Config",
-            "MADLAD GPU decision",
-            "Pass" if madlad_gpu_approved else "Warn",
-            "approved" if madlad_gpu_approved else "not recorded",
-            "Set ERRORSWEEP_MADLAD_GPU_APPROVED=true only after approving GPU-backed MADLAD capacity, or disable/defer MADLAD.",
-        )
+    provider = safe_text(env.get("COGNISWEEP_MT_PROVIDER") or env.get("ERRORSWEEP_MT_PROVIDER") or "disabled").lower()
+    add(
+        results,
+        "MT Config",
+        "Managed MT provider",
+        "Warn" if provider == "amazon_translate" else "Pass",
+        provider or "disabled",
+        "Leave disabled until the Amazon Translate adapter and tests are implemented.",
+    )
     return env
 
 
-def probe_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: int, require_madlad: bool) -> None:
-    for engine, config in ENGINE_ENV.items():
-        endpoint = env_value(env, config["endpoint"])
-        required = engine_is_active(env, config, require_madlad=require_madlad)
-        status_when_failed = "Blocker" if required else "Warn"
-        if not required:
-            add(results, "MT Probe", f"{engine} health", "Pass", "inactive", f"Enable {config['engine_key']} before probing health.")
-            continue
-        if not https_url(endpoint):
-            add(results, "MT Probe", f"{engine} health", status_when_failed, "endpoint not configured", f"Configure {config['endpoint']} before probing health.")
-            continue
-        try:
-            response = requests.get(endpoint_health_url(endpoint), timeout=timeout)
-            add(
-                results,
-                "MT Probe",
-                f"{engine} health",
-                "Pass" if response.status_code < 500 else status_when_failed,
-                f"HTTP {response.status_code}",
-                f"Verify {engine} /health is reachable from the deployment environment.",
-            )
-        except Exception as exc:
-            add(results, "MT Probe", f"{engine} health", status_when_failed, safe_text(exc)[:220], f"Check {engine} DNS, TLS, firewall, model startup, and service health.")
-
-
-def probe_translate(results: List[Dict[str, str]], env: Dict[str, str], timeout: int, require_madlad: bool) -> None:
-    for engine, config in ENGINE_ENV.items():
-        endpoint = env_value(env, config["endpoint"])
-        required = engine_is_active(env, config, require_madlad=require_madlad)
-        status_when_failed = "Blocker" if required else "Warn"
-        if not required:
-            add(results, "MT Probe", f"{engine} translation", "Pass", "inactive", f"Enable {config['engine_key']} before probing translation.")
-            continue
-        if not https_url(endpoint):
-            add(results, "MT Probe", f"{engine} translation", status_when_failed, "endpoint not configured", f"Configure {config['endpoint']} before probing translation.")
-            continue
-        headers = {"Content-Type": "application/json"}
-        api_key = env_value(env, config["api_key"])
-        if not api_key or is_placeholder(api_key):
-            add(results, "MT Probe", f"{engine} translation", status_when_failed, "API key not configured", f"Set {config['api_key']} before probing translation.")
-            continue
-        if api_key and not is_placeholder(api_key):
-            headers["Authorization"] = f"Bearer {api_key}"
-        payload = {
-            "source_language": config["source_language"],
-            "target_language": config["target_language"],
-            "texts": config["texts"],
-        }
-        try:
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
-            detail = f"HTTP {response.status_code}"
-            status = "Pass" if response.status_code < 400 else status_when_failed
-            if response.status_code < 400:
-                data = response.json() if response.content else {}
-                translations = data.get("translations") or data.get("items") or data.get("outputs") or []
-                status = "Pass" if translations else status_when_failed
-                detail = "translation returned" if translations else "empty translation"
-            add(results, "MT Probe", f"{engine} translation", status, detail, f"Verify {engine} can translate the launch smoke segment.")
-        except Exception as exc:
-            add(results, "MT Probe", f"{engine} translation", status_when_failed, safe_text(exc)[:220], f"Check {engine} /translate contract, auth token, model loading, and timeout.")
-
-
-def run_router_smoke(results: List[Dict[str, str]], timeout: int, env_path: Optional[Path] = None) -> None:
-    command = [sys.executable, "test_builtin_mt_engines.py"]
-    if env_path is not None:
-        command.extend(["--env-file", str(env_path)])
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout, check=False)
-        output = completed.stdout or completed.stderr or ""
-        evidence = "; ".join(line for line in output.splitlines()[:3] if line)[:220] or f"exit {completed.returncode}"
-        add(
-            results,
-            "MT Smoke",
-            "Router smoke script",
-            "Pass" if completed.returncode == 0 else "Warn",
-            evidence,
-            "Run this with live hosted MT endpoints and review per-engine output before launch.",
-        )
-    except Exception as exc:
-        add(results, "MT Smoke", "Router smoke script", "Warn", safe_text(exc)[:220], "Run test_builtin_mt_engines.py manually after endpoints are reachable.")
-
-
-def collect_results(
-    env_path: Optional[Path] = None,
-    *,
-    probe_health_enabled: bool = False,
-    probe_translate_enabled: bool = False,
-    run_router_smoke_enabled: bool = False,
-    require_madlad: bool = False,
-    timeout: int = 120,
-) -> List[Dict[str, str]]:
+def collect_results(env_path: Optional[Path] = None) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
-    validate_files(results)
-    validate_contracts(results)
-    validate_requirements(results)
+    validate_router(results)
+    validate_retired_files(results)
     validate_templates(results)
-
-    env: Optional[Dict[str, str]] = None
     if env_path is not None:
-        env = validate_env_config(results, env_path, require_madlad=require_madlad)
-    if probe_health_enabled:
-        if env is None:
-            add(results, "MT Probe", "Health probe configuration", "Blocker", "no env file", "Pass --env-file deploy/.env.production before --probe-health.")
-        else:
-            probe_health(results, env, min(timeout, 30), require_madlad=require_madlad)
-    if probe_translate_enabled:
-        if env is None:
-            add(results, "MT Probe", "Translation probe configuration", "Blocker", "no env file", "Pass --env-file deploy/.env.production before --probe-translate.")
-        else:
-            probe_translate(results, env, timeout, require_madlad=require_madlad)
-    if run_router_smoke_enabled:
-        run_router_smoke(results, timeout, env_path=env_path)
+        validate_env_config(results, env_path)
     return results
 
 
@@ -606,7 +268,7 @@ def summarize(results: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> str:
     lines = [
-        "# CogniSweep MT Endpoint Check",
+        "# CogniSweep Managed MT Check",
         "",
         f"- Generated: {summary['generated_at']}",
         f"- Result: {summary['result']}",
@@ -624,30 +286,21 @@ def markdown_report(summary: Dict[str, Any], results: List[Dict[str, str]]) -> s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate CogniSweep built-in MT endpoint launch readiness.")
-    parser.add_argument("--env-file", default="", help="Production env file to validate. Omit for offline code/template checks.")
-    parser.add_argument("--probe-health", action="store_true", help="Probe configured MT endpoint /health routes.")
-    parser.add_argument("--probe-translate", action="store_true", help="Run one direct /translate probe per configured MT endpoint.")
-    parser.add_argument("--run-router-smoke", action="store_true", help="Run test_builtin_mt_engines.py.")
-    parser.add_argument("--require-madlad", action="store_true", help="Treat MADLAD-400 as required instead of optional.")
-    parser.add_argument("--timeout", type=int, default=120, help="Endpoint probe timeout in seconds.")
+    parser = argparse.ArgumentParser(description="Validate CogniSweep managed-MT posture.")
+    parser.add_argument("--env-file", default="", help="Optional production env file to validate for retired MT keys.")
+    parser.add_argument("--probe-health", action="store_true", help="Accepted for backward compatibility; no live MT endpoint is probed.")
+    parser.add_argument("--probe-translate", action="store_true", help="Accepted for backward compatibility; no live MT endpoint is probed.")
+    parser.add_argument("--run-router-smoke", action="store_true", help="Accepted for backward compatibility; no live MT endpoint is probed.")
+    parser.add_argument("--require-madlad", action="store_true", help="Accepted for backward compatibility; MADLAD has been retired.")
+    parser.add_argument("--timeout", type=int, default=120, help="Unused compatibility option.")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when blockers are found.")
     parser.add_argument("--fail-on-warn", action="store_true", help="Exit non-zero on warnings as well as blockers.")
     args = parser.parse_args()
 
+    _ = (args.probe_health, args.probe_translate, args.run_router_smoke, args.require_madlad, args.timeout)
     env_path = Path(args.env_file) if args.env_file else None
-    results = sorted(
-        collect_results(
-            env_path=env_path,
-            probe_health_enabled=args.probe_health,
-            probe_translate_enabled=args.probe_translate,
-            run_router_smoke_enabled=args.run_router_smoke,
-            require_madlad=args.require_madlad,
-            timeout=max(10, args.timeout),
-        ),
-        key=lambda row: (status_rank(row["Status"]), row["Area"], row["Check"]),
-    )
+    results = sorted(collect_results(env_path=env_path), key=lambda row: (status_rank(row["Status"]), row["Area"], row["Check"]))
     summary = summarize(results)
     if args.json:
         print(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=2))

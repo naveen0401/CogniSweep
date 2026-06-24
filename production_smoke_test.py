@@ -141,10 +141,6 @@ def managed_ai_ready() -> bool:
     return _env_bool("ERRORSWEEP_MANAGED_AI_ENABLED") and _https_url(_env("ERRORSWEEP_MANAGED_AI_BASE_URL"))
 
 
-def mt_endpoint_ready(name: str) -> bool:
-    return _https_url(_env(name)) and not _is_placeholder(_env(name))
-
-
 def public_probe(url: str, timeout: int) -> Dict[str, str]:
     if not url:
         return {"status": "not_configured", "detail": ""}
@@ -414,34 +410,10 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
     add_result(
         results,
         "MT",
-        "No-key MT minimum route",
-        "Pass" if any(mt_endpoint_ready(name) for name in ("OPUS_MT_ENDPOINT", "INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT")) else "Blocker",
-        "configured" if any(mt_endpoint_ready(name) for name in ("OPUS_MT_ENDPOINT", "INDICTRANS2_ENDPOINT", "MADLAD_ENDPOINT")) else "missing",
-        "Configure live HTTPS self-hosted MT endpoints before public no-key Pro translation.",
-    )
-    add_result(
-        results,
-        "MT",
-        "OPUS-MT endpoint",
-        "Pass" if mt_endpoint_ready("OPUS_MT_ENDPOINT") else "Blocker",
-        _env("OPUS_MT_ENDPOINT") or "missing",
-        "Configure OPUS_MT_ENDPOINT as the lightweight no-key MT fallback.",
-    )
-    add_result(
-        results,
-        "MT",
-        "IndicTrans2 endpoint",
-        "Pass" if mt_endpoint_ready("INDICTRANS2_ENDPOINT") else "Blocker",
-        _env("INDICTRANS2_ENDPOINT") or "missing",
-        "Configure INDICTRANS2_ENDPOINT for Indian-language no-key translation.",
-    )
-    add_result(
-        results,
-        "MT",
-        "MADLAD-400 endpoint",
-        "Pass" if mt_endpoint_ready("MADLAD_ENDPOINT") else "Warn",
-        _env("MADLAD_ENDPOINT") or "missing",
-        "Configure MADLAD_ENDPOINT after production GPU capacity is approved.",
+        "Managed MT provider",
+        "Warn" if _env("ERRORSWEEP_MT_PROVIDER", "disabled").lower() == "amazon_translate" else "Pass",
+        _env("ERRORSWEEP_MT_PROVIDER", "disabled") or "disabled",
+        "Leave managed MT disabled until the Amazon Translate adapter and tests are implemented.",
     )
 
     provider = _env("ERRORSWEEP_BILLING_PROVIDER").lower()

@@ -815,7 +815,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             route_error = safe_text(exc)
             translations = ["" for _ in source_texts]
-            usage = {"provider": "self_hosted_mt", "model": "worker", "success": False, "error": route_error, "characters": sum(len(t) for t in source_texts), "requests": 1}
+            usage = {"provider": "managed_mt", "model": "amazon_translate_pending", "success": False, "error": route_error, "characters": sum(len(t) for t in source_texts), "requests": 1}
     else:
         route_error = "translator_router is unavailable in this worker environment."
         translations = ["" for _ in source_texts]
@@ -844,7 +844,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "segments": len(review_rows),
         "missing_or_review": missing,
         "status": "Needs Human Review" if missing else "Completed",
-        "route": safe_text(usage.get("engine") or usage.get("provider") or "self_hosted_mt"),
+        "route": safe_text(usage.get("engine") or usage.get("provider") or "managed_mt"),
         "route_error": route_error,
     }
     export_source: Dict[str, Any] = {}

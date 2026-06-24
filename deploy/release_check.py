@@ -69,9 +69,6 @@ REQUIRED_REQUIREMENT_PACKAGES = [
 
 REQUIREMENT_FILES = [
     "requirements.txt",
-    "requirements_opus_mt_server.txt",
-    "requirements_madlad_mt_server.txt",
-    "requirements_indictrans2_worker.txt",
 ]
 
 LOCKED_REQUIREMENTS_FILE = "requirements.lock.txt"
@@ -157,10 +154,7 @@ REQUIRED_ENV_KEYS = [
     "ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED",
     "ERRORSWEEP_BACKUP_OUTPUT_DIR",
     "ERRORSWEEP_WAF_PROVIDER",
-    "INDICTRANS2_ENDPOINT",
-    "MADLAD_ENDPOINT",
-    "OPUS_MT_ENDPOINT",
-    "SELF_HOSTED_MT_TIMEOUT",
+    "ERRORSWEEP_MT_PROVIDER",
 ]
 
 REQUIRED_STREAMLIT_SECRET_KEYS = [
@@ -195,9 +189,7 @@ REQUIRED_STREAMLIT_SECRET_KEYS = [
     "ERRORSWEEP_BACKUP_PROVIDER",
     "ERRORSWEEP_BACKUP_WORKER_ENABLED",
     "ERRORSWEEP_BACKUP_RETENTION_DAYS",
-    "INDICTRANS2_ENDPOINT",
-    "MADLAD_ENDPOINT",
-    "OPUS_MT_ENDPOINT",
+    "ERRORSWEEP_MT_PROVIDER",
 ]
 
 PYTHON_ENTRYPOINTS = [
@@ -681,7 +673,7 @@ def check_mt_endpoint_contract(results: List[Dict[str, str]]) -> None:
     try:
         completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
     except Exception as exc:
-        add(results, "MT", "MT endpoint launch check", "Warn", safe_text(exc)[:220], "Run deploy/mt_endpoint_check.py manually.")
+        add(results, "MT", "Managed MT posture check", "Warn", safe_text(exc)[:220], "Run deploy/mt_endpoint_check.py manually.")
         return
     output = completed.stdout or completed.stderr or ""
     try:
@@ -698,10 +690,10 @@ def check_mt_endpoint_contract(results: List[Dict[str, str]]) -> None:
     add(
         results,
         "MT",
-        "MT endpoint launch check",
+        "Managed MT posture check",
         status,
         evidence,
-        "Keep OPUS-MT, IndicTrans2, and MADLAD endpoint contracts, requirements, docs, and launch templates ready.",
+        "Keep retired local/self-hosted MT artifacts absent and leave Amazon Translate disabled until its adapter is implemented.",
     )
 
 
@@ -743,10 +735,7 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_process_file_locks.py",
         "python test_async_docx_security.py",
         "python test_async_manifest_security.py",
-        "python test_selfhosted_mt_client_security.py",
         "python test_dependency_locking.py",
-        "python test_local_translation_engine_routes.py",
-        "python test_model_download_integrity.py",
         "python test_persistence_cache_hardening.py",
         "python test_qa_correction_cache.py",
         "python test_subtitle_external_editor_only.py",
@@ -808,24 +797,6 @@ def check_dockerfile(results: List[Dict[str, str]]) -> None:
         "non-root app image with healthcheck" if not missing else ", ".join(missing),
         "Keep the app image non-root, health-checked, and based on the pinned requirements file.",
     )
-    opus_dockerfile = read_text("Dockerfile.opus-mt")
-    opus_required = [
-        f"FROM {DOCKER_BASE_DIGEST}",
-        PINNED_PIP_INSTALL,
-        "torch==2.12.0",
-        "-r /app/requirements_opus_mt_server.txt",
-    ]
-    opus_missing = missing_items(opus_required, opus_dockerfile)
-    add(
-        results,
-        "MT",
-        "OPUS-MT Dockerfile dependency posture",
-        "Pass" if not opus_missing else "Warn",
-        "digest-pinned base and exact worker dependencies" if not opus_missing else ", ".join(opus_missing),
-        "Keep the OPUS-MT image base digest-pinned with exact worker package versions.",
-    )
-
-
 def check_persistence_cache_hardening(results: List[Dict[str, str]]) -> None:
     app = read_text("app.py")
     required = [

@@ -409,21 +409,15 @@ def check_ai_mt(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         require_https(results, env, "AI", "Managed AI base URL", "ERRORSWEEP_MANAGED_AI_BASE_URL", "Set a live HTTPS OpenAI-compatible/vLLM base URL when managed AI is enabled.")
         require_value(results, env, "AI", "Managed AI API key", ["ERRORSWEEP_MANAGED_AI_API_KEY"], "Set the managed AI bearer/API token.", status_when_missing="Warn")
 
-    opus_ready = https_url(safe_text(env.get("OPUS_MT_ENDPOINT")))
-    indic_ready = https_url(safe_text(env.get("INDICTRANS2_ENDPOINT")))
-    madlad_ready = https_url(safe_text(env.get("MADLAD_ENDPOINT")))
+    mt_provider = value_for(env, ["ERRORSWEEP_MT_PROVIDER"]).lower() or "disabled"
     add(
         results,
         "MT",
-        "No-key MT minimum route",
-        "Pass" if opus_ready or indic_ready or madlad_ready else "Blocker",
-        "configured" if opus_ready or indic_ready or madlad_ready else "missing/placeholder",
-        "Configure at least one live HTTPS self-hosted MT endpoint so no-key Pro translation has a route.",
+        "Managed MT provider",
+        "Warn" if mt_provider == "amazon_translate" else "Pass",
+        mt_provider,
+        "Leave COGNISWEEP_MT_PROVIDER/ERRORSWEEP_MT_PROVIDER disabled until the Amazon Translate adapter and tests are implemented.",
     )
-    require_https(results, env, "MT", "OPUS-MT endpoint", "OPUS_MT_ENDPOINT", "Configure OPUS_MT_ENDPOINT as the lightweight no-key MT fallback.")
-    require_https(results, env, "MT", "IndicTrans2 endpoint", "INDICTRANS2_ENDPOINT", "Configure INDICTRANS2_ENDPOINT for Indian-language no-key translation.")
-    require_https(results, env, "MT", "MADLAD-400 endpoint", "MADLAD_ENDPOINT", "Configure MADLAD_ENDPOINT when production GPU capacity is approved.", status_when_missing="Warn")
-    require_value(results, env, "MT", "Self-hosted MT timeout", ["SELF_HOSTED_MT_TIMEOUT"], "Set SELF_HOSTED_MT_TIMEOUT for long batch translation requests.", status_when_missing="Warn")
 
 
 def check_billing(results: List[Dict[str, str]], env: Dict[str, str]) -> None:

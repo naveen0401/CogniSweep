@@ -5,9 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 REQUIREMENT_FILES = [
     "requirements.txt",
-    "requirements_opus_mt_server.txt",
-    "requirements_madlad_mt_server.txt",
-    "requirements_indictrans2_worker.txt",
 ]
 LOCK_FILE = "requirements.lock.txt"
 PINNED_REQUIREMENT = re.compile(
@@ -54,14 +51,10 @@ def test_lockfile_covers_main_direct_dependencies():
 
 def test_dockerfiles_use_digest_pinned_base_and_lockfile():
     dockerfile = read("Dockerfile")
-    opus_dockerfile = read("Dockerfile.opus-mt")
 
     assert f"FROM {DOCKER_BASE_DIGEST}" in dockerfile
-    assert f"FROM {DOCKER_BASE_DIGEST}" in opus_dockerfile
     assert "python -m pip install --upgrade pip==26.1.2" in dockerfile
     assert "python -m pip install -r requirements.lock.txt" in dockerfile
-    assert "python -m pip install --upgrade pip==26.1.2" in opus_dockerfile
-    assert "torch==2.12.0" in opus_dockerfile
 
 
 def test_release_gate_runs_dependency_locking_check():
