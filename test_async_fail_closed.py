@@ -15,6 +15,7 @@ TRACKED_ENV = [
     "APP_ENV",
     "ERRORSWEEP_ASYNC_BACKEND",
     "ERRORSWEEP_ASYNC_WORKER_URL",
+    "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED",
     "ERRORSWEEP_WORKER_ENDPOINT",
     "REDIS_URL",
     "CELERY_BROKER_URL",
@@ -87,6 +88,51 @@ def test_production_http_backend_remains_external():
         restore_env(previous)
 
 
+def test_production_compose_receiver_backend_remains_external_when_enabled():
+    previous = with_env({
+        "ERRORSWEEP_ENV": "production",
+        "ERRORSWEEP_ASYNC_WORKER_URL": "http://errorsweep-async-receiver:8300/tasks",
+        "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED": "true",
+    })
+    try:
+        status = queue.async_backend_status()
+        assert status["provider"] == "http"
+        assert status["ready"] is True
+        assert status["mode"] == "external"
+    finally:
+        restore_env(previous)
+
+
+def test_production_internal_backend_without_receiver_flag_blocks():
+    previous = with_env({
+        "ERRORSWEEP_ENV": "production",
+        "ERRORSWEEP_ASYNC_WORKER_URL": "http://errorsweep-async-receiver:8300/tasks",
+    })
+    try:
+        status = queue.async_backend_status()
+        assert status["provider"] == "http"
+        assert status["ready"] is False
+        assert status["mode"] == "blocked"
+        assert "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED" in status["message"]
+    finally:
+        restore_env(previous)
+
+
+def test_production_localhost_backend_still_blocks_with_receiver_flag():
+    previous = with_env({
+        "ERRORSWEEP_ENV": "production",
+        "ERRORSWEEP_ASYNC_WORKER_URL": "http://127.0.0.1:8300/tasks",
+        "ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED": "true",
+    })
+    try:
+        status = queue.async_backend_status()
+        assert status["provider"] == "http"
+        assert status["ready"] is False
+        assert status["mode"] == "blocked"
+    finally:
+        restore_env(previous)
+
+
 def test_release_gate_covers_async_fail_closed():
     app = source(APP)
     async_queue = source(ASYNC_QUEUE)
@@ -108,5 +154,8 @@ if __name__ == "__main__":
     test_local_development_still_allows_inline_fallback()
     test_production_without_external_backend_fails_closed()
     test_production_http_backend_remains_external()
+    test_production_compose_receiver_backend_remains_external_when_enabled()
+    test_production_internal_backend_without_receiver_flag_blocks()
+    test_production_localhost_backend_still_blocks_with_receiver_flag()
     test_release_gate_covers_async_fail_closed()
     print("Async fail-closed checks passed.")
