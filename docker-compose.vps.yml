@@ -89,6 +89,8 @@ services:
       ERRORSWEEP_OBJECT_STORAGE_DIR: /data/errorsweep/object_storage
       ERRORSWEEP_BACKUP_OUTPUT_DIR: /data/errorsweep/backups
     command: ["python", "worker_supervisor.py"]
+    healthcheck:
+      disable: true
     volumes:
       - errorsweep-data:/data/errorsweep
       - errorsweep-logs:/logs/errorsweep
