@@ -12,8 +12,8 @@ def source() -> str:
 
 def function_body(name: str, end_name: str) -> str:
     text = source()
-    start = text.index(f"def {name}")
-    end = text.index(f"def {end_name}", start)
+    start = text.index(f"def {name}(")
+    end = text.index(f"def {end_name}(", start)
     return text[start:end]
 
 

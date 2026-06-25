@@ -66,6 +66,18 @@ def _internal_only_worker_url(worker_url: str) -> bool:
     }
 
 
+def _compose_receiver_worker_url(worker_url: str) -> bool:
+    hostname = (urlparse(worker_url).hostname or "").lower()
+    return hostname in {"errorsweep-async-receiver", "async-receiver"}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = _secret(name, "")
+    if not value:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _secret(name: str, default: str = "") -> str:
     value = _env_value(name, "")
     if value not in (None, ""):
@@ -102,12 +114,19 @@ def async_backend_status() -> Dict[str, Any]:
     ready = provider == "local" or bool(worker_url if provider == "http" else redis_url if provider == "redis" else False)
     mode = "external" if provider in {"http", "redis"} and ready else "local_inline"
     message = ""
-    if provider == "http" and worker_url and is_production_mode() and _internal_only_worker_url(worker_url):
+    if (
+        provider == "http"
+        and worker_url
+        and is_production_mode()
+        and _internal_only_worker_url(worker_url)
+        and not (_compose_receiver_worker_url(worker_url) and _env_bool("ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED"))
+    ):
         ready = False
         mode = "blocked"
         message = (
             "ERRORSWEEP_ASYNC_WORKER_URL points to an internal/local host. "
-            "Use the public worker URL, for example https://cognisweep-async-worker.onrender.com/tasks."
+            "Use a public worker URL, or enable ERRORSWEEP_ASYNC_WORKER_SERVICE_ENABLED=true "
+            "when using the Docker Compose async receiver service."
         )
     if is_production_mode() and mode != "external":
         ready = False

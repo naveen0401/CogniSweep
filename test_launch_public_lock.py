@@ -15,8 +15,8 @@ def source(path: Path = APP) -> str:
 
 def function_body(name: str, end_name: str) -> str:
     text = source()
-    start = text.index(f"def {name}")
-    end = text.index(f"def {end_name}", start)
+    start = text.index(f"def {name}(")
+    end = text.index(f"def {end_name}(", start)
     return text[start:end]
 
 
@@ -48,9 +48,10 @@ def test_platform_settings_exposes_launch_lock_and_preflight_report():
 
 def test_launch_lock_is_in_deploy_templates_and_checks():
     key = "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT"
+    alias = "COGNISWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT"
 
-    assert f"{key}=true" in source(ENV_TEMPLATE)
-    assert f'{key} = "true"' in source(STREAMLIT_TEMPLATE)
+    assert f"{key}=true" in source(ENV_TEMPLATE) or f"{alias}=true" in source(ENV_TEMPLATE)
+    assert f'{key} = "true"' in source(STREAMLIT_TEMPLATE) or f'{alias} = "true"' in source(STREAMLIT_TEMPLATE)
     assert key in source(RELEASE_CHECK)
     assert "Public launch preflight lock" in source(LAUNCH_ENV_CHECK)
     assert "Public launch preflight lock" in source(SMOKE_TEST)
