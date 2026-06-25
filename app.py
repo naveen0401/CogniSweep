@@ -4393,7 +4393,7 @@ def feature_flag_defaults() -> Dict[str, bool]:
         "pro_human_review": True,
         "scorecards": True,
         "subtitle_editor": True,
-        "public_registration": local_mode,
+        "public_registration": True,
         "demo_access": local_mode,
         "billing_collection": local_mode,
     }
@@ -5249,10 +5249,15 @@ def normalized_profile_completion_status(user: Dict[str, Any]) -> str:
     return safe_text(user.get("profile_completion_status") or "pending").lower()
 
 
+PROFILE_COMPLETION_PROMPT_DISMISSED_SESSION_KEY = "_profile_completion_prompt_dismissed_session"
+
+
 def profile_completion_prompt_due(user: Dict[str, Any]) -> bool:
     if not user or is_platform_owner_identity(user):
         return False
-    return normalized_profile_completion_status(user) not in {"completed", "skipped"}
+    if st.session_state.get(PROFILE_COMPLETION_PROMPT_DISMISSED_SESSION_KEY):
+        return False
+    return normalized_profile_completion_status(user) != "completed"
 
 
 def stored_metadata_dict(value: Any) -> Dict[str, Any]:
@@ -5335,7 +5340,7 @@ def queue_verification_email(email: str, workspace: str, name: str = "") -> str:
     return link
 
 
-def queue_password_reset_email(email: str, workspace: str = "") -> str:
+def queue_password_reset_email(email: str, workspace: str = "", *, return_record: bool = False) -> Any:
     token, _ = create_auth_token(email, "password_reset", workspace or "Demo Workspace")
     link = public_auth_link("reset", token)
     record = queue_email_notification(
@@ -5346,7 +5351,9 @@ def queue_password_reset_email(email: str, workspace: str = "") -> str:
         metadata={"reset_url": link},
         workspace=workspace or "Demo Workspace",
     )
-    dispatch_queued_email_if_configured(record)
+    dispatched = dispatch_queued_email_if_configured(record)
+    if return_record:
+        return link, dispatched
     return link
 
 
@@ -19308,6 +19315,8 @@ def render_external_cat_editor(job_id: str) -> None:
         if done_key not in st.session_state:
             st.session_state[done_key] = is_segment_confirmed(row)
 
+    language = safe_text(metadata.get("target_language", "Target")) or "Target"
+    rules = payload.get("rules") or metadata.get("rules") or workspace_rules()
     current_rows: List[Dict[str, Any]] = []
     for idx, original in enumerate(rows):
         row = dict(original)
@@ -19316,11 +19325,21 @@ def render_external_cat_editor(job_id: str) -> None:
         row["id"] = row.get("id") or idx + 1
         row["target"] = target_value
         row["translation"] = target_value
-        set_segment_confirmed(row, done_value, target_value)
+        row["confirmed"] = done_value
+        row["done"] = done_value
         current_rows.append(row)
+    blocked_completion_count = apply_validated_completion_flags(
+        current_rows,
+        editor_type="translation",
+        target_language=language,
+        domain="Human Review",
+        rules=rules,
+    )
+    if blocked_completion_count:
+        for idx, row in enumerate(current_rows):
+            st.session_state[f"ext_cat_done_{job_id}_{idx}"] = is_segment_confirmed(row)
+        st.warning(f"Smart Done left {blocked_completion_count} segment(s) unmarked because validation findings remain.")
 
-    language = safe_text(metadata.get("target_language", "Target")) or "Target"
-    rules = payload.get("rules") or metadata.get("rules") or workspace_rules()
     gate_findings = delivery_quality_findings(current_rows, language, "Human Review", rules)
     qa_by_idx: Dict[int, List[Dict[str, Any]]] = {idx: [] for idx in range(len(current_rows))}
     for finding in gate_findings:
@@ -19433,8 +19452,13 @@ def render_external_media_editor(job_id: str) -> None:
     )
 
     media_rows_for_download = edited.to_dict(orient="records")
-    for media_row in media_rows_for_download:
-        set_segment_confirmed(media_row, bool(media_row.get("confirmed")), safe_text(media_row.get("target", "")))
+    blocked_media_completion = apply_validated_completion_flags(
+        media_rows_for_download,
+        editor_type=safe_text(workflow).lower() or "subtitling",
+        domain=safe_text(workflow),
+    )
+    if blocked_media_completion:
+        st.warning(f"Smart Done left {blocked_media_completion} media segment(s) unmarked because validation findings remain.")
     unconfirmed_media = unconfirmed_segment_count(media_rows_for_download)
     if unconfirmed_media:
         st.warning(f"Download is locked until all media segments are ticked complete. Pending: {unconfirmed_media}.")
@@ -19442,9 +19466,11 @@ def render_external_media_editor(job_id: str) -> None:
     c1, c2, c3, c4 = st.columns(4)
     if c1.button("Save Draft", use_container_width=True, key=f"media_save_{job_id}"):
         new_rows = media_rows_for_download
-        for new_row in new_rows:
-            target_value = safe_text(new_row.get("target", ""))
-            set_segment_confirmed(new_row, bool(new_row.get("confirmed")), target_value)
+        apply_validated_completion_flags(
+            new_rows,
+            editor_type=safe_text(workflow).lower() or "subtitling",
+            domain=safe_text(workflow),
+        )
         payload["rows"] = new_rows
         save_external_editor_payload(job_id, payload)
         st.success("Media editor draft saved.")
@@ -20165,6 +20191,41 @@ def unconfirmed_segment_count(rows: List[Dict[str, Any]]) -> int:
 
 def all_segments_confirmed(rows: List[Dict[str, Any]]) -> bool:
     return bool(rows) and unconfirmed_segment_count(rows) == 0
+
+
+def apply_validated_completion_flags(
+    rows: List[Dict[str, Any]],
+    editor_type: str = "translation",
+    target_language: str = "",
+    domain: str = "",
+    rules: Optional[Dict[str, Any]] = None,
+) -> int:
+    blocked = 0
+    for idx, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        target_value = safe_text(row.get("target") or row.get("translation") or "")
+        requested_complete = bool(row.get("confirmed") or row.get("done") or is_completed_with_warnings(row))
+        if requested_complete:
+            findings = segment_completion_validation_findings(
+                row,
+                editor_type=editor_type,
+                all_rows=rows,
+                row_index=idx + 1,
+                target_language=target_language,
+                domain=domain,
+                rules=rules,
+            )
+            if findings:
+                set_segment_confirmed(row, False, target_value, editor_type=editor_type)
+                row["done"] = False
+                blocked += 1
+                continue
+            set_segment_confirmed(row, True, target_value, editor_type=editor_type)
+        else:
+            set_segment_confirmed(row, False, target_value, editor_type=editor_type)
+            row["done"] = False
+    return blocked
 
 
 def compute_review_completion(rows: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -22494,15 +22555,30 @@ def render_login() -> None:
     with st.expander("Forgot password?", expanded=False):
         reset_email = st.text_input("Account email", key="password_reset_email")
         if st.button("Send password reset link", use_container_width=True, key="send_password_reset"):
-            allowed_attempt, throttle_message = consume_abuse_attempt("password_reset", reset_email.strip() or "anonymous")
+            clean_reset_email = safe_text(reset_email).strip()
+            if not clean_reset_email:
+                st.error("Enter your account email to request a password reset link.")
+                return
+            allowed_attempt, throttle_message = consume_abuse_attempt("password_reset", clean_reset_email or "anonymous")
             if not allowed_attempt:
                 st.error(throttle_message)
                 return
-            matched = find_user_by_email(reset_email)
+            matched = find_user_by_email(clean_reset_email)
             workspace = safe_text((matched or {}).get("workspace") or "Demo Workspace")
-            reset_url = queue_password_reset_email(reset_email.strip(), workspace) if safe_text(reset_email) else ""
-            st.success("If that account exists, a password reset link has been added to the notification outbox.")
-            if reset_url and email_provider_label() == "not_configured":
+            reset_url = ""
+            reset_record: Dict[str, Any] = {}
+            if matched:
+                account_email = safe_text(matched.get("email") or clean_reset_email).strip()
+                reset_url, reset_record = queue_password_reset_email(account_email, workspace, return_record=True)
+            st.success("If that account exists, a password reset link has been sent or queued.")
+            reset_status = safe_text(reset_record.get("status")).lower()
+            if matched and reset_status == "sent":
+                st.caption("Password reset email sent by the configured provider.")
+            elif matched and reset_status == "failed":
+                st.warning(f"Password reset email could not be sent: {safe_text(reset_record.get('error')) or 'provider dispatch failed'}.")
+            elif matched and reset_status in {"queued", "provider_pending"}:
+                st.caption("Password reset email is queued. Check the email provider or dispatch worker if it does not arrive.")
+            if reset_url and email_provider_label() == "not_configured" and not is_production_mode():
                 st.caption(f"Local reset link: {reset_url}")
 
 
@@ -22621,6 +22697,7 @@ def render_profile_completion_form(user: Dict[str, Any], form_key: str = "profil
         }
         changes["talent_search_text"] = talent_search_text({**user, **changes})
         save_current_user_profile(changes)
+        st.session_state.pop(PROFILE_COMPLETION_PROMPT_DISMISSED_SESSION_KEY, None)
         st.session_state.pop("_profile_completion_mode", None)
         st.session_state.pop("_profile_completion_force", None)
         st.session_state.pop("account_profile_edit_mode", None)
@@ -22649,6 +22726,7 @@ def render_profile_completion_choice(user: Dict[str, Any]) -> None:
             "profile_completion_status": "skipped",
             "profile_prompt_dismissed_at": now_stamp(),
         })
+        st.session_state[PROFILE_COMPLETION_PROMPT_DISMISSED_SESSION_KEY] = True
         st.session_state.pop("_profile_completion_mode", None)
         st.session_state.pop("_profile_completion_force", None)
         add_audit("Profile completion skipped", safe_text(user.get("email")))
@@ -25216,10 +25294,16 @@ def render_focused_subtitle_workspace() -> None:
             if timing_issues:
                 st.error("; ".join(f"Row {item['row']}: {item['issue']}" for item in timing_issues[:5]))
             else:
-                for updated_row in updated_rows:
-                    set_segment_confirmed(updated_row, bool(updated_row.get("confirmed")), safe_text(updated_row.get("target", "")))
+                blocked_completion_count = apply_validated_completion_flags(
+                    updated_rows,
+                    editor_type=workflow.lower(),
+                    domain=workflow,
+                )
                 st.session_state.subtitle_segments = updated_rows
-                st.success("Grid saved.")
+                if blocked_completion_count:
+                    st.warning(f"Smart Done left {blocked_completion_count} segment(s) unmarked because validation findings remain.")
+                else:
+                    st.success("Grid saved.")
         unconfirmed = unconfirmed_segment_count(st.session_state.subtitle_segments)
         if unconfirmed:
             st.warning(f"Download is locked until all subtitle/transcription segments are ticked complete. Pending: {unconfirmed}.")

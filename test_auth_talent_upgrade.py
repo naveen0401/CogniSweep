@@ -92,6 +92,11 @@ def test_profile_completion_prompt_routes_to_account_profile_editor():
     assert 'set_route_query({"es_page": "Account"})' in body
     assert '"profile_completion_status": "completed"' in body
     assert '"profile_completion_status": "skipped"' in body
+    assert "PROFILE_COMPLETION_PROMPT_DISMISSED_SESSION_KEY" in body
+
+    due = function_body("profile_completion_prompt_due", "stored_metadata_dict")
+    assert 'normalized_profile_completion_status(user) != "completed"' in due
+    assert '"skipped"' not in due
 
 
 def test_dashboard_uses_full_name_display():
@@ -160,6 +165,27 @@ def test_user_profile_columns_persist_to_database_contract():
     assert "idx_errorsweep_users_talent_search" in schema
 
 
+def test_public_signup_defaults_open_in_production():
+    defaults = function_body("feature_flag_defaults", "parse_bool_flag")
+
+    assert '"public_registration": True' in defaults
+    assert '"demo_access": local_mode' in defaults
+    assert '"billing_collection": local_mode' in defaults
+
+
+def test_forgot_password_reports_dispatch_status():
+    login = function_body("render_login", "profile_language_defaults")
+    reset = function_body("queue_password_reset_email", "hydrate_saas_state_for_user")
+
+    assert "return_record: bool = False" in reset
+    assert "dispatched = dispatch_queued_email_if_configured(record)" in reset
+    assert "return link, dispatched" in reset
+    assert "reset_url, reset_record = queue_password_reset_email" in login
+    assert 'reset_status == "sent"' in login
+    assert 'reset_status == "failed"' in login
+    assert "has been sent or queued" in login
+
+
 if __name__ == "__main__":
     test_login_is_unified_without_role_tabs()
     test_signup_collects_basic_account_fields_only()
@@ -167,4 +193,6 @@ if __name__ == "__main__":
     test_dashboard_uses_full_name_display()
     test_talent_database_page_and_route_are_registered()
     test_user_profile_columns_persist_to_database_contract()
+    test_public_signup_defaults_open_in_production()
+    test_forgot_password_reports_dispatch_status()
     print("Auth talent upgrade checks passed.")

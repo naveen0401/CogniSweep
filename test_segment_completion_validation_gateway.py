@@ -41,7 +41,7 @@ def test_cat_editor_completion_uses_row_popover_and_explicit_ignore() -> None:
     assert "Ignore and mark complete" in html
     assert "Completion cancelled" in html
     assert "requestRowCompletion(i, { anchor: tr })" in html
-    assert "showValidationPopover(idx, findings, { anchor:" in html
+    assert "showValidationPopover(idx, findings, options)" in html
     assert "COMPLETED_WITH_WARNINGS_STATUS" in html
     assert "completed-warning-row" in html
     assert "Ignored completion warning:" in html
@@ -62,12 +62,32 @@ def test_media_editor_completion_uses_gateway_for_subtitling_and_transcription()
     assert "Completion cancelled" in html
     assert 'requestedStatus === "Approved" || requestedStatus === COMPLETED_WITH_WARNINGS_STATUS' in html
     assert "function setAllSegmentsConfirmed(checked)" in html
-    assert "showValidationPopover(idx, findings, { anchor:" in html
+    assert "showValidationPopover(idx, findings, options)" in html
     assert "isTranscriptionMode() ? \"Transcript text is blank.\"" in html
     assert "if (!isTranscriptionMode() && end > start)" in html
     assert "completed-warning-row" in html
     assert "Ignored completion warning:" in html
     assert "row_count: rows.length,\n            rows," in html
+
+
+def test_header_done_is_smart_bulk_not_select_all() -> None:
+    source = read(APP)
+    cat_html = read(CAT_EDITOR)
+    media_html = read(MEDIA_EDITOR)
+
+    assert "def apply_validated_completion_flags(" in source
+    assert "blocked += 1" in source
+    assert "Smart Done left {blocked_completion_count} segment(s) unmarked" in source
+
+    for html in (cat_html, media_html):
+        assert "let completed = 0;" in html
+        assert "let blocked = 0;" in html
+        assert "blocked += 1;" in html
+        assert "continue;" in html
+        assert "markRowComplete(idx);" in html
+        assert "Smart Done marked ${completed} clean segment" in html
+        assert "left unmarked for review" in html
+        assert "requestAnimationFrame(() => showValidationPopover" not in html
 
 
 def test_streamlit_fallback_completion_paths_are_guarded() -> None:
@@ -78,11 +98,14 @@ def test_streamlit_fallback_completion_paths_are_guarded() -> None:
     assert "completion_requested = status in {\"Approved\", COMPLETED_WITH_WARNINGS_STATUS}" in source
     assert "segment_completion_validation_findings(\n                rows[idx]," in source
     assert "render_completion_validation_popover(rows[idx], pending_findings, action_prefix" in source
+    assert "blocked_media_completion = apply_validated_completion_flags(" in source
+    assert "blocked_completion_count = apply_validated_completion_flags(" in source
 
 
 if __name__ == "__main__":
     test_python_shared_completion_validation_gateway_contract()
     test_cat_editor_completion_uses_row_popover_and_explicit_ignore()
     test_media_editor_completion_uses_gateway_for_subtitling_and_transcription()
+    test_header_done_is_smart_bulk_not_select_all()
     test_streamlit_fallback_completion_paths_are_guarded()
     print("Segment completion validation gateway checks passed.")

@@ -1844,18 +1844,28 @@
     function setAllSegmentsConfirmed(checked) {
       closeValidationPopover();
       if (checked) {
+        let completed = 0;
+        let blocked = 0;
         for (let idx = 0; idx < rows.length; idx += 1) {
           if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;
           const findings = validationFindingsForRow(rows[idx], idx);
           if (findings.length) {
-            renderRows();
-            requestAnimationFrame(() => showValidationPopover(idx, findings, { anchor: document.querySelector(`tr[data-index="${idx}"]`) }));
-            showToast(`Review warnings for segment ${idx + 1} before marking all done`);
-            updateSummary();
-            return;
+            rows[idx].confirmed = false;
+            rows[idx].done = false;
+            blocked += 1;
+            continue;
           }
           markRowComplete(idx);
+          completed += 1;
         }
+        scheduleAutoSave();
+        renderRows();
+        updateSummary();
+        const suffix = blocked
+          ? `${blocked} segment${blocked === 1 ? "" : "s"} left unmarked for review`
+          : "all segments marked done";
+        showToast(`Smart Done marked ${completed} clean segment${completed === 1 ? "" : "s"}; ${suffix}`);
+        return;
       } else {
         rows.forEach((row) => {
           row.confirmed = false;
