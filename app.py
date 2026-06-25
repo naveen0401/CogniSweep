@@ -7198,6 +7198,10 @@ def ensure_authenticated_session_query_fallback(route: Optional[Dict[str, Any]] 
     """Keep a signed URL fallback when Streamlit Cloud cannot see browser cookies."""
     if not (st.session_state.get("authenticated") and st.session_state.get("user")):
         return
+    route = route or {}
+    public_route = safe_text(route.get("public") or route.get("route")).strip().lower()
+    if public_route in PUBLIC_ROUTES and public_route not in AUTHENTICATED_PUBLIC_ENTRY_ROUTES:
+        return
     if browser_session_cookie() or query_get(SESSION_HANDOFF_QUERY_PARAM):
         return
     token = signed_session_token_for_user(st.session_state.get("user") or {})

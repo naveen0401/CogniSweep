@@ -186,6 +186,14 @@ def test_forgot_password_reports_dispatch_status():
     assert "has been sent or queued" in login
 
 
+def test_authenticated_session_fallback_preserves_action_routes():
+    body = function_body("ensure_authenticated_session_query_fallback", "set_login_feedback")
+
+    assert "public_route in PUBLIC_ROUTES" in body
+    assert "public_route not in AUTHENTICATED_PUBLIC_ENTRY_ROUTES" in body
+    assert "protected_query_params_from_route" in body
+
+
 if __name__ == "__main__":
     test_login_is_unified_without_role_tabs()
     test_signup_collects_basic_account_fields_only()
@@ -195,4 +203,5 @@ if __name__ == "__main__":
     test_user_profile_columns_persist_to_database_contract()
     test_public_signup_defaults_open_in_production()
     test_forgot_password_reports_dispatch_status()
+    test_authenticated_session_fallback_preserves_action_routes()
     print("Auth talent upgrade checks passed.")
