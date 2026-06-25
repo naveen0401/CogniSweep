@@ -416,6 +416,8 @@
     tbody tr { background: #111827; }
     tbody tr:hover { background: #172033; }
     tbody tr.active-row { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(56,189,248,.12); }
+    tbody tr.completed-warning-row { background: rgba(251,191,36,.10); box-shadow: inset 3px 0 0 var(--amber); }
+    tbody tr.completed-warning-row.active-row { background: rgba(251,191,36,.14); outline-color: var(--amber); }
     tbody tr.hidden-row { display: none; }
     .row-index { color: #94a3b8; font-weight: 800; text-align: center; }
     .time-input, .cell-text, .status-select {
@@ -451,6 +453,56 @@
       padding-right: 4px;
     }
     .done-cell input { width: 18px; height: 18px; accent-color: var(--mint); }
+    .done-cell input.warning { accent-color: var(--amber); }
+    .status-select.warning { color: var(--amber); border-color: rgba(251,191,36,.55); }
+    .validation-popover {
+      position: fixed;
+      z-index: 120;
+      width: min(360px, calc(100vw - 24px));
+      max-height: min(420px, calc(100vh - 40px));
+      overflow: auto;
+      display: none;
+      padding: 12px;
+      border: 1px solid rgba(251,191,36,.55);
+      border-radius: 8px;
+      background: #17121f;
+      color: var(--text);
+      box-shadow: 0 18px 42px rgba(0,0,0,.45);
+    }
+    .validation-popover.open { display: block; }
+    .validation-popover h4 {
+      margin: 0 0 8px;
+      color: var(--amber);
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .validation-popover ul {
+      margin: 0 0 10px 16px;
+      padding: 0;
+      color: #fde68a;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .validation-popover li + li { margin-top: 5px; }
+    .validation-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .validation-actions button {
+      min-height: 30px;
+      border-radius: 7px;
+      border: 1px solid #475569;
+      background: #111827;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .validation-actions .ignore-complete {
+      border-color: rgba(251,191,36,.75);
+      background: rgba(251,191,36,.18);
+      color: #fde68a;
+    }
     .done-header {
       display: inline-flex;
       align-items: center;
@@ -964,10 +1016,12 @@
     </main>
   </div>
   <div class="toast" id="toast"></div>
+  <div class="validation-popover" id="validationPopover" role="dialog" aria-live="polite" aria-label="Segment validation warnings"></div>
 
   <script>
     const payload = __MEDIA_EDITOR_PAYLOAD__;
-    const statusOptions = ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated", "Existing", "Transcribed Source"];
+    const COMPLETED_WITH_WARNINGS_STATUS = "Completed with warnings";
+    const statusOptions = ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", COMPLETED_WITH_WARNINGS_STATUS, "Rejected", "Needs Rework", "Untranslated", "Existing", "Transcribed Source"];
     const MIN_MEDIA_SEGMENT_DURATION = 0.1;
     function safe(value) { return value == null ? "" : String(value); }
     const workflowValue = safe((payload.metadata || {}).workflow || (payload.metadata || {}).title).toLowerCase();
@@ -982,25 +1036,36 @@
     let activeVideoElement = null;
     let activeCaptionOverlay = null;
     let documentPipWindow = null;
+    let pendingCompletionRequest = null;
     const draftKey = `errorsweep-media-editor-draft:${payload.job_id || "local"}`;
 
     const el = (id) => document.getElementById(id);
+    const validationPopover = el("validationPopover");
     const isTranscriptionMode = () => editorMode === "transcription";
     const modeTitle = () => isTranscriptionMode() ? "Transcription" : "Subtitling";
     const targetColumnLabel = () => isTranscriptionMode() ? "Transcript" : "Target Subtitle";
 
     function normalizeRow(row, idx) {
-      const confirmed = Boolean(row.confirmed || row.done || row.status === "Approved");
+      const ignoredFindings = Array.isArray(row.ignoredValidationFindings)
+        ? row.ignoredValidationFindings
+        : (Array.isArray(row.ignored_validation_findings) ? row.ignored_validation_findings : []);
+      const completedWithWarnings = Boolean(row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || ignoredFindings.length);
+      const confirmed = Boolean(row.confirmed || row.done || row.status === "Approved" || completedWithWarnings);
       return {
         id: row.id || idx + 1,
         start: safe(row.startText || row.start || "00:00:00,000"),
         end: safe(row.endText || row.end || "00:00:03,500"),
         source: safe(row.source),
         target: safe(row.target || row.translation),
-        status: confirmed ? "Approved" : safe(row.status || "Draft"),
+        status: completedWithWarnings ? COMPLETED_WITH_WARNINGS_STATUS : (confirmed ? "Approved" : safe(row.status || "Draft")),
         match: safe(row.match),
         confirmed,
         qa: Array.isArray(row.qa) ? row.qa : [],
+        validationFindings: Array.isArray(row.validationFindings) ? row.validationFindings : [],
+        ignoredValidationFindings: ignoredFindings,
+        ignored_validation_findings: ignoredFindings,
+        completionValidation: row.completionValidation || row.completion_validation || {},
+        completedWithWarnings,
       };
     }
 
@@ -1024,6 +1089,172 @@
       const s = Math.floor(value % 60);
       const ms = Math.floor((value % 1) * 1000);
       return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    }
+
+    function completionIgnoredFindings(row) {
+      if (!row) return [];
+      if (Array.isArray(row.ignoredValidationFindings)) return row.ignoredValidationFindings;
+      if (Array.isArray(row.ignored_validation_findings)) return row.ignored_validation_findings;
+      const meta = row.completionValidation || row.completion_validation || {};
+      if (Array.isArray(meta.ignoredFindings)) return meta.ignoredFindings;
+      if (Array.isArray(meta.ignored_findings)) return meta.ignored_findings;
+      return [];
+    }
+
+    function isCompletedWithWarnings(row) {
+      return Boolean(row && (row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || completionIgnoredFindings(row).length));
+    }
+
+    function clearCompletionWarnings(row) {
+      if (!row) return;
+      row.completedWithWarnings = false;
+      row.ignoredValidationFindings = [];
+      row.ignored_validation_findings = [];
+      row.completionValidation = {};
+      row.completion_validation = {};
+      if (row.status === COMPLETED_WITH_WARNINGS_STATUS) row.status = safe(row.target).trim() ? "Needs Review" : "Draft";
+    }
+
+    function normalizeValidationFinding(item, idx) {
+      const value = item && typeof item === "object" ? item : { message: safe(item) || "Review this segment." };
+      return {
+        row: value.row || value.Row || idx + 1,
+        severity: value.severity || value.Severity || value.label || "Review",
+        category: value.category || value["Error Type"] || value.type || "Validation",
+        message: value.message || value.issue || value["Wrong Part"] || value.Explanation || value.Check || "Review this segment before completing it.",
+        suggestion: value.suggestion || value.Suggestion || value.action || "",
+      };
+    }
+
+    function validationFindingsForRow(row, idx) {
+      if (!row || isCompletedWithWarnings(row)) return [];
+      const findings = Array.isArray(row.validationFindings) ? row.validationFindings.map((item) => normalizeValidationFinding(item, idx)) : [];
+      const start = parseTimecode(row.start);
+      const end = parseTimecode(row.end);
+      const text = safe(row.target || (isTranscriptionMode() ? row.source : ""));
+      if (!safe(row.start).trim() || !safe(row.end).trim()) {
+        findings.push({ row: idx + 1, severity: "Major", category: "Timing", message: "Start or end time is missing.", suggestion: "Use valid timecodes before completing this row." });
+      } else if (end <= start) {
+        findings.push({ row: idx + 1, severity: "Major", category: "Timing", message: "End time must be after start time.", suggestion: "Move the end time after the start time." });
+      }
+      if (idx > 0 && start < parseTimecode(rows[idx - 1].end)) {
+        findings.push({ row: idx + 1, severity: "Major", category: "Timing", message: "Segment overlaps the previous segment.", suggestion: "Adjust this start time or the previous end time." });
+      }
+      if (!text.trim()) {
+        findings.push({
+          row: idx + 1,
+          severity: "Major",
+          category: "Completeness",
+          message: isTranscriptionMode() ? "Transcript text is blank." : "Target subtitle text is blank.",
+          suggestion: "Add the missing text before completing this row.",
+        });
+      }
+      if (!isTranscriptionMode() && end > start) {
+        const duration = Math.max(MIN_MEDIA_SEGMENT_DURATION, end - start);
+        const cps = Math.round(text.length / duration);
+        if (cps > 20) findings.push({ row: idx + 1, severity: "Review", category: "Readability", message: `Reading speed is ${cps} CPS.`, suggestion: "Shorten the subtitle or adjust timing." });
+        if (text.length > 84) findings.push({ row: idx + 1, severity: "Review", category: "Subtitle Length", message: "Target text is long for a two-line subtitle.", suggestion: "Split or shorten the subtitle." });
+      }
+      const seen = new Set();
+      return findings.filter((item) => {
+        const key = `${item.severity}|${item.category}|${item.message}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function storeIgnoredValidationFindings(row, findings) {
+      const ignoredAt = new Date().toISOString();
+      const normalized = (findings || []).map((item, idx) => ({
+        ...normalizeValidationFinding(item, idx),
+        ignoredAt,
+        ignoredBy: "browser-editor",
+      }));
+      row.ignoredValidationFindings = normalized;
+      row.ignored_validation_findings = normalized;
+      row.completionValidation = {
+        status: "ignored",
+        ignoredAt,
+        ignoredBy: "browser-editor",
+        editor: editorMode,
+        ignoredFindings: normalized,
+      };
+      row.completion_validation = {
+        status: "ignored",
+        ignored_at: ignoredAt,
+        ignored_by: "browser-editor",
+        editor: editorMode,
+        ignored_findings: normalized,
+      };
+      row.completedWithWarnings = normalized.length > 0;
+    }
+
+    function markRowComplete(idx, options = {}) {
+      const row = rows[idx];
+      if (!row) return;
+      row.confirmed = true;
+      row.done = true;
+      if (options.ignoredFindings && options.ignoredFindings.length) {
+        storeIgnoredValidationFindings(row, options.ignoredFindings);
+        row.status = COMPLETED_WITH_WARNINGS_STATUS;
+      } else {
+        clearCompletionWarnings(row);
+        row.confirmed = true;
+        row.done = true;
+        row.status = "Approved";
+      }
+    }
+
+    function closeValidationPopover() {
+      pendingCompletionRequest = null;
+      validationPopover.classList.remove("open");
+      validationPopover.innerHTML = "";
+    }
+
+    function positionValidationPopover(anchor) {
+      const target = anchor || document.querySelector(`tr[data-index="${activeIndex}"]`) || document.body;
+      const rect = target.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 24);
+      const left = Math.max(12, Math.min(rect.right + 10, window.innerWidth - width - 12));
+      const top = Math.max(12, Math.min(rect.top, window.innerHeight - validationPopover.offsetHeight - 12));
+      validationPopover.style.left = `${left}px`;
+      validationPopover.style.top = `${top}px`;
+    }
+
+    function showValidationPopover(idx, findings, options = {}) {
+      if (!rows[idx] || !findings.length) return;
+      pendingCompletionRequest = { idx, findings, options };
+      selectRow(idx, false);
+      validationPopover.innerHTML = `
+        <h4>Complete with warnings?</h4>
+        <ul>${findings.map((item) => `<li><b>${htmlEscape(item.severity || "Review")}</b>: ${htmlEscape(item.message || item.issue || "Review this segment.")}${item.suggestion ? `<br><span>${htmlEscape(item.suggestion)}</span>` : ""}</li>`).join("")}</ul>
+        <div class="validation-actions">
+          <button type="button" data-action="return">Return to segment</button>
+          <button type="button" class="ignore-complete" data-action="ignore">Ignore and mark complete</button>
+          <button type="button" data-action="cancel">Cancel</button>
+        </div>
+      `;
+      validationPopover.classList.add("open");
+      positionValidationPopover(options.anchor || document.querySelector(`tr[data-index="${idx}"]`));
+    }
+
+    function requestRowCompletion(idx, options = {}) {
+      const row = rows[idx];
+      if (!row) return false;
+      const findings = validationFindingsForRow(row, idx);
+      if (findings.length) {
+        showValidationPopover(idx, findings, options);
+        showToast("Review warnings before marking this row complete");
+        updateSummary();
+        return false;
+      }
+      markRowComplete(idx);
+      scheduleAutoSave();
+      renderRows();
+      selectRow(idx, false);
+      showToast("Segment completed");
+      return true;
     }
 
     function secondsInputValue(id, fallback) {
@@ -1455,7 +1686,7 @@
         const text = `${row.source} ${row.target} ${row.status} ${row.match}`.toLowerCase();
         const hidden = q && !text.includes(q);
         const tr = document.createElement("tr");
-        tr.className = `${idx === activeIndex ? "active-row" : ""} ${hidden ? "hidden-row" : ""}`;
+        tr.className = `${idx === activeIndex ? "active-row" : ""} ${hidden ? "hidden-row" : ""} ${isCompletedWithWarnings(row) ? "completed-warning-row" : ""}`;
         tr.dataset.index = idx;
         tr.innerHTML = `
           <td class="row-index index-column">${idx + 1}</td>
@@ -1463,8 +1694,8 @@
           <td class="time-column"><input class="time-input" data-field="end" value="${htmlEscape(row.end)}" /></td>
           <td class="source-column"><textarea class="cell-text source" data-field="source" rows="2" aria-label="Source / Speaker Note">${htmlEscape(row.source)}</textarea></td>
           <td class="target-column"><textarea class="cell-text target" data-field="target" rows="2" aria-label="${htmlEscape(targetColumnLabel())}">${htmlEscape(row.target)}</textarea></td>
-          <td class="status-column"><select class="status-select" data-field="status">${statusOptions.map((status) => `<option ${status === row.status ? "selected" : ""}>${htmlEscape(status)}</option>`).join("")}</select></td>
-          <td class="done-cell done-column"><input type="checkbox" data-field="confirmed" ${row.confirmed ? "checked" : ""} /></td>
+          <td class="status-column"><select class="status-select ${isCompletedWithWarnings(row) ? "warning" : ""}" data-field="status">${statusOptions.map((status) => `<option ${status === row.status ? "selected" : ""}>${htmlEscape(status)}</option>`).join("")}</select></td>
+          <td class="done-cell done-column"><input type="checkbox" class="${isCompletedWithWarnings(row) ? "warning" : ""}" data-field="confirmed" ${row.confirmed ? "checked" : ""} title="${isCompletedWithWarnings(row) ? "Completed with warnings" : "Mark done"}" /></td>
         `;
         tr.addEventListener("click", (event) => {
           if (event.target && event.target.dataset && event.target.dataset.field) return;
@@ -1484,17 +1715,39 @@
       const field = control.dataset.field;
       if (!rows[idx]) return;
       if (field === "confirmed") {
-        rows[idx][field] = control.checked;
-        rows[idx].status = control.checked ? "Approved" : (safe(rows[idx].target).trim() ? "Needs Review" : "Draft");
+        if (control.checked) {
+          control.checked = false;
+          requestRowCompletion(idx, { anchor: control.closest("tr") || control });
+          return;
+        }
+        rows[idx].confirmed = false;
+        rows[idx].done = false;
+        clearCompletionWarnings(rows[idx]);
+        rows[idx].status = safe(rows[idx].target).trim() ? "Needs Review" : "Draft";
         const statusSelect = control.closest("tr") && control.closest("tr").querySelector(".status-select");
         if (statusSelect) statusSelect.value = rows[idx].status;
       } else if (field === "status") {
-        rows[idx][field] = control.value;
-        rows[idx].confirmed = control.value === "Approved";
+        const requestedStatus = control.value;
+        if (requestedStatus === "Approved" || requestedStatus === COMPLETED_WITH_WARNINGS_STATUS) {
+          control.value = rows[idx].status;
+          requestRowCompletion(idx, { anchor: control.closest("tr") || control });
+          return;
+        }
+        rows[idx][field] = requestedStatus;
+        rows[idx].confirmed = false;
+        rows[idx].done = false;
+        clearCompletionWarnings(rows[idx]);
         const checkbox = control.closest("tr") && control.closest("tr").querySelector('input[data-field="confirmed"]');
         if (checkbox) checkbox.checked = rows[idx].confirmed;
       } else {
         rows[idx][field] = control.value;
+        if (["start", "end", "source", "target"].includes(field)) {
+          rows[idx].confirmed = false;
+          rows[idx].done = false;
+          clearCompletionWarnings(rows[idx]);
+          closeValidationPopover();
+          if (rows[idx].status === "Approved") rows[idx].status = safe(rows[idx].target).trim() ? "Needs Review" : "Draft";
+        }
       }
       if (idx === activeIndex) updateActivePanel();
       if (["start", "end", "target"].includes(field)) {
@@ -1525,7 +1778,7 @@
       const textLength = safe(row.target || row.source).length;
       const cps = Math.round(textLength / duration);
       const overlaps = countOverlaps();
-      const confirmed = rows.filter((item) => item.confirmed || item.status === "Approved").length;
+      const confirmed = confirmedCount();
       el("rowCountChip").textContent = `${rows.length} row${rows.length === 1 ? "" : "s"}`;
       el("metricRows").textContent = rows.length;
       el("metricConfirmed").textContent = confirmed;
@@ -1543,7 +1796,7 @@
     }
 
     function confirmedCount() {
-      return rows.filter((item) => item.confirmed || item.status === "Approved").length;
+      return rows.filter((item) => item.confirmed || item.status === "Approved" || isCompletedWithWarnings(item)).length;
     }
 
     function allRowsConfirmed() {
@@ -1589,14 +1842,30 @@
     }
 
     function setAllSegmentsConfirmed(checked) {
-      rows.forEach((row) => {
-        row.confirmed = checked;
-        if (checked) {
-          row.status = "Approved";
-        } else if (row.status === "Approved") {
-          row.status = safe(row.target).trim() ? "Needs Review" : "Draft";
+      closeValidationPopover();
+      if (checked) {
+        for (let idx = 0; idx < rows.length; idx += 1) {
+          if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;
+          const findings = validationFindingsForRow(rows[idx], idx);
+          if (findings.length) {
+            renderRows();
+            requestAnimationFrame(() => showValidationPopover(idx, findings, { anchor: document.querySelector(`tr[data-index="${idx}"]`) }));
+            showToast(`Review warnings for segment ${idx + 1} before marking all done`);
+            updateSummary();
+            return;
+          }
+          markRowComplete(idx);
         }
-      });
+      } else {
+        rows.forEach((row) => {
+          row.confirmed = false;
+          row.done = false;
+          if (row.status === "Approved" || row.status === COMPLETED_WITH_WARNINGS_STATUS) {
+            row.status = safe(row.target).trim() ? "Needs Review" : "Draft";
+          }
+          clearCompletionWarnings(row);
+        });
+      }
       scheduleAutoSave();
       renderRows();
       updateSummary();
@@ -1628,8 +1897,8 @@
       const textLength = safe(row.target || row.source).length;
       const cps = Math.round(textLength / duration);
       const quality = [...qa];
-      if (cps > 20) quality.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
-      if (safe(row.target).length > 84) quality.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
+      if (!isTranscriptionMode() && cps > 20) quality.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
+      if (!isTranscriptionMode() && safe(row.target).length > 84) quality.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
       if (parseTimecode(row.end) <= parseTimecode(row.start)) quality.push({ severity: "Blocker", message: "End time must be after start time." });
       el("connectionStatus").innerHTML = status.length ? status.map((item) => `<div class="assist-card"><b>${htmlEscape(item.connection || "Language resources")}</b><br>${htmlEscape(item.status || "")}</div>`).join("") : `<div class="empty">Internal resources active.</div>`;
       el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape(item.note || item.language || "TM match")}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
@@ -1644,7 +1913,12 @@
       const start = parseTimecode(row.start);
       const end = parseTimecode(row.end);
       const mid = formatTime((start + end) / 2);
-      const clone = { ...row, id: rows.length + 1, start: mid, confirmed: false, status: "Draft" };
+      const clone = { ...row, id: rows.length + 1, start: mid, confirmed: false, done: false, status: "Draft" };
+      clearCompletionWarnings(row);
+      clearCompletionWarnings(clone);
+      row.confirmed = false;
+      row.done = false;
+      row.status = safe(row.target).trim() ? "Needs Review" : "Draft";
       row.end = mid;
       rows.splice(activeIndex + 1, 0, clone);
       syncCaptionPreview();
@@ -1664,6 +1938,9 @@
       prev.source = [prev.source, row.source].filter(Boolean).join(" ");
       prev.target = [prev.target, row.target].filter(Boolean).join(" ");
       prev.confirmed = prev.confirmed && row.confirmed;
+      prev.done = false;
+      clearCompletionWarnings(prev);
+      prev.status = safe(prev.target).trim() ? "Needs Review" : "Draft";
       rows.splice(activeIndex, 1);
       syncCaptionPreview();
       scheduleAutoSave();
@@ -1675,7 +1952,7 @@
       const row = rows[activeIndex] || {};
       const start = row.end || formatTime(rows.length * 4);
       const end = formatTime(parseTimecode(start) + 3.5);
-      rows.splice(activeIndex + 1, 0, { id: rows.length + 1, start, end, source: "", target: "", status: "Draft", match: "", confirmed: false, qa: [] });
+      rows.splice(activeIndex + 1, 0, { id: rows.length + 1, start, end, source: "", target: "", status: "Draft", match: "", confirmed: false, done: false, qa: [], ignoredValidationFindings: [], ignored_validation_findings: [], completionValidation: {} });
       syncCaptionPreview();
       scheduleAutoSave();
       showToast("Row inserted");
@@ -1712,7 +1989,8 @@
       }
       rows.forEach((row) => {
         row.confirmed = true;
-        row.status = "Approved";
+        row.done = true;
+        if (!isCompletedWithWarnings(row)) row.status = "Approved";
       });
       saveCurrentDraft("submitted");
       renderRows();
@@ -1745,6 +2023,7 @@
             job_id: safe(payload.job_id),
             editor_type: "media",
             row_count: rows.length,
+            rows,
           }, "*");
           return;
         }
@@ -1902,10 +2181,14 @@
       const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
       const textLength = safe(row.target || row.source).length;
       const cps = Math.round(textLength / duration);
-      if (cps > 20) qa.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
-      if (safe(row.target).length > 84) qa.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
+      if (!isTranscriptionMode() && cps > 20) qa.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
+      if (!isTranscriptionMode() && safe(row.target).length > 84) qa.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
       if (parseTimecode(row.end) <= parseTimecode(row.start)) qa.push({ severity: "Blocker", message: "End time must be after start time." });
       if (!safe(row.target).trim()) qa.push({ severity: "Warn", message: `${targetColumnLabel()} text is blank.` });
+      completionIgnoredFindings(row).forEach((item) => qa.push({
+        severity: item.severity || "Review",
+        message: `Ignored completion warning: ${item.message || item.issue || "Review this segment."}`,
+      }));
       return qa;
     }
 
@@ -2051,6 +2334,31 @@
 
     function bindEvents() {
       el("searchInput").addEventListener("input", renderRows);
+      validationPopover.addEventListener("click", (event) => {
+        const action = event.target && event.target.dataset ? event.target.dataset.action : "";
+        if (!action || !pendingCompletionRequest) return;
+        const { idx, findings } = pendingCompletionRequest;
+        if (action === "return") {
+          closeValidationPopover();
+          selectRow(idx);
+          const target = document.querySelector(`tr[data-index="${idx}"] .cell-text.target`);
+          if (target) target.focus();
+          showToast("Returned to segment");
+          return;
+        }
+        if (action === "ignore") {
+          markRowComplete(idx, { ignoredFindings: findings });
+          closeValidationPopover();
+          scheduleAutoSave();
+          renderRows();
+          selectRow(idx, false);
+          showToast("Segment completed with warnings");
+          return;
+        }
+        closeValidationPopover();
+        renderRows();
+        showToast("Completion cancelled");
+      });
       el("splitBtn").addEventListener("click", splitRow);
       el("mergeBtn").addEventListener("click", mergeRow);
       el("insertBtn").addEventListener("click", insertRow);

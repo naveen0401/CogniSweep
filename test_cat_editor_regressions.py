@@ -970,7 +970,7 @@ def test_cat_editor_reference_file_matches_attached_shell() -> None:
     assert 'data-filter="pending"' in html
     assert 'id="confirmAll"' in html
     assert '<th class="col-confirm"><label class="done-header">' in html
-    assert 'class="confirm-check"' in html
+    assert 'class="confirm-check ${isCompletedWithWarnings(r) ? \'warning\' : \'\'}"' in html
     assert '<h3>Language Resources</h3>' in html
     assert 'id="languageResources"' in html
     assert "function renderLanguageResources()" in html
@@ -1102,7 +1102,8 @@ def test_media_editor_reference_file_restores_workflow_controls() -> None:
     assert "[\"exportCsvBtn\", \"exportSrtBtn\"].forEach" in html
     assert "Tick ${pending} more segment" in html
     assert "row.confirmed || row.done || row.status === \"Approved\"" in html
-    assert "rows[idx].status = control.checked ? \"Approved\"" in html
+    assert "requestRowCompletion(idx, { anchor: control.closest(\"tr\") || control })" in html
+    assert 'requestedStatus === "Approved" || requestedStatus === COMPLETED_WITH_WARNINGS_STATUS' in html
 
 
 def test_human_review_workspace_uses_reference_template() -> None:

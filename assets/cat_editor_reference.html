@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -430,6 +430,8 @@
     tr { cursor: pointer; }
     tr:hover { background: #172033; }
     tr.row-active { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(56, 189, 248, .12); }
+    tr.completed-warning-row { background: rgba(251, 191, 36, .10); box-shadow: inset 3px 0 0 var(--amber); }
+    tr.completed-warning-row.row-active { background: rgba(251, 191, 36, .14); outline-color: var(--amber); }
     .col-id { width: 52px; color: #94a3b8; text-align: right; }
     .col-source { width: 42%; }
     .col-target { width: 43%; }
@@ -465,6 +467,9 @@
       accent-color: var(--mint);
       cursor: pointer;
     }
+    .confirm-check.warning {
+      accent-color: var(--amber);
+    }
     .confirm-cell {
       text-align: center;
       vertical-align: middle;
@@ -481,6 +486,54 @@
     .confirm-all-check {
       width: 16px;
       height: 16px;
+    }
+    .validation-popover {
+      position: fixed;
+      z-index: 120;
+      width: min(360px, calc(100vw - 24px));
+      max-height: min(420px, calc(100vh - 40px));
+      overflow: auto;
+      display: none;
+      padding: 12px;
+      border: 1px solid rgba(251, 191, 36, .55);
+      border-radius: 8px;
+      background: #17121f;
+      color: var(--text);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, .45);
+    }
+    .validation-popover.open { display: block; }
+    .validation-popover h4 {
+      margin: 0 0 8px;
+      color: var(--amber);
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .validation-popover ul {
+      margin: 0 0 10px 16px;
+      padding: 0;
+      color: #fde68a;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .validation-popover li + li { margin-top: 5px; }
+    .validation-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .validation-actions button {
+      min-height: 30px;
+      border-radius: 7px;
+      border: 1px solid #475569;
+      background: #111827;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .validation-actions .ignore-complete {
+      border-color: rgba(251, 191, 36, .75);
+      background: rgba(251, 191, 36, .18);
+      color: #fde68a;
     }
     .match-badge { display: grid; place-items: center; min-height: 42px; padding: 0 8px; font-weight: 900; white-space: nowrap; }
     .match-100 { background: #048a33; color: white; }
@@ -930,6 +983,7 @@
       </aside>
     </main>
   </div>
+  <div class="validation-popover" id="validationPopover" role="dialog" aria-live="polite" aria-label="Segment validation warnings"></div>
 
   <script>
     const rows = [
@@ -970,8 +1024,10 @@
     const exportButton = document.querySelector('.export-btn');
     const backButton = document.querySelector('.back-btn');
     const confirmAllCheck = document.getElementById('confirmAll');
+    const validationPopover = document.getElementById('validationPopover');
     const tinyButtons = Array.from(document.querySelectorAll('.tiny-btn'));
     const originalRows = rows.map(row => ({ ...row }));
+    const COMPLETED_WITH_WARNINGS_STATUS = 'Completed with warnings';
     let active = 0;
     let activePanel = 'Context';
     let sourceSearchTerm = '';
@@ -981,11 +1037,18 @@
     let submitted = false;
     let savedSelection = null;
     let autoSaveTimer = null;
+    let pendingCompletionRequest = null;
     const undoStack = [];
     const redoStack = [];
 
     rows.forEach((row) => {
-      row.done = Boolean(row.done ?? row.confirmed ?? false);
+      row.ignoredValidationFindings = Array.isArray(row.ignoredValidationFindings)
+        ? row.ignoredValidationFindings
+        : (Array.isArray(row.ignored_validation_findings) ? row.ignored_validation_findings : []);
+      row.validationFindings = Array.isArray(row.validationFindings) ? row.validationFindings : [];
+      row.completedWithWarnings = Boolean(row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || row.ignoredValidationFindings.length);
+      row.done = Boolean(row.done ?? row.confirmed ?? row.completedWithWarnings ?? false);
+      if (row.completedWithWarnings) row.status = COMPLETED_WITH_WARNINGS_STATUS;
       row.notes = row.notes || '';
       row.format = {
         bold: Boolean(row.format?.bold),
@@ -1120,6 +1183,158 @@
       rows[index].targetHtml = '';
       rows[index].target = editor.value;
       rows[index].done = false;
+      clearCompletionWarnings(rows[index]);
+      closeValidationPopover();
+    }
+
+    function completionIgnoredFindings(row) {
+      if (!row) return [];
+      if (Array.isArray(row.ignoredValidationFindings)) return row.ignoredValidationFindings;
+      if (Array.isArray(row.ignored_validation_findings)) return row.ignored_validation_findings;
+      const meta = row.completionValidation || row.completion_validation || {};
+      if (Array.isArray(meta.ignoredFindings)) return meta.ignoredFindings;
+      if (Array.isArray(meta.ignored_findings)) return meta.ignored_findings;
+      return [];
+    }
+
+    function isCompletedWithWarnings(row) {
+      return Boolean(row && (row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || completionIgnoredFindings(row).length));
+    }
+
+    function clearCompletionWarnings(row) {
+      if (!row) return;
+      row.completedWithWarnings = false;
+      row.ignoredValidationFindings = [];
+      row.ignored_validation_findings = [];
+      row.completionValidation = {};
+      row.completion_validation = {};
+      if (row.status === COMPLETED_WITH_WARNINGS_STATUS) {
+        row.status = String(row.target || '').trim() ? 'Needs Review' : 'Untranslated';
+      }
+    }
+
+    function normalizeValidationFinding(item, idx) {
+      const value = item && typeof item === 'object' ? item : { message: String(item || 'Review this segment.') };
+      return {
+        row: value.row || value.Row || idx + 1,
+        severity: value.severity || value.Severity || value.label || 'Review',
+        category: value.category || value['Error Type'] || value.type || 'Validation',
+        message: value.message || value.issue || value['Wrong Part'] || value.Explanation || value.Check || 'Review this segment before completing it.',
+        suggestion: value.suggestion || value.Suggestion || value.action || '',
+      };
+    }
+
+    function validationFindingsForRow(row, idx) {
+      if (!row || isCompletedWithWarnings(row)) return [];
+      const fromPayload = Array.isArray(row.validationFindings) ? row.validationFindings.map(item => normalizeValidationFinding(item, idx)) : [];
+      const local = translationQaFindingsForRow(row, idx, { includeConfirmation: false }).map(item => normalizeValidationFinding(item, idx));
+      const seen = new Set();
+      return [...fromPayload, ...local].filter((item) => {
+        const key = `${item.severity}|${item.category}|${item.message}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function storeIgnoredValidationFindings(row, findings) {
+      const normalized = (findings || []).map((item, idx) => ({
+        ...normalizeValidationFinding(item, idx),
+        ignoredAt: new Date().toISOString(),
+        ignoredBy: 'browser-editor',
+      }));
+      row.ignoredValidationFindings = normalized;
+      row.ignored_validation_findings = normalized;
+      row.completionValidation = {
+        status: 'ignored',
+        ignoredAt: new Date().toISOString(),
+        ignoredBy: 'browser-editor',
+        editor: 'translation',
+        ignoredFindings: normalized,
+      };
+      row.completion_validation = {
+        status: 'ignored',
+        ignored_at: row.completionValidation.ignoredAt,
+        ignored_by: 'browser-editor',
+        editor: 'translation',
+        ignored_findings: normalized,
+      };
+      row.completedWithWarnings = normalized.length > 0;
+    }
+
+    function markRowComplete(idx, options = {}) {
+      const row = rows[idx];
+      if (!row) return;
+      row.done = true;
+      row.confirmed = true;
+      if (options.ignoredFindings && options.ignoredFindings.length) {
+        storeIgnoredValidationFindings(row, options.ignoredFindings);
+        row.status = COMPLETED_WITH_WARNINGS_STATUS;
+        row.qa = COMPLETED_WITH_WARNINGS_STATUS;
+      } else {
+        clearCompletionWarnings(row);
+        row.done = true;
+        row.confirmed = true;
+        row.status = 'Approved';
+        row.qa = row.qa || 'Clear';
+      }
+    }
+
+    function closeValidationPopover() {
+      pendingCompletionRequest = null;
+      validationPopover.classList.remove('open');
+      validationPopover.innerHTML = '';
+    }
+
+    function positionValidationPopover(anchor) {
+      const target = anchor || tbody.querySelector(`tr[data-row-index="${active}"]`) || document.body;
+      const rect = target.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 24);
+      const left = Math.max(12, Math.min(rect.right + 10, window.innerWidth - width - 12));
+      const top = Math.max(12, Math.min(rect.top, window.innerHeight - validationPopover.offsetHeight - 12));
+      validationPopover.style.left = `${left}px`;
+      validationPopover.style.top = `${top}px`;
+    }
+
+    function showValidationPopover(idx, findings, options = {}) {
+      const row = rows[idx];
+      if (!row || !findings.length) return;
+      pendingCompletionRequest = { idx, findings, options };
+      setActiveRow(idx);
+      validationPopover.innerHTML = `
+        <h4>Complete with warnings?</h4>
+        <ul>${findings.map(item => `<li><b>${escapeHtml(item.severity || 'Review')}</b>: ${escapeHtml(item.message || item.issue || 'Review this segment.')}${item.suggestion ? `<br><span>${escapeHtml(item.suggestion)}</span>` : ''}</li>`).join('')}</ul>
+        <div class="validation-actions">
+          <button type="button" data-action="return">Return to segment</button>
+          <button type="button" class="ignore-complete" data-action="ignore">Ignore and mark complete</button>
+          <button type="button" data-action="cancel">Cancel</button>
+        </div>
+      `;
+      validationPopover.classList.add('open');
+      positionValidationPopover(options.anchor || tbody.querySelector(`tr[data-row-index="${idx}"]`));
+    }
+
+    function requestRowCompletion(idx, options = {}) {
+      const row = rows[idx];
+      if (!row) return false;
+      if (idx === active) {
+        const cell = activeTargetCell();
+        if (cell) {
+          row.target = cell.value;
+          row.targetHtml = '';
+        }
+      }
+      const findings = validationFindingsForRow(row, idx);
+      if (findings.length) {
+        showValidationPopover(idx, findings, options);
+        updateFooter('Review warnings before marking this segment complete');
+        return false;
+      }
+      markRowComplete(idx);
+      renderRows();
+      updateFooter('Segment confirmed');
+      autoSaveDraft();
+      return true;
     }
 
     function restoreAutosavedDraft() {
@@ -1133,6 +1348,15 @@
           row.target = String(saved.target ?? row.target ?? '');
           row.targetHtml = '';
           row.done = Boolean(saved.done);
+          row.confirmed = Boolean(saved.confirmed ?? row.done);
+          row.ignoredValidationFindings = Array.isArray(saved.ignoredValidationFindings)
+            ? saved.ignoredValidationFindings
+            : (Array.isArray(saved.ignored_validation_findings) ? saved.ignored_validation_findings : []);
+          row.ignored_validation_findings = row.ignoredValidationFindings;
+          row.completionValidation = saved.completionValidation || saved.completion_validation || {};
+          row.completion_validation = saved.completion_validation || saved.completionValidation || {};
+          row.completedWithWarnings = Boolean(saved.completedWithWarnings || saved.status === COMPLETED_WITH_WARNINGS_STATUS || row.ignoredValidationFindings.length);
+          if (row.completedWithWarnings) row.status = COMPLETED_WITH_WARNINGS_STATUS;
           row.format = {
             bold: Boolean(saved.format?.bold),
             italic: Boolean(saved.format?.italic),
@@ -1177,7 +1401,7 @@
       tbody.innerHTML = '';
       visible.forEach(({ row: r, index: i }) => {
         const tr = document.createElement('tr');
-        tr.className = i === active ? 'row-active' : '';
+        tr.className = [i === active ? 'row-active' : '', isCompletedWithWarnings(r) ? 'completed-warning-row' : ''].filter(Boolean).join(' ');
         tr.dataset.rowIndex = i;
         tr.onclick = (event) => {
           if (event.target.closest('.target-editor')) {
@@ -1191,7 +1415,7 @@
           <td class="col-source">${escapeHtml(r.source)}</td>
           <td class="col-target cell-target"><textarea class="target-editor ${targetFormatClass(r)}" data-row-index="${i}" rows="1" lang="te" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Target segment ${i + 1}">${escapeHtml(r.target)}</textarea></td>
           <td class="col-match"><div class="match-badge ${matchClass(r.match)}">${escapeHtml(r.match)}${Number.isNaN(Number(r.match)) ? '' : '%'}</div></td>
-          <td class="col-confirm confirm-cell"><input type="checkbox" class="confirm-check" data-row-index="${i}" ${r.done ? 'checked' : ''} aria-label="Confirm segment ${i + 1}"></td>
+          <td class="col-confirm confirm-cell"><input type="checkbox" class="confirm-check ${isCompletedWithWarnings(r) ? 'warning' : ''}" data-row-index="${i}" ${r.done ? 'checked' : ''} aria-label="Confirm segment ${i + 1}" title="${isCompletedWithWarnings(r) ? 'Completed with warnings' : 'Confirm segment'}"></td>
         `;
         const targetCell = tr.querySelector('.target-editor');
         const confirmCheck = tr.querySelector('.confirm-check');
@@ -1228,10 +1452,17 @@
         confirmCheck.addEventListener('click', (event) => event.stopPropagation());
         confirmCheck.addEventListener('change', () => {
           pushHistory();
-          rows[i].done = confirmCheck.checked;
           setActiveRow(i);
-          updateFooter(confirmCheck.checked ? 'Segment confirmed' : 'Segment confirmation removed');
-          autoSaveDraft();
+          if (confirmCheck.checked) {
+            confirmCheck.checked = false;
+            requestRowCompletion(i, { anchor: tr });
+          } else {
+            rows[i].done = false;
+            rows[i].confirmed = false;
+            clearCompletionWarnings(rows[i]);
+            updateFooter('Segment confirmation removed');
+            autoSaveDraft();
+          }
         });
         tbody.appendChild(tr);
         autoResizeEditor(targetCell);
@@ -1267,7 +1498,7 @@
       document.getElementById('detailTranslation').innerText = `${r.target.length} characters`;
       document.getElementById('detailSegment').innerText = `${active + 1} of ${rows.length}`;
       document.getElementById('detailMatch').innerText = `${r.match}${Number.isNaN(Number(r.match)) ? '' : '%'}`;
-      document.getElementById('detailQa').innerText = r.done ? 'Confirmed' : 'Pending confirmation';
+      document.getElementById('detailQa').innerText = isCompletedWithWarnings(r) ? COMPLETED_WITH_WARNINGS_STATUS : (r.done ? 'Confirmed' : 'Pending confirmation');
       renderPanel();
     }
 
@@ -1440,6 +1671,8 @@
 
     function clearActiveConfirmation(message = 'Segment edited') {
       rows[active].done = false;
+      rows[active].confirmed = false;
+      clearCompletionWarnings(rows[active]);
       const check = tbody.querySelector(`.confirm-check[data-row-index="${active}"]`);
       if (check) check.checked = false;
       updateFocus();
@@ -1453,6 +1686,8 @@
       rows[active].target = cell.value;
       rows[active].targetHtml = '';
       rows[active].done = false;
+      rows[active].confirmed = false;
+      clearCompletionWarnings(rows[active]);
       renderRows();
       updateFooter('Saved locally');
       autoSaveDraft();
@@ -1465,10 +1700,7 @@
         rows[active].target = cell.value;
         rows[active].targetHtml = '';
       }
-      rows[active].done = true;
-      renderRows();
-      updateFooter('Segment confirmed');
-      autoSaveDraft();
+      requestRowCompletion(active, { anchor: tbody.querySelector(`tr[data-row-index="${active}"]`) });
     }
 
     function approveFocused() {
@@ -2535,7 +2767,7 @@
       return { name: translatedOriginalFileName(), content };
     }
 
-    function translationQaFindingsForRow(row, idx) {
+    function translationQaFindingsForRow(row, idx, options = {}) {
       const findings = [];
       if (!String(row.target || '').trim()) findings.push({ severity: 'Major', issue: 'Target translation is blank.' });
       const sourcePlaceholders = extractPlaceholders(row.source);
@@ -2543,7 +2775,7 @@
       sourcePlaceholders.forEach(token => {
         if (!targetText.includes(token)) findings.push({ severity: 'Major', issue: `Missing placeholder ${token}.` });
       });
-      if (!row.done) findings.push({ severity: 'Review', issue: 'Segment is not confirmed.' });
+      if (options.includeConfirmation !== false && !row.done) findings.push({ severity: 'Review', issue: 'Segment is not confirmed.' });
       if (row.qa && String(row.qa).trim() && !/^(✓|clear)$/i.test(String(row.qa).trim())) {
         findings.push({ severity: 'Review', issue: String(row.qa).trim() });
       }
@@ -2616,7 +2848,14 @@
     }
 
     function translationQaReportRows() {
-      const findings = rows.flatMap((row, idx) => translationQaFindingsForRow(row, idx));
+      const findings = rows.flatMap((row, idx) => [
+        ...translationQaFindingsForRow(row, idx),
+        ...completionIgnoredFindings(row).map(item => ({
+          row: idx + 1,
+          severity: item.severity || 'Review',
+          issue: `Ignored completion warning: ${item.message || item.issue || 'Review this segment.'}`,
+        })),
+      ]);
       const confirmed = rows.filter(row => row.done).length;
       const reportRows = [
         ['CogniSweep Translation QA Report'],
@@ -2687,7 +2926,6 @@
         return;
       }
       submitted = true;
-      rows.forEach(row => { if (row.target.trim()) { row.done = true; row.qa = row.qa || '✓'; } });
       savePage();
       renderRows();
       updateFooter('Submitted');
@@ -2719,6 +2957,7 @@
             job_id: editorJobId || '',
             editor_type: 'human_review',
             row_count: rows.length,
+            rows,
           }, '*');
           return;
         }
@@ -2774,10 +3013,56 @@
       renderRows();
     });
 
+    validationPopover.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      if (!action || !pendingCompletionRequest) return;
+      const { idx, findings } = pendingCompletionRequest;
+      if (action === 'return') {
+        closeValidationPopover();
+        setActiveRow(idx);
+        const target = tbody.querySelector(`.target-editor[data-row-index="${idx}"]`);
+        if (target) target.focus();
+        updateFooter('Returned to segment');
+        return;
+      }
+      if (action === 'ignore') {
+        pushHistory();
+        markRowComplete(idx, { ignoredFindings: findings });
+        closeValidationPopover();
+        renderRows();
+        updateFooter('Segment completed with warnings');
+        autoSaveDraft();
+        return;
+      }
+      closeValidationPopover();
+      renderRows();
+      updateFooter('Completion cancelled');
+    });
+
     confirmAllCheck.addEventListener('change', () => {
       pushHistory();
       const checked = confirmAllCheck.checked;
-      rows.forEach(row => { row.done = checked; });
+      closeValidationPopover();
+      if (checked) {
+        for (let idx = 0; idx < rows.length; idx += 1) {
+          if (rows[idx].done) continue;
+          const findings = validationFindingsForRow(rows[idx], idx);
+          if (findings.length) {
+            renderRows();
+            requestAnimationFrame(() => showValidationPopover(idx, findings, { anchor: tbody.querySelector(`tr[data-row-index="${idx}"]`) }));
+            updateFooter(`Review warnings for segment ${idx + 1} before confirming all`);
+            autoSaveDraft();
+            return;
+          }
+          markRowComplete(idx);
+        }
+      } else {
+        rows.forEach(row => {
+          row.done = false;
+          row.confirmed = false;
+          clearCompletionWarnings(row);
+        });
+      }
       renderRows();
       updateFooter(checked ? 'All segments confirmed' : 'All confirmations cleared');
       autoSaveDraft();
@@ -2788,7 +3073,13 @@
       if (!find) return;
       const replace = prompt('Replace with', '') ?? '';
       pushHistory();
-      visibleRows().forEach(({ row }) => { row.target = String(row.target).replaceAll(find, replace); row.targetHtml = ''; row.done = false; });
+      visibleRows().forEach(({ row }) => {
+        row.target = String(row.target).replaceAll(find, replace);
+        row.targetHtml = '';
+        row.done = false;
+        row.confirmed = false;
+        clearCompletionWarnings(row);
+      });
       renderRows();
       updateFooter('Replace applied');
       autoSaveDraft();
@@ -2881,6 +3172,6 @@
     renderRows();
     renderLanguageResources();
     updateExportButtonState();
-  </script>
+</script>
 </body>
 </html>

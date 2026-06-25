@@ -17510,7 +17510,7 @@ def media_export_qa_findings(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_name: str = "") -> bytes:
     findings = media_export_qa_findings(rows)
-    confirmed = sum(1 for row in rows or [] if bool(row.get("confirmed") or row.get("done")) or safe_text(row.get("status")).lower() == "approved")
+    confirmed = sum(1 for row in rows or [] if is_segment_confirmed(row))
     wb = Workbook()
     ws_summary = wb.active
     ws_summary.title = "Summary"
@@ -18720,7 +18720,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any], *, truste
             LOGGER.warning("Unable to update external editor job %s in persistent store: %s", job_id, exc)
 
 
-def submitted_editor_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def submitted_editor_rows(rows: List[Dict[str, Any]], editor_type: str = "") -> List[Dict[str, Any]]:
     submitted_rows: List[Dict[str, Any]] = []
     for row in rows or []:
         if not isinstance(row, dict):
@@ -18730,7 +18730,14 @@ def submitted_editor_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if target_value:
             next_row["target"] = target_value
             next_row["translation"] = target_value
-        set_segment_confirmed(next_row, True, target_value)
+        ignored_findings = row_completion_ignored_findings(next_row)
+        set_segment_confirmed(
+            next_row,
+            True,
+            target_value,
+            ignored_findings=ignored_findings if ignored_findings else None,
+            editor_type=editor_type,
+        )
         next_row["status"] = safe_text(next_row.get("status")) or "Submitted"
         submitted_rows.append(next_row)
     return submitted_rows
@@ -18796,7 +18803,13 @@ def submit_external_editor_payload(job_id: str, payload: Dict[str, Any], editor_
 
     user = current_user() or {}
     submitted_at = now_stamp()
-    rows = submitted_editor_rows(payload.get("rows") or [])
+    rows = submitted_editor_rows(payload.get("rows") or [], editor_type=editor_type)
+    completed_with_warnings = [row for row in rows if row_completion_ignored_findings(row)]
+    ignored_completion_findings = [
+        finding
+        for row in completed_with_warnings
+        for finding in row_completion_ignored_findings(row)
+    ]
     raw_metadata = payload.get("metadata")
     metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
     metadata.update({
@@ -18806,6 +18819,8 @@ def submit_external_editor_payload(job_id: str, payload: Dict[str, Any], editor_
         "submitted_role": safe_text(user.get("role")),
         "submitted_account_type": safe_text(user.get("account_type")),
         "submitted_editor_type": safe_text(editor_type or payload.get("job_type") or metadata.get("job_type")),
+        "completed_with_warnings_count": len(completed_with_warnings),
+        "ignored_completion_finding_count": len(ignored_completion_findings),
     })
     payload["rows"] = rows
     payload["metadata"] = metadata
@@ -18814,6 +18829,11 @@ def submit_external_editor_payload(job_id: str, payload: Dict[str, Any], editor_
     sync_recent_editor_job_status(job_id, metadata)
     mark_related_editor_records_submitted(job_id, metadata)
     add_audit("Editor task submitted", f"{job_id} by {metadata.get('submitted_by') or 'user'}")
+    if ignored_completion_findings:
+        add_audit(
+            "Editor validation warnings ignored",
+            f"{job_id}: {len(ignored_completion_findings)} finding(s) across {len(completed_with_warnings)} row(s)",
+        )
     return True
 
 
@@ -19040,6 +19060,7 @@ def render_reference_cat_editor_shell(
     component_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(editor_rows):
         findings = qa_by_idx.get(idx, [])
+        ignored_findings = row_completion_ignored_findings(row)
         match_value = safe_text(row.get("match") or row.get("match_score") or row.get("score") or "MT") or "MT"
         if match_value.endswith("%"):
             match_value = match_value[:-1]
@@ -19050,6 +19071,14 @@ def render_reference_cat_editor_shell(
                 "target": safe_text(row.get("target") or row.get("translation") or ""),
                 "match": match_value,
                 "qa": "Needs review" if findings else "Clear",
+                "validationFindings": [
+                    normalize_completion_validation_finding(item, row=row, editor_type="translation", row_index=idx + 1)
+                    for item in findings
+                ],
+                "ignoredValidationFindings": ignored_findings,
+                "ignored_validation_findings": ignored_findings,
+                "completionValidation": row.get("completionValidation") or row.get("completion_validation") or {},
+                "completedWithWarnings": is_completed_with_warnings(row),
                 "done": is_segment_confirmed(row),
                 "start": safe_text(row.get("start", "")),
                 "end": safe_text(row.get("end", "")),
@@ -19507,6 +19536,8 @@ def render_reference_media_editor_shell(
             timing_by_row.setdefault(row_number - 1, []).append(issue)
 
     component_rows: List[Dict[str, Any]] = []
+    workflow_label = safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
+    editor_mode = "transcription" if "transcription" in workflow_label.lower() else "subtitling"
     for idx, row in enumerate(rows or []):
         qa_items = row.get("qa_findings") if isinstance(row.get("qa_findings"), list) else []
         quality: List[Dict[str, str]] = []
@@ -19519,6 +19550,7 @@ def render_reference_media_editor_shell(
                 quality.append({"label": label or "Review", "message": message or "Needs review."})
         for issue in timing_by_row.get(idx, []):
             quality.append({"label": "Timing", "message": safe_text(issue.get("issue") or "Review segment timing.")})
+        ignored_findings = row_completion_ignored_findings(row)
 
         component_rows.append(
             {
@@ -19531,6 +19563,19 @@ def render_reference_media_editor_shell(
                 "match": safe_text(row.get("match") or row.get("match_score") or ""),
                 "done": is_segment_confirmed(row),
                 "qa": quality,
+                "validationFindings": segment_completion_validation_findings(
+                    row,
+                    editor_type=editor_mode,
+                    all_rows=rows,
+                    row_index=idx + 1,
+                    target_language=safe_text(metadata.get("target_language") or ""),
+                    domain=workflow_label,
+                    rules=workspace_rules(),
+                ),
+                "ignoredValidationFindings": ignored_findings,
+                "ignored_validation_findings": ignored_findings,
+                "completionValidation": row.get("completionValidation") or row.get("completion_validation") or {},
+                "completedWithWarnings": is_completed_with_warnings(row),
             }
         )
 
@@ -19543,8 +19588,7 @@ def render_reference_media_editor_shell(
         "back_url": back_url,
         "metadata": {
             "title": safe_text(metadata.get("title") or "CogniSweep Media Editor") or "CogniSweep Media Editor",
-            "workflow": safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
-            or "Subtitle / Transcription Workspace",
+            "workflow": workflow_label or "Subtitle / Transcription Workspace",
             "file_name": file_name,
             "target_language": safe_text(metadata.get("target_language") or ""),
         },
@@ -19780,20 +19824,169 @@ def build_reviewed_plain_text(rows: List[Dict[str, Any]]) -> bytes:
     return "\n".join(repair_localization_translation(r.get("source", ""), r.get("target", "")) for r in rows).encode("utf-8-sig")
 
 
+COMPLETED_WITH_WARNINGS_STATUS = "Completed with warnings"
+COMPLETION_STATUS_VALUES = {
+    "approved",
+    "confirmed",
+    "done",
+    "complete",
+    "completed",
+    "submitted",
+    COMPLETED_WITH_WARNINGS_STATUS.lower(),
+}
+COMPLETION_IGNORED_FINDINGS_KEYS = (
+    "ignored_validation_findings",
+    "ignoredValidationFindings",
+    "completion_validation_findings",
+    "completionValidationFindings",
+)
+
+
+def normalize_completion_validation_finding(
+    finding: Any,
+    row: Optional[Dict[str, Any]] = None,
+    editor_type: str = "",
+    row_index: int = 0,
+) -> Dict[str, Any]:
+    row = row or {}
+    if isinstance(finding, dict):
+        severity = safe_text(
+            finding.get("Severity")
+            or finding.get("severity")
+            or finding.get("Status")
+            or finding.get("label")
+            or "Review"
+        )
+        message = safe_text(
+            finding.get("Wrong Part")
+            or finding.get("Explanation")
+            or finding.get("issue")
+            or finding.get("message")
+            or finding.get("Check")
+            or "Review this segment before completing it."
+        )
+        category = safe_text(finding.get("Error Type") or finding.get("category") or finding.get("type") or "Validation")
+        suggestion = safe_text(finding.get("Suggestion") or finding.get("action") or finding.get("fix") or "")
+        location = safe_text(finding.get("Location") or finding.get("Segment ID") or finding.get("row") or f"Segment {row_index or row.get('id', '')}")
+        source = safe_text(finding.get("Source Text") or row.get("source", ""))
+        target = safe_text(finding.get("Translation") or row.get("target") or row.get("translation") or "")
+        rule_id = safe_text(finding.get("Rule ID") or finding.get("rule_id") or "")
+    else:
+        severity = "Review"
+        message = safe_text(finding) or "Review this segment before completing it."
+        category = "Validation"
+        suggestion = ""
+        location = f"Segment {row_index or row.get('id', '')}"
+        source = safe_text(row.get("source", ""))
+        target = safe_text(row.get("target") or row.get("translation") or "")
+        rule_id = ""
+
+    return {
+        "row": row_index or row.get("id") or "",
+        "location": location,
+        "editor": safe_text(editor_type) or "editor",
+        "severity": severity or "Review",
+        "category": category or "Validation",
+        "message": message,
+        "suggestion": suggestion,
+        "source": source,
+        "target": target,
+        "rule_id": rule_id,
+    }
+
+
+def row_completion_ignored_findings(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return []
+    raw_findings: Any = None
+    for key in COMPLETION_IGNORED_FINDINGS_KEYS:
+        value = row.get(key)
+        if isinstance(value, list):
+            raw_findings = value
+            break
+    if raw_findings is None:
+        validation_meta = row.get("completion_validation") or row.get("completionValidation")
+        if isinstance(validation_meta, dict):
+            for key in ("ignored_findings", "ignoredFindings", "findings"):
+                if isinstance(validation_meta.get(key), list):
+                    raw_findings = validation_meta.get(key)
+                    break
+    if not isinstance(raw_findings, list):
+        return []
+    return [
+        normalize_completion_validation_finding(item, row=row, editor_type=safe_text(row.get("editor_type")), row_index=idx + 1)
+        for idx, item in enumerate(raw_findings)
+    ]
+
+
+def store_ignored_completion_findings(
+    row: Dict[str, Any],
+    findings: List[Dict[str, Any]],
+    editor_type: str = "",
+) -> None:
+    try:
+        row_index = int(row.get("id") or 0)
+    except Exception:
+        row_index = 0
+    normalized = [
+        normalize_completion_validation_finding(item, row=row, editor_type=editor_type, row_index=row_index)
+        for item in findings or []
+    ]
+    if not normalized:
+        row.pop("ignored_validation_findings", None)
+        row.pop("ignoredValidationFindings", None)
+        row.pop("completion_validation", None)
+        row.pop("completionValidation", None)
+        return
+    ignored_at = now_stamp()
+    ignored_by = current_editor_identity()
+    for item in normalized:
+        item["ignored_at"] = ignored_at
+        item["ignored_by"] = ignored_by
+    row["ignored_validation_findings"] = normalized
+    row["ignoredValidationFindings"] = normalized
+    row["completion_validation"] = {
+        "status": "ignored",
+        "ignored_at": ignored_at,
+        "ignored_by": ignored_by,
+        "editor": safe_text(editor_type) or safe_text(row.get("editor_type")) or "editor",
+        "ignored_findings": normalized,
+    }
+    row["completionValidation"] = {
+        "status": "ignored",
+        "ignoredAt": ignored_at,
+        "ignoredBy": ignored_by,
+        "editor": safe_text(editor_type) or safe_text(row.get("editor_type")) or "editor",
+        "ignoredFindings": normalized,
+    }
+
+
+def is_completed_with_warnings(row: Dict[str, Any]) -> bool:
+    return safe_text(row.get("status")).strip().lower() == COMPLETED_WITH_WARNINGS_STATUS.lower() or bool(row_completion_ignored_findings(row))
+
+
 def is_segment_confirmed(row: Dict[str, Any]) -> bool:
     raw = row.get("confirmed", row.get("segment_confirmed", ""))
     if isinstance(raw, bool):
         return raw
-    if safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved"}:
+    if safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved", COMPLETED_WITH_WARNINGS_STATUS.lower()}:
         return True
-    return safe_text(row.get("status", "")) == "Approved"
+    return safe_text(row.get("status", "")).strip().lower() in COMPLETION_STATUS_VALUES
 
 
-def set_segment_confirmed(row: Dict[str, Any], confirmed: bool, target: str = "") -> None:
+def set_segment_confirmed(
+    row: Dict[str, Any],
+    confirmed: bool,
+    target: str = "",
+    ignored_findings: Optional[List[Dict[str, Any]]] = None,
+    editor_type: str = "",
+) -> None:
     row["confirmed"] = bool(confirmed)
     row["segment_confirmed"] = bool(confirmed)
     if confirmed:
-        row["status"] = "Approved"
+        if ignored_findings is not None:
+            store_ignored_completion_findings(row, ignored_findings, editor_type=editor_type)
+        row["status"] = COMPLETED_WITH_WARNINGS_STATUS if row_completion_ignored_findings(row) else "Approved"
         row["confirmed_by"] = current_editor_identity()
         row["confirmed_at"] = now_stamp()
         if target:
@@ -19802,20 +19995,166 @@ def set_segment_confirmed(row: Dict[str, Any], confirmed: bool, target: str = ""
     else:
         row.pop("confirmed_by", None)
         row.pop("confirmed_at", None)
-        if safe_text(row.get("status", "")) == "Approved":
+        store_ignored_completion_findings(row, [], editor_type=editor_type)
+        if safe_text(row.get("status", "")).strip().lower() in {"approved", COMPLETED_WITH_WARNINGS_STATUS.lower()}:
             row["status"] = "Needs Review" if safe_text(target or row.get("target", "")).strip() else "Untranslated"
 
 
-def render_segment_confirmation_checkbox(row: Dict[str, Any], key_prefix: str, target: str = "") -> bool:
+def _completion_time_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    raw = safe_text(value).strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+        return float(raw)
+    if re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?(?:[\.,]\d+)?", raw):
+        return parse_timecode(raw)
+    return None
+
+
+def segment_completion_validation_findings(
+    row: Dict[str, Any],
+    editor_type: str = "translation",
+    all_rows: Optional[List[Dict[str, Any]]] = None,
+    row_index: int = 0,
+    target_language: str = "",
+    domain: str = "",
+    rules: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return []
+    if is_segment_confirmed(row) and is_completed_with_warnings(row):
+        return []
+
+    editor_key = safe_text(editor_type).strip().lower()
+    row_number = row_index
+    if not row_number:
+        raw_id = safe_text(row.get("id"))
+        row_number = int(raw_id) if raw_id.isdigit() else 1
+    candidate = dict(row)
+    candidate.setdefault("id", row_number)
+    candidate.setdefault("location", f"Segment {row_number}")
+    candidate["target"] = safe_text(candidate.get("target") or candidate.get("translation") or "")
+    candidate["translation"] = candidate["target"]
+    candidate["source"] = safe_text(candidate.get("source") or candidate.get("text") or "")
+
+    findings: List[Dict[str, Any]] = []
+    if editor_key in {"translation", "cat", "human_review", "review"}:
+        findings.extend(delivery_quality_findings([candidate], target_language or "Target", domain or "Human Review", rules))
+    else:
+        start_value = _completion_time_seconds(candidate.get("start"))
+        end_value = _completion_time_seconds(candidate.get("end"))
+        text_value = candidate["target"] or (candidate["source"] if editor_key == "transcription" else "")
+        if start_value is None or end_value is None:
+            findings.append(qa_manual_finding(candidate, "Major", "Timing", "Start or end time is not valid.", "Use a valid timecode before completing this row."))
+        elif end_value <= start_value:
+            findings.append(qa_manual_finding(candidate, "Major", "Timing", "End time must be after start time.", "Move the end time after the start time."))
+        if start_value is not None and all_rows and row_number > 1:
+            previous = all_rows[row_number - 2] if row_number - 2 < len(all_rows) else {}
+            previous_end = _completion_time_seconds(previous.get("end")) if isinstance(previous, dict) else None
+            if previous_end is not None and start_value < previous_end:
+                findings.append(qa_manual_finding(candidate, "Major", "Timing", "Segment overlaps the previous segment.", "Adjust the start or previous end time."))
+        if not text_value.strip():
+            label = "Transcript text is blank." if editor_key == "transcription" else "Target subtitle text is blank."
+            findings.append(qa_manual_finding(candidate, "Major", "Completeness", label, "Add the missing text before completing this row."))
+        if editor_key != "transcription" and start_value is not None and end_value is not None and end_value > start_value:
+            duration = max(0.1, end_value - start_value)
+            cps = round(len(text_value) / duration)
+            if cps > 20:
+                findings.append(qa_manual_finding(candidate, "Review", "Readability", f"Reading speed is {cps} CPS.", "Shorten the subtitle or adjust timing."))
+            if len(text_value) > 84:
+                findings.append(qa_manual_finding(candidate, "Review", "Subtitle Length", "Target text is long for a two-line subtitle.", "Split or shorten the subtitle."))
+
+    if isinstance(row.get("qa_findings"), list):
+        findings.extend(item for item in row.get("qa_findings", []) if isinstance(item, dict))
+    return [
+        normalize_completion_validation_finding(item, row=candidate, editor_type=editor_key or "editor", row_index=row_number)
+        for item in dedupe_qa_findings(findings)
+    ]
+
+
+def render_completion_validation_popover(
+    row: Dict[str, Any],
+    findings: List[Dict[str, Any]],
+    key_prefix: str,
+    target: str = "",
+    editor_type: str = "translation",
+) -> bool:
+    if not findings:
+        return False
+    popover_factory = getattr(st, "popover", None)
+    if callable(popover_factory):
+        warning_container = popover_factory("Completion warnings", use_container_width=True)
+    else:
+        warning_container = st.expander("Completion warnings", expanded=True)
+    with warning_container:
+        st.caption("Resolve these findings or explicitly ignore them before marking this row complete.")
+        for finding in findings[:8]:
+            severity = safe_text(finding.get("severity") or "Review")
+            message = safe_text(finding.get("message") or "Review this segment.")
+            suggestion = safe_text(finding.get("suggestion"))
+            st.markdown(f"- **{escape(severity)}**: {escape(message)}" + (f" _{escape(suggestion)}_" if suggestion else ""))
+        col_return, col_ignore, col_cancel = st.columns(3)
+        if col_return.button("Return to segment", key=f"{key_prefix}_validation_return", use_container_width=True):
+            st.session_state.pop(f"{key_prefix}_completion_validation_findings", None)
+            return False
+        if col_ignore.button("Ignore and mark complete", key=f"{key_prefix}_validation_ignore", use_container_width=True):
+            set_segment_confirmed(row, True, target, ignored_findings=findings, editor_type=editor_type)
+            st.session_state.pop(f"{key_prefix}_completion_validation_findings", None)
+            return True
+        if col_cancel.button("Cancel", key=f"{key_prefix}_validation_cancel", use_container_width=True):
+            st.session_state.pop(f"{key_prefix}_completion_validation_findings", None)
+            return False
+    return False
+
+
+def render_segment_confirmation_checkbox(
+    row: Dict[str, Any],
+    key_prefix: str,
+    target: str = "",
+    editor_type: str = "translation",
+    all_rows: Optional[List[Dict[str, Any]]] = None,
+    row_index: int = 0,
+    target_language: str = "",
+    domain: str = "",
+    rules: Optional[Dict[str, Any]] = None,
+) -> bool:
     before = is_segment_confirmed(row)
+    checkbox_key = f"{key_prefix}_segment_completed"
+    pending_key = f"{key_prefix}_completion_validation_findings"
     confirmed = st.checkbox(
         "Segment completed",
         value=before,
-        key=f"{key_prefix}_segment_completed",
+        key=checkbox_key,
         help="Tick this after translation or editing is complete. Unticked segments remain pending.",
     )
     if confirmed != before:
-        set_segment_confirmed(row, confirmed, target)
+        if confirmed:
+            candidate = dict(row)
+            candidate["target"] = target or safe_text(candidate.get("target") or candidate.get("translation"))
+            findings = segment_completion_validation_findings(
+                candidate,
+                editor_type=editor_type,
+                all_rows=all_rows,
+                row_index=row_index,
+                target_language=target_language,
+                domain=domain,
+                rules=rules,
+            )
+            if findings:
+                st.session_state[pending_key] = findings
+                st.session_state[checkbox_key] = False
+            else:
+                set_segment_confirmed(row, True, target, editor_type=editor_type)
+                return True
+        else:
+            set_segment_confirmed(row, False, target, editor_type=editor_type)
+            st.session_state.pop(pending_key, None)
+            return True
+    pending_findings = st.session_state.get(pending_key)
+    if isinstance(pending_findings, list) and render_completion_validation_popover(row, pending_findings, key_prefix, target, editor_type):
+        st.session_state[checkbox_key] = True
         return True
     return False
 
@@ -24762,26 +25101,73 @@ def render_focused_subtitle_workspace() -> None:
             target_label = "Transcript text"
 
         target_text = st.text_area(target_label, value=row.get("target", ""), height=170, key=f"focus_target_{idx}")
+        focused_status_options = [
+            "Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%",
+            "Needs Review", "Approved", COMPLETED_WITH_WARNINGS_STATUS,
+            "Rejected", "Needs Rework", "Untranslated",
+        ]
         status = st.selectbox(
             "Status",
-            ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"],
-            index=["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"].index(row.get("status", "Draft")) if row.get("status", "Draft") in ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", "Rejected", "Needs Rework", "Untranslated"] else 0,
+            focused_status_options,
+            index=focused_status_options.index(row.get("status", "Draft")) if row.get("status", "Draft") in focused_status_options else 0,
             key=f"focus_status_{idx}",
         )
-        if render_segment_confirmation_checkbox(row, f"focus_confirm_{idx}", target_text):
+        if render_segment_confirmation_checkbox(
+            row,
+            f"focus_confirm_{idx}",
+            target_text,
+            editor_type=workflow.lower(),
+            all_rows=rows,
+            row_index=idx + 1,
+            domain=workflow,
+        ):
             st.session_state.subtitle_segments = rows
             st.rerun()
 
-        b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Save", key=f"focus_save_{idx}", use_container_width=True):
+        def request_focused_completion(action_prefix: str, success_message: str) -> bool:
             rows[idx]["target"] = target_text
             rows[idx]["status"] = status
-            set_segment_confirmed(rows[idx], status == "Approved" or is_segment_confirmed(rows[idx]), target_text)
-            st.success("Saved.")
-        if b2.button("Approve", key=f"focus_approve_{idx}", use_container_width=True):
+            findings = segment_completion_validation_findings(
+                rows[idx],
+                editor_type=workflow.lower(),
+                all_rows=rows,
+                row_index=idx + 1,
+                domain=workflow,
+            )
+            if findings:
+                st.session_state[f"{action_prefix}_completion_validation_findings"] = findings
+                return False
+            set_segment_confirmed(rows[idx], True, target_text, editor_type=workflow.lower())
+            st.session_state.subtitle_segments = rows
+            st.success(success_message)
+            return True
+
+        def save_focused_row(action_prefix: str, advance: bool = False) -> None:
             rows[idx]["target"] = target_text
-            set_segment_confirmed(rows[idx], True, target_text)
-            st.success("Approved.")
+            rows[idx]["status"] = status
+            completion_requested = status in {"Approved", COMPLETED_WITH_WARNINGS_STATUS}
+            message_shown = False
+            if completion_requested and not is_segment_confirmed(rows[idx]):
+                if not request_focused_completion(action_prefix, "Saved."):
+                    return
+                message_shown = True
+            elif completion_requested:
+                set_segment_confirmed(rows[idx], True, target_text, editor_type=workflow.lower())
+            else:
+                set_segment_confirmed(rows[idx], False, target_text, editor_type=workflow.lower())
+                rows[idx]["status"] = status
+            st.session_state.subtitle_segments = rows
+            if advance:
+                st.session_state.selected_subtitle_index = min(idx + 1, len(rows) - 1)
+                st.rerun()
+            elif not message_shown:
+                st.success("Saved.")
+
+        b1, b2, b3, b4 = st.columns(4)
+        if b1.button("Save", key=f"focus_save_{idx}", use_container_width=True):
+            save_focused_row(f"focus_save_{idx}")
+        if b2.button("Approve", key=f"focus_approve_{idx}", use_container_width=True):
+            request_focused_completion(f"focus_approve_{idx}", "Approved.")
         if b3.button("Split", key=f"focus_split_{idx}", use_container_width=True):
             start = float(rows[idx]["start"])
             end = float(rows[idx]["end"])
@@ -24792,11 +25178,19 @@ def render_focused_subtitle_workspace() -> None:
             rows.insert(idx + 1, new_segment)
             st.rerun()
         if b4.button("Next", key=f"focus_next_{idx}", use_container_width=True):
-            rows[idx]["target"] = target_text
-            rows[idx]["status"] = status
-            set_segment_confirmed(rows[idx], status == "Approved" or is_segment_confirmed(rows[idx]), target_text)
-            st.session_state.selected_subtitle_index = min(idx + 1, len(rows) - 1)
-            st.rerun()
+            save_focused_row(f"focus_next_{idx}", advance=True)
+        for action_prefix, message, advance_after_ignore in (
+            (f"focus_save_{idx}", "Saved with warnings.", False),
+            (f"focus_approve_{idx}", "Approved with warnings.", False),
+            (f"focus_next_{idx}", "Saved with warnings.", True),
+        ):
+            pending_findings = st.session_state.get(f"{action_prefix}_completion_validation_findings")
+            if isinstance(pending_findings, list) and render_completion_validation_popover(rows[idx], pending_findings, action_prefix, target_text, workflow.lower()):
+                st.session_state.subtitle_segments = rows
+                st.success(message)
+                if advance_after_ignore:
+                    st.session_state.selected_subtitle_index = min(idx + 1, len(rows) - 1)
+                st.rerun()
 
     with assist_col:
         render_assist_panel(row.get("source", "") or row.get("target", ""))
