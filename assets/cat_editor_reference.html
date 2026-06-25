@@ -1120,22 +1120,42 @@
       return resourceList(name).filter(item => resourceMatchesSegment(item, row));
     }
 
+    function normalizedResourceText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    function explicitTmScore(item) {
+      const raw = item.match_score ?? item.score ?? item.similarity ?? String(item.note || '').match(/\d+(?:\.\d+)?(?=%)/)?.[0] ?? '';
+      const value = Number.parseFloat(raw);
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    function tmMatchScore(item, row) {
+      const explicit = explicitTmScore(item);
+      if (explicit > 0) return explicit;
+      const source = normalizedResourceText(row?.source);
+      const itemSource = normalizedResourceText(item.source || item.source_text);
+      if (!source || !itemSource) return 0;
+      if (source === itemSource) return 100;
+      return source.includes(itemSource) || itemSource.includes(source) ? 85 : 0;
+    }
+
+    function segmentTmList(row) {
+      return resourceList('tm')
+        .map(item => ({ item, score: tmMatchScore(item, row) }))
+        .filter(({ score }) => score >= 70)
+        .sort((a, b) => b.score - a.score)
+        .map(({ item }) => item)
+        .slice(0, 6);
+    }
+
     function renderLanguageResources() {
       const container = document.getElementById('languageResources');
       if (!container) return;
       const row = rows[active] || {};
       const glossary = segmentResourceList('glossary', row);
       const dnt = segmentResourceList('dnt', row);
-      const tm = resourceList('tm').filter((item) => {
-        const source = String(row.source || '').toLowerCase();
-        const target = String(row.target || '').toLowerCase();
-        const itemSource = String(item.source || '').toLowerCase();
-        const itemTarget = String(item.target || '').toLowerCase();
-        return (
-          (itemSource && (source.includes(itemSource.slice(0, 24)) || itemSource.includes(source.slice(0, 24)))) ||
-          (itemTarget && (target.includes(itemTarget.slice(0, 24)) || itemTarget.includes(target.slice(0, 24))))
-        );
-      }).slice(0, 6);
+      const tm = segmentTmList(row);
       const status = resourceList('status');
       if (!glossary.length && !dnt.length && !tm.length && !status.length) {
         container.innerHTML = '<p class="resource-empty">No glossary, DNT, or TM resources match the selected segment.</p>';
@@ -1165,7 +1185,7 @@
           <li class="resource-item">
             <span class="resource-term">${escapeHtml(item.source || '')}</span>
             <span class="resource-target">${escapeHtml(item.target || '')}</span>
-            ${item.note || item.language ? `<span class="resource-note">${escapeHtml(item.note || item.language)}</span>` : ''}
+            ${item.match_score || item.note || item.language ? `<span class="resource-note">${escapeHtml([item.match_score ? `${item.match_score}%` : '', item.note || item.language].filter(Boolean).join(' · '))}</span>` : ''}
           </li>
         `),
       ].join('');
@@ -2825,6 +2845,21 @@
         if (sourceTerm && targetTerm && sourceText.toLowerCase().includes(sourceTerm.toLowerCase()) && !targetText.includes(targetTerm)) {
           findings.push({ severity: 'Major', issue: `Glossary target missing for ${sourceTerm}.`, suggestion: `Use ${targetTerm}.` });
         }
+      });
+      segmentTmList(row).forEach((item) => {
+        const tmSource = String(item.source || item.source_text || '').trim();
+        const tmTarget = String(item.target || item.target_text || '').trim();
+        if (!tmSource || !tmTarget) return;
+        const score = tmMatchScore(item, row);
+        const exact = score >= 100 || normalizedResourceText(tmSource) === normalizedResourceText(sourceText) || String(item.type || item.note || '').includes('100');
+        const targetMatchesTm = normalizedResourceText(targetText) === normalizedResourceText(tmTarget) || normalizedResourceText(targetText).includes(normalizedResourceText(tmTarget));
+        if (targetMatchesTm) return;
+        findings.push({
+          severity: exact ? 'Major' : 'Review',
+          category: 'Translation Memory',
+          issue: exact ? `TM 100% target not used for ${tmSource}.` : `Strong TM suggestion not reflected for ${tmSource}.`,
+          suggestion: `Use or reconcile: ${tmTarget}.`,
+        });
       });
       if (options.includeConfirmation !== false && !row.done) findings.push({ severity: 'Review', issue: 'Segment is not confirmed.' });
       if (Array.isArray(row.qa)) {

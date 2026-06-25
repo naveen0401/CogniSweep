@@ -979,6 +979,8 @@ def test_cat_editor_reference_file_matches_attached_shell() -> None:
     assert "renderResourceSection('TMs'" in html
     assert "No glossary, DNT, or TM resources match the selected segment." in html
     assert "function segmentResourceList(name, row)" in html
+    assert "function segmentTmList(row)" in html
+    assert "TM 100% target not used" in html
     assert "Focused source" not in html
     assert 'id="focusSource"' not in html
     assert "const languageResources = " in html

@@ -49,6 +49,9 @@ def test_cat_editor_completion_uses_row_popover_and_explicit_ignore() -> None:
     assert "if (!row || isCompletedWithWarnings(row)) return [];" not in html
     assert "DNT term changed or missing" in html
     assert "Glossary target missing" in html
+    assert "function segmentTmList(row)" in html
+    assert "TM 100% target not used" in html
+    assert "Strong TM suggestion not reflected" in html
     assert "No glossary, DNT, or TM resources match the selected segment." in html
     assert "function segmentResourceList(name, row)" in html
     assert "renderLanguageResources();" in html
@@ -79,6 +82,9 @@ def test_media_editor_completion_uses_gateway_for_subtitling_and_transcription()
     assert "const text = safe(row.target);" in html
     assert "DNT term changed or missing" in html
     assert "Glossary target missing" in html
+    assert "function segmentTmList(row)" in html
+    assert "TM 100% target not used" in html
+    assert "Strong TM suggestion not reflected" in html
     assert 'id="dntMatches"' in html
 
 
@@ -118,6 +124,9 @@ def test_streamlit_fallback_completion_paths_are_guarded() -> None:
     assert "if is_segment_confirmed(row) and is_completed_with_warnings(row):" not in source
     assert 'requested_complete = bool(row.get("confirmed") or row.get("done"))' in source
     assert 'text_value = candidate["target"]' in source
+    assert "def tm_completion_validation_findings(" in source
+    assert "Translation Memory" in source
+    assert "TM 100% target not used." in source
 
 
 if __name__ == "__main__":

@@ -1049,6 +1049,37 @@
     const modeTitle = () => isTranscriptionMode() ? "Transcription" : "Subtitling";
     const targetColumnLabel = () => isTranscriptionMode() ? "Transcript" : "Target Subtitle";
 
+    function normalizedResourceText(value) {
+      return safe(value).replace(/\s+/g, " ").trim().toLowerCase();
+    }
+
+    function explicitTmScore(item) {
+      const noteScore = safe(item.note).match(/\d+(?:\.\d+)?(?=%)/);
+      const raw = item.match_score ?? item.score ?? item.similarity ?? (noteScore ? noteScore[0] : "");
+      const value = Number.parseFloat(raw);
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    function tmMatchScore(item, row) {
+      const explicit = explicitTmScore(item);
+      if (explicit > 0) return explicit;
+      const source = normalizedResourceText(row && row.source);
+      const itemSource = normalizedResourceText(item.source || item.source_text);
+      if (!source || !itemSource) return 0;
+      if (source === itemSource) return 100;
+      return source.includes(itemSource) || itemSource.includes(source) ? 85 : 0;
+    }
+
+    function segmentTmList(row) {
+      const resources = payload.resources || {};
+      return (Array.isArray(resources.tm) ? resources.tm : [])
+        .map((item) => ({ item, score: tmMatchScore(item, row) }))
+        .filter(({ score }) => score >= 70)
+        .sort((a, b) => b.score - a.score)
+        .map(({ item }) => item)
+        .slice(0, 6);
+    }
+
     function normalizeRow(row, idx) {
       const ignoredFindings = Array.isArray(row.ignoredValidationFindings)
         ? row.ignoredValidationFindings
@@ -1178,6 +1209,22 @@
         if (sourceTerm && targetTerm && sourceText.toLowerCase().includes(sourceTerm.toLowerCase()) && !targetText.includes(targetTerm)) {
           findings.push({ row: idx + 1, severity: "Major", category: "Glossary", message: `Glossary target missing for ${sourceTerm}.`, suggestion: `Use ${targetTerm}.` });
         }
+      });
+      segmentTmList(row).forEach((item) => {
+        const tmSource = safe(item.source || item.source_text).trim();
+        const tmTarget = safe(item.target || item.target_text).trim();
+        if (!tmSource || !tmTarget) return;
+        const score = tmMatchScore(item, row);
+        const exact = score >= 100 || normalizedResourceText(tmSource) === normalizedResourceText(sourceText) || safe(item.type || item.note).includes("100");
+        const targetMatchesTm = normalizedResourceText(targetText) === normalizedResourceText(tmTarget) || normalizedResourceText(targetText).includes(normalizedResourceText(tmTarget));
+        if (targetMatchesTm) return;
+        findings.push({
+          row: idx + 1,
+          severity: exact ? "Major" : "Review",
+          category: "Translation Memory",
+          message: exact ? `TM 100% target not used for ${tmSource}.` : `Strong TM suggestion not reflected for ${tmSource}.`,
+          suggestion: `Use or reconcile: ${tmTarget}.`,
+        });
       });
       const seen = new Set();
       return findings.filter((item) => {
@@ -1921,10 +1968,7 @@
       const status = Array.isArray(resources.status) ? resources.status : [];
       const source = safe(row.source).toLowerCase();
       const target = safe(row.target).toLowerCase();
-      const tm = (resources.tm || []).filter((item) => {
-        const itemSource = safe(item.source).toLowerCase();
-        return itemSource && (source.includes(itemSource.slice(0, 24)) || itemSource.includes(source.slice(0, 24)));
-      }).slice(0, 3);
+      const tm = segmentTmList(row);
       const glossary = (resources.glossary || []).filter((item) => {
         const term = safe(item.source).toLowerCase();
         return term && (source.includes(term) || target.includes(term));
@@ -1942,7 +1986,7 @@
       if (!isTranscriptionMode() && safe(row.target).length > 84) quality.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
       if (parseTimecode(row.end) <= parseTimecode(row.start)) quality.push({ severity: "Blocker", message: "End time must be after start time." });
       el("connectionStatus").innerHTML = status.length ? status.map((item) => `<div class="assist-card"><b>${htmlEscape(item.connection || "Language resources")}</b><br>${htmlEscape(item.status || "")}</div>`).join("") : `<div class="empty">Internal resources active.</div>`;
-      el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape(item.note || item.language || "TM match")}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
+      el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape([item.match_score ? `${item.match_score}%` : "", item.note || item.language || "TM match"].filter(Boolean).join(" · "))}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
       el("glossaryMatches").innerHTML = glossary.length ? glossary.map((item) => `<div class="assist-card"><b>${htmlEscape(item.source)}</b> -> ${htmlEscape(item.target)}<small>${htmlEscape(item.source_name || "Saved glossary")}</small></div>`).join("") : `<div class="empty">No glossary hits.</div>`;
       el("dntMatches").innerHTML = dnt.length ? dnt.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.term || item.source || item.source_term)}</b><small>${htmlEscape(item.source_name || "DNT")}</small></div>`).join("") : `<div class="empty">No DNT hits.</div>`;
       el("qualityChecks").innerHTML = quality.length ? quality.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.severity || item.Severity || "Review")}</b><br>${htmlEscape(item.message || item.Explanation || item.issue || "Review this segment.")}</div>`).join("") : `<div class="assist-card"><b>Clear</b><br>No timing or quality warnings for the selected segment.</div>`;

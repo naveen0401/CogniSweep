@@ -62,6 +62,9 @@ def test_reference_media_editor_filters_segment_resources_and_done_validation():
     assert "No DNT hits." in html
     assert "DNT term changed or missing" in html
     assert "Glossary target missing" in html
+    assert "function segmentTmList(row)" in html
+    assert "TM 100% target not used" in html
+    assert "Strong TM suggestion not reflected" in html
     assert "const text = safe(row.target);" in html
     assert "if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;" not in html
 

@@ -16507,6 +16507,8 @@ def translation_memory_record_to_tm_item(record: Dict[str, Any]) -> Dict[str, An
         "approved_by": safe_text(record.get("approved_by") or record.get("user_email")),
         "created": safe_text(record.get("created_at") or record.get("created")),
         "origin": safe_text(record.get("origin")),
+        "match_score": safe_text(record.get("match_score") or record.get("score") or record.get("similarity")),
+        "type": safe_text(record.get("type")),
     }
 
 
@@ -18946,6 +18948,8 @@ def build_editor_language_resources(
                 "target": target,
                 "language": safe_text(item.get("language")),
                 "note": safe_text(item.get("notes") or item.get("status") or item.get("approved_by")),
+                "match_score": safe_text(item.get("match_score") or item.get("score") or item.get("similarity")),
+                "type": safe_text(item.get("type")),
             }
         )
     for record in load_workspace_translation_memory(limit=500):
@@ -18964,6 +18968,8 @@ def build_editor_language_resources(
                 "target": target,
                 "language": safe_text(item.get("language")),
                 "note": "CogniSweep Memory",
+                "match_score": safe_text(item.get("match_score") or item.get("score") or item.get("similarity")),
+                "type": safe_text(item.get("type") or "TM"),
             }
         )
 
@@ -18997,6 +19003,8 @@ def build_editor_language_resources(
                     "source": safe_text(item.get("source_text")),
                     "target": safe_text(item.get("target_text")),
                     "language": safe_text(item.get("resource_name") or item.get("provider") or "External TM"),
+                    "match_score": safe_text(item.get("match_score")),
+                    "type": safe_text(item.get("type") or item.get("provider") or "External TM"),
                     "note": " · ".join(part for part in [
                         safe_text(item.get("provider")),
                         f"{item.get('match_score')}%" if safe_text(item.get("match_score")) else "",
@@ -20042,6 +20050,40 @@ def _completion_time_seconds(value: Any) -> Optional[float]:
     return None
 
 
+def tm_completion_validation_findings(
+    row: Dict[str, Any],
+    row_number: int,
+    target_language: str = "",
+) -> List[Dict[str, Any]]:
+    source = normalize_translation_memory_text(row.get("source", ""))
+    target = normalize_translation_memory_text(row.get("target") or row.get("translation") or "")
+    if not source:
+        return []
+    findings: List[Dict[str, Any]] = []
+    for match in translation_memory_matches(source, target_language=target_language, limit=5):
+        tm_source = normalize_translation_memory_text(match.get("source"))
+        tm_target = normalize_translation_memory_text(match.get("target"))
+        if not tm_source or not tm_target:
+            continue
+        match_type = safe_text(match.get("type"))
+        exact_match = tm_source.lower() == source.lower() or "100" in match_type
+        target_matches = target.lower() == tm_target.lower() or tm_target.lower() in target.lower()
+        if target_matches:
+            continue
+        severity = "Major" if exact_match else "Review"
+        issue = "TM 100% target not used." if exact_match else "Strong TM suggestion is not reflected in the target."
+        findings.append(
+            qa_manual_finding(
+                {**row, "id": row_number, "location": f"Segment {row_number}"},
+                severity,
+                "Translation Memory",
+                issue,
+                f"Use or reconcile the TM target: {tm_target}",
+            )
+        )
+    return findings
+
+
 def segment_completion_validation_findings(
     row: Dict[str, Any],
     editor_type: str = "translation",
@@ -20092,6 +20134,7 @@ def segment_completion_validation_findings(
             if len(text_value) > 84:
                 findings.append(qa_manual_finding(candidate, "Review", "Subtitle Length", "Target text is long for a two-line subtitle.", "Split or shorten the subtitle."))
 
+    findings.extend(tm_completion_validation_findings(candidate, row_number, target_language=target_language))
     if isinstance(row.get("qa_findings"), list):
         findings.extend(item for item in row.get("qa_findings", []) if isinstance(item, dict))
     if isinstance(row.get("qa"), list):
