@@ -19862,7 +19862,6 @@ COMPLETION_STATUS_VALUES = {
     "complete",
     "completed",
     "submitted",
-    COMPLETED_WITH_WARNINGS_STATUS.lower(),
 }
 COMPLETION_IGNORED_FINDINGS_KEYS = (
     "ignored_validation_findings",
@@ -19999,7 +19998,7 @@ def is_segment_confirmed(row: Dict[str, Any]) -> bool:
     raw = row.get("confirmed", row.get("segment_confirmed", ""))
     if isinstance(raw, bool):
         return raw
-    if safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved", COMPLETED_WITH_WARNINGS_STATUS.lower()}:
+    if safe_text(raw).strip().lower() in {"1", "true", "yes", "y", "done", "confirmed", "approved"}:
         return True
     return safe_text(row.get("status", "")).strip().lower() in COMPLETION_STATUS_VALUES
 
@@ -20054,9 +20053,6 @@ def segment_completion_validation_findings(
 ) -> List[Dict[str, Any]]:
     if not isinstance(row, dict):
         return []
-    if is_segment_confirmed(row) and is_completed_with_warnings(row):
-        return []
-
     editor_key = safe_text(editor_type).strip().lower()
     row_number = row_index
     if not row_number:
@@ -20075,7 +20071,7 @@ def segment_completion_validation_findings(
     else:
         start_value = _completion_time_seconds(candidate.get("start"))
         end_value = _completion_time_seconds(candidate.get("end"))
-        text_value = candidate["target"] or (candidate["source"] if editor_key == "transcription" else "")
+        text_value = candidate["target"]
         if start_value is None or end_value is None:
             findings.append(qa_manual_finding(candidate, "Major", "Timing", "Start or end time is not valid.", "Use a valid timecode before completing this row."))
         elif end_value <= start_value:
@@ -20098,6 +20094,9 @@ def segment_completion_validation_findings(
 
     if isinstance(row.get("qa_findings"), list):
         findings.extend(item for item in row.get("qa_findings", []) if isinstance(item, dict))
+    if isinstance(row.get("qa"), list):
+        findings.extend(item for item in row.get("qa", []) if isinstance(item, dict))
+    findings.extend(row_completion_ignored_findings(row))
     return [
         normalize_completion_validation_finding(item, row=candidate, editor_type=editor_key or "editor", row_index=row_number)
         for item in dedupe_qa_findings(findings)
@@ -20209,7 +20208,7 @@ def apply_validated_completion_flags(
         if not isinstance(row, dict):
             continue
         target_value = safe_text(row.get("target") or row.get("translation") or "")
-        requested_complete = bool(row.get("confirmed") or row.get("done") or is_completed_with_warnings(row))
+        requested_complete = bool(row.get("confirmed") or row.get("done"))
         if requested_complete:
             findings = segment_completion_validation_findings(
                 row,
@@ -20221,8 +20220,13 @@ def apply_validated_completion_flags(
                 rules=rules,
             )
             if findings:
-                set_segment_confirmed(row, False, target_value, editor_type=editor_type)
+                row["confirmed"] = False
+                row["segment_confirmed"] = False
+                row.pop("confirmed_by", None)
+                row.pop("confirmed_at", None)
                 row["done"] = False
+                if safe_text(row.get("status", "")).strip().lower() in {"approved", COMPLETED_WITH_WARNINGS_STATUS.lower()}:
+                    row["status"] = "Needs Review" if safe_text(target_value or row.get("target", "")).strip() else "Untranslated"
                 blocked += 1
                 continue
             set_segment_confirmed(row, True, target_value, editor_type=editor_type)
@@ -21212,10 +21216,10 @@ def dedupe_qa_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen = set()
     for finding in findings or []:
         key = (
-            safe_text(finding.get("Location") or finding.get("Segment ID")),
-            safe_text(finding.get("Rule ID")),
-            safe_text(finding.get("Error Type")),
-            safe_text(finding.get("Wrong Part") or finding.get("Explanation")),
+            safe_text(finding.get("Location") or finding.get("Segment ID") or finding.get("location") or finding.get("row")),
+            safe_text(finding.get("Rule ID") or finding.get("rule_id")),
+            safe_text(finding.get("Error Type") or finding.get("category") or finding.get("type")),
+            safe_text(finding.get("Wrong Part") or finding.get("Explanation") or finding.get("message") or finding.get("issue")),
         )
         if key in seen:
             continue

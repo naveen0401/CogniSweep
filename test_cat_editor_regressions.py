@@ -977,7 +977,8 @@ def test_cat_editor_reference_file_matches_attached_shell() -> None:
     assert "renderResourceSection('All Glossary'" in html
     assert "renderResourceSection('DNT list'" in html
     assert "renderResourceSection('TMs'" in html
-    assert "Glossary, DNT list, and translation memory resources are not available for this task." in html
+    assert "No glossary, DNT, or TM resources match the selected segment." in html
+    assert "function segmentResourceList(name, row)" in html
     assert "Focused source" not in html
     assert 'id="focusSource"' not in html
     assert "const languageResources = " in html

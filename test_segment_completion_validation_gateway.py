@@ -45,6 +45,13 @@ def test_cat_editor_completion_uses_row_popover_and_explicit_ignore() -> None:
     assert "COMPLETED_WITH_WARNINGS_STATUS" in html
     assert "completed-warning-row" in html
     assert "Ignored completion warning:" in html
+    assert "row.qa =" not in html
+    assert "if (!row || isCompletedWithWarnings(row)) return [];" not in html
+    assert "DNT term changed or missing" in html
+    assert "Glossary target missing" in html
+    assert "No glossary, DNT, or TM resources match the selected segment." in html
+    assert "function segmentResourceList(name, row)" in html
+    assert "renderLanguageResources();" in html
     assert "rows.forEach(row => { if (row.target.trim())" not in html
 
 
@@ -68,6 +75,11 @@ def test_media_editor_completion_uses_gateway_for_subtitling_and_transcription()
     assert "completed-warning-row" in html
     assert "Ignored completion warning:" in html
     assert "row_count: rows.length,\n            rows," in html
+    assert "if (!row || isCompletedWithWarnings(row)) return [];" not in html
+    assert "const text = safe(row.target);" in html
+    assert "DNT term changed or missing" in html
+    assert "Glossary target missing" in html
+    assert 'id="dntMatches"' in html
 
 
 def test_header_done_is_smart_bulk_not_select_all() -> None:
@@ -88,6 +100,9 @@ def test_header_done_is_smart_bulk_not_select_all() -> None:
         assert "Smart Done marked ${completed} clean segment" in html
         assert "left unmarked for review" in html
         assert "requestAnimationFrame(() => showValidationPopover" not in html
+        assert "if (findings.length)" in html
+    assert "if (rows[idx].done) continue;" not in cat_html
+    assert "if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;" not in media_html
 
 
 def test_streamlit_fallback_completion_paths_are_guarded() -> None:
@@ -100,6 +115,9 @@ def test_streamlit_fallback_completion_paths_are_guarded() -> None:
     assert "render_completion_validation_popover(rows[idx], pending_findings, action_prefix" in source
     assert "blocked_media_completion = apply_validated_completion_flags(" in source
     assert "blocked_completion_count = apply_validated_completion_flags(" in source
+    assert "if is_segment_confirmed(row) and is_completed_with_warnings(row):" not in source
+    assert 'requested_complete = bool(row.get("confirmed") or row.get("done"))' in source
+    assert 'text_value = candidate["target"]' in source
 
 
 if __name__ == "__main__":

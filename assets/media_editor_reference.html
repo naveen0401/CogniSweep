@@ -1008,6 +1008,10 @@
             <div id="glossaryMatches"></div>
           </div>
           <div class="assist-section">
+            <h3>DNT</h3>
+            <div id="dntMatches"></div>
+          </div>
+          <div class="assist-section">
             <h3>Quality Checks</h3>
             <div id="qualityChecks"></div>
           </div>
@@ -1050,7 +1054,7 @@
         ? row.ignoredValidationFindings
         : (Array.isArray(row.ignored_validation_findings) ? row.ignored_validation_findings : []);
       const completedWithWarnings = Boolean(row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || ignoredFindings.length);
-      const confirmed = Boolean(row.confirmed || row.done || row.status === "Approved" || completedWithWarnings);
+      const confirmed = Boolean(row.confirmed || row.done || row.status === "Approved");
       return {
         id: row.id || idx + 1,
         start: safe(row.startText || row.start || "00:00:00,000"),
@@ -1127,11 +1131,15 @@
     }
 
     function validationFindingsForRow(row, idx) {
-      if (!row || isCompletedWithWarnings(row)) return [];
+      if (!row) return [];
       const findings = Array.isArray(row.validationFindings) ? row.validationFindings.map((item) => normalizeValidationFinding(item, idx)) : [];
+      if (Array.isArray(row.qa)) {
+        row.qa.forEach((item) => findings.push(normalizeValidationFinding(item, idx)));
+      }
+      completionIgnoredFindings(row).forEach((item) => findings.push(normalizeValidationFinding(item, idx)));
       const start = parseTimecode(row.start);
       const end = parseTimecode(row.end);
-      const text = safe(row.target || (isTranscriptionMode() ? row.source : ""));
+      const text = safe(row.target);
       if (!safe(row.start).trim() || !safe(row.end).trim()) {
         findings.push({ row: idx + 1, severity: "Major", category: "Timing", message: "Start or end time is missing.", suggestion: "Use valid timecodes before completing this row." });
       } else if (end <= start) {
@@ -1155,6 +1163,22 @@
         if (cps > 20) findings.push({ row: idx + 1, severity: "Review", category: "Readability", message: `Reading speed is ${cps} CPS.`, suggestion: "Shorten the subtitle or adjust timing." });
         if (text.length > 84) findings.push({ row: idx + 1, severity: "Review", category: "Subtitle Length", message: "Target text is long for a two-line subtitle.", suggestion: "Split or shorten the subtitle." });
       }
+      const resources = payload.resources || {};
+      const sourceText = safe(row.source);
+      const targetText = safe(row.target);
+      (Array.isArray(resources.dnt) ? resources.dnt : []).forEach((item) => {
+        const term = safe(item.term || item.source || item.source_term).trim();
+        if (term && sourceText.toLowerCase().includes(term.toLowerCase()) && !targetText.includes(term)) {
+          findings.push({ row: idx + 1, severity: "Major", category: "DNT", message: `DNT term changed or missing: ${term}.`, suggestion: `Keep ${term} unchanged.` });
+        }
+      });
+      (Array.isArray(resources.glossary) ? resources.glossary : []).forEach((item) => {
+        const sourceTerm = safe(item.source || item.source_term || item.term).trim();
+        const targetTerm = safe(item.target || item.target_term).trim();
+        if (sourceTerm && targetTerm && sourceText.toLowerCase().includes(sourceTerm.toLowerCase()) && !targetText.includes(targetTerm)) {
+          findings.push({ row: idx + 1, severity: "Major", category: "Glossary", message: `Glossary target missing for ${sourceTerm}.`, suggestion: `Use ${targetTerm}.` });
+        }
+      });
       const seen = new Set();
       return findings.filter((item) => {
         const key = `${item.severity}|${item.category}|${item.message}`;
@@ -1847,16 +1871,19 @@
         let completed = 0;
         let blocked = 0;
         for (let idx = 0; idx < rows.length; idx += 1) {
-          if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;
+          const wasDone = Boolean(rows[idx].confirmed || rows[idx].done);
           const findings = validationFindingsForRow(rows[idx], idx);
           if (findings.length) {
             rows[idx].confirmed = false;
             rows[idx].done = false;
+            if (rows[idx].status === "Approved" || rows[idx].status === COMPLETED_WITH_WARNINGS_STATUS) {
+              rows[idx].status = safe(rows[idx].target).trim() ? "Needs Review" : "Draft";
+            }
             blocked += 1;
             continue;
           }
           markRowComplete(idx);
-          completed += 1;
+          if (!wasDone) completed += 1;
         }
         scheduleAutoSave();
         renderRows();
@@ -1902,6 +1929,10 @@
         const term = safe(item.source).toLowerCase();
         return term && (source.includes(term) || target.includes(term));
       }).slice(0, 6);
+      const dnt = (resources.dnt || []).filter((item) => {
+        const term = safe(item.term || item.source || item.source_term).toLowerCase();
+        return term && (source.includes(term) || target.includes(term));
+      }).slice(0, 6);
       const qa = Array.isArray(row.qa) ? row.qa : [];
       const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
       const textLength = safe(row.target || row.source).length;
@@ -1913,6 +1944,7 @@
       el("connectionStatus").innerHTML = status.length ? status.map((item) => `<div class="assist-card"><b>${htmlEscape(item.connection || "Language resources")}</b><br>${htmlEscape(item.status || "")}</div>`).join("") : `<div class="empty">Internal resources active.</div>`;
       el("tmMatches").innerHTML = tm.length ? tm.map((item) => `<div class="assist-card"><b>${htmlEscape(item.note || item.language || "TM match")}</b><br>${htmlEscape(item.source)}<small>${htmlEscape(item.target)}</small></div>`).join("") : `<div class="empty">No TM matches for this segment.</div>`;
       el("glossaryMatches").innerHTML = glossary.length ? glossary.map((item) => `<div class="assist-card"><b>${htmlEscape(item.source)}</b> -> ${htmlEscape(item.target)}<small>${htmlEscape(item.source_name || "Saved glossary")}</small></div>`).join("") : `<div class="empty">No glossary hits.</div>`;
+      el("dntMatches").innerHTML = dnt.length ? dnt.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.term || item.source || item.source_term)}</b><small>${htmlEscape(item.source_name || "DNT")}</small></div>`).join("") : `<div class="empty">No DNT hits.</div>`;
       el("qualityChecks").innerHTML = quality.length ? quality.map((item) => `<div class="assist-card warn"><b>${htmlEscape(item.severity || item.Severity || "Review")}</b><br>${htmlEscape(item.message || item.Explanation || item.issue || "Review this segment.")}</div>`).join("") : `<div class="assist-card"><b>Clear</b><br>No timing or quality warnings for the selected segment.</div>`;
       el("assistCount").textContent = quality.length;
     }

@@ -55,6 +55,17 @@ def test_reference_media_editor_has_real_logo_slot_and_route_back_button():
     assert '<div class="logo"><img src="{escape(logo_data_uri, quote=True)}" alt="CogniSweep logo" /></div>' in app_source
 
 
+def test_reference_media_editor_filters_segment_resources_and_done_validation():
+    html = REFERENCE_HTML.read_text(encoding="utf-8")
+
+    assert 'id="dntMatches"' in html
+    assert "No DNT hits." in html
+    assert "DNT term changed or missing" in html
+    assert "Glossary target missing" in html
+    assert "const text = safe(row.target);" in html
+    assert "if (rows[idx].confirmed || isCompletedWithWarnings(rows[idx])) continue;" not in html
+
+
 def test_reference_media_editor_has_mobile_working_layout():
     html = REFERENCE_HTML.read_text(encoding="utf-8")
     mobile_start = html.index("@media (max-width: 760px)")
@@ -79,5 +90,6 @@ if __name__ == "__main__":
     test_reference_media_editor_updates_timing_metrics()
     test_reference_media_editor_uses_fixed_viewport_shell()
     test_reference_media_editor_has_real_logo_slot_and_route_back_button()
+    test_reference_media_editor_filters_segment_resources_and_done_validation()
     test_reference_media_editor_has_mobile_working_layout()
     print("Media editor reference checks passed.")

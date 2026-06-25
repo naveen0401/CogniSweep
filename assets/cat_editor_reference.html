@@ -1047,7 +1047,7 @@
         : (Array.isArray(row.ignored_validation_findings) ? row.ignored_validation_findings : []);
       row.validationFindings = Array.isArray(row.validationFindings) ? row.validationFindings : [];
       row.completedWithWarnings = Boolean(row.completedWithWarnings || row.status === COMPLETED_WITH_WARNINGS_STATUS || row.ignoredValidationFindings.length);
-      row.done = Boolean(row.done ?? row.confirmed ?? row.completedWithWarnings ?? false);
+      row.done = Boolean(row.done ?? row.confirmed ?? false);
       if (row.completedWithWarnings) row.status = COMPLETED_WITH_WARNINGS_STATUS;
       row.notes = row.notes || '';
       row.format = {
@@ -1097,15 +1097,48 @@
       `;
     }
 
+    function resourceTextParts(item) {
+      return [
+        item.source,
+        item.source_term,
+        item.term,
+        item.target,
+        item.target_term,
+      ].map(value => String(value || '').trim()).filter(Boolean);
+    }
+
+    function resourceMatchesSegment(item, row) {
+      const source = String(row?.source || '').toLowerCase();
+      const target = String(row?.target || '').toLowerCase();
+      return resourceTextParts(item).some((part) => {
+        const value = part.toLowerCase();
+        return value.length >= 2 && (source.includes(value) || target.includes(value));
+      });
+    }
+
+    function segmentResourceList(name, row) {
+      return resourceList(name).filter(item => resourceMatchesSegment(item, row));
+    }
+
     function renderLanguageResources() {
       const container = document.getElementById('languageResources');
       if (!container) return;
-      const glossary = resourceList('glossary');
-      const dnt = resourceList('dnt');
-      const tm = resourceList('tm');
+      const row = rows[active] || {};
+      const glossary = segmentResourceList('glossary', row);
+      const dnt = segmentResourceList('dnt', row);
+      const tm = resourceList('tm').filter((item) => {
+        const source = String(row.source || '').toLowerCase();
+        const target = String(row.target || '').toLowerCase();
+        const itemSource = String(item.source || '').toLowerCase();
+        const itemTarget = String(item.target || '').toLowerCase();
+        return (
+          (itemSource && (source.includes(itemSource.slice(0, 24)) || itemSource.includes(source.slice(0, 24)))) ||
+          (itemTarget && (target.includes(itemTarget.slice(0, 24)) || itemTarget.includes(target.slice(0, 24))))
+        );
+      }).slice(0, 6);
       const status = resourceList('status');
       if (!glossary.length && !dnt.length && !tm.length && !status.length) {
-        container.innerHTML = '<p class="resource-empty">Glossary, DNT list, and translation memory resources are not available for this task.</p>';
+        container.innerHTML = '<p class="resource-empty">No glossary, DNT, or TM resources match the selected segment.</p>';
         return;
       }
       container.innerHTML = [
@@ -1225,11 +1258,12 @@
     }
 
     function validationFindingsForRow(row, idx) {
-      if (!row || isCompletedWithWarnings(row)) return [];
+      if (!row) return [];
       const fromPayload = Array.isArray(row.validationFindings) ? row.validationFindings.map(item => normalizeValidationFinding(item, idx)) : [];
+      const ignored = completionIgnoredFindings(row).map(item => normalizeValidationFinding(item, idx));
       const local = translationQaFindingsForRow(row, idx, { includeConfirmation: false }).map(item => normalizeValidationFinding(item, idx));
       const seen = new Set();
-      return [...fromPayload, ...local].filter((item) => {
+      return [...fromPayload, ...ignored, ...local].filter((item) => {
         const key = `${item.severity}|${item.category}|${item.message}`;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -1270,13 +1304,11 @@
       if (options.ignoredFindings && options.ignoredFindings.length) {
         storeIgnoredValidationFindings(row, options.ignoredFindings);
         row.status = COMPLETED_WITH_WARNINGS_STATUS;
-        row.qa = COMPLETED_WITH_WARNINGS_STATUS;
       } else {
         clearCompletionWarnings(row);
         row.done = true;
         row.confirmed = true;
         row.status = 'Approved';
-        row.qa = row.qa || 'Clear';
       }
     }
 
@@ -1499,6 +1531,7 @@
       document.getElementById('detailSegment').innerText = `${active + 1} of ${rows.length}`;
       document.getElementById('detailMatch').innerText = `${r.match}${Number.isNaN(Number(r.match)) ? '' : '%'}`;
       document.getElementById('detailQa').innerText = isCompletedWithWarnings(r) ? COMPLETED_WITH_WARNINGS_STATUS : (r.done ? 'Confirmed' : 'Pending confirmation');
+      renderLanguageResources();
       renderPanel();
     }
 
@@ -1564,6 +1597,10 @@
       if (!r || !contextPanel) return;
       const previous = rows[active - 1];
       const next = rows[active + 1];
+      const activeFindings = validationFindingsForRow(r, active);
+      const qualitySummary = activeFindings.length
+        ? activeFindings.map(item => `${escapeHtml(item.severity || 'Review')}: ${escapeHtml(item.message || item.issue || 'Review this segment.')}`).join('<br>')
+        : 'No blocking QA findings for this segment.';
       const cards = {
         Context: `
           <div class="context-card es-scroll"><h3>Active context</h3><div id="contextText">${renderContextDetails(r)}</div></div>
@@ -1571,8 +1608,8 @@
           <div class="context-card es-scroll"><h3>Navigation</h3><p><b>Previous:</b> ${escapeHtml(previous?.source || 'No previous segment.')}</p><p><b>Next:</b> ${escapeHtml(next?.source || 'No next segment.')}</p></div>
         `,
         'Quality Checks': `
-          <div class="context-card es-scroll"><h3>Quality status</h3><p>${r.qa ? 'No blocking QA findings for this segment.' : 'Needs review. Confirm placeholders, punctuation, and terminology before approval.'}</p></div>
-          <div class="context-preview"><div class="context-bubble">${escapeHtml(r.qa || 'Needs review')}</div></div>
+          <div class="context-card es-scroll"><h3>Quality status</h3><p>${qualitySummary}</p></div>
+          <div class="context-preview"><div class="context-bubble">${activeFindings.length ? 'Needs review' : 'Clear'}</div></div>
           <div class="context-card es-scroll"><h3>Checklist</h3><p>Placeholders preserved<br>Numbers checked<br>Terminology aligned<br>Target not empty</p></div>
         `,
         'Search TM': `
@@ -1592,7 +1629,7 @@
     }
 
     function extractPlaceholders(text) {
-      return String(text).match(/\{\{[^{}]+\}\}|\{[^{}]+\}|%[sd]/g) || [];
+      return String(text).match(/\{\{[^{}]+\}\}|\{[^{}]+\}|<[^>]+>|%[0-9$.\-+]*[sdif]|https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g) || [];
     }
 
     function extractTerms(text) {
@@ -2771,12 +2808,28 @@
       const findings = [];
       if (!String(row.target || '').trim()) findings.push({ severity: 'Major', issue: 'Target translation is blank.' });
       const sourcePlaceholders = extractPlaceholders(row.source);
+      const sourceText = String(row.source || '');
       const targetText = String(row.target || '');
       sourcePlaceholders.forEach(token => {
         if (!targetText.includes(token)) findings.push({ severity: 'Major', issue: `Missing placeholder ${token}.` });
       });
+      resourceList('dnt').forEach((item) => {
+        const term = String(item.term || item.source || item.source_term || '').trim();
+        if (term && sourceText.toLowerCase().includes(term.toLowerCase()) && !targetText.includes(term)) {
+          findings.push({ severity: 'Major', issue: `DNT term changed or missing: ${term}.` });
+        }
+      });
+      resourceList('glossary').forEach((item) => {
+        const sourceTerm = String(item.source || item.source_term || item.term || '').trim();
+        const targetTerm = String(item.target || item.target_term || '').trim();
+        if (sourceTerm && targetTerm && sourceText.toLowerCase().includes(sourceTerm.toLowerCase()) && !targetText.includes(targetTerm)) {
+          findings.push({ severity: 'Major', issue: `Glossary target missing for ${sourceTerm}.`, suggestion: `Use ${targetTerm}.` });
+        }
+      });
       if (options.includeConfirmation !== false && !row.done) findings.push({ severity: 'Review', issue: 'Segment is not confirmed.' });
-      if (row.qa && String(row.qa).trim() && !/^(✓|clear)$/i.test(String(row.qa).trim())) {
+      if (Array.isArray(row.qa)) {
+        row.qa.forEach(item => findings.push(normalizeValidationFinding(item, idx)));
+      } else if (row.qa && String(row.qa).trim() && !/^(✓|clear)$/i.test(String(row.qa).trim())) {
         findings.push({ severity: 'Review', issue: String(row.qa).trim() });
       }
       return findings.map(item => ({ row: idx + 1, ...item }));
@@ -3047,16 +3100,19 @@
         let completed = 0;
         let blocked = 0;
         for (let idx = 0; idx < rows.length; idx += 1) {
-          if (rows[idx].done) continue;
+          const wasDone = Boolean(rows[idx].done);
           const findings = validationFindingsForRow(rows[idx], idx);
           if (findings.length) {
             rows[idx].done = false;
             rows[idx].confirmed = false;
+            if (rows[idx].status === 'Approved' || rows[idx].status === COMPLETED_WITH_WARNINGS_STATUS) {
+              rows[idx].status = String(rows[idx].target || '').trim() ? 'Needs Review' : 'Untranslated';
+            }
             blocked += 1;
             continue;
           }
           markRowComplete(idx);
-          completed += 1;
+          if (!wasDone) completed += 1;
         }
         renderRows();
         const suffix = blocked
