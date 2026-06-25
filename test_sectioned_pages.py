@@ -83,6 +83,14 @@ def test_section_labels_cover_required_long_pages():
         assert label in text
 
 
+def test_billing_opens_with_plans_before_overview():
+    body = function_body("page_billing", "page_account")
+    plans_index = body.index('("Plans & Checkout", "Choose a plan and open Razorpay checkout")')
+    overview_index = body.index('("Overview", "Plan, usage, and allowance summary")')
+
+    assert plans_index < overview_index
+
+
 def test_account_professional_profile_uses_inline_edit_mode():
     body = function_body("page_account", "page_admin")
     assert "es-account-sidebar-card" in body
@@ -116,6 +124,7 @@ if __name__ == "__main__":
     test_shared_sectioned_layout_helper_exists()
     test_long_workspace_pages_use_sectioned_layout()
     test_section_labels_cover_required_long_pages()
+    test_billing_opens_with_plans_before_overview()
     test_account_professional_profile_uses_inline_edit_mode()
     test_team_page_is_workspace_scoped_not_global()
     print("Sectioned page layout checks passed.")

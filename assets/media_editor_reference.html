@@ -1717,6 +1717,48 @@
       saveCurrentDraft("submitted");
       renderRows();
       showToast("All segments submitted");
+      notifySubmitted();
+    }
+
+    function submittedTargetUrl() {
+      const target = safe(payload.back_url) || "?es_page=Subtitle+%2F+Transcription+Editor&es_app_nav=1";
+      try {
+        const url = new URL(target, window.location.href);
+        url.searchParams.set("es_editor_submitted", "1");
+        url.searchParams.set("es_editor_submitted_type", "media");
+        if (safe(payload.job_id)) url.searchParams.set("job_id", safe(payload.job_id));
+        return url.toString();
+      } catch (error) {
+        const joiner = target.includes("?") ? "&" : "?";
+        const jobPart = safe(payload.job_id) ? `&job_id=${encodeURIComponent(safe(payload.job_id))}` : "";
+        return `${target}${joiner}es_editor_submitted=1&es_editor_submitted_type=media${jobPart}`;
+      }
+    }
+
+    function notifySubmitted() {
+      const target = safe(payload.back_url) || "?es_page=Subtitle+%2F+Transcription+Editor&es_app_nav=1";
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({
+            type: "errorsweep-editor-submit",
+            url: target,
+            job_id: safe(payload.job_id),
+            editor_type: "media",
+            row_count: rows.length,
+          }, "*");
+          return;
+        }
+      } catch (error) {
+        // Fall through to same-window navigation below.
+      }
+      try {
+        window.location.assign(submittedTargetUrl());
+      } catch (fallbackError) {
+        const anchor = document.createElement("a");
+        anchor.href = submittedTargetUrl();
+        anchor.target = "_self";
+        anchor.click();
+      }
     }
 
     function csvEscape(value) {

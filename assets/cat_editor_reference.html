@@ -950,6 +950,7 @@
     const exportAsset = {};
     const languageResources = { glossary: [], dnt: [], tm: [] };
     const backUrl = __CAT_EDITOR_BACK_URL__;
+    const editorJobId = __CAT_EDITOR_JOB_ID__;
 
     const tbody = document.getElementById('segmentRows');
     const sourceSearchInput = document.querySelector('.source-search');
@@ -2690,6 +2691,48 @@
       savePage();
       renderRows();
       updateFooter('Submitted');
+      notifySubmitted();
+    }
+
+    function submittedTargetUrl() {
+      const target = backUrl || '?es_page=CogniSweep+Pro&es_app_nav=1';
+      try {
+        const url = new URL(target, window.location.href);
+        url.searchParams.set('es_editor_submitted', '1');
+        url.searchParams.set('es_editor_submitted_type', 'human_review');
+        if (editorJobId) url.searchParams.set('job_id', editorJobId);
+        return url.toString();
+      } catch (error) {
+        const joiner = target.includes('?') ? '&' : '?';
+        const jobPart = editorJobId ? `&job_id=${encodeURIComponent(editorJobId)}` : '';
+        return `${target}${joiner}es_editor_submitted=1&es_editor_submitted_type=human_review${jobPart}`;
+      }
+    }
+
+    function notifySubmitted() {
+      const target = backUrl || '?es_page=CogniSweep+Pro&es_app_nav=1';
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({
+            type: 'errorsweep-editor-submit',
+            url: target,
+            job_id: editorJobId || '',
+            editor_type: 'human_review',
+            row_count: rows.length,
+          }, '*');
+          return;
+        }
+      } catch (error) {
+        // Fall through to same-window navigation below.
+      }
+      try {
+        window.location.assign(submittedTargetUrl());
+      } catch (fallbackError) {
+        const anchor = document.createElement('a');
+        anchor.href = submittedTargetUrl();
+        anchor.target = '_self';
+        anchor.click();
+      }
     }
 
     tabButtons.forEach(button => {

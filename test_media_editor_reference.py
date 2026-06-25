@@ -45,6 +45,9 @@ def test_reference_media_editor_has_real_logo_slot_and_route_back_button():
     assert 'id="backBtn"' in html
     assert "payload.back_url" in html
     assert 'anchor.target = "_self"' in html
+    assert "function notifySubmitted()" in html
+    assert 'type: "errorsweep-editor-submit"' in html
+    assert 'url.searchParams.set("es_editor_submitted", "1");' in html
     assert 'back_url = editor_back_link("Subtitle / Transcription Editor")' in app_source
     assert '"back_url": back_url' in app_source
     assert "render_editor_back_navigation_bridge(back_url)" in app_source

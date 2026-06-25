@@ -396,6 +396,8 @@ SESSION_HANDOFF_QUERY_PARAM = "es_session"
 EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
 EDITOR_LAUNCH_TTL_SECONDS = int(runtime_env("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
 EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"
+EDITOR_SUBMITTED_QUERY_PARAM = "es_editor_submitted"
+EDITOR_SUBMITTED_TYPE_QUERY_PARAM = "es_editor_submitted_type"
 AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
 AUTH_STATE_UNKNOWN = "unknown"
 AUTH_STATE_AUTHENTICATED = "authenticated"
@@ -409,7 +411,7 @@ LOGOUT_SKIP_RESTORE_KEY = "_logout_skip_restore_once"
 BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
 BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
 ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
-ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM)
+ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM)
 SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")
 SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"
 SESSION_LOGOUT_REGISTRY_LIMIT = 2000
@@ -5764,7 +5766,7 @@ def render_authenticated_logout_watchdog() -> None:
     st.session_state["_clear_session_cookie"] = True
     st.session_state[LOGOUT_BROWSER_CLEANUP_KEY] = True
     st.session_state[LOGOUT_SKIP_RESTORE_KEY] = True
-    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
+    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
         query_clear(key)
     query_set("es_page", "Landing")
     query_set(LOGOUT_DONE_QUERY_PARAM, "1")
@@ -7285,7 +7287,7 @@ def logout() -> None:
     st.session_state["_clear_session_cookie"] = True
     st.session_state[LOGOUT_BROWSER_CLEANUP_KEY] = True
     st.session_state[LOGOUT_SKIP_RESTORE_KEY] = True
-    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
+    for key in ("es_session", "es_restore", AUTH_CHECK_QUERY_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_app_nav", "route", "public", "return_to", "es_logout", LOGOUT_DONE_QUERY_PARAM):
         query_clear(key)
     query_set("es_page", "Landing")
     query_set(LOGOUT_DONE_QUERY_PARAM, "1")
@@ -8239,7 +8241,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             if stale == SESSION_HANDOFF_QUERY_PARAM and query_get(SESSION_HANDOFF_QUERY_PARAM) and not browser_session_cookie():
                 continue
@@ -8529,7 +8531,7 @@ def navigate_es_page(page_name: str, **params: str) -> None:
     st.session_state["current_route"] = {"page": page_name, "es_page": page_name, **clean_params}
 
     st.query_params["es_page"] = page_name
-    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
+    for key in ("route", "public", "return_to", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, "tool_tab", "es_panel", "es_app_nav", AUTH_CHECK_QUERY_PARAM):
         if key in st.query_params:
             del st.query_params[key]
     if st.session_state.get("authenticated") and st.session_state.get("user") and not browser_session_cookie():
@@ -17595,12 +17597,65 @@ def new_editor_job_id() -> str:
     return b64url(os.urandom(24))
 
 
+SUBMITTED_EDITOR_STATUSES = {"submitted", "complete", "completed", "done", "delivered", "approved", "confirmed"}
+SUBMITTED_EDITOR_REOPEN_ROLES = {
+    "Platform Owner",
+    "Workspace Owner",
+    "Company Admin",
+    "Workspace Admin",
+    "Project Manager",
+    "Team Lead",
+    "Individual Owner",
+}
+
+
+def can_reopen_submitted_editor_task(user: Optional[Dict[str, Any]] = None) -> bool:
+    candidate = user if user is not None else (current_user() or {})
+    if is_platform_owner_identity(candidate):
+        return True
+    role = safe_text(candidate.get("role"))
+    return (
+        role in SUBMITTED_EDITOR_REOPEN_ROLES
+        or has_permission("admin.workspace", candidate)
+        or has_permission("team.manage", candidate)
+    )
+
+
+def editor_payload_metadata(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return metadata
+
+
+def editor_payload_status(payload: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    metadata = editor_payload_metadata(payload)
+    return safe_text(payload.get("status") or metadata.get("status") or metadata.get("submission_status")).strip().lower()
+
+
+def editor_payload_is_submitted(payload: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    metadata = editor_payload_metadata(payload)
+    status = editor_payload_status(payload)
+    return status in SUBMITTED_EDITOR_STATUSES or bool(safe_text(metadata.get("submitted_at")))
+
+
+def editor_role_can_read_workspace_jobs(user: Optional[Dict[str, Any]] = None) -> bool:
+    return can_reopen_submitted_editor_task(user)
+
+
 def editor_store_scope_kwargs(user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     candidate = user if user is not None else (current_user() or {})
     if is_platform_owner_identity(candidate):
         return {"allow_platform": True}
+    workspace = safe_text(candidate.get("workspace"))
+    if workspace and editor_role_can_read_workspace_jobs(candidate):
+        return {"workspace": workspace}
     return {
-        "workspace": safe_text(candidate.get("workspace")),
+        "workspace": workspace,
         "user_email": safe_text(candidate.get("email") or candidate.get("username")).lower(),
     }
 
@@ -17609,8 +17664,11 @@ def editor_persistence_scope(reason: str, user: Optional[Dict[str, Any]] = None)
     candidate = user if user is not None else (current_user() or {})
     if is_platform_owner_identity(candidate):
         return {"include_all_workspaces": True, "platform_scope_reason": reason or "platform_editor_job"}
+    workspace = safe_text(candidate.get("workspace"))
+    if workspace and editor_role_can_read_workspace_jobs(candidate):
+        return {"workspace": workspace}
     return {
-        "workspace": safe_text(candidate.get("workspace")),
+        "workspace": workspace,
         "user_email": safe_text(candidate.get("email") or candidate.get("username")).lower(),
     }
 
@@ -17626,12 +17684,15 @@ def editor_payload_belongs_to_current_user(payload: Optional[Dict[str, Any]], us
     if not workspace_key and not user_key:
         return False
 
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata = editor_payload_metadata(payload)
     payload_workspace = safe_text(
         payload.get("workspace") or metadata.get("workspace") or payload.get("client") or metadata.get("client")
     ).lower()
     if workspace_key and payload_workspace and payload_workspace != workspace_key:
         return False
+
+    if editor_payload_is_submitted(payload):
+        return can_reopen_submitted_editor_task(candidate)
 
     explicit_users = {
         safe_text(value).lower()
@@ -18501,19 +18562,31 @@ def render_last_media_editor_link() -> None:
 def render_editor_back_navigation_bridge(back_url: str) -> None:
     """Let isolated editor iframes ask the parent app shell to navigate back."""
     back_url_json = json.dumps(safe_text(back_url) or app_page_link("Dashboard"))
+    submitted_param_json = json.dumps(EDITOR_SUBMITTED_QUERY_PARAM)
+    submitted_type_param_json = json.dumps(EDITOR_SUBMITTED_TYPE_QUERY_PARAM)
     render_parent_script(
         f"""
         (() => {{
           window.__errorsweepEditorBackUrl = {back_url_json};
+          window.__errorsweepEditorSubmittedParam = {submitted_param_json};
+          window.__errorsweepEditorSubmittedTypeParam = {submitted_type_param_json};
           if (window.__errorsweepEditorBackBridgeInstalled) return;
           window.__errorsweepEditorBackBridgeInstalled = true;
           window.addEventListener("message", (event) => {{
             const data = event && event.data ? event.data : {{}};
-            if (!data || data.type !== "errorsweep-editor-back") return;
+            const messageType = String(data && data.type ? data.type : "");
+            if (!data || !["errorsweep-editor-back", "errorsweep-editor-submit"].includes(messageType)) return;
             const rawTarget = String(data.url || window.__errorsweepEditorBackUrl || "?es_page=Dashboard");
             try {{
               const targetUrl = new URL(rawTarget, window.location.href);
               ["es_editor", "job_id", "review_id", "es_launch", "es_editor_auth_failed"].forEach((key) => targetUrl.searchParams.delete(key));
+              if (messageType === "errorsweep-editor-submit") {{
+                const jobId = String(data.job_id || data.review_id || "").trim();
+                const editorType = String(data.editor_type || data.editor || "").trim();
+                targetUrl.searchParams.set(window.__errorsweepEditorSubmittedParam || "es_editor_submitted", "1");
+                if (editorType) targetUrl.searchParams.set(window.__errorsweepEditorSubmittedTypeParam || "es_editor_submitted_type", editorType);
+                if (jobId) targetUrl.searchParams.set("job_id", jobId);
+              }}
               window.location.assign(targetUrl.toString());
             }} catch (err) {{
               window.location.assign(rawTarget || "?es_page=Dashboard");
@@ -18563,10 +18636,10 @@ def load_external_editor_payload(job_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
+def save_external_editor_payload(job_id: str, payload: Dict[str, Any], *, trusted_access_checked: bool = False) -> None:
     if not job_id or not payload:
         return
-    if not editor_payload_belongs_to_current_user(payload):
+    if not trusted_access_checked and not editor_payload_belongs_to_current_user(payload):
         LOGGER.warning("Denied external editor job update outside caller scope: %s", job_id)
         return
     rows = payload.get("rows") or []
@@ -18586,6 +18659,7 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
     if learned_count:
         metadata = {**metadata, "translation_memory_learned": learned_count}
     get_review_session_store()[job_id] = {
+        "job_id": job_id,
         "rows": rows,
         "metadata": {**metadata, "export_source": export_source},
         "rules": payload.get("rules") or metadata.get("rules") or {},
@@ -18616,6 +18690,126 @@ def save_external_editor_payload(job_id: str, payload: Dict[str, Any]) -> None:
             )
         except Exception as exc:
             LOGGER.warning("Unable to update external editor job %s in persistent store: %s", job_id, exc)
+
+
+def submitted_editor_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    submitted_rows: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        next_row = dict(row)
+        target_value = safe_text(next_row.get("target") or next_row.get("translation"))
+        if target_value:
+            next_row["target"] = target_value
+            next_row["translation"] = target_value
+        set_segment_confirmed(next_row, True, target_value)
+        next_row["status"] = safe_text(next_row.get("status")) or "Submitted"
+        submitted_rows.append(next_row)
+    return submitted_rows
+
+
+def sync_recent_editor_job_status(job_id: str, metadata: Dict[str, Any]) -> None:
+    status = safe_text(metadata.get("status") or "submitted")
+    submitted_at = safe_text(metadata.get("submitted_at"))
+    recent_jobs = st.session_state.setdefault("owner_recent_editor_jobs", [])
+    for record in recent_jobs:
+        if not isinstance(record, dict):
+            continue
+        if safe_text(record.get("id") or record.get("job_id")) != job_id:
+            continue
+        record["status"] = status
+        record["updated_at"] = submitted_at or now_stamp()
+        record["submitted_at"] = submitted_at
+        break
+
+
+def mark_related_editor_records_submitted(job_id: str, metadata: Dict[str, Any]) -> None:
+    related_ids = {
+        safe_text(job_id),
+        safe_text(metadata.get("job_id")),
+        safe_text(metadata.get("review_job_id")),
+        safe_text(metadata.get("editor_job_id")),
+        safe_text(metadata.get("task_id")),
+    }
+    related_ids = {value for value in related_ids if value}
+    if not related_ids:
+        return
+    submitted_at = safe_text(metadata.get("submitted_at")) or now_stamp()
+    submitter = safe_text(metadata.get("submitted_by"))
+
+    for job in st.session_state.get("jobs", []):
+        if not isinstance(job, dict):
+            continue
+        job_metadata = job_history_metadata(job) if "job_history_metadata" in globals() else {}
+        job_ids = {
+            safe_text(job.get("id")),
+            safe_text(job.get("review_job_id")),
+            safe_text(job.get("editor_job_id")),
+            safe_text(job_metadata.get("job_id")),
+            safe_text(job_metadata.get("review_job_id")),
+            safe_text(job_metadata.get("editor_job_id")),
+            safe_text(job_metadata.get("task_id")),
+        }
+        if not related_ids.intersection(value for value in job_ids if value):
+            continue
+        next_metadata = {**job_metadata, "status": "submitted", "submitted_at": submitted_at, "submitted_by": submitter}
+        job["status"] = "submitted"
+        job["updated_at"] = submitted_at
+        job["metadata_json"] = next_metadata
+        persist_saas_record("jobs", dict(job))
+
+
+def submit_external_editor_payload(job_id: str, payload: Dict[str, Any], editor_type: str = "") -> bool:
+    if not job_id or not isinstance(payload, dict):
+        return False
+    if not editor_payload_belongs_to_current_user(payload):
+        LOGGER.warning("Denied external editor submit outside caller scope: %s", job_id)
+        return False
+
+    user = current_user() or {}
+    submitted_at = now_stamp()
+    rows = submitted_editor_rows(payload.get("rows") or [])
+    raw_metadata = payload.get("metadata")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    metadata.update({
+        "status": "submitted",
+        "submitted_at": submitted_at,
+        "submitted_by": safe_text(user.get("email") or user.get("username")),
+        "submitted_role": safe_text(user.get("role")),
+        "submitted_account_type": safe_text(user.get("account_type")),
+        "submitted_editor_type": safe_text(editor_type or payload.get("job_type") or metadata.get("job_type")),
+    })
+    payload["rows"] = rows
+    payload["metadata"] = metadata
+    payload["status"] = "submitted"
+    save_external_editor_payload(job_id, payload, trusted_access_checked=True)
+    sync_recent_editor_job_status(job_id, metadata)
+    mark_related_editor_records_submitted(job_id, metadata)
+    add_audit("Editor task submitted", f"{job_id} by {metadata.get('submitted_by') or 'user'}")
+    return True
+
+
+def handle_editor_submit_return() -> bool:
+    if query_get(EDITOR_SUBMITTED_QUERY_PARAM) != "1":
+        return False
+    editor_type = safe_text(query_get(EDITOR_SUBMITTED_TYPE_QUERY_PARAM))
+    job_id = safe_text(query_get("job_id") or query_get("review_id"))
+    target_page = normalize_es_page(query_get("es_page") or ("Subtitle / Transcription Editor" if editor_type == "media" else "CogniSweep Pro"))
+    if target_page not in allowed_pages():
+        target_page = "Dashboard"
+
+    if job_id:
+        payload = load_external_editor_payload(job_id)
+        if payload and submit_external_editor_payload(job_id, payload, editor_type):
+            st.session_state["_editor_submit_success_message"] = "Editor task submitted."
+        else:
+            st.session_state["_editor_submit_warning_message"] = "The editor returned to the app, but the task could not be marked submitted. Please reopen from Jobs and try again."
+    else:
+        st.session_state["_editor_submit_warning_message"] = "The editor returned to the app without a job id."
+
+    set_route_query({"es_page": target_page})
+    st.rerun()
+    return True
 
 
 
@@ -18782,6 +18976,7 @@ def render_reference_cat_editor_shell(
     metadata: Dict[str, Any],
     qa_by_idx: Optional[Dict[int, List[Dict[str, Any]]]] = None,
     rules: Optional[Dict[str, Any]] = None,
+    job_id: str = "",
 ) -> None:
     """Render the supplied two-column CAT editor HTML as the translation editor shell."""
     reference_path = Path(__file__).resolve().parent / "assets" / "cat_editor_reference.html"
@@ -18813,6 +19008,7 @@ def render_reference_cat_editor_shell(
         )
     back_url = editor_back_link("CogniSweep Pro")
     html = html.replace("__CAT_EDITOR_BACK_URL__", json.dumps(back_url))
+    html = html.replace("__CAT_EDITOR_JOB_ID__", json.dumps(safe_text(job_id)))
     component_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(editor_rows):
         findings = qa_by_idx.get(idx, [])
@@ -19078,7 +19274,7 @@ def render_external_cat_editor(job_id: str) -> None:
             if 0 <= qa_idx < len(current_rows):
                 qa_by_idx.setdefault(qa_idx, []).append(finding)
 
-    render_reference_cat_editor_shell(current_rows, metadata, qa_by_idx, rules=rules)
+    render_reference_cat_editor_shell(current_rows, metadata, qa_by_idx, rules=rules, job_id=job_id)
 
 
 def render_external_media_editor(job_id: str) -> None:
@@ -23038,11 +23234,19 @@ def job_history_workspace_matches(record: Dict[str, Any], user: Dict[str, Any]) 
     return not user_workspace or not record_workspace or record_workspace == user_workspace
 
 
+def job_history_record_is_submitted(record: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(record)
+    status = safe_text(record.get("status") or metadata.get("status")).strip().lower()
+    return status in SUBMITTED_EDITOR_STATUSES or bool(safe_text(metadata.get("submitted_at")))
+
+
 def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
     if is_owner():
         return True
     if not job_history_workspace_matches(record, user):
         return False
+    if job_history_record_is_submitted(record):
+        return can_reopen_submitted_editor_task(user)
     metadata = job_history_metadata(record)
     email = safe_text(user.get("email")).strip().lower()
     if not email:
@@ -24144,7 +24348,13 @@ def render_text_review_editor() -> None:
         findings = row.get("qa_findings") if isinstance(row, dict) else None
         qa_by_idx[idx] = findings if isinstance(findings, list) else []
 
-    render_reference_cat_editor_shell([dict(row) for row in rows], metadata, qa_by_idx, rules=workspace_rules())
+    render_reference_cat_editor_shell(
+        [dict(row) for row in rows],
+        metadata,
+        qa_by_idx,
+        rules=workspace_rules(),
+        job_id=safe_text(st.session_state.get("active_review_session_id")),
+    )
 
 
 def default_subtitle_segments(count: int = 8, transcription: bool = False) -> List[Dict[str, Any]]:
@@ -26168,8 +26378,8 @@ def page_billing() -> None:
         "billing",
         [
             ("Overview", [
-                ("Overview", "Plan, usage, and allowance summary"),
                 ("Plans & Checkout", "Choose a plan and open Razorpay checkout"),
+                ("Overview", "Plan, usage, and allowance summary"),
                 ("Cancel Subscription", "Cancel trial, mandate, or active subscription"),
             ]),
             ("Records", [
@@ -26710,7 +26920,7 @@ def render_language_resource_connections_panel() -> None:
 
     with st.form("language_resource_connection_form", clear_on_submit=False):
         c1, c2 = st.columns(2)
-        connection_name = c1.text_input("Connection name", value=safe_text(existing.get("connection_name") or "My language resources"))
+        connection_name = c1.text_input("Connection name", value=safe_text(existing.get("connection_name")))
         provider_options = ["Generic REST"]
         provider_value = safe_text(existing.get("provider") or "Generic REST")
         provider = c2.selectbox("Provider", provider_options, index=provider_options.index(provider_value) if provider_value in provider_options else 0)
@@ -26723,24 +26933,24 @@ def render_language_resource_connections_panel() -> None:
             scope_options.append("Workspace shared")
         scope_value = safe_text(existing.get("scope") or "Personal")
         scope = c4.selectbox("Connection scope", scope_options, index=scope_options.index(scope_value) if scope_value in scope_options else 0)
-        base_url = st.text_input("API base URL", value=safe_text(existing.get("base_url")), placeholder="https://provider.example.com/api")
+        base_url = st.text_input("API base URL", value=safe_text(existing.get("base_url")))
         api_key = st.text_input(
             "API key / personal access token",
             type="password",
-            placeholder="Leave blank to keep the saved key" if existing_id else "Paste token",
+            placeholder="Leave blank to keep the saved key" if existing_id else "",
             help="Stored encrypted at rest. CogniSweep never sends this key to browser JavaScript, URLs, exports, or MT providers.",
         )
         c5, c6 = st.columns(2)
         organization_id = c5.text_input("Account or organization ID", value=safe_text(existing.get("organization_id")))
         provider_workspace_id = c6.text_input("Provider workspace/project ID", value=safe_text(existing.get("provider_workspace_id")))
         c7, c8 = st.columns(2)
-        source_language = c7.text_input("Source language", value=safe_text(existing.get("source_language") or "en"))
+        source_language = c7.text_input("Source language", value=safe_text(existing.get("source_language")))
         target_language = c8.text_input("Target language", value=safe_text(existing.get("target_language") or ""))
         tm_resource_ids = st.text_input("TM resources", value=resource_ids_text(existing.get("tm_resource_ids")), help="Comma-separated provider resource IDs. Leave blank to let the provider search defaults.")
         glossary_resource_ids = st.text_input("Glossary/termbase resources", value=resource_ids_text(existing.get("glossary_resource_ids")))
         dnt_resource_ids = st.text_input("DNT resources", value=resource_ids_text(existing.get("dnt_resource_ids")))
         c9, c10 = st.columns(2)
-        automatic_lookup_enabled = c9.checkbox("Enable automatic editor lookup", value=bool(existing.get("automatic_lookup_enabled", True)))
+        automatic_lookup_enabled = c9.checkbox("Enable automatic editor lookup", value=bool(existing.get("automatic_lookup_enabled")) if existing_id else False)
         is_personal_default = c10.checkbox("Set personal default", value=bool(existing.get("is_personal_default", False)))
         cache_seconds = st.number_input(
             "Cache duration seconds",
@@ -28709,6 +28919,12 @@ def render_app() -> None:
     def render_page_content() -> None:
         render_status_incident_banner()
         render_post_login_setup_prompt(page)
+        submit_notice = safe_text(st.session_state.pop("_editor_submit_success_message", ""))
+        submit_warning = safe_text(st.session_state.pop("_editor_submit_warning_message", ""))
+        if submit_notice:
+            st.success(submit_notice)
+        if submit_warning:
+            st.warning(submit_warning)
         if renderer:
             renderer()
         else:
@@ -28762,7 +28978,7 @@ if __name__ == "__main__":
             st.session_state["auth_return_to"] = query_get("return_to")
         page_name = PUBLIC_ROUTE_PAGE_NAMES.get(route_public, normalize_es_page(route_public))
         st.query_params["es_page"] = page_name
-        for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
+        for stale in ("es_restore_miss", "es_session", "es_restore", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, "tool_tab", "es_app_nav", "route", "public", "return_to", AUTH_CHECK_QUERY_PARAM):
             if stale == SESSION_HANDOFF_QUERY_PARAM and auth_state == AUTH_STATE_AUTHENTICATED and query_get(SESSION_HANDOFF_QUERY_PARAM) and not browser_session_cookie():
                 continue
             if stale in st.query_params:
@@ -28860,6 +29076,7 @@ if __name__ == "__main__":
             sync_browser_route_state(current_route)
             render_editor_session_handoff_bridge()
             hydrate_saas_state_for_user()
+            handle_editor_submit_return()
             render_app()
 
     render_router_debug_panel(decision="render_complete")

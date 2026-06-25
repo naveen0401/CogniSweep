@@ -101,8 +101,30 @@ def test_app_editor_open_paths_are_scoped():
     assert "python test_editor_job_security.py" in workflow
 
 
+def test_submitted_editor_jobs_close_for_lower_roles():
+    app = source(APP)
+
+    for token in [
+        'EDITOR_SUBMITTED_QUERY_PARAM = "es_editor_submitted"',
+        "SUBMITTED_EDITOR_STATUSES",
+        "def can_reopen_submitted_editor_task",
+        "def editor_payload_is_submitted",
+        "if editor_payload_is_submitted(payload):",
+        "return can_reopen_submitted_editor_task(candidate)",
+        "def submit_external_editor_payload",
+        '"status": "submitted"',
+        "save_external_editor_payload(job_id, payload, trusted_access_checked=True)",
+        "def handle_editor_submit_return",
+        "handle_editor_submit_return()",
+        "def job_history_record_is_submitted",
+        "return can_reopen_submitted_editor_task(user)",
+    ]:
+        assert token in app
+
+
 if __name__ == "__main__":
     test_local_editor_job_ids_use_os_urandom_and_scope_loads()
     test_persistent_local_fallback_requires_editor_scope()
     test_app_editor_open_paths_are_scoped()
+    test_submitted_editor_jobs_close_for_lower_roles()
     print("Editor job security checks passed.")

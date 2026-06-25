@@ -148,6 +148,20 @@ def test_app_keeps_language_resource_keys_server_side():
     assert "connectionStatus" in read(MEDIA_EDITOR)
 
 
+def test_language_resource_connection_form_starts_without_example_fillings():
+    app = read(APP)
+    account = function_body(app, "render_language_resource_connections_panel", "render_ai_mt_providers_panel")
+
+    assert '"My language resources"' not in account
+    assert '"https://provider.example.com/api"' not in account
+    assert '"Paste token"' not in account
+    assert 'existing.get("source_language") or "en"' not in account
+    assert 'existing.get("automatic_lookup_enabled", True)' not in account
+    assert 'value=safe_text(existing.get("connection_name"))' in account
+    assert 'value=safe_text(existing.get("source_language"))' in account
+    assert 'if existing_id else False' in account
+
+
 def test_language_resource_helpers_do_not_break_existing_session_upserts():
     app = read(APP)
     tree = ast.parse(app)
@@ -202,6 +216,7 @@ if __name__ == "__main__":
     test_secret_encryption_round_trip_and_masking()
     test_generic_rest_connector_normalizes_resources_and_segment_lookups()
     test_app_keeps_language_resource_keys_server_side()
+    test_language_resource_connection_form_starts_without_example_fillings()
     test_language_resource_helpers_do_not_break_existing_session_upserts()
     test_persistence_schema_and_release_guards_cover_language_resources()
     print("Language resource connector checks passed.")
