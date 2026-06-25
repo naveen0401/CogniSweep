@@ -228,6 +228,12 @@ def runtime_env(name: str, default: str = "") -> str:
     return default
 
 
+DEFAULT_PUBLIC_LANDING_URL = "https://www.cognisweep.com/solutions/software-localization-tool"
+PUBLIC_LANDING_ROUTE = "solutions/software-localization-tool"
+PUBLIC_LANDING_PATH = f"/{PUBLIC_LANDING_ROUTE}"
+PUBLIC_LANDING_CANONICAL_URL = runtime_env("ERRORSWEEP_PUBLIC_LANDING_URL", DEFAULT_PUBLIC_LANDING_URL).strip().rstrip("/") or DEFAULT_PUBLIC_LANDING_URL
+
+
 # Persistent browser sessions should survive reloads and browser restarts until
 # the user explicitly clicks Logout. Browser cookies still need a finite
 # Max-Age, so use a long renewal window while the signed token itself has no
@@ -5725,6 +5731,40 @@ def render_parent_script(runtime: str, *, height: int = 0, scrolling: bool = Fal
     )
 
 
+def render_public_landing_canonical_redirect_bridge() -> None:
+    """Redirect bare public roots to the canonical marketing landing URL."""
+    target_url = safe_text(PUBLIC_LANDING_CANONICAL_URL)
+    if not target_url:
+        return
+    target_url_json = json.dumps(target_url)
+    render_parent_script(
+        f"""
+        (() => {{
+          const target = {target_url_json};
+          try {{
+            const current = new URL(window.location.href);
+            const targetUrl = new URL(target, current.href);
+            const currentHost = current.hostname.toLowerCase();
+            const canonicalHost = targetUrl.hostname.toLowerCase();
+            const apexHost = canonicalHost.replace(/^www\\./, "");
+            const cleanPath = (value) => {{
+              const path = String(value || "/").replace(/\\/+$/, "");
+              return path || "/";
+            }};
+            const isBareRoot = cleanPath(current.pathname) === "/" && current.search === "";
+            const isPublicHost = currentHost === canonicalHost || currentHost === apexHost;
+            const isAlreadyCanonical = current.origin === targetUrl.origin && cleanPath(current.pathname) === cleanPath(targetUrl.pathname);
+            if (isBareRoot && isPublicHost && !isAlreadyCanonical) {{
+              window.location.replace(targetUrl.toString());
+            }}
+          }} catch (err) {{}}
+        }})();
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
 def render_authenticated_shell_seen_bridge() -> None:
     storage_key_json = json.dumps(SESSION_STORAGE_KEY)
     render_parent_script(
@@ -7690,6 +7730,7 @@ PAGE_ROUTE_SLUGS = {page: slug for slug, page in ROUTE_PAGE_ALIASES.items() if p
 PUBLIC_ROUTES = {
     "",
     "landing",
+    PUBLIC_LANDING_ROUTE,
     "login",
     "signup",
     "verify",
@@ -7706,6 +7747,9 @@ PUBLIC_ROUTES = {
 AUTHENTICATED_PUBLIC_ENTRY_ROUTES = {"landing", "login", "signup"}
 PUBLIC_ES_PAGE_ALIASES = {
     "landing": "landing",
+    "software localization tool": PUBLIC_LANDING_ROUTE,
+    "solutions software localization tool": PUBLIC_LANDING_ROUTE,
+    PUBLIC_LANDING_ROUTE: PUBLIC_LANDING_ROUTE,
     "login": "login",
     "signup": "signup",
     "sign up": "signup",
@@ -7730,6 +7774,7 @@ PUBLIC_ES_PAGE_ALIASES = {
 }
 PUBLIC_ROUTE_PAGE_NAMES = {
     "landing": "Landing",
+    PUBLIC_LANDING_ROUTE: "Landing",
     "login": "Login",
     "signup": "Signup",
     "verify": "Verify",
@@ -8653,7 +8698,7 @@ def get_current_route() -> Dict[str, str]:
         route_slug = params.get("route") or PAGE_ROUTE_SLUGS.get(page_value) or es_page_alias_key(page_value) or "dashboard"
         return {"route": route_slug, "page": page_value, **params}
     public_route = safe_text(query_get("public") or query_get("route")).strip().lower()
-    if public_route in {"landing", "login", "signup", "verify", "reset", "terms", "privacy", "security", "cookies", "dpa", "sso_handoff", "billing_success", "billing_cancel"}:
+    if public_route and public_route in PUBLIC_ROUTES:
         return {"route": safe_text(public_route), "public": safe_text(public_route), "page": PUBLIC_ROUTE_PAGE_NAMES.get(public_route, "Landing")}
     if public_route:
         return {"route": public_route, "unknown": public_route}
@@ -13861,13 +13906,13 @@ def sanitize_payment_link(url: str) -> str:
 def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "monthly") -> None:
     cards = []
     accents = [
-        ("#00d985", "#34bdf6", "TRIAL"),
-        ("#34bdf6", "#8b5cf6", "PRO"),
-        ("#f59e0b", "#34bdf6", "TEAM"),
-        ("#8b5cf6", "#00d985", "SSO"),
+        ("#00d985", "#34bdf6"),
+        ("#34bdf6", "#8b5cf6"),
+        ("#f59e0b", "#34bdf6"),
+        ("#8b5cf6", "#00d985"),
     ]
     for idx, plan in enumerate(public_billing_plans()):
-        accent_a, accent_b, code = accents[idx % len(accents)]
+        accent_a, accent_b = accents[idx % len(accents)]
         is_active = safe_text(plan.get("name")).lower() == safe_text(active_plan).lower()
         cycle = "annual" if safe_text(billing_cycle).lower().startswith("annual") else "monthly"
         if plan["name"] == "Enterprise":
@@ -13905,20 +13950,6 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
         cards.append(
             f"""
             <article class="es-pricing-card {'active' if is_active else ''}" style="--accent-a:{accent_a}; --accent-b:{accent_b};">
-              <div class="es-pricing-orb">
-                <svg viewBox="0 0 120 120" role="img" aria-label="{escape(plan['name'])} plan graphic">
-                  <defs>
-                    <linearGradient id="planGrad{idx}" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stop-color="{accent_a}" />
-                      <stop offset="100%" stop-color="{accent_b}" />
-                    </linearGradient>
-                  </defs>
-                  <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="10" />
-                  <circle cx="60" cy="60" r="52" fill="none" stroke="url(#planGrad{idx})" stroke-width="10" stroke-linecap="round" stroke-dasharray="{62 + idx * 28} 330" transform="rotate(-90 60 60)" />
-                  <circle cx="60" cy="60" r="34" fill="rgba(8,12,25,.74)" stroke="rgba(255,255,255,.10)" />
-                  <text x="60" y="65" text-anchor="middle" font-size="16" font-weight="900" fill="#f8fbff">{code}</text>
-                </svg>
-              </div>
               <div class="es-pricing-top">
                 <span>{escape(safe_text(plan['label']).upper())}</span>
                 {active_badge}
@@ -13951,13 +13982,15 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
           }}
           .es-pricing-card {{
             position:relative;
+            display:flex;
+            flex-direction:column;
             overflow:hidden;
             min-height: 430px;
             border:1px solid rgba(91,113,190,.32);
             border-radius:16px;
-            padding:22px 20px 18px;
+            padding:20px 20px 18px;
             background:
-              radial-gradient(circle at 80% 8%, color-mix(in srgb, var(--accent-a) 18%, transparent), transparent 34%),
+              radial-gradient(circle at 86% 6%, color-mix(in srgb, var(--accent-a) 16%, transparent), transparent 26%),
               linear-gradient(160deg, rgba(18,24,48,.92), rgba(8,10,22,.94) 58%, rgba(16,8,30,.88));
             box-shadow: 0 28px 80px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.055);
           }}
@@ -13975,12 +14008,6 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
           .es-pricing-card.active {{
             border-color: color-mix(in srgb, var(--accent-a) 72%, white 8%);
             box-shadow: 0 32px 94px color-mix(in srgb, var(--accent-a) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.08);
-          }}
-          .es-pricing-orb {{
-            width: 132px;
-            height: 132px;
-            margin-bottom: 18px;
-            filter: drop-shadow(0 18px 26px color-mix(in srgb, var(--accent-a) 22%, transparent));
           }}
           .es-pricing-top,
           .es-pricing-footer,
@@ -14047,7 +14074,8 @@ def render_pricing_graphic(active_plan: str = "Trial", billing_cycle: str = "mon
           .es-pricing-footer {{
             display:grid;
             gap:10px;
-            margin-top: 18px;
+            margin-top: auto;
+            padding-top: 18px;
             color:#9da8d6;
             font-size:12px;
           }}
@@ -22730,7 +22758,7 @@ def render_public_app() -> None:
         render_sso_handoff()
     elif route in {"terms", "privacy", "security", "cookies", "dpa"}:
         render_public_document(route)
-    elif route == "landing":
+    elif route in {"landing", PUBLIC_LANDING_ROUTE}:
         render_landing_page("explicit_public_landing")
     else:
         st.error(f"Unknown public route: {route}")
@@ -28936,6 +28964,7 @@ def render_app() -> None:
 if __name__ == "__main__":
     render_deploy_debug_page()
     render_global_logout_listener()
+    render_public_landing_canonical_redirect_bridge()
     if st.session_state.get("authenticated") and st.session_state.get("user") and st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, False):
         target_route = authenticated_shell_route_from_session()
         render_login_success_handoff(target_route)

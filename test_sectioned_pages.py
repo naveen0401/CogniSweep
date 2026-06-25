@@ -91,6 +91,16 @@ def test_billing_opens_with_plans_before_overview():
     assert plans_index < overview_index
 
 
+def test_pricing_cards_start_content_near_top():
+    body = function_body("render_pricing_graphic", "billing_provider_label")
+
+    assert "es-pricing-orb" not in body
+    assert "plan graphic" not in body
+    assert "display:flex;" in body
+    assert "flex-direction:column;" in body
+    assert "margin-top: auto;" in body
+
+
 def test_account_professional_profile_uses_inline_edit_mode():
     body = function_body("page_account", "page_admin")
     assert "es-account-sidebar-card" in body
@@ -125,6 +135,7 @@ if __name__ == "__main__":
     test_long_workspace_pages_use_sectioned_layout()
     test_section_labels_cover_required_long_pages()
     test_billing_opens_with_plans_before_overview()
+    test_pricing_cards_start_content_near_top()
     test_account_professional_profile_uses_inline_edit_mode()
     test_team_page_is_workspace_scoped_not_global()
     print("Sectioned page layout checks passed.")

@@ -1,5 +1,19 @@
-{$COGNISWEEP_DOMAIN:cognisweep.com} {
+{$COGNISWEEP_DOMAIN:cognisweep.com}, {$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com} {
     encode gzip zstd
+
+    @apexLanding {
+        host {$COGNISWEEP_DOMAIN:cognisweep.com}
+        path /
+        query ""
+    }
+    redir @apexLanding https://{$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}/solutions/software-localization-tool 308
+
+    @wwwRootLanding {
+        host {$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}
+        path /
+        query ""
+    }
+    redir @wwwRootLanding /solutions/software-localization-tool 308
 
     @billing path /webhooks/billing/*
     reverse_proxy @billing errorsweep-billing-webhook:8301

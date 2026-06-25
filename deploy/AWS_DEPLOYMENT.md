@@ -81,7 +81,9 @@ Add these values to `deploy/.env.production`, using your real domain and bucket.
 
 ```dotenv
 COGNISWEEP_DOMAIN=your-domain.com
-COGNISWEEP_PUBLIC_BASE_URL=https://your-domain.com
+COGNISWEEP_WWW_DOMAIN=www.your-domain.com
+COGNISWEEP_PUBLIC_BASE_URL=https://www.your-domain.com
+COGNISWEEP_PUBLIC_LANDING_URL=https://www.your-domain.com/solutions/software-localization-tool
 
 COGNISWEEP_OBJECT_STORAGE_PROVIDER=s3
 COGNISWEEP_OBJECT_STORAGE_ALLOW_PUBLIC_URLS=false
@@ -202,7 +204,7 @@ docker compose --env-file deploy/.env.production -f docker-compose.vps.yml up -d
 docker compose --env-file deploy/.env.production -f docker-compose.vps.yml ps
 ```
 
-Caddy will request TLS certificates for `COGNISWEEP_DOMAIN`, so the domain must point to the EC2 public IP before the first public start.
+Caddy will request TLS certificates for `COGNISWEEP_DOMAIN` and `COGNISWEEP_WWW_DOMAIN`, so both hostnames must point to the EC2 public IP before the first public start.
 
 ## Edge: CloudFront And WAF
 
@@ -213,7 +215,7 @@ For production hardening, put CloudFront and AWS WAF in front of the host:
 - Create a CloudFront distribution with the EC2/Caddy HTTPS endpoint as a custom origin.
 - Forward the headers needed by Streamlit, including WebSocket upgrade traffic.
 - Attach an AWS WAF web ACL with managed baseline rules and rate limiting.
-- Set `COGNISWEEP_PUBLIC_BASE_URL` to the final HTTPS domain customers use.
+- Set `COGNISWEEP_PUBLIC_BASE_URL` and `COGNISWEEP_PUBLIC_LANDING_URL` to the final HTTPS domain customers use.
 
 CloudFront supports WebSockets, which matters for Streamlit's live browser session.
 

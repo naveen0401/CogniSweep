@@ -71,6 +71,7 @@ jobs:
           python test_top_navigation.py
           python test_sectioned_pages.py
           python test_launch_public_lock.py
+          python test_public_landing_url.py
           python test_ai_json_extraction.py
           python test_launch_rehearsal.py
           python test_backup_check.py

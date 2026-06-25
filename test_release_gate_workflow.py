@@ -29,6 +29,7 @@ def test_github_actions_release_gate_contract():
         "python -m py_compile",
         "python test_auth_talent_upgrade.py",
         "python test_launch_public_lock.py",
+        "python test_public_landing_url.py",
         "python test_launch_rehearsal.py",
         "python test_backup_check.py",
         "python test_backup_redaction.py",

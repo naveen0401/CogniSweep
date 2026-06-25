@@ -72,18 +72,21 @@ docker compose --env-file deploy/.env.production -f docker-compose.production.ym
 
 ## Single VPS With cognisweep.com
 
-Use this mode when `cognisweep.com` points to one server and the app, async
-worker, and billing webhook should communicate on the private Docker network.
+Use this mode when `cognisweep.com` and `www.cognisweep.com` point to one
+server and the app, async worker, and billing webhook should communicate on the
+private Docker network.
 
 For an AWS deployment that uses this same Compose topology on EC2 with S3
 object storage and optional CloudFront/AWS WAF, use `deploy/AWS_DEPLOYMENT.md`.
 
 Required DNS/server setup:
 
-- Point `cognisweep.com` A/AAAA records to the VPS public IP.
+- Point `cognisweep.com` and `www.cognisweep.com` A/AAAA records to the VPS public IP.
 - Open ports `80` and `443` on the VPS firewall.
 - Set `COGNISWEEP_DOMAIN=cognisweep.com` in `deploy/.env.production`.
-- Set `COGNISWEEP_PUBLIC_BASE_URL=https://cognisweep.com`.
+- Set `COGNISWEEP_WWW_DOMAIN=www.cognisweep.com` in `deploy/.env.production`.
+- Set `COGNISWEEP_PUBLIC_BASE_URL=https://www.cognisweep.com`.
+- Set `COGNISWEEP_PUBLIC_LANDING_URL=https://www.cognisweep.com/solutions/software-localization-tool`.
 - Set `COGNISWEEP_BILLING_WEBHOOK_RECEIVER_URL=https://cognisweep.com/webhooks/billing/razorpay`.
 - Leave `COGNISWEEP_MT_PROVIDER=disabled` until the future Amazon Translate adapter is implemented.
 
@@ -94,9 +97,10 @@ docker compose --env-file deploy/.env.production -f docker-compose.vps.yml build
 docker compose --env-file deploy/.env.production -f docker-compose.vps.yml up -d
 ```
 
-Caddy terminates HTTPS and routes `/webhooks/billing/*` to the billing webhook;
-all other traffic goes to the Streamlit app. The MT services are not published
-to the public internet in this mode.
+Caddy terminates HTTPS, redirects bare root visits to the canonical public
+landing URL, and routes `/webhooks/billing/*` to the billing webhook; all other
+traffic goes to the Streamlit app. The MT services are not published to the
+public internet in this mode.
 
 ## Verify
 
