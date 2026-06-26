@@ -19,6 +19,8 @@ RUN python -m pip install --upgrade pip==26.1.2 \
 
 COPY . .
 
+RUN python deploy/brand_streamlit_shell.py
+
 RUN useradd --create-home --shell /usr/sbin/nologin errorsweep \
     && mkdir -p /data/errorsweep /logs/errorsweep \
     && chown -R errorsweep:errorsweep /app /data/errorsweep /logs/errorsweep

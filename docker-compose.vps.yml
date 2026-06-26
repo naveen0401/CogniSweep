@@ -9,6 +9,8 @@ services:
       - "443:443"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/public:/srv/cognisweep-public:ro
+      - ./assets:/srv/cognisweep-assets:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
