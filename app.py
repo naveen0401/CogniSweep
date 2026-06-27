@@ -3108,17 +3108,6 @@ div[class*="st-key-"][class*="_app_nav_targets"] * {
   font-size: 13px;
 }
 
-.es-history-left-active {
-  border: 1px solid rgba(17,245,181,.26);
-  border-radius: 8px;
-  background: rgba(17,245,181,.08);
-  color: #a7f3d0;
-  font-size: 12px;
-  font-weight: 900;
-  padding: 9px 10px;
-  margin: 10px 0 0;
-}
-
 div[class*="st-key-job_history_individual_year"] div[data-baseweb="select"] > div {
   border-color: rgba(104,137,230,.34) !important;
   background: rgba(18,22,46,.96) !important;
@@ -24114,10 +24103,6 @@ def page_job_history() -> None:
                             st.session_state["job_history_selected_scope"] = selected_token
                 else:
                     st.caption("No individual tasks")
-
-            if selected_token:
-                selected_label = "Project tasks" if selected_token.startswith("project::") else "Individual tasks"
-                st.html(f'<div class="es-history-left-active">{escape(selected_label)}</div>')
 
     selected_rows: List[Dict[str, Any]] = []
     frame_title = "Task history"
