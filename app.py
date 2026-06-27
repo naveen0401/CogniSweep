@@ -944,6 +944,30 @@ body:has(#errorsweep-root-shell-marker) .block-container {
   margin: 10px 0 14px;
 }
 
+div[data-baseweb="select"] [data-baseweb="tag"] {
+  background: linear-gradient(180deg, rgba(18, 44, 58, .96), rgba(15, 32, 52, .98)) !important;
+  border: 1px solid rgba(125, 211, 252, .34) !important;
+  border-radius: 7px !important;
+  color: #e8fff8 !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08) !important;
+}
+
+div[data-baseweb="select"] [data-baseweb="tag"] span,
+div[data-baseweb="select"] [data-baseweb="tag"] div {
+  color: #e8fff8 !important;
+  font-weight: 800 !important;
+}
+
+div[data-baseweb="select"] [data-baseweb="tag"] svg {
+  color: #a7f3d0 !important;
+  fill: #a7f3d0 !important;
+}
+
+div[data-baseweb="select"] [data-baseweb="tag"]:hover {
+  background: linear-gradient(180deg, rgba(24, 64, 78, .98), rgba(19, 42, 66, .98)) !important;
+  border-color: rgba(17, 245, 181, .42) !important;
+}
+
 .es-landing-shell {
   min-height: 100vh;
 }
