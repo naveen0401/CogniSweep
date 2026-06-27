@@ -3365,6 +3365,61 @@ div[class*="st-key-job_history_month_nav_"] [data-testid="stBaseButton-primary"]
   box-shadow: 0 12px 32px rgba(0,0,0,.20);
 }
 
+.es-project-details-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 18px;
+}
+
+.es-project-details-line span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid rgba(104,137,230,.24);
+  border-radius: 999px;
+  background: rgba(255,255,255,.045);
+  color: #e7ecff;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.es-project-details-line b {
+  color: #9ea9dc;
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+div[class*="st-key-project_workspace_nav_"] button {
+  justify-content: flex-start !important;
+  border: 1px solid rgba(104,137,230,.30) !important;
+  background: rgba(18,22,46,.94) !important;
+  color: #e8edff !important;
+  box-shadow: none !important;
+}
+
+div[class*="st-key-project_workspace_nav_"] button * {
+  color: inherit !important;
+}
+
+div[class*="st-key-project_workspace_nav_"] button:hover {
+  border-color: rgba(52,189,246,.42) !important;
+  background: rgba(31,39,78,.98) !important;
+}
+
+div[class*="st-key-project_workspace_nav_"] button[kind="primary"],
+div[class*="st-key-project_workspace_nav_"] [data-testid="stBaseButton-primary"] {
+  border-color: rgba(17,245,181,.42) !important;
+  background: linear-gradient(90deg, rgba(33,48,90,.98), rgba(18,76,93,.94)) !important;
+  color: #f8fbff !important;
+  box-shadow: inset 3px 0 0 rgba(17,245,181,.78), 0 10px 22px rgba(0,0,0,.18) !important;
+}
+
 .es-flyout {
   border: 1px solid rgba(52,189,246,.22);
   background: linear-gradient(180deg, rgba(18,24,48,.92), rgba(8,12,25,.92));
@@ -23307,12 +23362,12 @@ def create_job_for_project(
     return record
 
 
-def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label: str = "Create job") -> None:
+def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label: str = "Create job", type_label: str = "Job type") -> None:
     targets = project_target_languages(project)
     default_language = targets[0] if targets[0] in LANGUAGE_CATALOG else "French"
     with st.form(form_key, enter_to_submit=False):
         c1, c2, c3 = st.columns(3)
-        job_type = c1.selectbox("Job type", ["QA", "Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
+        job_type = c1.selectbox(type_label, ["QA", "Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
         language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index(default_language), key=f"{form_key}_language")
         assignee = c3.text_input("Assignee", value="reviewer@cognisweep.local", key=f"{form_key}_assignee")
         assignment_files = st.file_uploader("Assignment upload (optional)", accept_multiple_files=True, key=f"{form_key}_files", help="Upload any file or ZIP package that should be assigned with this project job.")
@@ -23853,39 +23908,64 @@ def page_projects() -> None:
         ("Active", sum(1 for p in projects if safe_text(p.get("status", "Active")).lower() == "active"), "open projects"),
     ])
 
-    left, main = st.columns([0.28, 0.72], gap="large")
+    selected_project_id = safe_text(st.session_state.get("selected_project_workspace_id"))
+    selected_project = project_by_identity(selected_project_id)
+    if not selected_project:
+        selected_project = projects[0]
+        selected_project_id = project_identity(selected_project)
+        st.session_state["selected_project_workspace_id"] = selected_project_id
+        st.session_state["selected_jobs_project_id"] = selected_project_id
+
+    left, main = st.columns([0.26, 0.74], gap="small")
     with left:
-        st.markdown("### Project list")
-        labels, lookup = project_select_options()
-        selected_label = st.radio("Open project", labels, label_visibility="collapsed", key="project_workspace_radio")
-        selected_project = lookup[selected_label]
-        st.session_state["selected_project_workspace_id"] = project_identity(selected_project)
-        st.session_state["selected_jobs_project_id"] = project_identity(selected_project)
-        st.dataframe(pd.DataFrame(display_records(projects)), use_container_width=True, hide_index=True)
+        with st.container(border=True):
+            st.markdown("### Projects")
+            for idx, project in enumerate(projects):
+                project_id = project_identity(project)
+                project_name = safe_text(project.get("project")) or "Untitled project"
+                active = project_id == selected_project_id
+                if st.button(project_name, key=f"project_workspace_nav_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                    selected_project = project
+                    selected_project_id = project_id
+                    st.session_state["selected_project_workspace_id"] = selected_project_id
+                    st.session_state["selected_jobs_project_id"] = selected_project_id
+                    st.rerun()
 
     with main:
         selected_project = project_by_identity(st.session_state.get("selected_project_workspace_id", "")) or selected_project
         jobs = project_jobs(selected_project)
         selected_project["job_count"] = len(jobs)
-        st.markdown(f"### {safe_text(selected_project.get('project'))}")
-        metrics([
-            ("Client", safe_text(selected_project.get("client")) or safe_text(selected_project.get("workspace")), "project owner"),
-            ("Source", safe_text(selected_project.get("source", "")), "source language"),
-            ("Jobs", len(jobs), "inside project"),
-        ])
-        st.caption(
-            f"Targets: {safe_text(selected_project.get('targets')) or 'Not set'} | "
-            f"Domain: {safe_text(selected_project.get('domain')) or 'General'} | "
-            f"Status: {safe_text(selected_project.get('status')) or 'Active'}"
-        )
-        st.markdown("#### Create job in this project")
-        render_project_job_form(selected_project, f"project_page_job_{project_identity(selected_project)}")
-        st.markdown("#### Project jobs")
-        if jobs:
-            render_jobs_kanban(jobs)
-            st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+        target_languages = [safe_text(item) for item in safe_text(selected_project.get("targets")).split(",") if safe_text(item)]
+        if not target_languages:
+            target_summary = "Not set"
+        elif len(target_languages) <= 4:
+            target_summary = ", ".join(target_languages)
         else:
-            st.info("No jobs in this project yet.")
+            target_summary = f"{len(target_languages)} target languages"
+        full_targets = ", ".join(target_languages) or "Not set"
+        project_name = safe_text(selected_project.get("project")) or "Untitled project"
+        with st.container(border=True):
+            st.markdown(f"### {project_name}")
+            st.html(
+                f"""
+                <div class="es-project-details-line" title="Targets: {escape(full_targets, quote=True)}">
+                  <span><b>Client</b>{escape(safe_text(selected_project.get("client")) or safe_text(selected_project.get("workspace")) or "Workspace")}</span>
+                  <span><b>Source</b>{escape(safe_text(selected_project.get("source")) or "Not set")}</span>
+                  <span><b>Targets</b>{escape(target_summary)}</span>
+                  <span><b>Domain</b>{escape(safe_text(selected_project.get("domain")) or "General")}</span>
+                  <span><b>Status</b>{escape(safe_text(selected_project.get("status")) or "Active")}</span>
+                  <span><b>Tasks</b>{len(jobs)}</span>
+                </div>
+                """
+            )
+            st.markdown("#### Create task in this project")
+            render_project_job_form(selected_project, f"project_page_job_{project_identity(selected_project)}", submit_label="Create task", type_label="Task type")
+            st.markdown("#### Project tasks")
+            if jobs:
+                render_jobs_kanban(jobs)
+                st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+            else:
+                st.info("No tasks in this project yet.")
 
 
 def page_jobs() -> None:
