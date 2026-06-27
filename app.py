@@ -3395,7 +3395,8 @@ div[class*="st-key-job_history_month_nav_"] [data-testid="stBaseButton-primary"]
   text-transform: uppercase;
 }
 
-div[class*="st-key-project_workspace_nav_"] button {
+div[class*="st-key-project_workspace_nav_"] button,
+div[class*="st-key-jobs_project_nav_"] button {
   justify-content: flex-start !important;
   border: 1px solid rgba(104,137,230,.30) !important;
   background: rgba(18,22,46,.94) !important;
@@ -3403,21 +3404,37 @@ div[class*="st-key-project_workspace_nav_"] button {
   box-shadow: none !important;
 }
 
-div[class*="st-key-project_workspace_nav_"] button * {
+div[class*="st-key-project_workspace_nav_"] button *,
+div[class*="st-key-jobs_project_nav_"] button * {
   color: inherit !important;
 }
 
-div[class*="st-key-project_workspace_nav_"] button:hover {
+div[class*="st-key-project_workspace_nav_"] button:hover,
+div[class*="st-key-jobs_project_nav_"] button:hover {
   border-color: rgba(52,189,246,.42) !important;
   background: rgba(31,39,78,.98) !important;
 }
 
 div[class*="st-key-project_workspace_nav_"] button[kind="primary"],
-div[class*="st-key-project_workspace_nav_"] [data-testid="stBaseButton-primary"] {
+div[class*="st-key-project_workspace_nav_"] [data-testid="stBaseButton-primary"],
+div[class*="st-key-jobs_project_nav_"] button[kind="primary"],
+div[class*="st-key-jobs_project_nav_"] [data-testid="stBaseButton-primary"] {
   border-color: rgba(17,245,181,.42) !important;
   background: linear-gradient(90deg, rgba(33,48,90,.98), rgba(18,76,93,.94)) !important;
   color: #f8fbff !important;
   box-shadow: inset 3px 0 0 rgba(17,245,181,.78), 0 10px 22px rgba(0,0,0,.18) !important;
+}
+
+.es-history-note {
+  margin: 10px 0 0;
+  border: 1px solid rgba(245,158,11,.26);
+  border-radius: 8px;
+  background: rgba(245,158,11,.10);
+  color: #ffe9a6;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
 }
 
 .es-flyout {
@@ -23270,6 +23287,127 @@ def project_target_languages(project: Dict[str, Any]) -> List[str]:
     return targets or ["French"]
 
 
+PROJECT_TASK_TYPES = ["Translation", "Post-editing Review", "QA", "Subtitle Review", "Transcription", "Scorecard"]
+AI_TRANSLATION_TASK_TYPES = {"translation", "post-editing review", "subtitle review"}
+NO_AI_TASK_NOTE = (
+    "As API key is not provided, we are unable to provide AI translation for this task. "
+    "Open the task to translate manually."
+)
+
+
+def split_assignee_emails(value: Any) -> List[str]:
+    seen: Set[str] = set()
+    recipients: List[str] = []
+    for item in re.split(r"[\s,;]+", safe_text(value)):
+        email = item.strip().strip("<>")
+        if not email:
+            continue
+        lowered = email.lower()
+        if "@" not in lowered or lowered in seen:
+            continue
+        seen.add(lowered)
+        recipients.append(email)
+    return recipients
+
+
+def job_assignee_list(job: Dict[str, Any]) -> List[str]:
+    values: Any = job.get("assignees_json")
+    metadata = coerce_json_dict(job.get("metadata_json"))
+    if not values and metadata:
+        values = metadata.get("assignees")
+    if isinstance(values, str):
+        try:
+            values = json.loads(values)
+        except Exception:
+            values = split_assignee_emails(values)
+    if not values:
+        values = split_assignee_emails(job.get("assignee"))
+    if isinstance(values, dict):
+        values = list(values.values())
+    if not isinstance(values, list):
+        values = [values]
+    seen: Set[str] = set()
+    recipients: List[str] = []
+    for value in values:
+        email = safe_text(value).strip()
+        lowered = email.lower()
+        if not email or lowered in seen:
+            continue
+        seen.add(lowered)
+        recipients.append(email)
+    return recipients
+
+
+def job_single_assignee_display(job: Dict[str, Any]) -> str:
+    assignees = job_assignee_list(job)
+    return assignees[0] if len(assignees) == 1 else ""
+
+
+def uploaded_rows_have_targets(rows: List[Dict[str, Any]]) -> bool:
+    return any(safe_text(row.get("target") or row.get("translation")) for row in rows or [])
+
+
+def project_assignment_source_from_uploads(uploaded_files: List[Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any], str]:
+    for uploaded in uploaded_files or []:
+        if uploaded is None:
+            continue
+        try:
+            rows = sentence_segment_rows_for_pro(extract_rows_from_upload(uploaded))
+        finally:
+            try:
+                if hasattr(uploaded, "seek"):
+                    uploaded.seek(0)
+            except Exception as exc:
+                LOGGER.debug("Unable to rewind project assignment upload: %s", exc)
+        if rows:
+            return rows, build_pro_export_source_asset(uploaded), safe_text(getattr(uploaded, "name", "assignment_file"))
+    return [], {}, ""
+
+
+def starter_project_task_rows() -> List[Dict[str, Any]]:
+    return [{
+        "id": 1,
+        "location": "Segment 1",
+        "source": "",
+        "target": "",
+        "status": "Untranslated",
+        "match": "",
+        "notes": "No parseable source file was attached when this task was created.",
+    }]
+
+
+def prepare_project_task_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    target_language: str,
+    domain: str,
+    generate_ai: bool,
+    rules: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], int, str]:
+    working_rows = [dict(row) for row in (rows or starter_project_task_rows())]
+    source_texts = [safe_text(row.get("source") or row.get("target") or row.get("translation")) for row in working_rows]
+    translations = call_main_api_translate(source_texts, target_language, domain, rules=rules) if generate_ai and source_texts else []
+    missing = 0
+    for idx, row in enumerate(working_rows):
+        source = safe_text(row.get("source") or row.get("target") or row.get("translation"))
+        existing_target = safe_text(row.get("target") or row.get("translation"))
+        ai_target = safe_text(translations[idx]) if idx < len(translations) else ""
+        target = ai_target if generate_ai else existing_target
+        row["id"] = row.get("id") or idx + 1
+        row["source"] = source
+        row["target"] = repair_localization_translation(source, target)
+        row["translation"] = row["target"]
+        if row["target"]:
+            row["status"] = "MT" if generate_ai and ai_target else safe_text(row.get("status") or "Existing")
+            row["match"] = "MT" if generate_ai and ai_target else safe_text(row.get("match") or "Existing")
+        else:
+            row["status"] = "Needs Review"
+            row["match"] = "Untranslated"
+            missing += 1
+    ai_mode = "ai_draft" if generate_ai else ("manual_no_key" if manual_review_mode_active() else "uploaded_or_manual")
+    return working_rows, missing, ai_mode
+
+
 def project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     project_id = project_identity(project)
     project_name = safe_text(project.get("project")).lower()
@@ -23304,6 +23442,164 @@ def project_select_options() -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     return options, lookup
 
 
+def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    project_name = safe_text(job.get("project")) or "Project"
+    language = safe_text(job.get("language")) or "Target language"
+    job_type = safe_text(job.get("type") or "Task")
+    workspace = safe_text(job.get("workspace") or (current_user() or {}).get("workspace") or "Demo Workspace")
+    editor_url = human_review_editor_link(safe_text(job.get("review_job_id") or job.get("editor_job_id")))
+    for recipient in assignees:
+        notification = queue_email_notification(
+            recipient,
+            f"CogniSweep task assigned: {project_name} - {language}",
+            (
+                f"You have been assigned a {job_type} task for {language} in project '{project_name}'. "
+                "Open CogniSweep Jobs and use Open task to start work."
+            ),
+            "job.assigned",
+            metadata={
+                "job_id": safe_text(job.get("id")),
+                "project_id": safe_text(job.get("project_id")),
+                "project": project_name,
+                "job_type": job_type,
+                "language": language,
+                "review_job_id": safe_text(job.get("review_job_id")),
+                "editor_job_id": safe_text(job.get("editor_job_id")),
+                "task_url": editor_url,
+                "workspace": workspace,
+            },
+            workspace=workspace,
+        )
+        dispatched = dispatch_email_notification(notification)
+        upsert_session_record("notifications", dispatched)
+        results.append({
+            "recipient": recipient,
+            "status": safe_text(dispatched.get("status")),
+            "error": safe_text(dispatched.get("error")),
+        })
+    return results
+
+
+def create_project_tasks_for_project(
+    project: Dict[str, Any],
+    *,
+    job_type: str,
+    languages: List[str],
+    assignees: List[str],
+    note: str,
+    assignment_files: List[Any],
+    ai_translation_choice: str = "auto",
+) -> List[Dict[str, Any]]:
+    if not project:
+        st.error("Select a project before creating a job.")
+        return []
+    languages = [safe_text(language) for language in languages if safe_text(language)]
+    if not languages:
+        st.error("Please select at least one target language before creating the task.")
+        return []
+    assignees = assignees or []
+    if not assignees:
+        st.error("Please enter at least one assignee email before creating the task.")
+        return []
+    project_id = project_identity(project)
+    workspace = safe_text(project.get("workspace")) or safe_text((current_user() or {}).get("workspace")) or "Demo Workspace"
+    project_name = safe_text(project.get("project")) or "Project"
+    parsed_source_rows, export_source, source_file_name = project_assignment_source_from_uploads(assignment_files or [])
+    source_rows = parsed_source_rows or starter_project_task_rows()
+    uploaded_has_targets = uploaded_rows_have_targets(source_rows)
+    domain = safe_text(project.get("domain")) or "General"
+    task_type_key = safe_text(job_type).lower()
+    can_generate_ai = user_ai_api_key_available() and task_type_key in AI_TRANSLATION_TASK_TYPES and bool(parsed_source_rows)
+    generate_ai = can_generate_ai and (ai_translation_choice == "generate" or (ai_translation_choice == "auto" and not uploaded_has_targets))
+    client_rules = workspace_rules()
+    records: List[Dict[str, Any]] = []
+
+    for language in languages:
+        job_id = uuid.uuid4().hex
+        attachment_manifests = save_job_attachment_files(job_id, assignment_files or [])
+        review_rows, missing, ai_mode = prepare_project_task_rows(
+            source_rows,
+            target_language=language,
+            domain=domain,
+            generate_ai=generate_ai,
+            rules=client_rules,
+        )
+        file_name = source_file_name or f"{project_name}_{language}_task"
+        review_session_id = save_review_session_to_store(
+            review_rows,
+            f"Project task: {project_name}",
+            language,
+            file_name,
+            rules=client_rules,
+            export_source=export_source,
+        )
+        no_ai_note = NO_AI_TASK_NOTE if ai_mode == "manual_no_key" and task_type_key in AI_TRANSLATION_TASK_TYPES else ""
+        status = "AI Draft Ready" if ai_mode == "ai_draft" else "Manual Translation Ready" if no_ai_note else "Task Ready"
+        record = persist_saas_record("jobs", {
+            "id": job_id,
+            "created": now_stamp(),
+            "updated_at": now_stamp(),
+            "workspace": workspace,
+            "type": job_type,
+            "language": language,
+            "assignee": ", ".join(assignees),
+            "status": status,
+            "note": note,
+            "segments": len(review_rows),
+            "missing": missing,
+            "project_id": project_id,
+            "project": project_name,
+            "file_name": file_name,
+            "review_job_id": review_session_id,
+            "editor_job_id": review_session_id,
+            "attachment_count": len(attachment_manifests),
+            "attachments_json": attachment_manifests,
+            "metadata_json": {
+                "project_id": project_id,
+                "project": project_name,
+                "job_type": job_type,
+                "target_language": language,
+                "assignees": assignees,
+                "file_name": file_name,
+                "review_job_id": review_session_id,
+                "editor_job_id": review_session_id,
+                "segments": len(review_rows),
+                "missing": missing,
+                "ai_mode": ai_mode,
+                "ai_translation_choice": ai_translation_choice,
+                "source_file_has_translations": uploaded_has_targets,
+                "no_ai_note": no_ai_note,
+            },
+        })
+        st.session_state.setdefault("jobs", [])
+        st.session_state.jobs.insert(0, record)
+        trim_session_list("jobs")
+        email_results = notify_project_task_assignees(record, assignees)
+        email_status = "sent" if email_results and all(item["status"] == "sent" for item in email_results) else (
+            "provider_pending" if any(item["status"] == "provider_pending" for item in email_results) else "failed"
+        )
+        record["email_status"] = email_status
+        metadata = coerce_json_dict(record.get("metadata_json"))
+        metadata["assignment_notifications"] = email_results
+        metadata["email_status"] = email_status
+        record["metadata_json"] = metadata
+        persisted_record = persist_saas_record("jobs", record)
+        record.update(persisted_record)
+        upsert_session_record("jobs", record)
+        records.append(record)
+        add_audit("Project task created", f"{project_name}: {job_type} / {language} assigned to {', '.join(assignees)}")
+
+    project["id"] = project_id
+    project["job_count"] = len(project_jobs(project))
+    persisted_project = persist_saas_record("projects", project)
+    for idx, item in enumerate(st.session_state.get("projects", [])):
+        if project_identity(item) == project_id:
+            st.session_state.projects[idx] = persisted_project
+            break
+    return records
+
+
 def create_job_for_project(
     project: Dict[str, Any],
     *,
@@ -23313,73 +23609,88 @@ def create_job_for_project(
     note: str,
     assignment_files: List[Any],
 ) -> Optional[Dict[str, Any]]:
-    if not project:
-        st.error("Select a project before creating a job.")
-        return None
-    if not safe_text(language):
-        st.error("Please select a target language before creating the job.")
-        return None
-    if not safe_text(assignee):
-        st.error("Please enter an assignee before creating the job.")
-        return None
-    project_id = project_identity(project)
-    job_id = uuid.uuid4().hex
-    attachment_manifests = save_job_attachment_files(job_id, assignment_files or [])
-    workspace = safe_text(project.get("workspace")) or safe_text((current_user() or {}).get("workspace")) or "Demo Workspace"
-    record = persist_saas_record("jobs", {
-        "id": job_id,
-        "created": now_stamp(),
-        "workspace": workspace,
-        "type": job_type,
-        "language": language,
-        "assignee": assignee,
-        "status": "Draft",
-        "note": note,
-        "segments": 0,
-        "project_id": project_id,
-        "project": safe_text(project.get("project")),
-        "attachment_count": len(attachment_manifests),
-        "attachments_json": attachment_manifests,
-    })
-    st.session_state.jobs.insert(0, record)
-    trim_session_list("jobs")
-    project["id"] = project_id
-    project["job_count"] = len(project_jobs(project))
-    persisted_project = persist_saas_record("projects", project)
-    for idx, item in enumerate(st.session_state.get("projects", [])):
-        if project_identity(item) == project_id:
-            st.session_state.projects[idx] = persisted_project
-            break
-    add_audit("Project job created", f"{safe_text(project.get('project'))}: {job_type} assigned to {assignee}")
-    queue_email_notification(
-        assignee,
-        "New CogniSweep job assigned",
-        f"A new {job_type} job has been assigned to you for {language} in project '{safe_text(project.get('project'))}'. Attachments: {len(attachment_manifests)}.",
-        "job.assigned",
-        metadata={"job_id": job_id, "project_id": project_id, "project": safe_text(project.get("project")), "job_type": job_type, "language": language, "attachment_count": len(attachment_manifests)},
-        workspace=workspace,
+    records = create_project_tasks_for_project(
+        project,
+        job_type=job_type,
+        languages=[language],
+        assignees=split_assignee_emails(assignee),
+        note=note,
+        assignment_files=assignment_files,
     )
-    return record
+    return records[0] if records else None
 
 
 def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label: str = "Create job", type_label: str = "Job type") -> None:
     targets = project_target_languages(project)
     default_language = targets[0] if targets[0] in LANGUAGE_CATALOG else "French"
     with st.form(form_key, enter_to_submit=False):
-        c1, c2, c3 = st.columns(3)
-        job_type = c1.selectbox(type_label, ["QA", "Translation", "Post-editing Review", "Subtitle Review", "Transcription", "Scorecard"], key=f"{form_key}_type")
-        language = c2.selectbox("Target language", LANGUAGE_CATALOG, index=LANGUAGE_CATALOG.index(default_language), key=f"{form_key}_language")
-        assignee = c3.text_input("Assignee", value="reviewer@cognisweep.local", key=f"{form_key}_assignee")
-        assignment_files = st.file_uploader("Assignment upload (optional)", accept_multiple_files=True, key=f"{form_key}_files", help="Upload any file or ZIP package that should be assigned with this project job.")
+        c1, c2 = st.columns([0.8, 1.2])
+        job_type = c1.selectbox(type_label, PROJECT_TASK_TYPES, key=f"{form_key}_type")
+        languages = c2.multiselect(
+            "Target languages",
+            LANGUAGE_CATALOG,
+            default=[default_language],
+            key=f"{form_key}_languages",
+            help="Select more than one language to create one separate task for each language.",
+        )
+        assignee_text = st.text_area(
+            "Assignee emails",
+            value="reviewer@cognisweep.local",
+            height=72,
+            key=f"{form_key}_assignees",
+            help="Enter one or more email IDs separated by commas, semicolons, spaces, or new lines.",
+        )
+        assignment_files = st.file_uploader(
+            "Assignment upload (optional)",
+            accept_multiple_files=True,
+            key=f"{form_key}_files",
+            help="Upload source or bilingual files. The first parseable file becomes the editor task source; all files remain attached.",
+        )
+        ai_translation_choice = "auto"
+        preview_rows: List[Dict[str, Any]] = []
+        if assignment_files:
+            preview_rows, _, _ = project_assignment_source_from_uploads(assignment_files or [])
+        has_uploaded_translations = uploaded_rows_have_targets(preview_rows)
+        if user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES and has_uploaded_translations:
+            choice = st.radio(
+                "Uploaded file already contains translations. Do you want AI translation for this task?",
+                ["No, keep uploaded translations", "Yes, generate AI translation"],
+                index=0,
+                horizontal=True,
+                key=f"{form_key}_ai_translation_choice",
+            )
+            ai_translation_choice = "generate" if choice.startswith("Yes") else "skip"
+        elif not user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES:
+            st.caption(NO_AI_TASK_NOTE)
         note = st.text_area("Notes", height=80, key=f"{form_key}_note")
         submitted = st.form_submit_button(submit_label, use_container_width=True)
     if submitted:
-        created = create_job_for_project(project, job_type=job_type, language=language, assignee=assignee, note=note, assignment_files=assignment_files or [])
+        created = create_project_tasks_for_project(
+            project,
+            job_type=job_type,
+            languages=languages,
+            assignees=split_assignee_emails(assignee_text),
+            note=note,
+            assignment_files=assignment_files or [],
+            ai_translation_choice=ai_translation_choice,
+        )
         if created:
-            st.success(f"Job created inside {safe_text(project.get('project'))}.")
+            st.success(f"{len(created)} task{'s' if len(created) != 1 else ''} created inside {safe_text(project.get('project'))}.")
+            email_statuses = [safe_text(item.get("email_status")) for item in created]
+            if any(status == "sent" for status in email_statuses):
+                st.success("Assignment email sent for configured recipients.")
+            if any(status == "provider_pending" for status in email_statuses):
+                st.warning("Assignment email is queued, but the email provider is not configured.")
+            if any(status == "failed" for status in email_statuses):
+                st.warning("Some assignment emails could not be sent. Check notification logs for provider errors.")
+            if any(safe_text((coerce_json_dict(item.get("metadata_json"))).get("no_ai_note")) for item in created):
+                st.info(NO_AI_TASK_NOTE)
 
 
 def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
+    assigned_to = job_single_assignee_display(job)
+    metadata = coerce_json_dict(job.get("metadata_json"))
+    no_ai_note = safe_text(metadata.get("no_ai_note"))
     st.html(
         f"""
         <div class="es-flyout">
@@ -23389,11 +23700,13 @@ def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
             <div class="es-mini-row"><span>Status</span><b>{escape(safe_text(job.get("status", "")))}</b></div>
             <div class="es-mini-row"><span>Project</span><b>{escape(safe_text(job.get("project", "")))}</b></div>
             <div class="es-mini-row"><span>Language</span><b>{escape(safe_text(job.get("language", "")))}</b></div>
+            <div class="es-mini-row"><span>Assigned to</span><b>{escape(assigned_to)}</b></div>
             <div class="es-mini-row"><span>Attachments</span><b>{escape(safe_text(job.get("attachment_count", 0)))}</b></div>
             <div class="es-mini-row"><span>Workspace</span><b>{escape(safe_text(job.get("workspace", "")))}</b></div>
             <div class="es-mini-row"><span>Created</span><b>{escape(format_local_time(job.get("created", job.get("created_at", ""))))}</b></div>
           </div>
           <p class="es-small">{escape(safe_text(job.get("note", "")) or "No job note supplied.")}</p>
+          {f'<p class="es-history-note">{escape(no_ai_note)}</p>' if no_ai_note else ''}
         </div>
         """
     )
@@ -23651,7 +23964,8 @@ def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "language": safe_text(job.get("language") or metadata.get("target_language")),
         "status": safe_text(job.get("status") or metadata.get("status") or "Draft"),
         "segments": int(job.get("segments") or metadata.get("segments") or metadata.get("row_count") or 0),
-        "assignee": safe_text(job.get("assignee") or metadata.get("assignee")),
+        "assignee": job_single_assignee_display(job),
+        "no_ai_note": safe_text(metadata.get("no_ai_note")),
         "created": safe_text(job.get("created") or job.get("created_at") or metadata.get("created")),
         "updated_at": safe_text(job.get("updated_at") or job.get("created_at") or job.get("created")),
         "editor_url": editor_url,
@@ -23796,6 +24110,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
         file_name = safe_text(row.get("file_name")) or "-"
         language = safe_text(row.get("language")) or "-"
         status = safe_text(row.get("status")) or "Status unknown"
+        no_ai_note = safe_text(row.get("no_ai_note"))
         status_class = job_history_status_class(status)
         updated_value = row.get("updated_at") or row.get("created")
         updated_at = format_local_time(updated_value)
@@ -23803,7 +24118,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             job_history_detail_item("File", file_name),
             job_history_detail_item("Language", language),
             job_history_detail_item("Segments", int(row.get("segments") or 0)),
-            job_history_detail_item("Assignee", safe_text(row.get("assignee")) or "-"),
+            job_history_detail_item("Assigned to", safe_text(row.get("assignee")) or "-"),
             job_history_detail_item("Updated", updated_at, value_html=local_time_html(updated_value)),
             job_history_detail_item("Workspace", safe_text(row.get("workspace")) or safe_text(row.get("project")) or "-"),
         ]
@@ -23827,6 +24142,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
                 <dl class="es-history-meta">
                   {''.join(details)}
                 </dl>
+                {f'<p class="es-history-note">{escape(no_ai_note)}</p>' if no_ai_note else ''}
               </div>
               <div class="es-history-task-actions">
                 <span class="es-history-status {escape(status_class, quote=True)}">{escape(status)}</span>
@@ -23962,8 +24278,7 @@ def page_projects() -> None:
             render_project_job_form(selected_project, f"project_page_job_{project_identity(selected_project)}", submit_label="Create task", type_label="Task type")
             st.markdown("#### Project tasks")
             if jobs:
-                render_jobs_kanban(jobs)
-                st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+                render_job_history_table([job_history_row_from_job(job) for job in jobs], f"project_page_tasks_{project_identity(selected_project)}")
             else:
                 st.info("No tasks in this project yet.")
 
@@ -23987,59 +24302,63 @@ def page_jobs() -> None:
             navigate_es_page("Projects")
         return
 
-    left, main = st.columns([0.20, 0.80], gap="large")
+    selected_id = safe_text(query_get("project_id") or st.session_state.get("selected_jobs_project_id"))
+    selected_project = project_by_identity(selected_id) if selected_id else None
+    if not selected_project:
+        selected_project = projects[0]
+        selected_id = project_identity(selected_project)
+    st.session_state["selected_jobs_project_id"] = selected_id
+
+    left, main = st.columns([0.24, 0.76], gap="small")
     with left:
         with st.container(border=True):
             st.markdown("### Projects")
-            st.caption("Project name - client name")
-            labels, lookup = project_select_options()
-            selected_id = safe_text(query_get("project_id") or st.session_state.get("selected_jobs_project_id"))
-            default_index = 0
-            if selected_id:
-                for idx, label in enumerate(labels):
-                    if project_identity(lookup[label]) == selected_id:
-                        default_index = idx
-                        break
-            selected_label = st.radio("Project list", labels, index=default_index, label_visibility="collapsed", key="jobs_project_radio")
-            selected_project = lookup[selected_label]
-            st.session_state["selected_jobs_project_id"] = project_identity(selected_project)
-            st.caption(f"{len(projects)} project{'s' if len(projects) != 1 else ''}")
+            for idx, project in enumerate(projects):
+                project_id = project_identity(project)
+                project_name = safe_text(project.get("project")) or "Untitled project"
+                active = project_id == selected_id
+                if st.button(project_name, key=f"jobs_project_nav_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                    st.session_state["selected_jobs_project_id"] = project_id
+                    st.rerun()
 
     with main:
         with st.container(border=True):
             selected_project = project_by_identity(st.session_state.get("selected_jobs_project_id", "")) or selected_project
             jobs = project_jobs(selected_project)
             selected_project["job_count"] = len(jobs)
-            st.markdown(f"### Jobs in {safe_text(selected_project.get('project'))}")
-            st.caption(
-                f"Client: {safe_text(selected_project.get('client')) or safe_text(selected_project.get('workspace'))} | "
-                f"Targets: {safe_text(selected_project.get('targets')) or 'Not set'}"
+            project_name = safe_text(selected_project.get("project")) or "Untitled project"
+            target_languages = [safe_text(item) for item in safe_text(selected_project.get("targets")).split(",") if safe_text(item)]
+            if not target_languages:
+                target_summary = "Not set"
+            elif len(target_languages) <= 4:
+                target_summary = ", ".join(target_languages)
+            else:
+                target_summary = f"{len(target_languages)} target languages"
+            full_targets = ", ".join(target_languages) or "Not set"
+            st.markdown(f"### Jobs in {project_name}")
+            st.html(
+                f"""
+                <div class="es-project-details-line" title="Targets: {escape(full_targets, quote=True)}">
+                  <span><b>Client</b>{escape(safe_text(selected_project.get("client")) or safe_text(selected_project.get("workspace")) or "Workspace")}</span>
+                  <span><b>Source</b>{escape(safe_text(selected_project.get("source")) or "Not set")}</span>
+                  <span><b>Targets</b>{escape(target_summary)}</span>
+                  <span><b>Domain</b>{escape(safe_text(selected_project.get("domain")) or "General")}</span>
+                  <span><b>Tasks</b>{len(jobs)}</span>
+                </div>
+                """
             )
-            metrics([
-                ("Jobs", len(jobs), "selected project"),
-                ("Draft", sum(1 for job in jobs if safe_text(job.get("status")).lower() == "draft"), "not started"),
-                ("Completed", sum(1 for job in jobs if safe_text(job.get("status")).lower() == "completed"), "delivered"),
-            ])
+            with st.expander("Create task in this project", expanded=not bool(jobs)):
+                render_project_job_form(selected_project, f"jobs_page_job_{project_identity(selected_project)}", submit_label="Create task", type_label="Task type")
+            st.markdown("#### Task details")
             if jobs:
-                render_jobs_kanban(jobs)
-                st.dataframe(pd.DataFrame(display_records(jobs)), use_container_width=True, hide_index=True)
+                render_job_history_table([job_history_row_from_job(job) for job in jobs], f"jobs_page_tasks_{project_identity(selected_project)}")
                 focused_job_id = safe_text(query_get("job_id") or st.session_state.get("job_id", ""))
                 focused_job = next((job for job in jobs if safe_text(job.get("id")) == focused_job_id), None) if focused_job_id else None
                 if focused_job:
                     with st.expander("Focused job", expanded=True):
                         render_project_job_details(focused_job, "focused_project_job")
-                labels_for_jobs = [
-                    f"{idx + 1}. {safe_text(job.get('type', 'Job'))} - {safe_text(job.get('status', ''))} - {safe_text(job.get('language', ''))}"
-                    for idx, job in enumerate(jobs)
-                ]
-                with st.expander("Open job context panel", expanded=False):
-                    selected_job_label = st.selectbox("Job", labels_for_jobs, label_visibility="collapsed", key="selected_project_job_context")
-                    selected_job = jobs[labels_for_jobs.index(selected_job_label)]
-                    render_project_job_details(selected_job, "selected_project_job")
             else:
-                st.info("No jobs have been created inside this project yet.")
-            with st.expander("Create job in this project", expanded=not bool(jobs)):
-                render_project_job_form(selected_project, f"jobs_page_job_{project_identity(selected_project)}")
+                st.info("No tasks have been created inside this project yet.")
             focused_task_id = safe_text(query_get("task_id") or st.session_state.get("task_id", ""))
             if st.session_state.get("task_queue"):
                 with st.expander("Workflow task monitor", expanded=bool(focused_task_id)):
