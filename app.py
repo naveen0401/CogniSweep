@@ -594,7 +594,11 @@ PUBLIC_BILLING_PLAN_NAMES = {"Trial", "Pro", "Agency", "Enterprise"}
 EMAIL_DISPATCH_BATCH_LIMIT = int(runtime_env("ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT", "25"))
 AUTH_TOKEN_TTL_SECONDS = int(runtime_env("ERRORSWEEP_AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24)))
 COMPLIANCE_ACK_LABEL = "I accept the Terms of Service, Privacy Policy, and NDA/confidentiality obligations for this workspace."
-UNLIMITED_ACCESS_WORKSPACE = "Naveen Unlimited Workspace"
+UNLIMITED_ACCESS_WORKSPACE = (
+    runtime_env("ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE")
+    or runtime_env("COGNISWEEP_UNLIMITED_ACCESS_WORKSPACE")
+    or "CogniSweep Unlimited Workspace"
+).strip() or "CogniSweep Unlimited Workspace"
 UNLIMITED_ACCESS_EMAIL_SECRET = "ERRORSWEEP_UNLIMITED_ACCESS_EMAIL"
 UNLIMITED_ACCESS_PASSWORD_HASH_SECRET = "ERRORSWEEP_UNLIMITED_ACCESS_PASSWORD_HASH"
 SENSITIVE_TEXT_RE = re.compile(

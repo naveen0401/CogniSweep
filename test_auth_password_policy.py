@@ -53,9 +53,19 @@ def test_global_command_palette_is_mounted() -> None:
     assert 'key !== "k"' in bridge
 
 
+def test_no_hardcoded_personal_unlimited_owner_secret() -> None:
+    app = read_app()
+
+    assert "errorsweep_unlimited_adapa_2026" not in app
+    assert "adapalanaveen" not in app.lower()
+    assert "Naveen Unlimited Workspace" not in app
+    assert "ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE" in app
+
+
 if __name__ == "__main__":
     test_login_password_verification_is_hash_only()
     test_deploy_expected_branch_is_configurable()
     test_legacy_dashboard_renderer_removed()
     test_global_command_palette_is_mounted()
+    test_no_hardcoded_personal_unlimited_owner_secret()
     print("Auth password policy checks passed.")
