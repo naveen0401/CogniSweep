@@ -3065,6 +3065,60 @@ div[class*="st-key-"][class*="_app_nav_targets"] * {
   font-weight: 800;
 }
 
+.es-history-frame-title {
+  margin: 0 0 4px;
+  color: #f8fbff;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 950;
+}
+
+.es-history-frame-subtitle {
+  color: #aeb8e8;
+  font-size: 13px;
+  font-weight: 750;
+  margin-bottom: 10px;
+}
+
+.es-history-left-summary {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 12px;
+}
+
+.es-history-left-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(104,137,230,.22);
+  border-radius: 8px;
+  background: rgba(255,255,255,.035);
+  padding: 9px 10px;
+}
+
+.es-history-left-stat span {
+  color: #aeb8e8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.es-history-left-stat b {
+  color: #f8fbff;
+  font-size: 13px;
+}
+
+.es-history-left-active {
+  border: 1px solid rgba(17,245,181,.26);
+  border-radius: 8px;
+  background: rgba(17,245,181,.08);
+  color: #a7f3d0;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 9px 10px;
+  margin: 10px 0 0;
+}
+
 @media (max-width: 980px) {
   .es-history-task-card {
     grid-template-columns: 1fr;
@@ -23898,7 +23952,7 @@ def page_job_history() -> None:
     project_groups: Dict[str, Dict[str, Any]] = {}
     for project in projects:
         key = project_identity(project)
-        project_groups[key] = {"label": project_display_name(project), "rows": []}
+        project_groups[key] = {"key": key, "label": project_display_name(project), "rows": []}
 
     direct_rows: List[Dict[str, Any]] = []
     for row in rows:
@@ -23909,12 +23963,72 @@ def page_job_history() -> None:
         if project_key:
             if project_key not in project_groups:
                 project_groups[project_key] = {
+                    "key": project_key,
                     "label": safe_text(row.get("project")) or f"Project {project_key[-6:]}",
                     "rows": [],
                 }
             project_groups[project_key]["rows"].append(row)
         else:
             direct_rows.append(row)
+
+    month_names = (
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    )
+    individual_years: Dict[str, Dict[str, Any]] = {}
+    for row in direct_rows:
+        row_dt = parse_record_datetime(row.get("updated_at") or row.get("created"))
+        if row_dt:
+            year_label = str(row_dt.year)
+            month_number = row_dt.month
+            month_key = f"{row_dt.year}-{row_dt.month:02d}"
+            month_label = month_names[month_number - 1]
+            sort_value = (row_dt.year, row_dt.month)
+        else:
+            year_label = "Undated"
+            month_number = 0
+            month_key = "undated"
+            month_label = "No date"
+            sort_value = (0, 0)
+        year_group = individual_years.setdefault(year_label, {"label": year_label, "sort": sort_value[0], "months": {}})
+        month_group = year_group["months"].setdefault(
+            month_key,
+            {"key": month_key, "label": month_label, "month": month_number, "sort": sort_value, "rows": []},
+        )
+        month_group["rows"].append(row)
+
+    sorted_project_groups = sorted(project_groups.values(), key=lambda item: safe_text(item.get("label")).lower())
+    project_groups_with_rows = [group for group in sorted_project_groups if group["rows"]]
+    sorted_year_groups = sorted(individual_years.values(), key=lambda item: int(item.get("sort") or 0), reverse=True)
+    month_options: List[Tuple[str, Dict[str, Any]]] = []
+    for year_group in sorted_year_groups:
+        months = sorted(year_group["months"].values(), key=lambda item: item.get("sort", (0, 0)), reverse=True)
+        for month_group in months:
+            month_options.append((safe_text(year_group.get("label")), month_group))
+
+    valid_tokens = {f"project::{group['key']}" for group in sorted_project_groups}
+    valid_tokens.update(f"individual::{year_label}::{month_group['key']}" for year_label, month_group in month_options)
+    selected_token = safe_text(st.session_state.get("job_history_selected_scope"))
+    if selected_token not in valid_tokens:
+        if project_groups_with_rows:
+            selected_token = f"project::{project_groups_with_rows[0]['key']}"
+        elif month_options:
+            selected_token = f"individual::{month_options[0][0]}::{month_options[0][1]['key']}"
+        elif sorted_project_groups:
+            selected_token = f"project::{sorted_project_groups[0]['key']}"
+        else:
+            selected_token = ""
+        st.session_state["job_history_selected_scope"] = selected_token
 
     project_task_count = sum(len(group["rows"]) for group in project_groups.values())
     metrics([
@@ -23923,19 +24037,81 @@ def page_job_history() -> None:
         ("Individual tasks", len(direct_rows), "direct uploads and workflow tasks"),
     ])
 
-    st.markdown("### Project tasks")
-    populated_groups = [group for group in project_groups.values() if group["rows"]]
-    if populated_groups:
-        for idx, group in enumerate(populated_groups):
-            with st.expander(f"{group['label']} ({len(group['rows'])})", expanded=idx == 0):
-                render_job_history_table(group["rows"], f"job_history_project_{idx}")
-    else:
-        st.info("No project-owned tasks are recorded for this account yet.")
+    left, right = st.columns([0.25, 0.75], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("### Task browser")
+            st.html(
+                f"""
+                <div class="es-history-left-summary">
+                  <div class="es-history-left-stat"><span>Project tasks</span><b>{project_task_count}</b></div>
+                  <div class="es-history-left-stat"><span>Individual tasks</span><b>{len(direct_rows)}</b></div>
+                </div>
+                """
+            )
+            with st.expander("Project tasks", expanded=selected_token.startswith("project::")):
+                if sorted_project_groups:
+                    for idx, group in enumerate(sorted_project_groups):
+                        group_token = f"project::{group['key']}"
+                        active = selected_token == group_token
+                        label = f"{safe_text(group['label'])} ({len(group['rows'])})"
+                        if st.button(label, key=f"job_history_project_nav_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                            selected_token = group_token
+                            st.session_state["job_history_selected_scope"] = selected_token
+                else:
+                    st.caption("No projects")
 
-    st.markdown("### Individual tasks")
-    if direct_rows:
-        st.caption("Direct translation uploads and standalone editor jobs appear here when they are not attached to a project.")
-    render_job_history_table(direct_rows, "job_history_individual_tasks")
+            with st.expander("Individual tasks", expanded=selected_token.startswith("individual::")):
+                if sorted_year_groups:
+                    year_labels = [safe_text(group.get("label")) for group in sorted_year_groups]
+                    selected_year_from_token = selected_token.split("::")[1] if selected_token.startswith("individual::") and len(selected_token.split("::")) > 1 else year_labels[0]
+                    year_index = year_labels.index(selected_year_from_token) if selected_year_from_token in year_labels else 0
+                    selected_year_label = st.selectbox("Year", year_labels, index=year_index, key="job_history_individual_year")
+                    selected_year_group = sorted_year_groups[year_labels.index(selected_year_label)]
+                    months = sorted(selected_year_group["months"].values(), key=lambda item: item.get("sort", (0, 0)), reverse=True)
+                    for idx, month_group in enumerate(months):
+                        month_token = f"individual::{selected_year_label}::{month_group['key']}"
+                        active = selected_token == month_token
+                        month_label = f"{month_group['label']} ({len(month_group['rows'])})"
+                        if st.button(month_label, key=f"job_history_month_nav_{selected_year_label}_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                            selected_token = month_token
+                            st.session_state["job_history_selected_scope"] = selected_token
+                else:
+                    st.caption("No individual tasks")
+
+            if selected_token:
+                selected_label = "Project tasks" if selected_token.startswith("project::") else "Individual tasks"
+                st.html(f'<div class="es-history-left-active">{escape(selected_label)}</div>')
+
+    selected_rows: List[Dict[str, Any]] = []
+    frame_title = "Task history"
+    frame_subtitle = "No task section selected"
+    if selected_token.startswith("project::"):
+        selected_project_key = selected_token.split("::", 1)[1]
+        selected_group = project_groups.get(selected_project_key, {})
+        selected_rows = list(selected_group.get("rows", []))
+        frame_title = safe_text(selected_group.get("label")) or "Project tasks"
+        frame_subtitle = f"Project tasks | {len(selected_rows)} task{'s' if len(selected_rows) != 1 else ''}"
+    elif selected_token.startswith("individual::"):
+        _, selected_year, selected_month_key = selected_token.split("::", 2)
+        selected_year_group = individual_years.get(selected_year, {})
+        selected_month_group = selected_year_group.get("months", {}).get(selected_month_key, {})
+        selected_rows = list(selected_month_group.get("rows", []))
+        month_label = safe_text(selected_month_group.get("label")) or "Month"
+        frame_title = f"{month_label} {selected_year}" if selected_year != "Undated" else month_label
+        frame_subtitle = f"Individual tasks | {len(selected_rows)} task{'s' if len(selected_rows) != 1 else ''}"
+
+    with right:
+        with st.container(border=True):
+            st.html(
+                f"""
+                <div>
+                  <h3 class="es-history-frame-title">{escape(frame_title)}</h3>
+                  <div class="es-history-frame-subtitle">{escape(frame_subtitle)}</div>
+                </div>
+                """
+            )
+            render_job_history_table(selected_rows, "job_history_selected_tasks")
 
 
 def page_qa() -> None:
