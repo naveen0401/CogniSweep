@@ -48,9 +48,12 @@ def test_jobs_page_uses_clean_task_list_not_status_lanes() -> None:
     assert "display_records(jobs)" not in body
     assert "metrics([" not in body
     assert "render_job_history_table([job_history_row_from_job(job) for job in jobs]" in body
-    assert 'st.expander("Create task in this project"' in body
-    assert 'submit_label="Create task"' in body
-    assert 'type_label="Task type"' in body
+    assert 'st.expander("Create task in this project"' not in body
+    assert "render_project_job_form(" not in body
+    assert '"Workflow task monitor"' not in body
+    assert "render_task_queue_panel()" not in body
+    assert "active_project_jobs(selected_project)" in body
+    assert "Submitted tasks are available in History." in body
 
 
 def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
@@ -60,6 +63,10 @@ def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
 
     assert "def split_assignee_emails" in app
     assert "def job_single_assignee_display" in app
+    assert "def ensure_project_job_editor_session" in app
+    assert "def active_project_jobs" in app
+    assert "candidates.extend(job_assignee_list(record))" in app
+    assert "review_job_id = ensure_project_job_editor_session(job)" in row
     assert '"assignee": job_single_assignee_display(job)' in row
     assert '"no_ai_note": safe_text(metadata.get("no_ai_note"))' in row
     assert 'job_history_detail_item("Assigned to"' in table

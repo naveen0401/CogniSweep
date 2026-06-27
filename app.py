@@ -23343,6 +23343,48 @@ def job_single_assignee_display(job: Dict[str, Any]) -> str:
     return assignees[0] if len(assignees) == 1 else ""
 
 
+def update_project_editor_session_metadata(
+    review_session_id: str,
+    rows: List[Dict[str, Any]],
+    job: Dict[str, Any],
+    assignees: Optional[List[str]] = None,
+) -> None:
+    review_session_id = safe_text(review_session_id)
+    if not review_session_id:
+        return
+    assignees = assignees if assignees is not None else job_assignee_list(job)
+    payload = get_review_session_store().get(review_session_id)
+    metadata = coerce_json_dict(payload.get("metadata")) if isinstance(payload, dict) else {}
+    metadata.update({
+        "source": "Project task",
+        "job_id": safe_text(job.get("id")),
+        "review_job_id": review_session_id,
+        "editor_job_id": review_session_id,
+        "project_id": safe_text(job.get("project_id")),
+        "project": safe_text(job.get("project")),
+        "workspace": safe_text(job.get("workspace") or metadata.get("workspace")),
+        "target_language": safe_text(job.get("language") or metadata.get("target_language")),
+        "file_name": safe_text(job.get("file_name") or metadata.get("file_name")),
+        "assignee": ", ".join(assignees),
+        "assignees": assignees,
+    })
+    if isinstance(payload, dict):
+        payload["metadata"] = metadata
+        payload["rows"] = rows or payload.get("rows") or []
+        payload["target_language"] = metadata.get("target_language", payload.get("target_language", ""))
+        payload["file_name"] = metadata.get("file_name", payload.get("file_name", ""))
+    if save_editor_job is not None:
+        try:
+            save_editor_job("cat", rows or [], metadata=metadata, job_id=review_session_id)
+        except Exception as exc:
+            LOGGER.warning("Unable to update CAT project task context in local editor store: %s", exc)
+    if save_persistent_editor_job is not None:
+        try:
+            save_persistent_editor_job("cat", rows or [], metadata=metadata, job_id=review_session_id, user=current_user() or {})
+        except Exception as exc:
+            LOGGER.warning("Unable to update CAT project task context in persistent store: %s", exc)
+
+
 def uploaded_rows_have_targets(rows: List[Dict[str, Any]]) -> bool:
     return any(safe_text(row.get("target") or row.get("translation")) for row in rows or [])
 
@@ -23575,6 +23617,7 @@ def create_project_tasks_for_project(
         st.session_state.setdefault("jobs", [])
         st.session_state.jobs.insert(0, record)
         trim_session_list("jobs")
+        update_project_editor_session_metadata(review_session_id, review_rows, record, assignees)
         email_results = notify_project_task_assignees(record, assignees)
         email_status = "sent" if email_results and all(item["status"] == "sent" for item in email_results) else (
             "provider_pending" if any(item["status"] == "provider_pending" for item in email_results) else "failed"
@@ -23811,6 +23854,17 @@ def job_history_record_is_submitted(record: Dict[str, Any]) -> bool:
     return status in SUBMITTED_EDITOR_STATUSES or bool(safe_text(metadata.get("submitted_at")))
 
 
+def project_job_is_active(job: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(job)
+    status = safe_text(job.get("status") or metadata.get("status")).strip().lower()
+    archived_statuses = SUBMITTED_EDITOR_STATUSES | {"complete", "completed", "done", "delivered", "approved", "confirmed"}
+    return status not in archived_statuses and not bool(safe_text(metadata.get("submitted_at")))
+
+
+def active_project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [job for job in project_jobs(project) if project_job_is_active(job)]
+
+
 def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
     if is_owner():
         return True
@@ -23831,6 +23885,7 @@ def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]
         metadata.get("assignee"),
         metadata.get("owner_email"),
     ]
+    candidates.extend(job_assignee_list(record))
     if any(safe_text(candidate).strip().lower() == email for candidate in candidates):
         return True
     if account_type_for_user(user) == "individual":
@@ -23933,10 +23988,70 @@ def review_job_id_for_job_record(job: Dict[str, Any]) -> str:
     return ""
 
 
+def ensure_project_job_editor_session(job: Dict[str, Any]) -> str:
+    review_id = review_job_id_for_job_record(job)
+    if review_id:
+        return review_id
+    if not project_job_is_active(job):
+        return ""
+    metadata = job_history_metadata(job)
+    project_id = safe_text(job.get("project_id") or metadata.get("project_id"))
+    project_name = safe_text(job.get("project") or metadata.get("project"))
+    if not project_id and not project_name:
+        return ""
+    if not job_history_is_translation_review(job):
+        return ""
+    segment_count = int(job.get("segments") or metadata.get("segments") or metadata.get("row_count") or 1)
+    segment_count = max(1, min(segment_count, 500))
+    rows = []
+    for idx in range(segment_count):
+        rows.append({
+            "id": idx + 1,
+            "location": f"Segment {idx + 1}",
+            "source": "",
+            "target": "",
+            "translation": "",
+            "status": "Needs Review",
+            "match": "Untranslated",
+            "notes": "Recovered editor task for an existing project job.",
+        })
+    language = safe_text(job.get("language") or metadata.get("target_language")) or "French"
+    file_name = safe_text(job.get("file_name") or metadata.get("file_name")) or f"{project_name or 'project'}_{language}_task"
+    review_id = save_review_session_to_store(
+        rows,
+        f"Project task: {project_name or 'Project'}",
+        language,
+        file_name,
+        rules=workspace_rules(),
+        context={
+            "project_id": project_id,
+            "project": project_name,
+            "source": "Project job recovery",
+        },
+    )
+    job["review_job_id"] = review_id
+    job["editor_job_id"] = review_id
+    job["segments"] = segment_count
+    next_metadata = {
+        **metadata,
+        "review_job_id": review_id,
+        "editor_job_id": review_id,
+        "segments": segment_count,
+        "project_id": project_id,
+        "project": project_name,
+    }
+    job["metadata_json"] = next_metadata
+    update_project_editor_session_metadata(review_id, rows, job)
+    persisted_job = persist_saas_record("jobs", dict(job))
+    job.update(persisted_job)
+    upsert_session_record("jobs", job)
+    return review_id
+
+
 def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
     metadata = job_history_metadata(job)
     job_id = safe_text(job.get("id"))
-    review_job_id = review_job_id_for_job_record(job)
+    review_job_id = ensure_project_job_editor_session(job)
     editor_job_id = review_job_id
     project_id = safe_text(job.get("project_id") or metadata.get("project_id"))
     if editor_job_id and job_history_is_media_record(job):
@@ -24284,7 +24399,7 @@ def page_projects() -> None:
 
 
 def page_jobs() -> None:
-    hero("Jobs", "Project job queue", "Select a project on the left, then create and manage jobs inside that project.")
+    hero("Jobs", "Project job queue", "Select a project on the left, then open active tasks for work.")
     projects = st.session_state.get("projects", [])
     if not projects:
         st.html(
@@ -24324,8 +24439,9 @@ def page_jobs() -> None:
     with main:
         with st.container(border=True):
             selected_project = project_by_identity(st.session_state.get("selected_jobs_project_id", "")) or selected_project
-            jobs = project_jobs(selected_project)
-            selected_project["job_count"] = len(jobs)
+            all_jobs = project_jobs(selected_project)
+            jobs = active_project_jobs(selected_project)
+            selected_project["job_count"] = len(all_jobs)
             project_name = safe_text(selected_project.get("project")) or "Untitled project"
             target_languages = [safe_text(item) for item in safe_text(selected_project.get("targets")).split(",") if safe_text(item)]
             if not target_languages:
@@ -24343,12 +24459,10 @@ def page_jobs() -> None:
                   <span><b>Source</b>{escape(safe_text(selected_project.get("source")) or "Not set")}</span>
                   <span><b>Targets</b>{escape(target_summary)}</span>
                   <span><b>Domain</b>{escape(safe_text(selected_project.get("domain")) or "General")}</span>
-                  <span><b>Tasks</b>{len(jobs)}</span>
+                  <span><b>Active tasks</b>{len(jobs)}</span>
                 </div>
                 """
             )
-            with st.expander("Create task in this project", expanded=not bool(jobs)):
-                render_project_job_form(selected_project, f"jobs_page_job_{project_identity(selected_project)}", submit_label="Create task", type_label="Task type")
             st.markdown("#### Task details")
             if jobs:
                 render_job_history_table([job_history_row_from_job(job) for job in jobs], f"jobs_page_tasks_{project_identity(selected_project)}")
@@ -24358,11 +24472,7 @@ def page_jobs() -> None:
                     with st.expander("Focused job", expanded=True):
                         render_project_job_details(focused_job, "focused_project_job")
             else:
-                st.info("No tasks have been created inside this project yet.")
-            focused_task_id = safe_text(query_get("task_id") or st.session_state.get("task_id", ""))
-            if st.session_state.get("task_queue"):
-                with st.expander("Workflow task monitor", expanded=bool(focused_task_id)):
-                    render_task_queue_panel()
+                st.info("No active tasks in this project. Submitted tasks are available in History.")
     return
 
 
