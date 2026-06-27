@@ -3119,6 +3119,65 @@ div[class*="st-key-"][class*="_app_nav_targets"] * {
   margin: 10px 0 0;
 }
 
+div[class*="st-key-job_history_individual_year"] div[data-baseweb="select"] > div {
+  border-color: rgba(104,137,230,.34) !important;
+  background: rgba(18,22,46,.96) !important;
+  color: #f8fbff !important;
+}
+
+div[class*="st-key-job_history_individual_year"] div[data-baseweb="select"] span,
+div[class*="st-key-job_history_individual_year"] div[data-baseweb="select"] svg {
+  color: #f8fbff !important;
+  fill: currentColor !important;
+}
+
+div[data-baseweb="popover"] div[role="listbox"] {
+  border: 1px solid rgba(104,137,230,.34) !important;
+  background: #11152e !important;
+  box-shadow: 0 18px 42px rgba(0,0,0,.42) !important;
+}
+
+div[data-baseweb="popover"] div[role="option"] {
+  background: #11152e !important;
+  color: #e8edff !important;
+}
+
+div[data-baseweb="popover"] div[role="option"]:hover,
+div[data-baseweb="popover"] div[role="option"][aria-selected="true"] {
+  background: rgba(52,189,246,.18) !important;
+  color: #ffffff !important;
+}
+
+div[class*="st-key-job_history_project_nav_"] button,
+div[class*="st-key-job_history_month_nav_"] button {
+  border: 1px solid rgba(104,137,230,.30) !important;
+  background: rgba(18,22,46,.94) !important;
+  color: #e8edff !important;
+  box-shadow: none !important;
+}
+
+div[class*="st-key-job_history_project_nav_"] button *,
+div[class*="st-key-job_history_month_nav_"] button * {
+  color: inherit !important;
+}
+
+div[class*="st-key-job_history_project_nav_"] button:hover,
+div[class*="st-key-job_history_month_nav_"] button:hover {
+  border-color: rgba(52,189,246,.42) !important;
+  background: rgba(31,39,78,.98) !important;
+  color: #ffffff !important;
+}
+
+div[class*="st-key-job_history_project_nav_"] button[kind="primary"],
+div[class*="st-key-job_history_month_nav_"] button[kind="primary"],
+div[class*="st-key-job_history_project_nav_"] [data-testid="stBaseButton-primary"],
+div[class*="st-key-job_history_month_nav_"] [data-testid="stBaseButton-primary"] {
+  border-color: rgba(17,245,181,.42) !important;
+  background: linear-gradient(90deg, rgba(33,48,90,.98), rgba(18,76,93,.94)) !important;
+  color: #f8fbff !important;
+  box-shadow: inset 3px 0 0 rgba(17,245,181,.78), 0 10px 22px rgba(0,0,0,.18) !important;
+}
+
 @media (max-width: 980px) {
   .es-history-task-card {
     grid-template-columns: 1fr;
@@ -24014,7 +24073,7 @@ def page_job_history() -> None:
         ("Individual tasks", len(direct_rows), "direct uploads and workflow tasks"),
     ])
 
-    left, right = st.columns([0.25, 0.75], gap="large")
+    left, right = st.columns([0.25, 0.75], gap="small")
     with left:
         with st.container(border=True):
             st.markdown("### Task browser")

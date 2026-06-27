@@ -18,7 +18,7 @@ def test_job_history_uses_left_task_browser_and_right_task_frame() -> None:
     app = read_app()
     body = function_body(app, "page_job_history", "page_qa")
 
-    assert 'st.columns([0.25, 0.75], gap="large")' in body
+    assert 'st.columns([0.25, 0.75], gap="small")' in body
     assert "Task browser" in body
     assert 'st.expander("Project tasks"' in body
     assert 'st.expander("Individual tasks"' in body
@@ -28,6 +28,8 @@ def test_job_history_uses_left_task_browser_and_right_task_frame() -> None:
     assert 'individual::' in body
     assert "render_job_history_table(selected_rows" in body
     assert "es-history-frame-title" in app
+    assert "st-key-job_history_individual_year" in app
+    assert "st-key-job_history_month_nav_" in app
 
 
 if __name__ == "__main__":
