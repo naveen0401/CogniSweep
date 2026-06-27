@@ -53,15 +53,15 @@ def test_legacy_dashboard_renderer_removed() -> None:
     assert "def _legacy_page_dashboard_unused" not in app
 
 
-def test_global_command_palette_is_mounted() -> None:
+def test_global_command_palette_is_not_exposed_in_header() -> None:
     app = read_app()
     topnav_panel = function_body(app, "render_topnav_panel", "render_native_route_button")
     navigation = function_body(app, "render_navigation", "render_command_palette")
     bridge = function_body(app, "render_app_navigation_bridge", "human_review_editor_link")
 
-    assert "render_topnav_command_panel(active_page)" in topnav_panel
-    assert 'data-es-command-palette-trigger="1"' in navigation
-    assert "{command_tool}" in navigation
+    assert "render_topnav_command_panel(active_page)" not in topnav_panel
+    assert 'data-es-command-palette-trigger="1"' not in navigation
+    assert "{command_tool}" not in navigation
     assert "handleCommandShortcut" in bridge
     assert 'key !== "k"' in bridge
 
@@ -81,6 +81,6 @@ if __name__ == "__main__":
     test_login_password_verification_is_hash_only()
     test_deploy_expected_branch_is_configurable()
     test_legacy_dashboard_renderer_removed()
-    test_global_command_palette_is_mounted()
+    test_global_command_palette_is_not_exposed_in_header()
     test_no_hardcoded_personal_unlimited_owner_secret()
     print("Auth password policy checks passed.")

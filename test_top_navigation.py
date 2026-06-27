@@ -66,20 +66,20 @@ def test_mobile_navigation_uses_compact_scrollable_layout():
         assert token in mobile_css
 
 
-def test_notes_and_language_tools_are_clickable_panels():
+def test_notes_tool_is_clickable_without_search_or_language_header_tools():
     text = source()
     body = function_body("render_navigation", "now_stamp")
 
     assert "def render_topnav_notes_panel" in text
     assert "def normalized_notification_note" in text
     assert "def notification_badge_count" in text
-    assert "def render_topnav_language_panel" in text
     assert 'notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")' in body
-    assert 'language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")' in body
     assert 'title="Open notifications" {notes_nav_attr}' in body
-    assert 'title="Change interface language" {language_nav_attr}' in body
     assert '<b>{unread_notes}</b><span>Notes</span>{notes_badge}</button>' in body
-    assert '<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></button>' in body
+    assert 'data-es-command-palette-trigger="1"' not in body
+    assert '<span>Search</span>' not in body
+    assert 'title="Change interface language"' not in body
+    assert '<span>Lang</span>' not in body
     assert "notification_badge_count(normalized_notification_notes" in body
 
 
@@ -194,7 +194,7 @@ if __name__ == "__main__":
     test_topnav_uses_one_permission_ordered_renderer()
     test_platform_owner_navigation_uses_two_rows_without_scroll_strip()
     test_mobile_navigation_uses_compact_scrollable_layout()
-    test_notes_and_language_tools_are_clickable_panels()
+    test_notes_tool_is_clickable_without_search_or_language_header_tools()
     test_team_billing_admin_visibility_comes_from_allowed_pages()
     test_jobs_tool_is_hidden_without_permission()
     test_workflow_nav_labels_are_professional()

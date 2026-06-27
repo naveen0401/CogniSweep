@@ -8948,12 +8948,8 @@ def render_topnav_command_panel(active_page: str) -> None:
 def render_topnav_panel(active_page: str, user: Dict[str, Any], notifications: List[Dict[str, Any]]) -> None:
     panel = safe_text(query_get("es_panel")).lower()
     permissions = effective_permissions(user)
-    if panel in {"command", "search", "palette"}:
-        render_topnav_command_panel(active_page)
-    elif panel == "notes" and "notes.view" in permissions:
+    if panel == "notes" and "notes.view" in permissions:
         render_topnav_notes_panel(active_page, notifications, user)
-    elif panel in {"language", "lang"} and "language.select" in permissions:
-        render_topnav_language_panel(active_page, user)
 
 
 def render_native_route_button(
@@ -9041,14 +9037,9 @@ def render_navigation() -> None:
     current_page = safe_text(st.session_state.get("page") or "Dashboard")
     notifications = st.session_state.get("notifications", [])
     unread_notes = notification_badge_count(normalized_notification_notes(st.session_state.get("notifications", []), user, current_page))
-    ui_language_code, _ = current_ui_language(user)
-    notes_href = nav_href(current_page, {"es_panel": "notes"})
-    language_href = nav_href(current_page, {"es_panel": "language"})
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
     jobs_nav_attr = nav_target_attr("Jobs") if "Jobs" in pages else ""
-    command_nav_attr = nav_target_attr(current_page, {"es_panel": "command"}, "Search")
     notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
-    language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
     account_nav_attr = nav_target_attr("Account")
     settings_nav_attr = nav_target_attr(settings_page)
     billing_nav_attr = nav_target_attr("Billing") if "Billing" in pages else ""
@@ -9058,23 +9049,11 @@ def render_navigation() -> None:
         f'<b>{open_count}</b><span>Jobs</span></button>'
         if "Jobs" in pages else ""
     )
-    command_tool = (
-        f'<button type="button" class="es-topnav-tool{" active" if active_panel in {"command", "search", "palette"} else ""}" '
-        f'title="Open command palette" data-es-command-palette-trigger="1" {command_nav_attr}>'
-        '<b>/</b><span>Search</span></button>'
-    )
     notes_tool = (
         f'<button type="button" class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
         f'title="Open notifications" {notes_nav_attr}>'
         f'<b>{unread_notes}</b><span>Notes</span>{notes_badge}</button>'
         if "notes.view" in permissions
-        else ""
-    )
-    language_tool = (
-        f'<button type="button" class="es-topnav-tool{" active" if active_panel in {"language", "lang"} else ""}" '
-        f'title="Change interface language" {language_nav_attr}>'
-        f'<b>{escape(ui_language_code or "EN")}</b><span>Lang</span></button>'
-        if "language.select" in permissions
         else ""
     )
     user_avatar = escape(monogram(user_name or user_email or "User"))
@@ -9102,9 +9081,7 @@ def render_navigation() -> None:
         </div>
         <div class="es-topnav-tools">
           {jobs_tool}
-          {command_tool}
           {notes_tool}
-          {language_tool}
           <div class="es-topnav-user-wrap">
             <div class="es-topnav-user" tabindex="0" title="Account menu">
               <div>
