@@ -37,11 +37,15 @@ def fresh_import(module_name: str):
 
 
 def test_app_secret_helpers_support_cognisweep_prefix() -> None:
-    source = read("app.py")
-    assert "def cognisweep_env_alias" in source
-    assert 'return f"COGNISWEEP_{name[len(\'ERRORSWEEP_\'):]}"' in source
-    assert 'runtime_env("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS"' in source
-    assert "st.secrets.get(alias)" in source
+    app = read("app.py")
+    runtime_config = read("app_runtime_config.py")
+    platform_constants = read("app_platform_constants.py")
+
+    assert "from app_runtime_config import" in app
+    assert "def cognisweep_env_alias" in runtime_config
+    assert 'return f"COGNISWEEP_{name[len(\'ERRORSWEEP_\'):]}"' in runtime_config
+    assert 'runtime_env("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS"' in platform_constants
+    assert "st.secrets.get(alias)" in app
 
 
 def test_async_worker_queue_accepts_cognisweep_prefix() -> None:

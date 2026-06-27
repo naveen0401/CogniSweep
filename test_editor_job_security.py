@@ -7,6 +7,7 @@ import production_persistence as persistence
 
 
 APP = Path("app.py")
+PLATFORM_CONSTANTS = Path("app_platform_constants.py")
 EDITOR_STORE = Path("editor_job_store.py")
 PERSISTENCE = Path("production_persistence.py")
 WORKFLOW = Path(".github/workflows/release-gate.yml")
@@ -103,6 +104,8 @@ def test_app_editor_open_paths_are_scoped():
 
 def test_submitted_editor_jobs_close_for_lower_roles():
     app = source(APP)
+    platform_constants = source(PLATFORM_CONSTANTS)
+    combined_source = app + platform_constants
 
     for token in [
         'EDITOR_SUBMITTED_QUERY_PARAM = "es_editor_submitted"',
@@ -119,7 +122,7 @@ def test_submitted_editor_jobs_close_for_lower_roles():
         "def job_history_record_is_submitted",
         "return can_reopen_submitted_editor_task(user)",
     ]:
-        assert token in app
+        assert token in combined_source
 
 
 if __name__ == "__main__":

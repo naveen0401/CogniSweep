@@ -25,14 +25,38 @@ def test_owner_credentials_are_secret_backed() -> None:
 def test_runtime_and_billing_config_are_extracted_from_app_module() -> None:
     app = read_text("app.py")
     runtime_config = read_text("app_runtime_config.py")
+    platform_constants = read_text("app_platform_constants.py")
     billing_config = read_text("billing_config.py")
+    billing_utils = read_text("billing_utils.py")
+    auth_security = read_text("auth_security.py")
+    text_utils = read_text("text_utils.py")
 
     assert "from app_runtime_config import" in app
+    assert "from app_platform_constants import" in app
     assert "from billing_config import" in app
+    assert "from billing_utils import" in app
+    assert "from auth_security import" in app
+    assert "from text_utils import safe_text" in app
     assert "def runtime_env(" not in app
+    assert "SESSION_COLLECTION_LIMITS = {" not in app
+    assert "LANGUAGE_CATALOG = [" not in app
     assert "PLAN_CATALOG = [" not in app
+    assert "def plan_record(" not in app
+    assert "def format_money(" not in app
+    assert "def invoice_amounts(" not in app
+    assert "def hash_password(" not in app
+    assert "def verify_password(" not in app
+    assert "def safe_text(" not in app
     assert "def runtime_env(" in runtime_config
+    assert "SESSION_COLLECTION_LIMITS = {" in platform_constants
+    assert "LANGUAGE_CATALOG = [" in platform_constants
     assert "PLAN_CATALOG = [" in billing_config
+    assert "def plan_record(" in billing_utils
+    assert "def format_money(" in billing_utils
+    assert "def invoice_amounts(" in billing_utils
+    assert "def hash_password(" in auth_security
+    assert "def verify_password(" in auth_security
+    assert "def safe_text(" in text_utils
 
 
 def test_supabase_schema_has_tenant_rls_policies() -> None:

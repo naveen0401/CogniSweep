@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "app.py"
+PLATFORM_CONSTANTS = ROOT / "app_platform_constants.py"
 CADDYFILE = ROOT / "deploy" / "Caddyfile"
 ENV_TEMPLATE = ROOT / "deploy" / ".env.production.example"
 
@@ -19,10 +20,12 @@ def function_body(source: str, name: str, next_name: str) -> str:
 
 def test_public_landing_canonical_url_is_configured() -> None:
     app = read(APP)
+    platform_constants = read(PLATFORM_CONSTANTS)
 
-    assert 'DEFAULT_PUBLIC_LANDING_URL = "https://www.cognisweep.com/solutions/software-localization-tool"' in app
-    assert 'PUBLIC_LANDING_ROUTE = "solutions/software-localization-tool"' in app
-    assert 'runtime_env("ERRORSWEEP_PUBLIC_LANDING_URL", DEFAULT_PUBLIC_LANDING_URL)' in app
+    assert "from app_platform_constants import" in app
+    assert 'DEFAULT_PUBLIC_LANDING_URL = "https://www.cognisweep.com/solutions/software-localization-tool"' in platform_constants
+    assert 'PUBLIC_LANDING_ROUTE = "solutions/software-localization-tool"' in platform_constants
+    assert 'runtime_env("ERRORSWEEP_PUBLIC_LANDING_URL", DEFAULT_PUBLIC_LANDING_URL)' in platform_constants
 
 
 def test_public_landing_route_alias_renders_landing() -> None:

@@ -43,6 +43,75 @@ from app_runtime_config import (
     cognisweep_env_alias,
     runtime_env,
 )
+from app_platform_constants import (
+    ABUSE_ACTION_META,
+    ABUSE_PROTECTION_DEFAULTS,
+    AUTH_CHECK_QUERY_PARAM,
+    AUTH_STATE_AUTHENTICATED,
+    AUTH_STATE_UNAUTHENTICATED,
+    AUTH_STATE_UNKNOWN,
+    BROWSER_TIMEZONE_QUERY_PARAM,
+    BROWSER_TIMEZONE_STORAGE_KEY,
+    DEFAULT_PUBLIC_LANDING_URL,
+    DEFAULT_SESSION_SECRET,
+    EDITOR_AUTH_FAILED_QUERY_PARAM,
+    EDITOR_LAUNCH_QUERY_PARAM,
+    EDITOR_LAUNCH_TTL_SECONDS,
+    EDITOR_SUBMITTED_QUERY_PARAM,
+    EDITOR_SUBMITTED_TYPE_QUERY_PARAM,
+    LANGUAGE_CATALOG,
+    LEGAL_VERSION_DEFAULTS,
+    LOGIN_BROADCAST_KEY,
+    LOGOUT_BROADCAST_KEY,
+    LOGOUT_BROWSER_CLEANUP_KEY,
+    LOGOUT_DONE_QUERY_PARAM,
+    LOGOUT_SKIP_RESTORE_KEY,
+    MEDIA_PREVIEW_TTL_SECONDS,
+    MEDIA_URL_MAX_BYTES,
+    OFFICE_XML_MEMBER_MAX_BYTES,
+    OFFICE_ZIP_MAX_EXPANDED_BYTES,
+    OFFICE_ZIP_MAX_FILES,
+    PUBLIC_LANDING_CANONICAL_URL,
+    PUBLIC_LANDING_PATH,
+    PUBLIC_LANDING_ROUTE,
+    RETENTION_POLICY_DEFAULTS,
+    ROUTE_RESTORE_BLOCKING_QUERY_KEYS,
+    ROUTE_STORAGE_KEY,
+    ROUTE_STORAGE_PARAM_KEYS,
+    RULE_ZIP_MAX_BYTES,
+    RULE_ZIP_MAX_EXPANDED_BYTES,
+    RULE_ZIP_MAX_FILES,
+    RULE_ZIP_MEMBER_MAX_BYTES,
+    SAAS_CACHE_GENERATION_KEY,
+    SAAS_CACHE_TTL_SECONDS,
+    SAAS_CACHEABLE_COLLECTIONS,
+    SESSION_COLLECTION_LIMITS,
+    SESSION_COOKIE_CONTROLLER_KEY,
+    SESSION_COOKIE_MAX_BYTES,
+    SESSION_COOKIE_NAME,
+    SESSION_HANDOFF_QUERY_PARAM,
+    SESSION_HISTORY_LIMIT,
+    SESSION_LOGOUT_REGISTRY_LIMIT,
+    SESSION_PERSISTENCE_SECONDS,
+    SESSION_STARTED_AT_MS_FIELD,
+    SESSION_STORAGE_KEY,
+    SESSION_TOKEN_USER_FIELDS,
+    SESSION_TTL_SECONDS,
+    SSO_PROTOCOL_OPTIONS,
+    SSO_PROVIDER_OPTIONS,
+    SSO_STATUS_OPTIONS,
+    SUBPROCESSOR_APPROVAL_STATUSES,
+    SUBPROCESSOR_DEFAULT_REGISTER,
+    SUBPROCESSOR_DPA_STATUSES,
+    SUBPROCESSOR_NOTICE_STATUSES,
+    TALENT_AVAILABILITY,
+    TALENT_DOMAINS,
+    TALENT_PRIMARY_ROLES,
+    TALENT_PROFILE_TYPES,
+    TALENT_SERVICES,
+    TALENT_WORK_PREFERENCES,
+    UI_LANGUAGE_OPTIONS,
+)
 from billing_config import (
     AUTH_TOKEN_TTL_SECONDS,
     COMPLIANCE_ACK_LABEL,
@@ -53,6 +122,15 @@ from billing_config import (
     UNLIMITED_ACCESS_PASSWORD_HASH_SECRET,
     UNLIMITED_ACCESS_WORKSPACE,
 )
+from billing_utils import format_money, invoice_amounts, money_value, plan_record
+from auth_security import (
+    PASSWORD_HASH_ITERATIONS,
+    b64url,
+    b64url_decode,
+    hash_password,
+    verify_password,
+)
+from text_utils import safe_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -208,306 +286,6 @@ except Exception as exc:
 # Editor jobs and usage persist to Supabase when configured, with local JSON fallback
 # ==========================================================
 
-DEFAULT_PUBLIC_LANDING_URL = "https://www.cognisweep.com/solutions/software-localization-tool"
-PUBLIC_LANDING_ROUTE = "solutions/software-localization-tool"
-PUBLIC_LANDING_PATH = f"/{PUBLIC_LANDING_ROUTE}"
-PUBLIC_LANDING_CANONICAL_URL = runtime_env("ERRORSWEEP_PUBLIC_LANDING_URL", DEFAULT_PUBLIC_LANDING_URL).strip().rstrip("/") or DEFAULT_PUBLIC_LANDING_URL
-
-
-# Persistent browser sessions should survive reloads and browser restarts until
-# the user explicitly clicks Logout. Browser cookies still need a finite
-# Max-Age, so use a long renewal window while the signed token itself has no
-# expiry check.
-SESSION_PERSISTENCE_SECONDS = int(runtime_env("ERRORSWEEP_SESSION_PERSISTENCE_SECONDS", str(60 * 60 * 24 * 365 * 10)))
-SESSION_TTL_SECONDS = SESSION_PERSISTENCE_SECONDS
-DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
-PASSWORD_HASH_ITERATIONS = 260_000
-SESSION_HISTORY_LIMIT = 500
-RULE_ZIP_MAX_FILES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_FILES", "250"))
-RULE_ZIP_MAX_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_BYTES", str(25 * 1024 * 1024)))
-RULE_ZIP_MAX_EXPANDED_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MAX_EXPANDED_BYTES", str(RULE_ZIP_MAX_BYTES * 4)))
-RULE_ZIP_MEMBER_MAX_BYTES = int(runtime_env("ERRORSWEEP_RULE_ZIP_MEMBER_MAX_BYTES", str(5 * 1024 * 1024)))
-OFFICE_ZIP_MAX_FILES = int(runtime_env("ERRORSWEEP_OFFICE_ZIP_MAX_FILES", "1500"))
-OFFICE_ZIP_MAX_EXPANDED_BYTES = int(runtime_env("ERRORSWEEP_OFFICE_ZIP_MAX_EXPANDED_BYTES", str(120 * 1024 * 1024)))
-OFFICE_XML_MEMBER_MAX_BYTES = int(runtime_env("ERRORSWEEP_OFFICE_XML_MEMBER_MAX_BYTES", str(20 * 1024 * 1024)))
-MEDIA_PREVIEW_TTL_SECONDS = int(runtime_env("ERRORSWEEP_MEDIA_PREVIEW_TTL_SECONDS", str(60 * 60 * 24 * 2)))
-MEDIA_URL_MAX_BYTES = int(runtime_env("ERRORSWEEP_MEDIA_URL_MAX_BYTES", str(200 * 1024 * 1024)))
-RETENTION_POLICY_DEFAULTS = {
-    "expired_auth_token_grace_days": 0,
-    "expired_file_manifest_grace_days": 7,
-    "sent_notification_days": 180,
-    "completed_task_days": 90,
-    "closed_privacy_request_days": 730,
-    "closed_support_ticket_days": 730,
-    "local_media_preview_hours": max(1, MEDIA_PREVIEW_TTL_SECONDS // 3600),
-}
-LEGAL_VERSION_DEFAULTS = {
-    "terms_version": "2026-05-29",
-    "privacy_version": "2026-05-29",
-    "nda_version": "2026-05-29",
-    "cookie_version": "2026-05-29",
-    "dpa_version": "2026-05-29",
-}
-ABUSE_PROTECTION_DEFAULTS = {
-    "window_minutes": 15,
-    "owner_login_attempts": 5,
-    "workspace_login_attempts": 8,
-    "demo_access_attempts": 12,
-    "signup_attempts": 5,
-    "password_reset_attempts": 5,
-    "checkout_intent_attempts": 5,
-    "support_ticket_attempts": 8,
-    "privacy_request_attempts": 8,
-}
-ABUSE_ACTION_META = {
-    "owner_login": ("Owner login", "owner_login_attempts"),
-    "workspace_login": ("Workspace login", "workspace_login_attempts"),
-    "demo_access": ("Demo access", "demo_access_attempts"),
-    "signup": ("Public signup", "signup_attempts"),
-    "password_reset": ("Password reset", "password_reset_attempts"),
-    "checkout_intent": ("Checkout intent", "checkout_intent_attempts"),
-    "support_ticket": ("Support ticket", "support_ticket_attempts"),
-    "privacy_request": ("Privacy request", "privacy_request_attempts"),
-}
-SUBPROCESSOR_APPROVAL_STATUSES = ["Needs review", "Approved", "Blocked", "Customer controlled"]
-SUBPROCESSOR_DPA_STATUSES = ["Needs DPA", "DPA approved", "Not applicable", "Customer controlled"]
-SUBPROCESSOR_NOTICE_STATUSES = ["Needs customer notice", "Covered in policy", "Customer-specific approval", "Not applicable"]
-SUBPROCESSOR_DEFAULT_REGISTER = {
-    "supabase_persistence": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Covered in policy",
-        "notes": "",
-    },
-    "object_storage": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Covered in policy",
-        "notes": "",
-    },
-    "async_worker": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Covered in policy",
-        "notes": "",
-    },
-    "transactional_email": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Covered in policy",
-        "notes": "",
-    },
-    "billing_gateway": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Covered in policy",
-        "notes": "",
-    },
-    "byo_ai": {
-        "approval_status": "Customer controlled",
-        "dpa_status": "Customer controlled",
-        "customer_notice": "Customer-specific approval",
-        "notes": "Customer-provided API keys and base URLs are controlled by the customer/workspace.",
-    },
-    "languagetool": {
-        "approval_status": "Needs review",
-        "dpa_status": "Needs DPA",
-        "customer_notice": "Customer-specific approval",
-        "notes": "Public LanguageTool routing should remain disabled unless approved by customer policy.",
-    },
-}
-SSO_PROVIDER_OPTIONS = ["Microsoft Entra ID", "Okta", "Google Workspace", "Custom OIDC", "SAML 2.0"]
-SSO_PROTOCOL_OPTIONS = ["OIDC", "SAML"]
-SSO_STATUS_OPTIONS = ["Draft", "Metadata review", "Enabled", "Disabled"]
-SESSION_COLLECTION_LIMITS = {
-    "ai_usage_events": 500,
-    "audit_logs": 500,
-    "jobs": 500,
-    "owner_recent_editor_jobs": 100,
-    "payments": 500,
-    "invoices": 500,
-    "projects": 500,
-    "files": 1000,
-    "translation_memory": 5000,
-    "tm": 5000,
-    "glossary": 5000,
-    "dnt": 5000,
-    "rule_instructions": 1000,
-    "users": 1000,
-    "workspaces": 1000,
-    "notifications": 1000,
-    "task_queue": 1000,
-    "subscriptions": 500,
-    "checkout_sessions": 500,
-    "billing_events": 500,
-    "auth_tokens": 500,
-    "platform_settings": 100,
-    "privacy_requests": 500,
-    "support_tickets": 1000,
-    "status_incidents": 500,
-    "consent_records": 1000,
-    "integration_connections": 500,
-    "resource_bindings": 1000,
-    "resource_lookup_cache": 1000,
-    "integration_audit": 1000,
-}
-SAAS_CACHE_TTL_SECONDS = int(runtime_env("ERRORSWEEP_SAAS_CACHE_TTL_SECONDS", "15"))
-SAAS_CACHE_GENERATION_KEY = "_saas_read_cache_generation"
-SAAS_CACHEABLE_COLLECTIONS = {
-    "workspaces",
-    "projects",
-    "jobs",
-    "payments",
-    "invoices",
-    "audit_logs",
-    "notifications",
-    "files",
-    "subscriptions",
-    "checkout_sessions",
-    "billing_events",
-    "platform_settings",
-    "privacy_requests",
-    "support_tickets",
-    "status_incidents",
-    "consent_records",
-    "integration_connections",
-    "resource_bindings",
-    "translation_memory",
-    "integration_audit",
-}
-SESSION_COOKIE_NAME = "errorsweep_session"
-SESSION_STORAGE_KEY = "errorsweep_session"
-SESSION_COOKIE_CONTROLLER_KEY = "errorsweep_browser_cookies"
-SESSION_HANDOFF_QUERY_PARAM = "es_session"
-EDITOR_LAUNCH_QUERY_PARAM = "es_launch"
-EDITOR_LAUNCH_TTL_SECONDS = int(runtime_env("ERRORSWEEP_EDITOR_LAUNCH_TTL_SECONDS", str(60 * 30)))
-EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"
-EDITOR_SUBMITTED_QUERY_PARAM = "es_editor_submitted"
-EDITOR_SUBMITTED_TYPE_QUERY_PARAM = "es_editor_submitted_type"
-AUTH_CHECK_QUERY_PARAM = "es_auth_checked"
-AUTH_STATE_UNKNOWN = "unknown"
-AUTH_STATE_AUTHENTICATED = "authenticated"
-AUTH_STATE_UNAUTHENTICATED = "unauthenticated"
-ROUTE_STORAGE_KEY = "errorsweep_route"
-LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"
-LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"
-LOGOUT_DONE_QUERY_PARAM = "es_signed_out"
-LOGOUT_BROWSER_CLEANUP_KEY = "_logout_browser_cleanup_pending"
-LOGOUT_SKIP_RESTORE_KEY = "_logout_skip_restore_once"
-BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
-BROWSER_TIMEZONE_STORAGE_KEY = "cognisweep_browser_timezone"
-ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")
-ROUTE_RESTORE_BLOCKING_QUERY_KEYS = (*ROUTE_STORAGE_PARAM_KEYS, "route", "public", "return_to", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM)
-SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")
-SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"
-SESSION_LOGOUT_REGISTRY_LIMIT = 2000
-SESSION_COOKIE_MAX_BYTES = 3800
-LANGUAGE_CATALOG = [
-    "English",
-    "French",
-    "Spanish",
-    "German",
-    "Italian",
-    "Portuguese",
-    "Hindi",
-    "Bengali",
-    "Tamil",
-    "Telugu",
-    "Kannada",
-    "Malayalam",
-    "Marathi",
-    "Gujarati",
-    "Punjabi",
-    "Urdu",
-    "Arabic",
-    "Persian",
-    "Hebrew",
-    "Russian",
-    "Ukrainian",
-    "Polish",
-    "Turkish",
-    "Greek",
-    "Dutch",
-    "Norwegian",
-    "Swedish",
-    "Danish",
-    "Finnish",
-    "Afrikaans",
-    "Swahili",
-    "Hausa",
-    "Sinhala",
-    "Zulu",
-    "Amharic",
-    "Yoruba",
-    "Chinese",
-    "Japanese",
-    "Korean",
-    "Thai",
-    "Indonesian",
-    "Malay",
-    "Tagalog",
-    "Burmese",
-    "Khmer",
-    "Lao",
-    "Mongolian",
-    "Vietnamese",
-]
-TALENT_PROFILE_TYPES = [
-    "Freelancer",
-    "Professional",
-    "Agency",
-    "Company employee",
-    "Client / Hiring manager",
-]
-TALENT_PRIMARY_ROLES = [
-    "Translator",
-    "Reviewer",
-    "LQA Specialist",
-    "Subtitler",
-    "Transcriptionist",
-    "Project Manager",
-    "Localization Engineer",
-    "Client / Hiring Manager",
-    "Other",
-]
-TALENT_SERVICES = [
-    "Translation",
-    "Editing",
-    "Proofreading",
-    "LQA",
-    "Terminology",
-    "Subtitling",
-    "Transcription",
-    "MTPE",
-    "Project Management",
-    "Localization Engineering",
-]
-TALENT_DOMAINS = [
-    "Software / UI",
-    "Marketing",
-    "Legal",
-    "Medical",
-    "Finance",
-    "Gaming",
-    "E-learning",
-    "Media / Entertainment",
-    "Technical",
-    "General Business",
-]
-TALENT_AVAILABILITY = ["Available now", "Available this week", "Part-time", "Booked", "Not currently available"]
-TALENT_WORK_PREFERENCES = ["Remote", "Hybrid", "On-site", "Contract", "Full-time", "Part-time"]
-UI_LANGUAGE_OPTIONS = [
-    ("EN", "English"),
-    ("HI", "Hindi"),
-    ("TE", "Telugu"),
-    ("TA", "Tamil"),
-    ("KN", "Kannada"),
-    ("ML", "Malayalam"),
-    ("FR", "French"),
-    ("ES", "Spanish"),
-    ("DE", "German"),
-    ("JA", "Japanese"),
-]
 SENSITIVE_TEXT_RE = re.compile(
     r"("
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
@@ -4370,29 +4148,6 @@ def session_secret() -> str:
     return value
 
 
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
-
-
-def hash_password(password: str, salt: Optional[str] = None, iterations: int = PASSWORD_HASH_ITERATIONS) -> str:
-    salt = salt or b64url(os.urandom(16))
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
-    return f"pbkdf2_sha256${iterations}${salt}${b64url(digest)}"
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    parts = str(stored_hash or "").split("$")
-    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
-        return False
-    try:
-        iterations = int(parts[1])
-        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), parts[2].encode("utf-8"), iterations)
-        return hmac.compare_digest(b64url(digest), parts[3])
-    except Exception as exc:
-        LOGGER.warning("Password hash verification failed: %s", exc)
-        return False
-
-
 def verify_login_password(password: str, hash_secret_name: str, legacy_secret_name: str = "") -> bool:
     stored_hash = secret(hash_secret_name, "")
     if stored_hash:
@@ -5345,11 +5100,6 @@ def refresh_task_queue_state_for_user(force: bool = False) -> None:
         st.session_state["_task_queue_refresh_at"] = now
     except Exception as exc:
         LOGGER.warning("Unable to refresh task queue state: %s", exc)
-
-
-def b64url_decode(data: str) -> bytes:
-    pad = "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(data + pad)
 
 
 def sign_payload(payload: Dict[str, Any]) -> str:
@@ -13538,33 +13288,6 @@ def render_lqa_visuals(records: List[Dict[str, Any]], summary: Dict[str, Any]) -
     )
 
 
-def safe_text(x: Any) -> str:
-    if x is None:
-        return ""
-    return str(x).replace("\u00A0", " ").strip()
-
-
-def plan_record(name: str) -> Dict[str, Any]:
-    requested = safe_text(name).lower()
-    return next((plan for plan in PLAN_CATALOG if plan["name"].lower() == requested), PLAN_CATALOG[0])
-
-
-def format_money(amount: Any, currency: str = "INR", decimals: bool = False) -> str:
-    try:
-        value = float(amount or 0)
-    except Exception:
-        value = 0.0
-    precision = 2 if decimals and value != int(value) else 0
-    return f"{safe_text(currency or 'INR')} {value:,.{precision}f}"
-
-
-def money_value(amount: Any) -> float:
-    try:
-        return max(0.0, float(amount or 0))
-    except Exception:
-        return 0.0
-
-
 def default_tax_rate_percent() -> float:
     try:
         return max(0.0, float(secret("ERRORSWEEP_INVOICE_TAX_RATE", "18")))
@@ -13580,22 +13303,6 @@ def invoice_number() -> str:
         if safe_text(item.get("invoice_number")).startswith(f"{prefix}-{period}-")
     ]
     return f"{prefix}-{period}-{len(existing) + 1:04d}"
-
-
-def invoice_amounts(total_amount: Any, tax_rate_percent: Any) -> Dict[str, float]:
-    total = money_value(total_amount)
-    try:
-        tax_rate = max(0.0, float(tax_rate_percent or 0))
-    except Exception:
-        tax_rate = 0.0
-    subtotal = total / (1 + tax_rate / 100) if tax_rate else total
-    tax_amount = max(0.0, total - subtotal)
-    return {
-        "subtotal": round(subtotal, 2),
-        "tax_rate_percent": round(tax_rate, 2),
-        "tax_amount": round(tax_amount, 2),
-        "total": round(total, 2),
-    }
 
 
 def create_invoice_record(

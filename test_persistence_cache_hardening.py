@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "app.py"
+PLATFORM_CONSTANTS = ROOT / "app_platform_constants.py"
 RELEASE_CHECK = ROOT / "deploy" / "release_check.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release-gate.yml"
 
@@ -34,8 +35,8 @@ def test_saas_reads_use_streamlit_cache_data_with_generation_key():
 
 
 def test_auth_and_lifecycle_collections_are_not_cached():
-    app = source(APP)
-    match = re.search(r"SAAS_CACHEABLE_COLLECTIONS\s*=\s*\{(?P<body>.*?)\n\}", app, re.S)
+    platform_constants = source(PLATFORM_CONSTANTS)
+    match = re.search(r"SAAS_CACHEABLE_COLLECTIONS\s*=\s*\{(?P<body>.*?)\n\}", platform_constants, re.S)
     assert match, "Missing SAAS_CACHEABLE_COLLECTIONS block"
     cacheable = match.group("body")
 

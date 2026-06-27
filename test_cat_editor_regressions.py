@@ -3,10 +3,20 @@ from pathlib import Path
 
 
 APP = Path(__file__).with_name("app.py")
+PLATFORM_CONSTANTS = Path(__file__).with_name("app_platform_constants.py")
+BILLING_CONFIG = Path(__file__).with_name("billing_config.py")
 
 
 def read_app() -> str:
     return APP.read_text(encoding="utf-8")
+
+
+def read_platform_constants() -> str:
+    return PLATFORM_CONSTANTS.read_text(encoding="utf-8")
+
+
+def read_billing_config() -> str:
+    return BILLING_CONFIG.read_text(encoding="utf-8")
 
 
 def active_cat_editor_body(source: str) -> str:
@@ -157,13 +167,14 @@ def test_editor_urls_are_clean_routes_without_session_tokens() -> None:
 
 def test_editor_links_seed_browser_session_before_new_tab_editor_open() -> None:
     source = read_app()
+    constants = read_platform_constants()
     helper_start = source.index("def current_session_token_for_links")
     helper_end = source.index("def external_editor_url", helper_start)
     helper_body = source[helper_start:helper_end]
     assert "return signed_session_token_for_user(user)" in helper_body
     assert "def render_editor_session_handoff_bridge() -> None:" in helper_body
-    assert 'EDITOR_LAUNCH_QUERY_PARAM = "es_launch"' in source
-    assert 'EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"' in source
+    assert 'EDITOR_LAUNCH_QUERY_PARAM = "es_launch"' in constants
+    assert 'EDITOR_AUTH_FAILED_QUERY_PARAM = "es_editor_auth_failed"' in constants
     assert "def signed_editor_launch_token_for_user(user: Dict[str, Any]) -> str:" in source
     assert '"purpose": "editor_launch"' in source
     assert '"exp": issued_at + EDITOR_LAUNCH_TTL_SECONDS' in source
@@ -477,9 +488,10 @@ def test_login_stays_in_current_streamlit_session() -> None:
 
 def test_logout_routes_every_window_to_landing() -> None:
     source = read_app()
-    assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in source
-    assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in source
-    assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in source
+    constants = read_platform_constants()
+    assert 'LOGOUT_BROADCAST_KEY = "errorsweep_logout_broadcast"' in constants
+    assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in constants
+    assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in constants
     assert "def render_global_logout_listener() -> None" in source
     assert 'const listenerVersion = "auth-sync-v9-focus-logout-marker-2026-06-23";' in source
     assert "window.addEventListener(\"storage\"" in source
@@ -575,7 +587,8 @@ def test_logout_routes_every_window_to_landing() -> None:
 
 def test_logout_revokes_stale_server_sessions() -> None:
     source = read_app()
-    assert 'SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"' in source
+    constants = read_platform_constants()
+    assert 'SESSION_STARTED_AT_MS_FIELD = "session_started_at_ms"' in constants
     assert "def session_logout_registry() -> Dict[str, int]:" in source
     assert "def record_session_logout(user: Dict[str, Any]) -> None:" in source
     assert "def session_token_revoked(payload: Dict[str, Any]) -> bool:" in source
@@ -629,16 +642,17 @@ def test_logout_revokes_stale_server_sessions() -> None:
 
 def test_reload_session_restore_uses_cookie_not_url_only() -> None:
     source = read_app()
+    constants = read_platform_constants()
     requirements = Path(__file__).with_name("requirements.txt").read_text(encoding="utf-8")
-    assert "SESSION_COOKIE_NAME = \"errorsweep_session\"" in source
-    assert "SESSION_STORAGE_KEY = \"errorsweep_session\"" in source
-    assert "SESSION_COOKIE_CONTROLLER_KEY = \"errorsweep_browser_cookies\"" in source
-    assert 'AUTH_CHECK_QUERY_PARAM = "es_auth_checked"' in source
-    assert 'AUTH_STATE_UNKNOWN = "unknown"' in source
-    assert 'AUTH_STATE_AUTHENTICATED = "authenticated"' in source
-    assert 'AUTH_STATE_UNAUTHENTICATED = "unauthenticated"' in source
+    assert "SESSION_COOKIE_NAME = \"errorsweep_session\"" in constants
+    assert "SESSION_STORAGE_KEY = \"errorsweep_session\"" in constants
+    assert "SESSION_COOKIE_CONTROLLER_KEY = \"errorsweep_browser_cookies\"" in constants
+    assert 'AUTH_CHECK_QUERY_PARAM = "es_auth_checked"' in constants
+    assert 'AUTH_STATE_UNKNOWN = "unknown"' in constants
+    assert 'AUTH_STATE_AUTHENTICATED = "authenticated"' in constants
+    assert 'AUTH_STATE_UNAUTHENTICATED = "unauthenticated"' in constants
     assert "streamlit-cookies-controller==0.0.4" in requirements
-    assert "SESSION_PERSISTENCE_SECONDS" in source
+    assert "SESSION_PERSISTENCE_SECONDS" in constants
     assert "from streamlit_cookies_controller import CookieController" in source
     assert "def browser_session_cookie()" in source
     assert "def browser_cookie_controller()" in source
@@ -825,8 +839,9 @@ def test_public_login_signup_navigation_ignores_restore_miss() -> None:
 
 def test_login_session_persists_until_explicit_logout() -> None:
     source = read_app()
-    assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")' in source
-    assert "SESSION_COOKIE_MAX_BYTES = 3800" in source
+    constants = read_platform_constants()
+    assert 'SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")' in constants
+    assert "SESSION_COOKIE_MAX_BYTES = 3800" in constants
     assert "def compact_session_user_payload" in source
 
     sign_start = source.index("def signed_session_token_for_user")
@@ -882,8 +897,9 @@ def test_login_session_persists_until_explicit_logout() -> None:
 
 def test_refresh_restores_last_authenticated_route() -> None:
     source = read_app()
-    assert 'ROUTE_STORAGE_KEY = "errorsweep_route"' in source
-    assert 'ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")' in source
+    constants = read_platform_constants()
+    assert 'ROUTE_STORAGE_KEY = "errorsweep_route"' in constants
+    assert 'ROUTE_STORAGE_PARAM_KEYS = ("es_page", "es_editor", "job_id", "review_id")' in constants
     assert "def route_query_has_explicit_target()" in source
     assert "def browser_route_storage_params" in source
     assert "def sync_browser_route_state" in source
@@ -1128,6 +1144,7 @@ def test_human_review_workspace_uses_reference_template() -> None:
 
 def test_unlimited_access_account_bypasses_usage_allowance() -> None:
     source = read_app()
+    billing_config = read_billing_config()
     assert "UNLIMITED_ACCESS_EMAIL_SECRET" in source
     assert "UNLIMITED_ACCESS_PASSWORD_HASH_SECRET" in source
     assert "def is_platform_owner_identity(" in source
@@ -1139,7 +1156,7 @@ def test_unlimited_access_account_bypasses_usage_allowance() -> None:
     assert 'login_user(owner_user, "Workspace Owner", "workspace", UNLIMITED_ACCESS_WORKSPACE)' not in source
     assert 'class="es-topnav-owner-row"><span class="es-topnav-owner-tag">Owner tools</span>' in source
     assert "owner_links" in source
-    assert "\"name\": \"Unlimited\"" in source
+    assert "\"name\": \"Unlimited\"" in billing_config
     assert "def ensure_unlimited_access_account(owner_email: str = \"\", password_hash: str = \"\")" in source
     assert "Unified owner login" in source
     assert "plan_name.lower() == \"unlimited\"" in source
