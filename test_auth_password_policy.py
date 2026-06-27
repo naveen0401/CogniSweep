@@ -3,10 +3,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT / "app.py"
+RUNTIME_CONFIG = ROOT / "app_runtime_config.py"
+BILLING_CONFIG = ROOT / "billing_config.py"
 
 
 def read_app() -> str:
     return APP.read_text(encoding="utf-8")
+
+
+def read_runtime_config() -> str:
+    return RUNTIME_CONFIG.read_text(encoding="utf-8")
+
+
+def read_billing_config() -> str:
+    return BILLING_CONFIG.read_text(encoding="utf-8")
 
 
 def function_body(source: str, name: str, next_name: str) -> str:
@@ -28,10 +38,13 @@ def test_login_password_verification_is_hash_only() -> None:
 
 def test_deploy_expected_branch_is_configurable() -> None:
     app = read_app()
+    runtime_config = read_runtime_config()
 
-    assert 'os.environ.get("ERRORSWEEP_EXPECTED_BRANCH")' in app
-    assert 'os.environ.get("COGNISWEEP_EXPECTED_BRANCH")' in app
-    assert 'or "main"' in app
+    assert "from app_runtime_config import" in app
+    assert "DEPLOY_EXPECTED_BRANCH" in app
+    assert "def cognisweep_env_alias" in runtime_config
+    assert 'runtime_env("ERRORSWEEP_EXPECTED_BRANCH", "main")' in runtime_config
+    assert 'or "main"' in runtime_config
 
 
 def test_legacy_dashboard_renderer_removed() -> None:
@@ -55,11 +68,13 @@ def test_global_command_palette_is_mounted() -> None:
 
 def test_no_hardcoded_personal_unlimited_owner_secret() -> None:
     app = read_app()
+    billing_config = read_billing_config()
+    source = app + billing_config
 
-    assert "errorsweep_unlimited_adapa_2026" not in app
-    assert "adapalanaveen" not in app.lower()
-    assert "Naveen Unlimited Workspace" not in app
-    assert "ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE" in app
+    assert "errorsweep_unlimited_adapa_2026" not in source
+    assert "adapalanaveen" not in source.lower()
+    assert "Naveen Unlimited Workspace" not in source
+    assert "ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE" in billing_config
 
 
 if __name__ == "__main__":

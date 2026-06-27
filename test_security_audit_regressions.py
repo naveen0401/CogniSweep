@@ -11,13 +11,28 @@ def read_text(path: str) -> str:
 
 def test_owner_credentials_are_secret_backed() -> None:
     app = read_text("app.py")
+    billing_config = read_text("billing_config.py")
+    source = app + billing_config
 
-    assert "errorsweep_unlimited_adapa_2026" not in app
-    assert "adapalanaveen" not in app.lower()
-    assert "Naveen Unlimited Workspace" not in app
-    assert "ERRORSWEEP_UNLIMITED_ACCESS_EMAIL" in app
-    assert "ERRORSWEEP_UNLIMITED_ACCESS_PASSWORD_HASH" in app
-    assert "ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE" in app
+    assert "errorsweep_unlimited_adapa_2026" not in source
+    assert "adapalanaveen" not in source.lower()
+    assert "Naveen Unlimited Workspace" not in source
+    assert "ERRORSWEEP_UNLIMITED_ACCESS_EMAIL" in billing_config
+    assert "ERRORSWEEP_UNLIMITED_ACCESS_PASSWORD_HASH" in billing_config
+    assert "ERRORSWEEP_UNLIMITED_ACCESS_WORKSPACE" in billing_config
+
+
+def test_runtime_and_billing_config_are_extracted_from_app_module() -> None:
+    app = read_text("app.py")
+    runtime_config = read_text("app_runtime_config.py")
+    billing_config = read_text("billing_config.py")
+
+    assert "from app_runtime_config import" in app
+    assert "from billing_config import" in app
+    assert "def runtime_env(" not in app
+    assert "PLAN_CATALOG = [" not in app
+    assert "def runtime_env(" in runtime_config
+    assert "PLAN_CATALOG = [" in billing_config
 
 
 def test_supabase_schema_has_tenant_rls_policies() -> None:
@@ -79,6 +94,7 @@ def test_browser_eval_pattern_removed() -> None:
 
 if __name__ == "__main__":
     test_owner_credentials_are_secret_backed()
+    test_runtime_and_billing_config_are_extracted_from_app_module()
     test_supabase_schema_has_tenant_rls_policies()
     test_async_queue_fails_closed_in_production()
     test_external_editor_jobs_are_random_and_scoped()
