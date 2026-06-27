@@ -190,7 +190,11 @@ except Exception as exc:
 
 APP_VERSION = "v46 Security + QA Workflow Hardening"
 DEPLOY_BUILD_ID = "auth-handoff-v15-server-logout-watchdog-2026-06-23"
-DEPLOY_EXPECTED_BRANCH = "main"
+DEPLOY_EXPECTED_BRANCH = (
+    os.environ.get("ERRORSWEEP_EXPECTED_BRANCH")
+    or os.environ.get("COGNISWEEP_EXPECTED_BRANCH")
+    or "main"
+).strip() or "main"
 DEPLOY_EXPECTED_FEATURES = (
     "separate_global_and_editor_shells",
     "editor_css_scoped_to_editor_shell",
@@ -4478,19 +4482,13 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def verify_login_password(password: str, hash_secret_name: str, legacy_secret_name: str) -> bool:
+def verify_login_password(password: str, hash_secret_name: str, legacy_secret_name: str = "") -> bool:
     stored_hash = secret(hash_secret_name, "")
     if stored_hash:
         return verify_password(password, stored_hash)
-
-    legacy_password = secret(legacy_secret_name, "")
-    if not legacy_password:
-        return False
-    if is_production_mode():
-        LOGGER.error("%s is plaintext and is not accepted in production. Configure %s.", legacy_secret_name, hash_secret_name)
-        return False
-    LOGGER.warning("%s is plaintext and should be replaced with %s.", legacy_secret_name, hash_secret_name)
-    return hmac.compare_digest(password, legacy_password)
+    if legacy_secret_name and secret(legacy_secret_name, ""):
+        LOGGER.error("%s is plaintext and is not accepted. Configure %s.", legacy_secret_name, hash_secret_name)
+    return False
 
 
 def early_safe_text(value: Any) -> str:
@@ -4523,8 +4521,10 @@ def unlimited_access_configured() -> bool:
     return bool(unlimited_access_email() and unlimited_access_password_hash().startswith("pbkdf2_sha256$"))
 
 
-def password_configured(hash_secret_name: str, legacy_secret_name: str) -> bool:
-    return bool(secret(hash_secret_name, "") or secret(legacy_secret_name, ""))
+def password_configured(hash_secret_name: str, legacy_secret_name: str = "") -> bool:
+    if legacy_secret_name and secret(legacy_secret_name, ""):
+        LOGGER.error("%s is plaintext and is ignored. Configure %s.", legacy_secret_name, hash_secret_name)
+    return bool(secret(hash_secret_name, ""))
 
 
 def trim_session_list(key: str, limit: int = SESSION_HISTORY_LIMIT) -> None:
@@ -5907,7 +5907,7 @@ def render_auth_transition_shell(message: str = "Opening your workspace...") -> 
 
 def runtime_commit_hint() -> str:
     for key in ("STREAMLIT_GIT_COMMIT", "GIT_COMMIT", "SOURCE_COMMIT", "COMMIT_SHA", "RENDER_GIT_COMMIT"):
-        value = safe_text(os.getenv(key))
+        value = safe_text(runtime_env(key))
         if value:
             return value
     return ""
@@ -5930,7 +5930,7 @@ def render_deploy_debug_page() -> None:
             "global_shell_marker": "errorsweep-root-shell-marker",
         }
     )
-    st.caption("If this page or build ID is missing on Streamlit Cloud, Cloud is not running the pushed main branch.")
+    st.caption(f"If this page or build ID is missing on Streamlit Cloud, Cloud is not running the pushed {DEPLOY_EXPECTED_BRANCH} branch.")
     st.stop()
 
 
@@ -8236,6 +8236,22 @@ def render_app_navigation_bridge() -> None:
             window.__errorsweepAppNavBoundAt = Date.now();
             window.__errorsweepAppNavParentRuntime = true;
           };
+          const isTypingTarget = (el) => {
+            if (!el) return false;
+            const tag = String(el.tagName || "").toLowerCase();
+            return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+          };
+          const handleCommandShortcut = (event) => {
+            const key = String(event.key || "").toLowerCase();
+            if (key !== "k" || event.altKey || !(event.ctrlKey || event.metaKey)) return;
+            if (isTypingTarget(document.activeElement)) return;
+            const trigger = document.querySelector("[data-es-command-palette-trigger]");
+            if (!trigger) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            trigger.click();
+          };
           const findCurrentTarget = () => {
             const current = new URL(window.location.href);
             const currentSearch = current.searchParams.toString();
@@ -8279,6 +8295,11 @@ def render_app_navigation_bridge() -> None:
           }
           window.__errorsweepAppNavPopState = handlePopState;
           window.addEventListener("popstate", handlePopState);
+          if (document.__errorsweepCommandPaletteShortcut) {
+            document.removeEventListener("keydown", document.__errorsweepCommandPaletteShortcut, true);
+          }
+          document.__errorsweepCommandPaletteShortcut = handleCommandShortcut;
+          document.addEventListener("keydown", handleCommandShortcut, true);
         })();
         """,
         height=0,
@@ -9156,10 +9177,41 @@ def render_topnav_language_panel(active_page: str, user: Dict[str, Any]) -> None
             st.rerun()
 
 
+def render_topnav_command_panel(active_page: str) -> None:
+    close_href = page_link(active_page)
+    nav_targets: List[Dict[str, Any]] = []
+    close_attr = app_nav_target_from_href(nav_targets, "topnav_command_panel", close_href, "Close search")
+    close_control = (
+        f'<button type="button" class="es-topnav-panel-close" {close_attr}>Close</button>'
+        if close_attr
+        else f'<a class="es-topnav-panel-close" href="{escape(close_href)}" target="_self">Close</a>'
+    )
+    st.markdown(
+        dedent(f"""
+        <section class="es-topnav-panel" aria-label="Command palette">
+          <div class="es-topnav-panel-head">
+            <div>
+              <div class="es-topnav-panel-title">Command palette</div>
+              <div class="es-note-meta">Search pages, projects, jobs, and language resources</div>
+            </div>
+            {close_control}
+          </div>
+        </section>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+    render_app_navigation_targets(nav_targets, "topnav_command_panel")
+    render_app_navigation_bridge()
+    with st.container(key="topnav_command_palette"):
+        render_command_palette()
+
+
 def render_topnav_panel(active_page: str, user: Dict[str, Any], notifications: List[Dict[str, Any]]) -> None:
     panel = safe_text(query_get("es_panel")).lower()
     permissions = effective_permissions(user)
-    if panel == "notes" and "notes.view" in permissions:
+    if panel in {"command", "search", "palette"}:
+        render_topnav_command_panel(active_page)
+    elif panel == "notes" and "notes.view" in permissions:
         render_topnav_notes_panel(active_page, notifications, user)
     elif panel in {"language", "lang"} and "language.select" in permissions:
         render_topnav_language_panel(active_page, user)
@@ -9255,6 +9307,7 @@ def render_navigation() -> None:
     language_href = nav_href(current_page, {"es_panel": "language"})
     settings_page = "Platform Settings" if is_owner() else ("Admin" if "Admin" in pages else "Account")
     jobs_nav_attr = nav_target_attr("Jobs") if "Jobs" in pages else ""
+    command_nav_attr = nav_target_attr(current_page, {"es_panel": "command"}, "Search")
     notes_nav_attr = nav_target_attr(current_page, {"es_panel": "notes"}, "Notes")
     language_nav_attr = nav_target_attr(current_page, {"es_panel": "language"}, "Language")
     account_nav_attr = nav_target_attr("Account")
@@ -9265,6 +9318,11 @@ def render_navigation() -> None:
         f'<button type="button" class="es-topnav-tool" title="Open jobs" {jobs_nav_attr}>'
         f'<b>{open_count}</b><span>Jobs</span></button>'
         if "Jobs" in pages else ""
+    )
+    command_tool = (
+        f'<button type="button" class="es-topnav-tool{" active" if active_panel in {"command", "search", "palette"} else ""}" '
+        f'title="Open command palette" data-es-command-palette-trigger="1" {command_nav_attr}>'
+        '<b>/</b><span>Search</span></button>'
     )
     notes_tool = (
         f'<button type="button" class="es-topnav-tool{" active" if active_panel == "notes" else ""}" '
@@ -9305,6 +9363,7 @@ def render_navigation() -> None:
         </div>
         <div class="es-topnav-tools">
           {jobs_tool}
+          {command_tool}
           {notes_tool}
           {language_tool}
           <div class="es-topnav-user-wrap">
@@ -23236,79 +23295,6 @@ def render_public_app() -> None:
 # ==========================================================
 # Pages
 # ==========================================================
-
-def _legacy_page_dashboard_unused() -> None:
-    hero("Dashboard", "Localization operations hub", "Manage projects, jobs, review tasks, scorecards, and translation memory from one workspace.")
-    pending_review = sum(1 for r in st.session_state.review_segments if r.get("status") not in ("Approved", "Rejected"))
-    spark_base = [
-        len(st.session_state.projects),
-        len(st.session_state.jobs),
-        len(st.session_state.tm),
-        pending_review,
-        len(st.session_state.audit_logs),
-        len(st.session_state.glossary),
-        len(st.session_state.dnt),
-    ]
-    st.markdown(
-        f"""
-        <div class="es-bento">
-          <div class="es-bento-card wide">
-            <div class="es-metric-label">Mission Control</div>
-            <div class="es-metric-value">{len(st.session_state.jobs)}</div>
-            <div class="es-small">Jobs across QA, Pro, subtitle, transcription, and scorecard workflows.</div>
-            {sparkline_svg(spark_base)}
-          </div>
-          <div class="es-bento-card">
-            <div class="es-metric-label">Projects</div>
-            <div class="es-metric-value">{len(st.session_state.projects)}</div>
-            <div class="es-small">Client/product workspaces</div>
-            {sparkline_svg([0, len(st.session_state.projects), len(st.session_state.projects) + len(st.session_state.glossary)])}
-          </div>
-          <div class="es-bento-card">
-            <div class="es-metric-label">TM Entries</div>
-            <div class="es-metric-value">{len(st.session_state.tm)}</div>
-            <div class="es-small">Approved translations</div>
-            {sparkline_svg([0, max(1, len(st.session_state.tm)//3), len(st.session_state.tm)])}
-          </div>
-          <div class="es-bento-card">
-            <div class="es-metric-label">Pending Review</div>
-            <div class="es-metric-value">{pending_review}</div>
-            <div class="es-small">Segments requiring attention</div>
-            {sparkline_svg([pending_review + 2, pending_review + 1, pending_review])}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("### Recommended next steps")
-    c1, c2, c3 = st.columns(3)
-    with c1.container(border=True):
-        st.markdown("### 📁 Create a project")
-        st.caption("Set source/target languages, domain, and reusable rules.")
-    with c2.container(border=True):
-        st.markdown("### 🚀 Run QA or Translation")
-        st.caption("Upload bilingual files or source files and route outputs to review.")
-    with c3.container(border=True):
-        st.markdown("### 🎬 Subtitle / Transcription")
-        st.caption("Create subtitles, transcripts, and timing rows in a focused editor.")
-
-    jobs_col, activity_col = st.columns([0.62, 0.38], gap="large")
-    with jobs_col:
-        st.markdown("### Recent jobs")
-        if st.session_state.jobs:
-            st.dataframe(pd.DataFrame(display_records(st.session_state.jobs)), use_container_width=True, hide_index=True)
-        else:
-            st.info("No jobs yet.")
-    with activity_col:
-        st.markdown("### Activity pulse")
-        items = []
-        for item in st.session_state.audit_logs[:8]:
-            items.append(
-                f'<div class="es-activity-item"><div class="es-small">{escape(format_local_time(item.get("time", "")))}</div>'
-                f'<div><b>{escape(safe_text(item.get("action", "")))}</b><br><span class="es-small">{escape(safe_text(item.get("details", "")))}</span></div></div>'
-            )
-        activity_html = "".join(items) or '<span class="es-small">No activity yet.</span>'
-        st.markdown(f'<div class="es-activity-drawer">{activity_html}</div>', unsafe_allow_html=True)
 
 def page_dashboard() -> None:
     st.markdown('<div id="errorsweep-dashboard-page-marker" class="errorsweep_dashboard_page" aria-hidden="true"></div>', unsafe_allow_html=True)

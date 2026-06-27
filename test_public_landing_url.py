@@ -27,7 +27,7 @@ def test_public_landing_canonical_url_is_configured() -> None:
 
 def test_public_landing_route_alias_renders_landing() -> None:
     app = read(APP)
-    public_app = function_body(app, "render_public_app", "_legacy_page_dashboard_unused")
+    public_app = function_body(app, "render_public_app", "page_dashboard")
     route_resolver = function_body(app, "get_current_route", "is_authenticated")
 
     assert "PUBLIC_LANDING_ROUTE" in app
