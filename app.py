@@ -4889,6 +4889,229 @@ def clear_abuse_attempts(action: str, identifier: str = "") -> None:
     events.pop(key, None)
 
 
+OAUTH_CALLBACK_ROUTE = "oauth_callback"
+OAUTH_ACCESS_TOKEN_PARAM = "oauth_access_token"
+OAUTH_STATE_PARAM = "oauth_state"
+OAUTH_ERROR_PARAM = "oauth_error"
+OAUTH_ERROR_DESCRIPTION_PARAM = "oauth_error_description"
+OAUTH_PROVIDER_PARAM = "provider"
+SOCIAL_LOGIN_ACK_KEY = "social_login_compliance_ack"
+
+
+def social_login_enabled() -> bool:
+    return parse_bool_flag(secret("ERRORSWEEP_SOCIAL_LOGIN_ENABLED", "true"), True)
+
+
+def google_oauth_enabled() -> bool:
+    configured = secret("ERRORSWEEP_GOOGLE_OAUTH_ENABLED", "")
+    if configured != "":
+        return social_login_enabled() and parse_bool_flag(configured, False)
+    return social_login_enabled()
+
+
+def supabase_auth_base_url() -> str:
+    return secret("SUPABASE_URL", "").strip().rstrip("/")
+
+
+def oauth_public_base_url() -> str:
+    return secret("ERRORSWEEP_PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+
+def google_oauth_config_status() -> Tuple[bool, str]:
+    if not google_oauth_enabled():
+        return False, "Google login is disabled by configuration."
+    if not supabase_auth_base_url():
+        return False, "SUPABASE_URL is not configured."
+    if not secret("SUPABASE_ANON_KEY", "").strip():
+        return False, "SUPABASE_ANON_KEY is not configured."
+    if not oauth_public_base_url():
+        return False, "ERRORSWEEP_PUBLIC_BASE_URL is not configured."
+    return True, ""
+
+
+def oauth_callback_url(provider: str, state_token: str = "") -> str:
+    base_url = oauth_public_base_url()
+    params = {"public": OAUTH_CALLBACK_ROUTE, OAUTH_PROVIDER_PARAM: safe_text(provider).strip().lower() or "google"}
+    if state_token:
+        params[OAUTH_STATE_PARAM] = state_token
+    return f"{base_url}/?{urlencode(params)}"
+
+
+def social_oauth_authorize_url(provider: str = "google") -> str:
+    ready, _ = google_oauth_config_status()
+    if not ready:
+        return ""
+    provider_key = safe_text(provider).strip().lower() or "google"
+    return_to = query_get("return_to") or safe_text(st.session_state.get("auth_return_to", ""))
+    state_token = sign_payload(
+        {
+            "purpose": "social_login",
+            "provider": provider_key,
+            "return_to": return_to,
+            "nonce": b64url(os.urandom(16)),
+            "exp": int(time.time()) + 600,
+        }
+    )
+    params = {
+        "provider": provider_key,
+        "redirect_to": oauth_callback_url(provider_key, state_token),
+        "scopes": "openid email profile",
+    }
+    return f"{supabase_auth_base_url()}/auth/v1/authorize?{urlencode(params)}"
+
+
+def verify_social_oauth_state(state_token: str, provider: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    payload = verify_payload(state_token)
+    provider_key = safe_text(provider).strip().lower()
+    if not payload:
+        return None, "The Google sign-in state is missing or invalid. Please start login again."
+    if safe_text(payload.get("purpose")) != "social_login":
+        return None, "This sign-in link is not valid for social login."
+    if safe_text(payload.get("provider")).strip().lower() != provider_key:
+        return None, "This sign-in link was created for a different provider."
+    try:
+        expires_at = int(payload.get("exp") or 0)
+    except Exception:
+        expires_at = 0
+    if expires_at < int(time.time()):
+        return None, "This Google sign-in attempt expired. Please start login again."
+    return payload, ""
+
+
+def verify_supabase_oauth_token(access_token: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    token = safe_text(access_token).strip()
+    anon_key = secret("SUPABASE_ANON_KEY", "").strip()
+    supabase_url = supabase_auth_base_url()
+    if not token:
+        return None, "Google did not return a usable sign-in token."
+    if len(token) > 8192:
+        return None, "The returned sign-in token is too large to accept."
+    if not supabase_url or not anon_key:
+        return None, "Supabase OAuth is not configured for this deployment."
+    try:
+        response = requests.get(
+            f"{supabase_url}/auth/v1/user",
+            headers={"Authorization": f"Bearer {token}", "apikey": anon_key},
+            timeout=12,
+        )
+    except requests.RequestException as exc:
+        LOGGER.warning("Supabase OAuth user lookup failed: %s", exc)
+        return None, "CogniSweep could not verify the Google sign-in with Supabase. Please try again."
+    if response.status_code >= 400:
+        LOGGER.warning("Supabase OAuth user lookup returned %s: %s", response.status_code, response.text[:240])
+        return None, "Google sign-in could not be verified. Please start login again."
+    try:
+        user = response.json()
+    except ValueError:
+        return None, "Supabase returned an unreadable Google profile."
+    metadata = user.get("user_metadata") if isinstance(user.get("user_metadata"), dict) else {}
+    email = safe_text(user.get("email") or metadata.get("email")).strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return None, "Google did not provide a verified email address for this account."
+    user["email"] = email
+    return user, ""
+
+
+def social_profile_name(profile: Dict[str, Any]) -> str:
+    metadata = profile.get("user_metadata") if isinstance(profile.get("user_metadata"), dict) else {}
+    name = safe_text(metadata.get("full_name") or metadata.get("name") or profile.get("name")).strip()
+    return re.sub(r"\s+", " ", name)[:120]
+
+
+def unique_personal_workspace_name(display_name: str, email: str) -> str:
+    base = safe_text(display_name).strip() or safe_text(email).partition("@")[0] or "CogniSweep"
+    base = re.sub(r"[^A-Za-z0-9 ._-]+", " ", base)
+    base = re.sub(r"\s+", " ", base).strip()[:60] or "CogniSweep"
+    candidate = f"{base} Personal"
+    records = list(st.session_state.get("workspaces", []))
+    for record in load_saas_records(
+        "workspaces",
+        include_all_workspaces=True,
+        platform_scope_reason="social_oauth_workspace_lookup",
+        limit=SESSION_COLLECTION_LIMITS.get("workspaces", 1000),
+    ):
+        if not any(safe_text(item.get("workspace")) == safe_text(record.get("workspace")) for item in records):
+            records.append(record)
+    existing = next((row for row in records if safe_text(row.get("workspace")).lower() == candidate.lower()), None)
+    if not existing or safe_text(existing.get("owner")).lower() == safe_text(email).lower():
+        return candidate
+    return f"{base} {uuid.uuid4().hex[:6]} Personal"
+
+
+def ensure_social_login_user(profile: Dict[str, Any], provider: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    email = safe_text(profile.get("email")).strip().lower()
+    provider_key = safe_text(provider).strip().lower() or "google"
+    if not email:
+        return None, "Google did not provide an email address."
+
+    existing = find_user_by_email(email)
+    if existing:
+        if safe_text(existing.get("status", "Active")).lower() not in {"active", "invited"}:
+            return None, "This CogniSweep account is not active. Contact your workspace owner."
+        updates: Dict[str, Any] = {}
+        if not bool(existing.get("email_verified")):
+            updates.update({"email_verified": True, "verified_at": now_stamp(), "status": "Active"})
+        metadata = stored_metadata_dict(existing.get("metadata_json"))
+        providers = metadata.get("oauth_providers") if isinstance(metadata.get("oauth_providers"), list) else []
+        if provider_key not in providers:
+            providers.append(provider_key)
+            metadata["oauth_providers"] = providers
+            metadata["last_oauth_provider"] = provider_key
+            updates["metadata_json"] = metadata
+        if updates:
+            existing = update_stored_user(email, updates) or existing
+        return existing, ""
+
+    if not feature_flag("public_registration"):
+        return None, "No CogniSweep account exists for this Google email yet. Ask the workspace owner to invite this email, or enable public registration."
+    launch_gate = public_signup_launch_gate()
+    if launch_gate.get("locked"):
+        return None, "No CogniSweep account exists for this Google email yet. Public signup is still locked while launch checks are completed."
+
+    display_name = social_profile_name(profile)
+    workspace = unique_personal_workspace_name(display_name, email)
+    metadata = {
+        "signup_source": f"{provider_key}_oauth",
+        "oauth_provider": provider_key,
+        "oauth_providers": [provider_key],
+        "supabase_user_id": safe_text(profile.get("id")),
+        "app_version": APP_VERSION,
+    }
+    user_payload = {
+        "email": email,
+        "workspace": workspace,
+        "role": "Individual Owner",
+        "account_type": "individual",
+        "permission_flags": "",
+        "plan": "Trial",
+        "status": "Active",
+        "password_hash": "",
+        "email_verified": True,
+        "verified_at": now_stamp(),
+        "full_name": display_name,
+        "profile_completion_status": "pending",
+        "profile_completed_at": None,
+        "profile_prompt_dismissed_at": None,
+        "talent_status": "New signup",
+        "metadata_json": metadata,
+    }
+    user_payload["talent_search_text"] = talent_search_text(user_payload)
+    user_record = persist_saas_record("users", user_payload)
+    upsert_session_record("users", user_record)
+    if not any(safe_text(w.get("workspace")).lower() == workspace.lower() for w in st.session_state.get("workspaces", [])):
+        workspace_record = persist_saas_record("workspaces", {
+            "workspace": workspace,
+            "owner": email,
+            "plan": "Trial",
+            "status": "Active",
+            "users": 1,
+            "jobs": 0,
+        })
+        upsert_session_record("workspaces", workspace_record)
+    add_audit("Google signup", email)
+    return user_record, ""
+
+
 def hydrate_platform_settings(force: bool = False) -> None:
     if st.session_state.get("_platform_settings_hydrated") and not force:
         return
@@ -6928,6 +7151,11 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear(AUTH_CHECK_QUERY_PARAM)
     query_clear(EDITOR_LAUNCH_QUERY_PARAM)
     query_clear(EDITOR_AUTH_FAILED_QUERY_PARAM)
+    query_clear(OAUTH_ACCESS_TOKEN_PARAM)
+    query_clear(OAUTH_STATE_PARAM)
+    query_clear(OAUTH_ERROR_PARAM)
+    query_clear(OAUTH_ERROR_DESCRIPTION_PARAM)
+    query_clear(OAUTH_PROVIDER_PARAM)
     query_clear("es_restore")
     query_clear("es_restore_miss")
 
@@ -7605,6 +7833,7 @@ PUBLIC_ROUTES = {
     "signup",
     "verify",
     "reset",
+    OAUTH_CALLBACK_ROUTE,
     "terms",
     "privacy",
     "security",
@@ -7627,6 +7856,9 @@ PUBLIC_ES_PAGE_ALIASES = {
     "verify email": "verify",
     "reset": "reset",
     "reset password": "reset",
+    OAUTH_CALLBACK_ROUTE: OAUTH_CALLBACK_ROUTE,
+    "oauth callback": OAUTH_CALLBACK_ROUTE,
+    "google callback": OAUTH_CALLBACK_ROUTE,
     "terms": "terms",
     "terms of service": "terms",
     "privacy": "privacy",
@@ -7649,6 +7881,7 @@ PUBLIC_ROUTE_PAGE_NAMES = {
     "signup": "Signup",
     "verify": "Verify",
     "reset": "Reset Password",
+    OAUTH_CALLBACK_ROUTE: "OAuth Callback",
     "terms": "Terms",
     "privacy": "Privacy",
     "security": "Security",
@@ -8177,7 +8410,7 @@ def task_monitor_link(task_id: str) -> str:
 
 def set_route_query(params: Dict[str, str], *, sync_storage: bool = True) -> None:
     params = {key: safe_text(value) for key, value in params.items() if key != "route" and safe_text(value)}
-    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
+    for stale in ("public", "return_to", "route", "es_page", "es_editor", "job_id", "review_id", "task_id", "tool_tab", "es_panel", "es_app_nav", "es_session", "es_restore", "es_restore_miss", OAUTH_ACCESS_TOKEN_PARAM, OAUTH_STATE_PARAM, OAUTH_ERROR_PARAM, OAUTH_ERROR_DESCRIPTION_PARAM, OAUTH_PROVIDER_PARAM, EDITOR_LAUNCH_QUERY_PARAM, EDITOR_AUTH_FAILED_QUERY_PARAM, EDITOR_SUBMITTED_QUERY_PARAM, EDITOR_SUBMITTED_TYPE_QUERY_PARAM, AUTH_CHECK_QUERY_PARAM):
         if stale not in params:
             if stale == SESSION_HANDOFF_QUERY_PARAM and query_get(SESSION_HANDOFF_QUERY_PARAM) and not browser_session_cookie():
                 continue
@@ -15288,6 +15521,8 @@ def production_env_template() -> str:
         ERRORSWEEP_USER_PASSWORD_HASH=replace-with-workspace-pbkdf2-hash
         ERRORSWEEP_ORG_NAME=replace-with-initial-workspace-name
         ERRORSWEEP_DEFAULT_USER_ROLE=Workspace Owner
+        ERRORSWEEP_SOCIAL_LOGIN_ENABLED=true
+        ERRORSWEEP_GOOGLE_OAUTH_ENABLED=true
 
         # Supabase persistence
         SUPABASE_URL=https://your-project.supabase.co
@@ -22476,6 +22711,15 @@ def render_login() -> None:
     st.markdown("## Login to CogniSweep")
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
+    oauth_ready, oauth_message = google_oauth_config_status()
+    if oauth_ready:
+        google_url = social_oauth_authorize_url("google")
+        if google_url:
+            st.link_button("Continue with Google", google_url, use_container_width=True)
+            st.divider()
+    elif query_get("debug_auth") == "1":
+        st.caption(f"Google login is not available: {oauth_message}")
+
     with st.form("unified_login", enter_to_submit=True):
         st.text_input("Email", key=LOGIN_EMAIL_KEY)
         st.text_input("Password", type="password", key=LOGIN_PASSWORD_KEY)
@@ -23014,6 +23258,126 @@ def render_password_reset() -> None:
             st.error("The account for this reset link could not be found.")
 
 
+def render_oauth_fragment_bridge() -> None:
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const hash = window.location.hash ? window.location.hash.slice(1) : "";
+          const hashParams = new URLSearchParams(hash);
+          const accessToken = hashParams.get("access_token");
+          const error = hashParams.get("error");
+          const errorDescription = hashParams.get("error_description");
+          if (!accessToken && !error) return;
+          const params = new URLSearchParams(window.location.search);
+          params.set("public", "{OAUTH_CALLBACK_ROUTE}");
+          if (!params.get("{OAUTH_PROVIDER_PARAM}")) {{
+            params.set("{OAUTH_PROVIDER_PARAM}", "google");
+          }}
+          if (accessToken) {{
+            params.set("{OAUTH_ACCESS_TOKEN_PARAM}", accessToken);
+          }}
+          if (error) {{
+            params.set("{OAUTH_ERROR_PARAM}", error);
+          }}
+          if (errorDescription) {{
+            params.set("{OAUTH_ERROR_DESCRIPTION_PARAM}", errorDescription);
+          }}
+          window.location.replace(window.location.pathname + "?" + params.toString());
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+
+def render_oauth_callback() -> None:
+    render_public_auth_page_marker()
+    render_public_auth_session_resume_bridge()
+    st.html(
+        dedent(f"""
+        <div class="es-auth-shell">
+          <div class="es-lp-brand">
+            <div class="es-lp-logo" aria-hidden="true"></div>
+            <div>
+              <div class="es-lp-brand-name">CogniSweep</div>
+            </div>
+          </div>
+          <div class="es-auth-links">
+            <a class="es-lp-btn" href="{public_page_link('landing')}" target="_self">Back to landing</a>
+            <a class="es-lp-btn primary" href="{public_page_link('login')}" {public_login_link_target()}>Login</a>
+          </div>
+        </div>
+        """).strip(),
+    )
+    st.markdown("## Google sign-in")
+    provider = safe_text(query_get(OAUTH_PROVIDER_PARAM) or "google").strip().lower()
+    if provider != "google":
+        st.error("This social login provider is not enabled.")
+        st.link_button("Back to login", public_page_link("login"), use_container_width=True)
+        return
+
+    oauth_error = safe_text(query_get(OAUTH_ERROR_PARAM))
+    oauth_error_description = safe_text(query_get(OAUTH_ERROR_DESCRIPTION_PARAM))
+    if oauth_error:
+        st.error(oauth_error_description or oauth_error)
+        st.link_button("Back to login", public_page_link("login"), use_container_width=True)
+        return
+
+    access_token = safe_text(query_get(OAUTH_ACCESS_TOKEN_PARAM)).strip()
+    if not access_token:
+        render_oauth_fragment_bridge()
+        st.info("Completing Google sign-in...")
+        st.link_button("Back to login", public_page_link("login"), use_container_width=True)
+        return
+
+    state_payload, state_error = verify_social_oauth_state(query_get(OAUTH_STATE_PARAM), provider)
+    if state_error:
+        st.error(state_error)
+        st.link_button("Back to login", public_page_link("login"), use_container_width=True)
+        return
+    if safe_text((state_payload or {}).get("return_to")):
+        st.session_state["auth_return_to"] = safe_text((state_payload or {}).get("return_to"))
+
+    profile, profile_error = verify_supabase_oauth_token(access_token)
+    if profile_error or not profile:
+        st.error(profile_error or "Unable to verify Google sign-in.")
+        st.link_button("Back to login", public_page_link("login"), use_container_width=True)
+        return
+
+    email = safe_text(profile.get("email")).strip().lower()
+    display_name = social_profile_name(profile)
+    st.success(f"Google sign-in verified for {email}.")
+    if display_name:
+        st.caption(display_name)
+
+    with st.form("social_login_confirm", enter_to_submit=False):
+        accepted = st.checkbox(compliance_ack_label(), key=SOCIAL_LOGIN_ACK_KEY)
+        submitted = st.form_submit_button("Continue to CogniSweep", use_container_width=True)
+    if not submitted:
+        return
+    if not accepted:
+        st.error("Please accept the workspace compliance terms before continuing.")
+        return
+    allowed_attempt, throttle_message = consume_abuse_attempt("workspace_login", email)
+    if not allowed_attempt:
+        st.error(throttle_message)
+        return
+    user_record, user_error = ensure_social_login_user(profile, provider)
+    if user_error or not user_record:
+        st.error(user_error or "Unable to create or load this CogniSweep account.")
+        return
+    clear_abuse_attempts("workspace_login", email)
+    role = safe_text(user_record.get("role") or "User")
+    workspace = safe_text(user_record.get("workspace") or "Demo Workspace")
+    account_type = safe_text(user_record.get("account_type") or ("owner" if workspace == "Platform" else "workspace"))
+    record_consent_acceptance(email, role, account_type, workspace, f"{provider}_oauth")
+    add_audit("Google login", email)
+    login_user(email, role, account_type, workspace, sync_route_storage=False)
+    st.rerun()
+
+
 def render_sso_handoff() -> None:
     st.html(
         dedent(f"""
@@ -23113,6 +23477,8 @@ def render_public_app() -> None:
         render_verify_email()
     elif route == "reset":
         render_password_reset()
+    elif route == OAUTH_CALLBACK_ROUTE:
+        render_oauth_callback()
     elif route == "sso_handoff":
         render_sso_handoff()
     elif route in {"terms", "privacy", "security", "cookies", "dpa"}:
