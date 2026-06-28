@@ -12339,6 +12339,20 @@ def email_from_address() -> str:
     ).strip()
 
 
+def config_value_is_placeholder(value: Any) -> bool:
+    raw = safe_text(value).strip()
+    lowered = raw.lower()
+    return not raw or lowered.startswith(("todo", "replace_", "your_")) or "placeholder" in lowered
+
+
+def email_sender_config_error(provider: str, sender: str, sender_email: str) -> str:
+    if provider in {"", "manual", "not_configured"}:
+        return "Email provider is not configured."
+    if config_value_is_placeholder(sender) or "@" not in safe_text(sender_email):
+        return "ERRORSWEEP_EMAIL_FROM must be a verified sender email address before assignment emails can be sent."
+    return ""
+
+
 def email_sender_parts() -> Tuple[str, str, str]:
     raw = email_from_address()
     name, email = parseaddr(raw)
@@ -12451,12 +12465,15 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
     html_body = safe_text(email_payload.get("html"))
     sender, sender_email, sender_name = email_sender_parts()
     try:
+        sender_error = email_sender_config_error(provider, sender, sender_email)
+        if sender_error:
+            raise RuntimeError(sender_error)
         if not recipient or "@" not in recipient:
             raise ValueError("Notification recipient is missing or invalid.")
         if provider == "resend":
             api_key = secret("RESEND_API_KEY", secret("ERRORSWEEP_RESEND_API_KEY", "")).strip()
-            if not api_key:
-                raise RuntimeError("RESEND_API_KEY is not configured.")
+            if config_value_is_placeholder(api_key):
+                raise RuntimeError("RESEND_API_KEY is missing or still uses a placeholder value.")
             response = requests.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -12473,8 +12490,8 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
                 raise RuntimeError(f"Resend returned {response.status_code}: {response.text[:300]}")
         elif provider == "sendgrid":
             api_key = secret("SENDGRID_API_KEY", secret("ERRORSWEEP_SENDGRID_API_KEY", "")).strip()
-            if not api_key:
-                raise RuntimeError("SENDGRID_API_KEY is not configured.")
+            if config_value_is_placeholder(api_key):
+                raise RuntimeError("SENDGRID_API_KEY is missing or still uses a placeholder value.")
             response = requests.post(
                 "https://api.sendgrid.com/v3/mail/send",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -12497,8 +12514,10 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
             port = int(secret("SMTP_PORT", secret("ERRORSWEEP_SMTP_PORT", "587")) or "587")
             username = secret("SMTP_USER", secret("ERRORSWEEP_SMTP_USER", "")).strip()
             password = secret("SMTP_PASSWORD", secret("ERRORSWEEP_SMTP_PASSWORD", "")).strip()
-            if not host:
-                raise RuntimeError("SMTP_HOST is not configured.")
+            if config_value_is_placeholder(host):
+                raise RuntimeError("SMTP_HOST is missing or still uses a placeholder value.")
+            if config_value_is_placeholder(password):
+                raise RuntimeError("SMTP_PASSWORD is missing or still uses a placeholder value.")
             message = EmailMessage()
             message["From"] = sender
             message["To"] = recipient
@@ -23295,6 +23314,24 @@ NO_AI_TASK_NOTE = (
 )
 
 
+def deadline_iso_from_parts(deadline_date: Any, deadline_time: Any) -> str:
+    if not deadline_date:
+        return ""
+    try:
+        combined = datetime.combine(deadline_date, deadline_time or datetime.min.time())
+    except Exception:
+        return ""
+    if combined.tzinfo is None:
+        combined = combined.replace(tzinfo=local_timezone())
+    return combined.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def job_deadline_display(job_or_row: Dict[str, Any]) -> str:
+    metadata = job_history_metadata(job_or_row) if "job_history_metadata" in globals() else coerce_json_dict(job_or_row.get("metadata_json"))
+    deadline = safe_text(job_or_row.get("deadline_at") or metadata.get("deadline_at") or metadata.get("deadline"))
+    return format_local_time(deadline) if deadline else ""
+
+
 def split_assignee_emails(value: Any) -> List[str]:
     seen: Set[str] = set()
     recipients: List[str] = []
@@ -23367,6 +23404,7 @@ def update_project_editor_session_metadata(
         "file_name": safe_text(job.get("file_name") or metadata.get("file_name")),
         "assignee": ", ".join(assignees),
         "assignees": assignees,
+        "deadline_at": safe_text(job.get("deadline_at") or metadata.get("deadline_at")),
     })
     if isinstance(payload, dict):
         payload["metadata"] = metadata
@@ -23489,6 +23527,9 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
     project_name = safe_text(job.get("project")) or "Project"
     language = safe_text(job.get("language")) or "Target language"
     job_type = safe_text(job.get("type") or "Task")
+    metadata = coerce_json_dict(job.get("metadata_json"))
+    deadline_at = safe_text(metadata.get("deadline_at"))
+    deadline_display = format_local_time(deadline_at) if deadline_at else ""
     workspace = safe_text(job.get("workspace") or (current_user() or {}).get("workspace") or "Demo Workspace")
     editor_url = human_review_editor_link(safe_text(job.get("review_job_id") or job.get("editor_job_id")))
     for recipient in assignees:
@@ -23497,6 +23538,7 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
             f"CogniSweep task assigned: {project_name} - {language}",
             (
                 f"You have been assigned a {job_type} task for {language} in project '{project_name}'. "
+                f"{'Deadline: ' + deadline_display + '. ' if deadline_display else ''}"
                 "Open CogniSweep Jobs and use Open task to start work."
             ),
             "job.assigned",
@@ -23510,6 +23552,8 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
                 "editor_job_id": safe_text(job.get("editor_job_id")),
                 "task_url": editor_url,
                 "workspace": workspace,
+                "deadline_at": deadline_at,
+                "deadline_display": deadline_display,
             },
             workspace=workspace,
         )
@@ -23523,6 +23567,28 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
     return results
 
 
+def assignment_email_error_messages(records: List[Dict[str, Any]]) -> List[str]:
+    messages: List[str] = []
+    seen: Set[str] = set()
+    for record in records or []:
+        metadata = coerce_json_dict(record.get("metadata_json"))
+        for item in metadata.get("assignment_notifications") or []:
+            if not isinstance(item, dict):
+                continue
+            message = safe_text(item.get("error"))
+            if not message:
+                status = safe_text(item.get("status"))
+                if status == "provider_pending":
+                    message = "Email provider is not configured."
+            if not message:
+                continue
+            compact = message[:240]
+            if compact not in seen:
+                messages.append(compact)
+                seen.add(compact)
+    return messages
+
+
 def create_project_tasks_for_project(
     project: Dict[str, Any],
     *,
@@ -23532,6 +23598,7 @@ def create_project_tasks_for_project(
     note: str,
     assignment_files: List[Any],
     ai_translation_choice: str = "auto",
+    deadline_at: str = "",
 ) -> List[Dict[str, Any]]:
     if not project:
         st.error("Select a project before creating a job.")
@@ -23612,6 +23679,7 @@ def create_project_tasks_for_project(
                 "ai_translation_choice": ai_translation_choice,
                 "source_file_has_translations": uploaded_has_targets,
                 "no_ai_note": no_ai_note,
+                "deadline_at": deadline_at,
             },
         })
         st.session_state.setdefault("jobs", [])
@@ -23698,6 +23766,15 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             key=f"{form_key}_files",
             help="Upload source or bilingual files. The first parseable file becomes the editor task source; all files remain attached.",
         )
+        deadline_enabled = st.checkbox("Add deadline", key=f"{form_key}_deadline_enabled")
+        deadline_at = ""
+        if deadline_enabled:
+            d1, d2 = st.columns(2)
+            default_deadline_date = (datetime.now(local_timezone()) + timedelta(days=1)).date()
+            default_deadline_time = datetime.now(local_timezone()).replace(second=0, microsecond=0).time()
+            deadline_date = d1.date_input("Deadline date", value=default_deadline_date, key=f"{form_key}_deadline_date")
+            deadline_time = d2.time_input("Deadline time", value=default_deadline_time, key=f"{form_key}_deadline_time")
+            deadline_at = deadline_iso_from_parts(deadline_date, deadline_time)
         ai_translation_choice = "auto"
         preview_rows: List[Dict[str, Any]] = []
         if assignment_files:
@@ -23728,6 +23805,7 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             note=note,
             assignment_files=assignment_files or [],
             ai_translation_choice=ai_translation_choice,
+            deadline_at=deadline_at,
         )
         if created:
             st.success(f"{len(created)} task{'s' if len(created) != 1 else ''} created inside {safe_text(project.get('project'))}.")
@@ -23735,9 +23813,11 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             if any(status == "sent" for status in email_statuses):
                 st.success("Assignment email sent for configured recipients.")
             if any(status == "provider_pending" for status in email_statuses):
-                st.warning("Assignment email is queued, but the email provider is not configured.")
+                details = assignment_email_error_messages(created)
+                st.warning(f"Assignment email is queued, but cannot be sent yet. {details[0] if details else 'Email provider is not configured.'}")
             if any(status == "failed" for status in email_statuses):
-                st.warning("Some assignment emails could not be sent. Check notification logs for provider errors.")
+                details = assignment_email_error_messages(created)
+                st.warning(f"Some assignment emails could not be sent. {details[0] if details else 'Check notification logs for provider errors.'}")
             if any(safe_text((coerce_json_dict(item.get("metadata_json"))).get("no_ai_note")) for item in created):
                 st.info(NO_AI_TASK_NOTE)
 
@@ -23746,6 +23826,7 @@ def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
     assigned_to = job_single_assignee_display(job)
     metadata = coerce_json_dict(job.get("metadata_json"))
     no_ai_note = safe_text(metadata.get("no_ai_note"))
+    deadline_display = job_deadline_display(job)
     st.html(
         f"""
         <div class="es-flyout">
@@ -23756,6 +23837,7 @@ def render_project_job_details(job: Dict[str, Any], key_prefix: str) -> None:
             <div class="es-mini-row"><span>Project</span><b>{escape(safe_text(job.get("project", "")))}</b></div>
             <div class="es-mini-row"><span>Language</span><b>{escape(safe_text(job.get("language", "")))}</b></div>
             <div class="es-mini-row"><span>Assigned to</span><b>{escape(assigned_to)}</b></div>
+            <div class="es-mini-row"><span>Deadline</span><b>{escape(deadline_display or "-")}</b></div>
             <div class="es-mini-row"><span>Attachments</span><b>{escape(safe_text(job.get("attachment_count", 0)))}</b></div>
             <div class="es-mini-row"><span>Workspace</span><b>{escape(safe_text(job.get("workspace", "")))}</b></div>
             <div class="es-mini-row"><span>Created</span><b>{escape(format_local_time(job.get("created", job.get("created_at", ""))))}</b></div>
@@ -24092,6 +24174,7 @@ def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "status": safe_text(job.get("status") or metadata.get("status") or "Draft"),
         "segments": int(job.get("segments") or metadata.get("segments") or metadata.get("row_count") or 0),
         "assignee": job_single_assignee_display(job),
+        "deadline_at": safe_text(metadata.get("deadline_at")),
         "no_ai_note": safe_text(metadata.get("no_ai_note")),
         "created": safe_text(job.get("created") or job.get("created_at") or metadata.get("created")),
         "updated_at": safe_text(job.get("updated_at") or job.get("created_at") or job.get("created")),
@@ -24124,6 +24207,7 @@ def job_history_row_from_editor_job(record: Dict[str, Any]) -> Dict[str, Any]:
         "status": safe_text(record.get("status") or metadata.get("status") or "draft"),
         "segments": int(record.get("row_count") or metadata.get("row_count") or 0),
         "assignee": safe_text(metadata.get("assignee")),
+        "deadline_at": safe_text(metadata.get("deadline_at")),
         "created": safe_text(record.get("created_at") or record.get("created") or metadata.get("created")),
         "updated_at": safe_text(record.get("updated_at") or record.get("created_at") or metadata.get("created")),
         "editor_url": job_history_editor_url(record),
@@ -24159,6 +24243,7 @@ def job_history_row_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "status": safe_text(task.get("status") or "queued"),
         "segments": int(task.get("total_units") or metadata.get("segments") or 0),
         "assignee": safe_text(metadata.get("assignee")),
+        "deadline_at": safe_text(metadata.get("deadline_at")),
         "created": safe_text(task.get("created_at")),
         "updated_at": safe_text(task.get("updated_at") or task.get("created_at")),
         "editor_url": editor_url,
@@ -24238,6 +24323,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
         language = safe_text(row.get("language")) or "-"
         status = safe_text(row.get("status")) or "Status unknown"
         no_ai_note = safe_text(row.get("no_ai_note"))
+        deadline_display = job_deadline_display(row)
         status_class = job_history_status_class(status)
         updated_value = row.get("updated_at") or row.get("created")
         updated_at = format_local_time(updated_value)
@@ -24246,6 +24332,7 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             job_history_detail_item("Language", language),
             job_history_detail_item("Segments", int(row.get("segments") or 0)),
             job_history_detail_item("Assigned to", safe_text(row.get("assignee")) or "-"),
+            job_history_detail_item("Deadline", deadline_display or "-"),
             job_history_detail_item("Updated", updated_at, value_html=local_time_html(updated_value)),
             job_history_detail_item("Workspace", safe_text(row.get("workspace")) or safe_text(row.get("project")) or "-"),
         ]
