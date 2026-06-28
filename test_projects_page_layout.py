@@ -24,10 +24,14 @@ def test_projects_page_uses_clean_selector_and_compact_detail_frame() -> None:
     assert "display_records(projects)" not in body
     assert "es-project-details-line" in app
     assert "target_summary = f\"{len(target_languages)} target languages\"" in body
+    assert '("Jobs", len(st.session_state.get("jobs", []))' not in body
+    assert '"Target languages"' in body
     assert 'st.markdown("#### Create task in this project")' in body
     assert 'submit_label="Create task"' in body
     assert 'type_label="Task type"' in body
-    assert 'st.markdown("#### Project tasks")' in body
+    assert 'st.markdown("#### Project tasks")' not in body
+    assert "project_page_tasks_" not in body
+    assert "render_job_history_table([job_history_row_from_job(job) for job in jobs]" not in body
 
 
 if __name__ == "__main__":

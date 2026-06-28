@@ -23666,6 +23666,9 @@ def create_job_for_project(
 def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label: str = "Create job", type_label: str = "Job type") -> None:
     targets = project_target_languages(project)
     default_language = targets[0] if targets[0] in LANGUAGE_CATALOG else "French"
+    assignee_count_key = f"{form_key}_assignee_count"
+    st.session_state.setdefault(assignee_count_key, 1)
+    assignee_count = max(1, int(st.session_state.get(assignee_count_key) or 1))
     with st.form(form_key, enter_to_submit=False):
         c1, c2 = st.columns([0.8, 1.2])
         job_type = c1.selectbox(type_label, PROJECT_TASK_TYPES, key=f"{form_key}_type")
@@ -23676,13 +23679,19 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             key=f"{form_key}_languages",
             help="Select more than one language to create one separate task for each language.",
         )
-        assignee_text = st.text_area(
-            "Assignee emails",
-            value="reviewer@cognisweep.local",
-            height=72,
-            key=f"{form_key}_assignees",
-            help="Enter one or more email IDs separated by commas, semicolons, spaces, or new lines.",
-        )
+        st.markdown("Assignee emails")
+        with st.container(border=True):
+            assignee_values: List[str] = []
+            for idx in range(assignee_count):
+                field_key = f"{form_key}_assignee_email_{idx}"
+                if idx == 0:
+                    st.session_state.setdefault(field_key, "reviewer@cognisweep.local")
+                assignee_values.append(st.text_input(
+                    f"Email {idx + 1}",
+                    key=field_key,
+                    placeholder="name@example.com",
+                ))
+            add_assignee = st.form_submit_button("+ Add email", use_container_width=True)
         assignment_files = st.file_uploader(
             "Assignment upload (optional)",
             accept_multiple_files=True,
@@ -23707,12 +23716,15 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             st.caption(NO_AI_TASK_NOTE)
         note = st.text_area("Notes", height=80, key=f"{form_key}_note")
         submitted = st.form_submit_button(submit_label, use_container_width=True)
+    if add_assignee:
+        st.session_state[assignee_count_key] = assignee_count + 1
+        st.rerun()
     if submitted:
         created = create_project_tasks_for_project(
             project,
             job_type=job_type,
             languages=languages,
-            assignees=split_assignee_emails(assignee_text),
+            assignees=split_assignee_emails(" ".join(assignee_values)),
             note=note,
             assignment_files=assignment_files or [],
             ai_translation_choice=ai_translation_choice,
@@ -24335,8 +24347,8 @@ def page_projects() -> None:
 
     metrics([
         ("Projects", len(projects), "active workspaces"),
-        ("Jobs", len(st.session_state.get("jobs", [])), "project-owned tasks"),
         ("Active", sum(1 for p in projects if safe_text(p.get("status", "Active")).lower() == "active"), "open projects"),
+        ("Target languages", sum(len(project_target_languages(p)) for p in projects), "configured"),
     ])
 
     selected_project_id = safe_text(st.session_state.get("selected_project_workspace_id"))
@@ -24364,8 +24376,6 @@ def page_projects() -> None:
 
     with main:
         selected_project = project_by_identity(st.session_state.get("selected_project_workspace_id", "")) or selected_project
-        jobs = project_jobs(selected_project)
-        selected_project["job_count"] = len(jobs)
         target_languages = [safe_text(item) for item in safe_text(selected_project.get("targets")).split(",") if safe_text(item)]
         if not target_languages:
             target_summary = "Not set"
@@ -24385,17 +24395,11 @@ def page_projects() -> None:
                   <span><b>Targets</b>{escape(target_summary)}</span>
                   <span><b>Domain</b>{escape(safe_text(selected_project.get("domain")) or "General")}</span>
                   <span><b>Status</b>{escape(safe_text(selected_project.get("status")) or "Active")}</span>
-                  <span><b>Tasks</b>{len(jobs)}</span>
                 </div>
                 """
             )
             st.markdown("#### Create task in this project")
             render_project_job_form(selected_project, f"project_page_job_{project_identity(selected_project)}", submit_label="Create task", type_label="Task type")
-            st.markdown("#### Project tasks")
-            if jobs:
-                render_job_history_table([job_history_row_from_job(job) for job in jobs], f"project_page_tasks_{project_identity(selected_project)}")
-            else:
-                st.info("No tasks in this project yet.")
 
 
 def page_jobs() -> None:

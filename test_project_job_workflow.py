@@ -25,6 +25,11 @@ def test_project_job_form_supports_multi_language_assignees_and_ai_choice() -> N
     assert "c2.multiselect(" in form
     assert '"Target languages"' in form
     assert '"Assignee emails"' in form
+    assert "assignee_count_key" in form
+    assert "st.container(border=True)" in form
+    assert "st.form_submit_button(\"+ Add email\"" in form
+    assert "assignee_values.append(st.text_input(" in form
+    assert "split_assignee_emails(\" \".join(assignee_values))" in form
     assert "project_assignment_source_from_uploads" in form
     assert "ai_translation_choice" in form
     assert "NO_AI_TASK_NOTE" in form
