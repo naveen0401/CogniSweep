@@ -27,14 +27,23 @@ def test_project_job_form_supports_multi_language_assignees_and_ai_choice() -> N
     assert '"Assignee emails"' in form
     assert "assignee_count_key" in form
     assert "st.container(border=True)" in form
-    assert "st.form_submit_button(\"+ Add email\"" in form
+    assert "with st.form" not in form
+    assert "st.button(\"+ Add email\"" in form
+    assert "key=f\"{form_key}_add_assignee\"" in form
     assert "assignee_values.append(st.text_input(" in form
     assert "split_assignee_emails(\" \".join(assignee_values))" in form
     assert "deadline_enabled = st.checkbox(\"Add deadline\"" in form
-    assert "date_input(\"Deadline date\"" in form
-    assert "time_input(\"Deadline time\"" in form
-    assert "deadline_iso_from_parts(deadline_date, deadline_time)" in form
+    assert form.index("deadline_enabled = st.checkbox(\"Add deadline\"") > form.index("st.file_uploader(")
+    assert "date_input(" in form
+    assert '"Deadline date"' in form
+    assert "time_input(" in form
+    assert '"Deadline time"' in form
+    assert '"Deadline time zone"' in form
+    assert "deadline_timezone_options()" in form
+    assert "deadline_iso_from_parts(deadline_date, deadline_time, deadline_timezone)" in form
     assert "deadline_at=deadline_at" in form
+    assert "deadline_timezone=deadline_timezone" in form
+    assert "st.button(submit_label, key=f\"{form_key}_submit\"" in form
     assert "project_assignment_source_from_uploads" in form
     assert "ai_translation_choice" in form
     assert "NO_AI_TASK_NOTE" in form
@@ -45,10 +54,13 @@ def test_project_job_form_supports_multi_language_assignees_and_ai_choice() -> N
     assert "notify_project_task_assignees(record, assignees)" in creator
     assert '"assignees": assignees' in creator
     assert '"deadline_at": deadline_at' in creator
+    assert '"deadline_timezone": deadline_timezone' in creator
     assert '"assignees_json"' not in creator
     assert "NO_AI_TASK_NOTE if ai_mode == \"manual_no_key\"" in creator
     assert "assignment_email_error_messages" in app
     assert "config_value_is_placeholder" in app
+    assert "DEADLINE_TIMEZONE_OPTIONS" in app
+    assert "def format_deadline_time" in app
 
 
 def test_jobs_page_uses_clean_task_list_not_status_lanes() -> None:
@@ -83,6 +95,7 @@ def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
     assert '"assignee": job_single_assignee_display(job)' in row
     assert '"no_ai_note": safe_text(metadata.get("no_ai_note"))' in row
     assert '"deadline_at": safe_text(metadata.get("deadline_at"))' in row
+    assert '"deadline_timezone": safe_text(metadata.get("deadline_timezone"))' in row
     assert 'job_history_detail_item("Assigned to"' in table
     assert 'job_history_detail_item("Deadline"' in table
     assert "es-history-note" in table

@@ -23308,13 +23308,60 @@ def project_target_languages(project: Dict[str, Any]) -> List[str]:
 
 PROJECT_TASK_TYPES = ["Translation", "Post-editing Review", "QA", "Subtitle Review", "Transcription", "Scorecard"]
 AI_TRANSLATION_TASK_TYPES = {"translation", "post-editing review", "subtitle review"}
+DEADLINE_TIMEZONE_OPTIONS = [
+    "Asia/Kolkata",
+    "UTC",
+    "America/New_York",
+    "America/Los_Angeles",
+    "America/Toronto",
+    "America/Halifax",
+    "Europe/London",
+    "Europe/Paris",
+    "Europe/Berlin",
+    "Asia/Dubai",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+]
 NO_AI_TASK_NOTE = (
     "As API key is not provided, we are unable to provide AI translation for this task. "
     "Open the task to translate manually."
 )
 
 
-def deadline_iso_from_parts(deadline_date: Any, deadline_time: Any) -> str:
+def deadline_timezone_options() -> List[str]:
+    candidates = [
+        browser_timezone_name(),
+        user_timezone_name(),
+        safe_text(secret("ERRORSWEEP_DISPLAY_TIMEZONE", secret("TZ", ""))),
+        *DEADLINE_TIMEZONE_OPTIONS,
+    ]
+    seen: Set[str] = set()
+    options: List[str] = []
+    for candidate in candidates:
+        name = safe_text(candidate)
+        if not name or name in seen or not timezone_from_name(name):
+            continue
+        seen.add(name)
+        options.append(name)
+    return options or ["UTC"]
+
+
+def format_deadline_time(value: Any, timezone_name: Any = "") -> str:
+    if value in (None, ""):
+        return ""
+    dt = parse_datetime_value(value, naive_tz=timezone.utc)
+    if dt is None:
+        return safe_text(value)
+    selected_timezone = timezone_from_name(timezone_name) or local_timezone()
+    local_dt = dt.astimezone(selected_timezone)
+    zone = local_dt.tzname() or safe_text(timezone_name)
+    if " " in zone:
+        zone = "".join(part[0] for part in zone.split() if part[:1]).upper()
+    return f"{local_dt.strftime('%Y-%m-%d %I:%M %p')} {zone}".strip()
+
+
+def deadline_iso_from_parts(deadline_date: Any, deadline_time: Any, timezone_name: str = "") -> str:
     if not deadline_date:
         return ""
     try:
@@ -23322,14 +23369,16 @@ def deadline_iso_from_parts(deadline_date: Any, deadline_time: Any) -> str:
     except Exception:
         return ""
     if combined.tzinfo is None:
-        combined = combined.replace(tzinfo=local_timezone())
+        selected_timezone = timezone_from_name(timezone_name) or local_timezone()
+        combined = combined.replace(tzinfo=selected_timezone)
     return combined.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def job_deadline_display(job_or_row: Dict[str, Any]) -> str:
     metadata = job_history_metadata(job_or_row) if "job_history_metadata" in globals() else coerce_json_dict(job_or_row.get("metadata_json"))
     deadline = safe_text(job_or_row.get("deadline_at") or metadata.get("deadline_at") or metadata.get("deadline"))
-    return format_local_time(deadline) if deadline else ""
+    deadline_timezone = safe_text(job_or_row.get("deadline_timezone") or metadata.get("deadline_timezone"))
+    return format_deadline_time(deadline, deadline_timezone) if deadline else ""
 
 
 def split_assignee_emails(value: Any) -> List[str]:
@@ -23405,6 +23454,7 @@ def update_project_editor_session_metadata(
         "assignee": ", ".join(assignees),
         "assignees": assignees,
         "deadline_at": safe_text(job.get("deadline_at") or metadata.get("deadline_at")),
+        "deadline_timezone": safe_text(job.get("deadline_timezone") or metadata.get("deadline_timezone")),
     })
     if isinstance(payload, dict):
         payload["metadata"] = metadata
@@ -23529,7 +23579,8 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
     job_type = safe_text(job.get("type") or "Task")
     metadata = coerce_json_dict(job.get("metadata_json"))
     deadline_at = safe_text(metadata.get("deadline_at"))
-    deadline_display = format_local_time(deadline_at) if deadline_at else ""
+    deadline_timezone = safe_text(metadata.get("deadline_timezone"))
+    deadline_display = format_deadline_time(deadline_at, deadline_timezone) if deadline_at else ""
     workspace = safe_text(job.get("workspace") or (current_user() or {}).get("workspace") or "Demo Workspace")
     editor_url = human_review_editor_link(safe_text(job.get("review_job_id") or job.get("editor_job_id")))
     for recipient in assignees:
@@ -23553,6 +23604,7 @@ def notify_project_task_assignees(job: Dict[str, Any], assignees: List[str]) -> 
                 "task_url": editor_url,
                 "workspace": workspace,
                 "deadline_at": deadline_at,
+                "deadline_timezone": deadline_timezone,
                 "deadline_display": deadline_display,
             },
             workspace=workspace,
@@ -23599,6 +23651,7 @@ def create_project_tasks_for_project(
     assignment_files: List[Any],
     ai_translation_choice: str = "auto",
     deadline_at: str = "",
+    deadline_timezone: str = "",
 ) -> List[Dict[str, Any]]:
     if not project:
         st.error("Select a project before creating a job.")
@@ -23680,6 +23733,7 @@ def create_project_tasks_for_project(
                 "source_file_has_translations": uploaded_has_targets,
                 "no_ai_note": no_ai_note,
                 "deadline_at": deadline_at,
+                "deadline_timezone": deadline_timezone,
             },
         })
         st.session_state.setdefault("jobs", [])
@@ -23737,65 +23791,87 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
     assignee_count_key = f"{form_key}_assignee_count"
     st.session_state.setdefault(assignee_count_key, 1)
     assignee_count = max(1, int(st.session_state.get(assignee_count_key) or 1))
-    with st.form(form_key, enter_to_submit=False):
-        c1, c2 = st.columns([0.8, 1.2])
-        job_type = c1.selectbox(type_label, PROJECT_TASK_TYPES, key=f"{form_key}_type")
-        languages = c2.multiselect(
-            "Target languages",
-            LANGUAGE_CATALOG,
-            default=[default_language],
-            key=f"{form_key}_languages",
-            help="Select more than one language to create one separate task for each language.",
-        )
-        st.markdown("Assignee emails")
-        with st.container(border=True):
-            assignee_values: List[str] = []
-            for idx in range(assignee_count):
-                field_key = f"{form_key}_assignee_email_{idx}"
-                if idx == 0:
-                    st.session_state.setdefault(field_key, "reviewer@cognisweep.local")
-                assignee_values.append(st.text_input(
-                    f"Email {idx + 1}",
-                    key=field_key,
-                    placeholder="name@example.com",
-                ))
-            add_assignee = st.form_submit_button("+ Add email", use_container_width=True)
-        assignment_files = st.file_uploader(
-            "Assignment upload (optional)",
-            accept_multiple_files=True,
-            key=f"{form_key}_files",
-            help="Upload source or bilingual files. The first parseable file becomes the editor task source; all files remain attached.",
-        )
-        deadline_enabled = st.checkbox("Add deadline", key=f"{form_key}_deadline_enabled")
-        deadline_at = ""
-        if deadline_enabled:
-            d1, d2 = st.columns(2)
-            default_deadline_date = (datetime.now(local_timezone()) + timedelta(days=1)).date()
-            default_deadline_time = datetime.now(local_timezone()).replace(second=0, microsecond=0).time()
-            deadline_date = d1.date_input("Deadline date", value=default_deadline_date, key=f"{form_key}_deadline_date")
-            deadline_time = d2.time_input("Deadline time", value=default_deadline_time, key=f"{form_key}_deadline_time")
-            deadline_at = deadline_iso_from_parts(deadline_date, deadline_time)
-        ai_translation_choice = "auto"
-        preview_rows: List[Dict[str, Any]] = []
-        if assignment_files:
-            preview_rows, _, _ = project_assignment_source_from_uploads(assignment_files or [])
-        has_uploaded_translations = uploaded_rows_have_targets(preview_rows)
-        if user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES and has_uploaded_translations:
-            choice = st.radio(
-                "Uploaded file already contains translations. Do you want AI translation for this task?",
-                ["No, keep uploaded translations", "Yes, generate AI translation"],
-                index=0,
-                horizontal=True,
-                key=f"{form_key}_ai_translation_choice",
-            )
-            ai_translation_choice = "generate" if choice.startswith("Yes") else "skip"
-        elif not user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES:
-            st.caption(NO_AI_TASK_NOTE)
-        note = st.text_area("Notes", height=80, key=f"{form_key}_note")
-        submitted = st.form_submit_button(submit_label, use_container_width=True)
+    c1, c2 = st.columns([0.8, 1.2])
+    job_type = c1.selectbox(type_label, PROJECT_TASK_TYPES, key=f"{form_key}_type")
+    languages = c2.multiselect(
+        "Target languages",
+        LANGUAGE_CATALOG,
+        default=[default_language],
+        key=f"{form_key}_languages",
+        help="Select more than one language to create one separate task for each language.",
+    )
+    st.markdown("Assignee emails")
+    with st.container(border=True):
+        assignee_values: List[str] = []
+        for idx in range(assignee_count):
+            field_key = f"{form_key}_assignee_email_{idx}"
+            if idx == 0:
+                st.session_state.setdefault(field_key, "reviewer@cognisweep.local")
+            assignee_values.append(st.text_input(
+                f"Email {idx + 1}",
+                key=field_key,
+                placeholder="name@example.com",
+            ))
+        add_assignee = st.button("+ Add email", key=f"{form_key}_add_assignee", use_container_width=True)
     if add_assignee:
         st.session_state[assignee_count_key] = assignee_count + 1
         st.rerun()
+    assignment_files = st.file_uploader(
+        "Assignment upload (optional)",
+        accept_multiple_files=True,
+        key=f"{form_key}_files",
+        help="Upload source or bilingual files. The first parseable file becomes the editor task source; all files remain attached.",
+    )
+    deadline_enabled = st.checkbox("Add deadline", key=f"{form_key}_deadline_enabled")
+    deadline_at = ""
+    deadline_timezone = ""
+    if deadline_enabled:
+        timezone_options = deadline_timezone_options()
+        default_timezone = safe_text(browser_timezone_name() or user_timezone_name() or secret("ERRORSWEEP_DISPLAY_TIMEZONE", secret("TZ", "")))
+        if default_timezone not in timezone_options:
+            default_timezone = timezone_options[0]
+        default_tz = timezone_from_name(default_timezone) or local_timezone()
+        default_deadline_now = datetime.now(default_tz).replace(second=0, microsecond=0)
+        with st.container(border=True):
+            d1, d2, d3 = st.columns([1, 1, 1.15])
+            deadline_date = d1.date_input(
+                "Deadline date",
+                value=(default_deadline_now + timedelta(days=1)).date(),
+                key=f"{form_key}_deadline_date",
+            )
+            deadline_time = d2.time_input(
+                "Deadline time",
+                value=default_deadline_now.time(),
+                key=f"{form_key}_deadline_time",
+            )
+            deadline_timezone = d3.selectbox(
+                "Deadline time zone",
+                timezone_options,
+                index=timezone_options.index(default_timezone),
+                key=f"{form_key}_deadline_timezone",
+            )
+            deadline_at = deadline_iso_from_parts(deadline_date, deadline_time, deadline_timezone)
+            deadline_preview = format_deadline_time(deadline_at, deadline_timezone)
+            if deadline_preview:
+                st.caption(f"Deadline will be saved as {deadline_preview}.")
+    ai_translation_choice = "auto"
+    preview_rows: List[Dict[str, Any]] = []
+    if assignment_files:
+        preview_rows, _, _ = project_assignment_source_from_uploads(assignment_files or [])
+    has_uploaded_translations = uploaded_rows_have_targets(preview_rows)
+    if user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES and has_uploaded_translations:
+        choice = st.radio(
+            "Uploaded file already contains translations. Do you want AI translation for this task?",
+            ["No, keep uploaded translations", "Yes, generate AI translation"],
+            index=0,
+            horizontal=True,
+            key=f"{form_key}_ai_translation_choice",
+        )
+        ai_translation_choice = "generate" if choice.startswith("Yes") else "skip"
+    elif not user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES:
+        st.caption(NO_AI_TASK_NOTE)
+    note = st.text_area("Notes", height=80, key=f"{form_key}_note")
+    submitted = st.button(submit_label, key=f"{form_key}_submit", use_container_width=True)
     if submitted:
         created = create_project_tasks_for_project(
             project,
@@ -23806,6 +23882,7 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
             assignment_files=assignment_files or [],
             ai_translation_choice=ai_translation_choice,
             deadline_at=deadline_at,
+            deadline_timezone=deadline_timezone,
         )
         if created:
             st.success(f"{len(created)} task{'s' if len(created) != 1 else ''} created inside {safe_text(project.get('project'))}.")
@@ -24175,6 +24252,7 @@ def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "segments": int(job.get("segments") or metadata.get("segments") or metadata.get("row_count") or 0),
         "assignee": job_single_assignee_display(job),
         "deadline_at": safe_text(metadata.get("deadline_at")),
+        "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
         "no_ai_note": safe_text(metadata.get("no_ai_note")),
         "created": safe_text(job.get("created") or job.get("created_at") or metadata.get("created")),
         "updated_at": safe_text(job.get("updated_at") or job.get("created_at") or job.get("created")),
@@ -24208,6 +24286,7 @@ def job_history_row_from_editor_job(record: Dict[str, Any]) -> Dict[str, Any]:
         "segments": int(record.get("row_count") or metadata.get("row_count") or 0),
         "assignee": safe_text(metadata.get("assignee")),
         "deadline_at": safe_text(metadata.get("deadline_at")),
+        "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
         "created": safe_text(record.get("created_at") or record.get("created") or metadata.get("created")),
         "updated_at": safe_text(record.get("updated_at") or record.get("created_at") or metadata.get("created")),
         "editor_url": job_history_editor_url(record),
@@ -24244,6 +24323,7 @@ def job_history_row_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "segments": int(task.get("total_units") or metadata.get("segments") or 0),
         "assignee": safe_text(metadata.get("assignee")),
         "deadline_at": safe_text(metadata.get("deadline_at")),
+        "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
         "created": safe_text(task.get("created_at")),
         "updated_at": safe_text(task.get("updated_at") or task.get("created_at")),
         "editor_url": editor_url,
