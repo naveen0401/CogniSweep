@@ -4960,6 +4960,74 @@ def social_oauth_authorize_url(provider: str = "google") -> str:
     return f"{supabase_auth_base_url()}/auth/v1/authorize?{urlencode(params)}"
 
 
+def render_google_oauth_button(label: str = "Continue with Google") -> bool:
+    ready, oauth_message = google_oauth_config_status()
+    if not ready:
+        if query_get("debug_auth") == "1":
+            st.caption(f"Google login is not available: {oauth_message}")
+        return False
+    google_url = social_oauth_authorize_url("google")
+    if not google_url:
+        return False
+    st.markdown(
+        dedent(f"""
+        <div class="es-google-oauth-wrap">
+          <a class="es-google-oauth-button" href="{escape(google_url, quote=True)}" target="_self" rel="nofollow">
+            <span class="es-google-oauth-icon" aria-hidden="true">
+              <svg viewBox="0 0 18 18" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/>
+                <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.33-1.58-5.04-3.72H.94v2.33A9 9 0 0 0 9 18z"/>
+                <path fill="#FBBC05" d="M3.96 10.7A5.4 5.4 0 0 1 3.68 9c0-.59.1-1.16.28-1.7V4.97H.94A9 9 0 0 0 0 9c0 1.45.34 2.82.94 4.03l3.02-2.33z"/>
+                <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58A8.65 8.65 0 0 0 9 0 9 9 0 0 0 .94 4.97L3.96 7.3C4.67 5.16 6.66 3.58 9 3.58z"/>
+              </svg>
+            </span>
+            <span>{escape(label)}</span>
+          </a>
+        </div>
+        <style>
+          .es-google-oauth-wrap {{
+            display: flex;
+            justify-content: center;
+            width: 100%;
+            margin: 0.85rem 0 1.1rem;
+          }}
+          .es-google-oauth-button {{
+            align-items: center;
+            background: #fff;
+            border: 1px solid #dadce0;
+            border-radius: 4px;
+            color: #3c4043 !important;
+            display: inline-flex;
+            font-family: Roboto, Arial, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            gap: 12px;
+            height: 42px;
+            justify-content: center;
+            line-height: 1;
+            max-width: 420px;
+            padding: 0 16px;
+            text-decoration: none !important;
+            width: min(100%, 420px);
+            box-shadow: 0 1px 1px rgba(60, 64, 67, 0.08);
+          }}
+          .es-google-oauth-button:hover {{
+            background: #f8fafd;
+            border-color: #c6cacf;
+            box-shadow: 0 1px 3px rgba(60, 64, 67, 0.18);
+          }}
+          .es-google-oauth-icon {{
+            display: inline-flex;
+            height: 18px;
+            width: 18px;
+          }}
+        </style>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+    return True
+
+
 def verify_social_oauth_state(state_token: str, provider: str) -> Tuple[Optional[Dict[str, Any]], str]:
     payload = verify_payload(state_token)
     provider_key = safe_text(provider).strip().lower()
@@ -22711,20 +22779,13 @@ def render_login() -> None:
     st.markdown("## Login to CogniSweep")
     st.caption("Use your registered email and password. Account role and workspace access are applied automatically after sign-in.")
 
-    oauth_ready, oauth_message = google_oauth_config_status()
-    if oauth_ready:
-        google_url = social_oauth_authorize_url("google")
-        if google_url:
-            st.link_button("Continue with Google", google_url, use_container_width=True)
-            st.divider()
-    elif query_get("debug_auth") == "1":
-        st.caption(f"Google login is not available: {oauth_message}")
-
     with st.form("unified_login", enter_to_submit=True):
         st.text_input("Email", key=LOGIN_EMAIL_KEY)
         st.text_input("Password", type="password", key=LOGIN_PASSWORD_KEY)
         st.checkbox(compliance_ack_label(), key=LOGIN_ACCEPT_KEY)
         st.form_submit_button("Login", use_container_width=True, on_click=handle_unified_login_submit)
+
+    render_google_oauth_button("Sign in with Google")
 
     feedback = st.session_state.pop(LOGIN_FEEDBACK_KEY, None)
     if feedback:
@@ -23027,6 +23088,8 @@ def render_signup() -> None:
         )
         accepted = st.checkbox(compliance_ack_label(), key="signup_compliance_ack")
         submitted = st.form_submit_button("Create account", use_container_width=True)
+
+    render_google_oauth_button("Sign up with Google")
 
     if submitted:
         clean_name = safe_text(name)

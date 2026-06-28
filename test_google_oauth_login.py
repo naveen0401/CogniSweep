@@ -21,6 +21,8 @@ def test_google_oauth_public_route_and_login_button() -> None:
     text = source()
     public_app = function_body("render_public_app", "page_dashboard")
     login = function_body("render_login", "profile_language_defaults")
+    signup = function_body("render_signup", "render_public_document")
+    google_button = function_body("render_google_oauth_button", "verify_social_oauth_state")
     routes_start = text.index("PUBLIC_ROUTES = {")
     routes_body = text[routes_start : text.index("}", routes_start)]
 
@@ -28,9 +30,11 @@ def test_google_oauth_public_route_and_login_button() -> None:
     assert "OAUTH_CALLBACK_ROUTE" in routes_body
     assert 'OAUTH_CALLBACK_ROUTE: "OAuth Callback"' in text
     assert "render_oauth_callback()" in public_app
-    assert "google_oauth_config_status()" in login
-    assert 'social_oauth_authorize_url("google")' in login
-    assert "Continue with Google" in login
+    assert 'render_google_oauth_button("Sign in with Google")' in login
+    assert 'render_google_oauth_button("Sign up with Google")' in signup
+    assert "google_oauth_config_status()" in google_button
+    assert 'social_oauth_authorize_url("google")' in google_button
+    assert "es-google-oauth-button" in google_button
 
 
 def test_google_oauth_callback_verifies_supabase_and_respects_signup_gate() -> None:
