@@ -27,7 +27,7 @@ WORKER_PATH = ROOT / "email_dispatch_worker.py"
 TEMPLATES_PATH = ROOT / "email_templates.py"
 SUPERVISOR_PATH = ROOT / "worker_supervisor.py"
 
-SUPPORTED_PROVIDERS = {"resend", "sendgrid", "smtp"}
+SUPPORTED_PROVIDERS = {"resend", "sendgrid", "ses", "smtp"}
 REQUIRED_WORKER_SYMBOLS = [
     "dispatch_notification",
     "dispatch_pending",
@@ -59,12 +59,12 @@ REQUIRED_TEMPLATE_EVENTS = [
     "email.deliverability_test",
 ]
 REQUIRED_ENV_TOKENS = [
-    "ERRORSWEEP_EMAIL_PROVIDER",
-    "ERRORSWEEP_EMAIL_HTML_ENABLED",
-    "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED",
-    "ERRORSWEEP_EMAIL_WORKER_INTERVAL_SECONDS",
-    "ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT",
-    "ERRORSWEEP_EMAIL_FROM",
+    "COGNISWEEP_EMAIL_PROVIDER",
+    "COGNISWEEP_EMAIL_HTML_ENABLED",
+    "COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED",
+    "COGNISWEEP_EMAIL_WORKER_INTERVAL_SECONDS",
+    "COGNISWEEP_EMAIL_DISPATCH_BATCH_LIMIT",
+    "COGNISWEEP_EMAIL_FROM",
     "RESEND_API_KEY",
     "SENDGRID_API_KEY",
     "SMTP_HOST",
@@ -72,11 +72,14 @@ REQUIRED_ENV_TOKENS = [
     "SMTP_USER",
     "SMTP_PASSWORD",
     "SMTP_TLS",
+    "COGNISWEEP_AWS_SES_REGION",
+    "AWS_SES_SMTP_USERNAME",
+    "AWS_SES_SMTP_PASSWORD",
 ]
 REQUIRED_STREAMLIT_TOKENS = [
-    "ERRORSWEEP_EMAIL_PROVIDER",
-    "ERRORSWEEP_EMAIL_FROM",
-    "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED",
+    "COGNISWEEP_EMAIL_PROVIDER",
+    "COGNISWEEP_EMAIL_FROM",
+    "COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED",
     "RESEND_API_KEY",
     "SENDGRID_API_KEY",
     "SMTP_HOST",
@@ -84,6 +87,9 @@ REQUIRED_STREAMLIT_TOKENS = [
     "SMTP_USER",
     "SMTP_PASSWORD",
     "SMTP_TLS",
+    "COGNISWEEP_AWS_SES_REGION",
+    "AWS_SES_SMTP_USERNAME",
+    "AWS_SES_SMTP_PASSWORD",
 ]
 REQUIRED_COMPOSE_TOKENS = [
     "errorsweep-worker-supervisor:",
@@ -111,6 +117,17 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def cognisweep_env_alias(name: str) -> str:
+    if name.startswith("ERRORSWEEP_"):
+        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
+    return ""
+
+
+def aliases_for(name: str) -> List[str]:
+    alias = cognisweep_env_alias(name)
+    return [name, alias] if alias else [name]
 
 
 def add(results: List[Dict[str, str]], area: str, check: str, status: str, evidence: str, action: str) -> None:
@@ -203,17 +220,6 @@ def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     return ""
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
-
-
 def configured(env: Dict[str, str], names: Sequence[str], min_length: int = 1) -> bool:
     value = value_for(env, names)
     return bool(value) and not is_placeholder(value) and len(value) >= min_length
@@ -286,14 +292,14 @@ def validate_worker_contract(results: List[Dict[str, str]]) -> None:
     missing_worker = [symbol for symbol in REQUIRED_WORKER_SYMBOLS if symbol not in worker]
     missing_templates = [symbol for symbol in REQUIRED_TEMPLATE_SYMBOLS if symbol not in templates]
     missing_events = [event for event in REQUIRED_TEMPLATE_EVENTS if event not in templates]
-    provider_tokens = missing_items(["resend", "sendgrid", "smtp", "dry_run", "provider_pending"], worker)
+    provider_tokens = missing_items(["resend", "sendgrid", "ses", "smtp", "dry_run", "provider_pending"], worker)
 
     add(
         results,
         "Email",
         "Dispatch worker contract",
         "Pass" if not missing_worker and not provider_tokens else "Blocker",
-        "Resend, SendGrid, SMTP, dry-run dispatch functions present" if not missing_worker and not provider_tokens else ", ".join(missing_worker + provider_tokens),
+        "SES, Resend, SendGrid, SMTP, dry-run dispatch functions present" if not missing_worker and not provider_tokens else ", ".join(missing_worker + provider_tokens),
         "Keep the dispatch worker able to render and deliver queued notifications through supported providers.",
     )
     add(
@@ -324,7 +330,7 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
         "Email",
         "Production env email keys",
         "Pass" if not missing_env else "Warn",
-        "provider, sender, worker, Resend, SendGrid, SMTP keys listed" if not missing_env else ", ".join(missing_env),
+        "provider, sender, worker, SES, Resend, SendGrid, SMTP keys listed" if not missing_env else ", ".join(missing_env),
         "Keep deploy/.env.production.example aligned with transactional email provider settings.",
     )
     add(
@@ -378,7 +384,7 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         "Email provider",
         "Pass" if provider in SUPPORTED_PROVIDERS else "Blocker",
         provider or "missing",
-        "Set ERRORSWEEP_EMAIL_PROVIDER to resend, sendgrid, or smtp.",
+        "Set ERRORSWEEP_EMAIL_PROVIDER to ses, resend, sendgrid, or smtp.",
     )
     add(
         results,
@@ -394,6 +400,10 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         require_value(results, env, "Email Config", "Resend API key", ["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY"], "Set the production Resend API key.", min_length=12)
     elif provider == "sendgrid":
         require_value(results, env, "Email Config", "SendGrid API key", ["SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY"], "Set the production SendGrid API key.", min_length=12)
+    elif provider == "ses":
+        require_value(results, env, "Email Config", "SES region", ["AWS_SES_REGION", "ERRORSWEEP_AWS_SES_REGION", "AWS_REGION"], "Set the AWS SES region, for example ap-south-1.", status_when_missing="Warn")
+        require_value(results, env, "Email Config", "SES SMTP username", ["AWS_SES_SMTP_USERNAME", "ERRORSWEEP_AWS_SES_SMTP_USERNAME", "SMTP_USER", "ERRORSWEEP_SMTP_USER"], "Set the AWS SES SMTP username.", min_length=8)
+        require_value(results, env, "Email Config", "SES SMTP password", ["AWS_SES_SMTP_PASSWORD", "ERRORSWEEP_AWS_SES_SMTP_PASSWORD", "SMTP_PASSWORD", "ERRORSWEEP_SMTP_PASSWORD"], "Set the AWS SES SMTP password.", min_length=8)
     elif provider == "smtp":
         require_value(results, env, "Email Config", "SMTP host", ["SMTP_HOST", "ERRORSWEEP_SMTP_HOST"], "Set the production SMTP host.")
         require_value(results, env, "Email Config", "SMTP password", ["SMTP_PASSWORD", "ERRORSWEEP_SMTP_PASSWORD"], "Set the production SMTP password.", min_length=8)

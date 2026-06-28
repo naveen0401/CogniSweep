@@ -10344,7 +10344,7 @@ def subprocessor_runtime_rows() -> List[Dict[str, Any]]:
     storage_provider = safe_text(storage_health.get("provider") or "local")
     storage_active = bool(storage_health.get("configured")) and storage_provider != "local"
     async_active = async_health.get("mode") == "external" and bool(async_health.get("ready") or secret_is_configured("ERRORSWEEP_ASYNC_WORKER_URL") or secret_is_configured("REDIS_URL") or secret_is_configured("CELERY_BROKER_URL"))
-    email_active = email_provider in {"resend", "sendgrid", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
+    email_active = email_provider in {"resend", "sendgrid", "ses", "smtp"} and email_from_address() != "no-reply@cognisweep.local"
     billing_active = billing_provider in {"stripe", "razorpay"} and billing_provider_ready(billing_provider)
     language_tool_active = safe_text(secret("ERRORSWEEP_LANGUAGETOOL_PUBLIC", "")).lower() in {"1", "true", "yes", "on"}
 
@@ -12447,8 +12447,18 @@ def queue_email_notification(
     return record
 
 
+def ses_smtp_host() -> str:
+    region = (
+        secret("ERRORSWEEP_AWS_SES_REGION", "")
+        or secret("AWS_SES_REGION", "")
+        or secret("AWS_REGION", "")
+        or "ap-south-1"
+    ).strip()
+    return f"email-smtp.{region}.amazonaws.com"
+
+
 def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Send one queued notification via Resend, SendGrid, or SMTP when configured."""
+    """Send one queued notification via Resend, SendGrid, SMTP, or Amazon SES SMTP."""
     provider = email_provider_label()
     if provider in {"", "manual", "not_configured"}:
         record["status"] = "provider_pending"
@@ -12509,15 +12519,23 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
             )
             if response.status_code >= 300:
                 raise RuntimeError(f"SendGrid returned {response.status_code}: {response.text[:300]}")
-        elif provider == "smtp":
+        elif provider in {"smtp", "ses"}:
             host = secret("SMTP_HOST", secret("ERRORSWEEP_SMTP_HOST", "")).strip()
+            if provider == "ses" and config_value_is_placeholder(host):
+                host = ses_smtp_host()
             port = int(secret("SMTP_PORT", secret("ERRORSWEEP_SMTP_PORT", "587")) or "587")
-            username = secret("SMTP_USER", secret("ERRORSWEEP_SMTP_USER", "")).strip()
-            password = secret("SMTP_PASSWORD", secret("ERRORSWEEP_SMTP_PASSWORD", "")).strip()
+            username = (
+                secret("SMTP_USER", secret("ERRORSWEEP_SMTP_USER", ""))
+                or secret("AWS_SES_SMTP_USERNAME", secret("ERRORSWEEP_AWS_SES_SMTP_USERNAME", ""))
+            ).strip()
+            password = (
+                secret("SMTP_PASSWORD", secret("ERRORSWEEP_SMTP_PASSWORD", ""))
+                or secret("AWS_SES_SMTP_PASSWORD", secret("ERRORSWEEP_AWS_SES_SMTP_PASSWORD", ""))
+            ).strip()
             if config_value_is_placeholder(host):
                 raise RuntimeError("SMTP_HOST is missing or still uses a placeholder value.")
             if config_value_is_placeholder(password):
-                raise RuntimeError("SMTP_PASSWORD is missing or still uses a placeholder value.")
+                raise RuntimeError("SMTP_PASSWORD/AWS_SES_SMTP_PASSWORD is missing or still uses a placeholder value.")
             message = EmailMessage()
             message["From"] = sender
             message["To"] = recipient
@@ -12532,7 +12550,7 @@ def dispatch_email_notification(record: Dict[str, Any]) -> Dict[str, Any]:
                     client.login(username, password)
                 client.send_message(message)
         else:
-            raise RuntimeError(f"Unsupported email provider: {provider}. Use resend, sendgrid, smtp, or manual.")
+            raise RuntimeError(f"Unsupported email provider: {provider}. Use resend, sendgrid, ses, smtp, or manual.")
         record["status"] = "sent"
         record["sent_at"] = now_stamp()
         record["error"] = ""
@@ -15215,11 +15233,11 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     add("Billing", "STRIPE_WEBHOOK_SECRET / RAZORPAY_WEBHOOK_SECRET", any_secret_configured(["STRIPE_WEBHOOK_SECRET", "RAZORPAY_WEBHOOK_SECRET", "ERRORSWEEP_BILLING_WEBHOOK_SECRET"]), "Billing reconciliation", "Required before applying live webhook events.")
     add("Billing", "ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL", secret_is_configured("ERRORSWEEP_BILLING_WEBHOOK_RECEIVER_URL"), "Live billing webhooks", "Public HTTPS endpoint for billing_webhook_receiver.py, for example https://billing.cognisweep.com/webhooks/billing/razorpay.")
     add("Billing", "ERRORSWEEP_MONTHLY_MANDATE_LINK_*", any_secret_configured(["ERRORSWEEP_MONTHLY_MANDATE_LINK", "ERRORSWEEP_CARD_UPI_MANDATE_LINK", "ERRORSWEEP_TRIAL_MANDATE_LINK"]), "Mandate checkout", "Configure plan-specific Pro/Agency/Enterprise links where possible.")
-    add("Email", "ERRORSWEEP_EMAIL_PROVIDER", email_provider in {"resend", "sendgrid", "smtp"}, "Verification/reset/invites", "Use resend, sendgrid, or smtp.")
-    add("Email", "ERRORSWEEP_EMAIL_HTML_ENABLED", email_templates_enabled() and render_transactional_email is not None, "Transactional email", "Sends branded HTML with plain-text fallback for Resend, SendGrid, and SMTP.")
+    add("Email", "ERRORSWEEP_EMAIL_PROVIDER", email_provider in {"resend", "sendgrid", "ses", "smtp"}, "Verification/reset/invites", "Use ses, resend, sendgrid, or smtp.")
+    add("Email", "ERRORSWEEP_EMAIL_HTML_ENABLED", email_templates_enabled() and render_transactional_email is not None, "Transactional email", "Sends branded HTML with plain-text fallback for SES, Resend, SendGrid, and SMTP.")
     add("Email", "ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true", email_worker_enabled, "Public launch", "Run email_dispatch_worker.py so queued notifications send without opening Platform Settings.")
     add("Email", "Platform Settings: email_deliverability_last_test", email_deliverability_test_is_recent(), "Public launch", "Send a test message from Platform Settings after provider credentials and sender domain are configured.")
-    add("Email", "Provider API key or SMTP credentials", any_secret_configured(["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY", "SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY", "SMTP_HOST", "ERRORSWEEP_SMTP_HOST"]), "Transactional email", "Needed for live delivery.")
+    add("Email", "Provider API key or SMTP credentials", any_secret_configured(["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY", "SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY", "SMTP_HOST", "ERRORSWEEP_SMTP_HOST", "AWS_SES_SMTP_USERNAME", "ERRORSWEEP_AWS_SES_SMTP_USERNAME"]), "Transactional email", "Needed for live delivery.")
     add("Email", "ERRORSWEEP_EMAIL_FROM / verified sender", email_from_address() != "no-reply@cognisweep.local", "Transactional email", "Use a verified domain address.")
     sso_summary = enterprise_sso_summary()
     add("SSO", "Platform Settings: enterprise_sso_connections", sso_summary["ready"] > 0, "Enterprise launch", "At least one enabled workspace connection with domain and IdP metadata.")
@@ -15339,20 +15357,22 @@ def production_env_template() -> str:
         ERRORSWEEP_MONTHLY_MANDATE_LINK_ENTERPRISE=
         ERRORSWEEP_TRIAL_MANDATE_LINK=
 
-        # Transactional email: choose resend, sendgrid, or smtp
-        ERRORSWEEP_EMAIL_PROVIDER=resend
+        # Transactional email: choose ses, resend, sendgrid, or smtp
+        # SES uses AWS SES SMTP credentials, not IAM access keys.
+        ERRORSWEEP_EMAIL_PROVIDER=ses
         ERRORSWEEP_EMAIL_HTML_ENABLED=true
         ERRORSWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true
         ERRORSWEEP_EMAIL_WORKER_INTERVAL_SECONDS=60
         ERRORSWEEP_EMAIL_DISPATCH_BATCH_LIMIT=25
         ERRORSWEEP_EMAIL_FROM=CogniSweep <no-reply@cognisweep.com>
-        RESEND_API_KEY=
+        ERRORSWEEP_AWS_SES_REGION=ap-south-1
+        SMTP_HOST=email-smtp.ap-south-1.amazonaws.com
+        SMTP_PORT=587
+        AWS_SES_SMTP_USERNAME=
+        AWS_SES_SMTP_PASSWORD=
+        SMTP_TLS=true
+        # RESEND_API_KEY=
         # SENDGRID_API_KEY=
-        # SMTP_HOST=
-        # SMTP_PORT=587
-        # SMTP_USER=
-        # SMTP_PASSWORD=
-        # SMTP_TLS=true
 
         # Enterprise and legal launch flags
         ERRORSWEEP_ENTERPRISE_SSO_ENABLED=false
@@ -29173,7 +29193,7 @@ def render_platform_email_outbox_section() -> None:
         ("Provider", provider, "resend/sendgrid/smtp/manual"),
     ])
     if provider in {"", "manual", "not_configured"}:
-        st.info("Email dispatch is in outbox-only mode. Set ERRORSWEEP_EMAIL_PROVIDER to resend, sendgrid, or smtp with provider credentials to send real emails.")
+        st.info("Email dispatch is in outbox-only mode. Set ERRORSWEEP_EMAIL_PROVIDER to ses, resend, sendgrid, or smtp with provider credentials to send real emails.")
     else:
         if st.button("Send pending notifications", use_container_width=True):
             sent, failed = dispatch_pending_notifications()

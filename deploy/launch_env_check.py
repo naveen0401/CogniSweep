@@ -458,14 +458,18 @@ def check_email(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         results,
         "Email",
         "Email provider",
-        "Pass" if provider in {"resend", "sendgrid", "smtp"} else "Blocker",
+        "Pass" if provider in {"resend", "sendgrid", "ses", "smtp"} else "Blocker",
         provider or "missing",
-        "Set ERRORSWEEP_EMAIL_PROVIDER to resend, sendgrid, or smtp.",
+        "Set ERRORSWEEP_EMAIL_PROVIDER to ses, resend, sendgrid, or smtp.",
     )
     if provider == "resend":
         require_value(results, env, "Email", "Resend API key", ["RESEND_API_KEY", "ERRORSWEEP_RESEND_API_KEY"], "Set the production Resend API key.", min_length=12)
     elif provider == "sendgrid":
         require_value(results, env, "Email", "SendGrid API key", ["SENDGRID_API_KEY", "ERRORSWEEP_SENDGRID_API_KEY"], "Set the production SendGrid API key.", min_length=12)
+    elif provider == "ses":
+        require_value(results, env, "Email", "SES region", ["AWS_SES_REGION", "ERRORSWEEP_AWS_SES_REGION", "AWS_REGION"], "Set the AWS SES region, for example ap-south-1.", status_when_missing="Warn")
+        require_value(results, env, "Email", "SES SMTP username", ["AWS_SES_SMTP_USERNAME", "ERRORSWEEP_AWS_SES_SMTP_USERNAME", "SMTP_USER", "ERRORSWEEP_SMTP_USER"], "Set the AWS SES SMTP username.", min_length=8)
+        require_value(results, env, "Email", "SES SMTP password", ["AWS_SES_SMTP_PASSWORD", "ERRORSWEEP_AWS_SES_SMTP_PASSWORD", "SMTP_PASSWORD", "ERRORSWEEP_SMTP_PASSWORD"], "Set the AWS SES SMTP password.", min_length=8)
     elif provider == "smtp":
         require_value(results, env, "Email", "SMTP host", ["SMTP_HOST", "ERRORSWEEP_SMTP_HOST"], "Set the production SMTP host.")
         require_value(results, env, "Email", "SMTP username", ["SMTP_USER", "ERRORSWEEP_SMTP_USER"], "Set the production SMTP username.", status_when_missing="Warn")

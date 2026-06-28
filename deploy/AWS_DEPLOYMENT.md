@@ -106,6 +106,37 @@ COGNISWEEP_MT_PROVIDER=disabled
 
 The code and launch checks still accept legacy `ERRORSWEEP_*` aliases, but new AWS config should use `COGNISWEEP_*`.
 
+## Transactional Email With Amazon SES
+
+CogniSweep can send verification, password reset, task assignment, deadline, billing, and support emails through Amazon SES using the SES SMTP interface. Use SES SMTP credentials, not normal IAM access keys.
+
+Recommended production settings:
+
+```dotenv
+COGNISWEEP_EMAIL_PROVIDER=ses
+COGNISWEEP_EMAIL_HTML_ENABLED=true
+COGNISWEEP_EMAIL_DISPATCH_WORKER_ENABLED=true
+COGNISWEEP_EMAIL_WORKER_INTERVAL_SECONDS=60
+COGNISWEEP_EMAIL_DISPATCH_BATCH_LIMIT=25
+COGNISWEEP_EMAIL_FROM=CogniSweep <no-reply@cognisweep.com>
+COGNISWEEP_AWS_SES_REGION=ap-south-1
+SMTP_HOST=email-smtp.ap-south-1.amazonaws.com
+SMTP_PORT=587
+AWS_SES_SMTP_USERNAME=<ses-smtp-username>
+AWS_SES_SMTP_PASSWORD=<ses-smtp-password>
+SMTP_TLS=true
+```
+
+SES setup checklist:
+
+- Open Amazon SES in the same region used above, for example `ap-south-1`.
+- Verify `cognisweep.com` or the exact sender address such as `no-reply@cognisweep.com`.
+- Add the SES DNS records at Namecheap: domain verification TXT/CNAME records and DKIM CNAME records.
+- Keep your existing Namecheap mail forwarding for receiving mail if you want; SES here is only for app-sent transactional mail.
+- Request SES production access. Until production access is approved, SES sandbox mode can send only to verified recipient addresses.
+- Create SES SMTP credentials from the SES console and put them into `AWS_SES_SMTP_USERNAME` and `AWS_SES_SMTP_PASSWORD`.
+- Restart the Docker stack after changing `deploy/.env.production`.
+
 ## Future AWS Machine Translation
 
 When you are ready to move managed MT onto AWS, use Amazon Translate as the first managed provider to evaluate.

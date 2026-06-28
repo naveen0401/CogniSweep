@@ -1,7 +1,7 @@
 """CogniSweep transactional email dispatch worker.
 
 Run this beside the Streamlit app in production so queued notification records
-are delivered automatically through Resend, SendGrid, or SMTP.
+are delivered automatically through Resend, SendGrid, SMTP, or Amazon SES SMTP.
 """
 from __future__ import annotations
 
@@ -110,6 +110,16 @@ def email_from_address() -> str:
     )
 
 
+def _ses_smtp_host() -> str:
+    region = (
+        _env("ERRORSWEEP_AWS_SES_REGION")
+        or _env("AWS_SES_REGION")
+        or _env("AWS_REGION")
+        or "ap-south-1"
+    )
+    return f"email-smtp.{region}.amazonaws.com"
+
+
 def email_sender_parts() -> Tuple[str, str, str]:
     raw = email_from_address()
     name, email = parseaddr(raw)
@@ -186,13 +196,27 @@ def _send_sendgrid(recipient: str, subject: str, text_body: str, html_body: str,
         raise RuntimeError(f"SendGrid returned {response.status_code}: {response.text[:300]}")
 
 
-def _send_smtp(recipient: str, subject: str, text_body: str, html_body: str, sender: str) -> None:
+def _send_smtp(recipient: str, subject: str, text_body: str, html_body: str, sender: str, *, use_ses_defaults: bool = False) -> None:
     host = _env("SMTP_HOST") or _env("ERRORSWEEP_SMTP_HOST")
+    if use_ses_defaults and not host:
+        host = _ses_smtp_host()
     port = _int_env("SMTP_PORT", _int_env("ERRORSWEEP_SMTP_PORT", 587))
-    username = _env("SMTP_USER") or _env("ERRORSWEEP_SMTP_USER")
-    password = _env("SMTP_PASSWORD") or _env("ERRORSWEEP_SMTP_PASSWORD")
+    username = (
+        _env("SMTP_USER")
+        or _env("ERRORSWEEP_SMTP_USER")
+        or _env("AWS_SES_SMTP_USERNAME")
+        or _env("ERRORSWEEP_AWS_SES_SMTP_USERNAME")
+    )
+    password = (
+        _env("SMTP_PASSWORD")
+        or _env("ERRORSWEEP_SMTP_PASSWORD")
+        or _env("AWS_SES_SMTP_PASSWORD")
+        or _env("ERRORSWEEP_AWS_SES_SMTP_PASSWORD")
+    )
     if not host:
         raise RuntimeError("SMTP_HOST is not configured.")
+    if not password:
+        raise RuntimeError("SMTP_PASSWORD/AWS_SES_SMTP_PASSWORD is not configured.")
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
@@ -250,8 +274,10 @@ def dispatch_notification(record: Dict[str, Any], dry_run: bool = False) -> Dict
             _send_sendgrid(recipient, subject, text_body, html_body, sender_email, sender_name)
         elif provider == "smtp":
             _send_smtp(recipient, subject, text_body, html_body, sender)
+        elif provider == "ses":
+            _send_smtp(recipient, subject, text_body, html_body, sender, use_ses_defaults=True)
         else:
-            raise RuntimeError(f"Unsupported email provider: {provider}. Use resend, sendgrid, smtp, or manual.")
+            raise RuntimeError(f"Unsupported email provider: {provider}. Use resend, sendgrid, ses, smtp, or manual.")
         updated["status"] = "dry_run" if dry_run else "sent"
         updated["sent_at"] = _now_iso() if not dry_run else _safe_text(updated.get("sent_at"))
         updated["error"] = ""
