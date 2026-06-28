@@ -23326,27 +23326,57 @@ def render_oauth_fragment_bridge() -> None:
         f"""
         <script>
         (() => {{
-          const hash = window.location.hash ? window.location.hash.slice(1) : "";
-          const hashParams = new URLSearchParams(hash);
-          const accessToken = hashParams.get("access_token");
-          const error = hashParams.get("error");
-          const errorDescription = hashParams.get("error_description");
-          if (!accessToken && !error) return;
-          const params = new URLSearchParams(window.location.search);
-          params.set("public", "{OAUTH_CALLBACK_ROUTE}");
-          if (!params.get("{OAUTH_PROVIDER_PARAM}")) {{
-            params.set("{OAUTH_PROVIDER_PARAM}", "google");
+          const runtime = () => {{
+            const parentWin = window.parent || window;
+            let loc = window.location;
+            try {{
+              if (parentWin && parentWin.location) loc = parentWin.location;
+            }} catch (err) {{}}
+            const hash = loc.hash ? loc.hash.slice(1) : "";
+            const hashParams = new URLSearchParams(hash);
+            const accessToken = hashParams.get("access_token");
+            const error = hashParams.get("error");
+            const errorDescription = hashParams.get("error_description");
+            if (!accessToken && !error) return;
+            const params = new URLSearchParams(loc.search || "");
+            params.set("public", "{OAUTH_CALLBACK_ROUTE}");
+            if (!params.get("{OAUTH_PROVIDER_PARAM}")) {{
+              params.set("{OAUTH_PROVIDER_PARAM}", "google");
+            }}
+            if (accessToken) {{
+              params.set("{OAUTH_ACCESS_TOKEN_PARAM}", accessToken);
+            }}
+            if (error) {{
+              params.set("{OAUTH_ERROR_PARAM}", error);
+            }}
+            if (errorDescription) {{
+              params.set("{OAUTH_ERROR_DESCRIPTION_PARAM}", errorDescription);
+            }}
+            const origin = loc.origin || (loc.protocol + "//" + loc.host);
+            const nextUrl = origin + loc.pathname + "?" + params.toString();
+            try {{
+              if (parentWin && parentWin.location) parentWin.location.replace(nextUrl);
+              else window.location.replace(nextUrl);
+            }} catch (err) {{
+              window.location.replace(nextUrl);
+            }}
+          }};
+          try {{
+            const parentWin = window.parent || window;
+            const parentDoc = parentWin.document || document;
+            const host = parentDoc.head || parentDoc.documentElement || parentDoc.body;
+            if (host && parentWin !== window) {{
+              const script = parentDoc.createElement("script");
+              script.type = "text/javascript";
+              script.textContent = "(" + runtime.toString() + ")();";
+              host.appendChild(script);
+              script.remove();
+            }} else {{
+              runtime();
+            }}
+          }} catch (err) {{
+            runtime();
           }}
-          if (accessToken) {{
-            params.set("{OAUTH_ACCESS_TOKEN_PARAM}", accessToken);
-          }}
-          if (error) {{
-            params.set("{OAUTH_ERROR_PARAM}", error);
-          }}
-          if (errorDescription) {{
-            params.set("{OAUTH_ERROR_DESCRIPTION_PARAM}", errorDescription);
-          }}
-          window.location.replace(window.location.pathname + "?" + params.toString());
         }})();
         </script>
         """,

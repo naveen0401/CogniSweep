@@ -38,9 +38,13 @@ def test_google_oauth_public_route_and_login_button() -> None:
 
 
 def test_google_oauth_callback_verifies_supabase_and_respects_signup_gate() -> None:
+    bridge = function_body("render_oauth_fragment_bridge", "render_oauth_callback")
     callback = function_body("render_oauth_callback", "render_sso_handoff")
     ensure_user = function_body("ensure_social_login_user", "hydrate_platform_settings")
 
+    assert "window.parent" in bridge
+    assert "parentWin.location" in bridge
+    assert "loc.hash" in bridge
     assert "render_oauth_fragment_bridge()" in callback
     assert "verify_social_oauth_state" in callback
     assert "verify_supabase_oauth_token" in callback
