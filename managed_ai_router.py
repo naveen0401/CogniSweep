@@ -19,7 +19,7 @@ from __future__ import annotations
 import functools
 import ipaddress
 import json
-import os
+import logging
 import re
 import socket
 import sys
@@ -27,10 +27,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, unquote, urlparse, urlsplit, urlunsplit
 
+LOGGER = logging.getLogger("errorsweep.managed_ai_router")
+
 try:
     import streamlit as st
-except Exception:
+    from streamlit.errors import StreamlitSecretNotFoundError
+except ImportError:
     st = None
+    StreamlitSecretNotFoundError = RuntimeError
+
+from app_runtime_config import cognisweep_env_alias, runtime_env
 
 # -----------------------------------------------------------------------------
 # Runtime compatibility constants
@@ -64,26 +70,12 @@ def _safe_text(value: Any) -> str:
         return ""
     try:
         return str(value).replace("\u00A0", " ").strip()
-    except Exception:
+    except (TypeError, ValueError):
         return ""
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env_value(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 def _secret(name: str, default: str = "") -> str:
@@ -95,12 +87,13 @@ def _secret(name: str, default: str = "") -> str:
             value = st.secrets.get(name)
             if value:
                 return value
-            alias = _cognisweep_env_alias(name)
+            alias = cognisweep_env_alias(name)
             if alias:
                 value = st.secrets.get(alias)
                 if value:
                     return str(value)
-        except Exception:
+        except (AttributeError, KeyError, RuntimeError, TypeError, StreamlitSecretNotFoundError) as exc:
+            LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
             return default
     return default
 
@@ -123,7 +116,7 @@ def _query_value(params: Any, key: str) -> str:
         if isinstance(value, list):
             return _safe_text(value[0] if value else "")
         return _safe_text(value)
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         return ""
 
 
@@ -148,7 +141,8 @@ def _normalize_query_params() -> None:
         return
     try:
         params = st.query_params
-    except Exception:
+    except (AttributeError, RuntimeError) as exc:
+        LOGGER.debug("Unable to access Streamlit query params: %s", exc)
         return
     try:
         for raw_key in list(params.keys()):
@@ -160,8 +154,8 @@ def _normalize_query_params() -> None:
                 params[clean_key] = value
             try:
                 del params[raw_key]
-            except Exception:
-                pass
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+                LOGGER.debug("Unable to remove malformed query param %r: %s", raw_key, exc)
 
         es_page = _query_value(params, "es_page")
         for key in ("review_id", "job_id", "es_editor", "task_id"):
@@ -169,8 +163,8 @@ def _normalize_query_params() -> None:
             if match and not _query_value(params, key):
                 params[key] = match.group(1)
                 params["es_page"] = re.split(rf"[;&]{re.escape(key)}=", es_page, 1)[0].strip() or params.get("es_page", "")
-    except Exception:
-        pass
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        LOGGER.debug("Unable to normalize Streamlit query params: %s", exc)
 
 
 # Run immediately after Streamlit import. app.py imports this module before its
@@ -234,7 +228,8 @@ def _install_signup_scroll_fix() -> None:
                 compact_page = re.sub(r"[^a-z0-9]+", "", page)
                 compact_public = re.sub(r"[^a-z0-9]+", "", public)
                 return compact_page in {"signup", "register", "registration"} or compact_public in {"signup", "register", "registration"}
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                LOGGER.debug("Unable to read signup route query params: %s", exc)
                 return False
 
         @functools.wraps(original_html)
@@ -247,8 +242,8 @@ def _install_signup_scroll_fix() -> None:
 
         setattr(html_with_signup_scroll, "_errorsweep_signup_scroll_fix", True)
         st.html = html_with_signup_scroll
-    except Exception:
-        pass
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        LOGGER.debug("Unable to install signup scroll fix: %s", exc)
 
 
 # -----------------------------------------------------------------------------
@@ -271,7 +266,7 @@ def _href_needs_session(href: str) -> bool:
         return any(query.get(key) for key in _PROTECTED_LINK_KEYS) and bool(
             page or query.get("es_editor") or query.get("job_id") or query.get("review_id") or query.get("task_id")
         )
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -281,7 +276,7 @@ def _current_user() -> Dict[str, Any]:
     try:
         user = st.session_state.get("user") or {}
         return user if isinstance(user, dict) else {}
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError):
         return {}
 
 
@@ -303,7 +298,7 @@ def _current_signed_session_token() -> str:
                 st.session_state["_pending_session_cookie"] = token
                 st.session_state["_post_login_session_token"] = token
                 return token
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         return ""
     return ""
 
@@ -470,8 +465,8 @@ def _ensure_owner_entitlements() -> None:
                     break
             else:
                 subscriptions.insert(0, subscription_record)
-    except Exception:
-        pass
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        LOGGER.debug("Unable to ensure owner entitlements: %s", exc)
 
 
 def _owner_unlimited_context(workspace: str = "") -> bool:
@@ -614,14 +609,14 @@ def _install_authenticated_reload_bridge() -> None:
                 try:
                     import streamlit.components.v1 as components
                     components.html(_protected_page_session_script(token), height=0, scrolling=False)
-                except Exception:
-                    pass
+                except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+                    LOGGER.debug("Unable to install protected page session bridge: %s", exc)
             return result
 
         setattr(markdown_with_authenticated_reload, "_errorsweep_authenticated_reload_bridge", True)
         st.markdown = markdown_with_authenticated_reload
-    except Exception:
-        pass
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        LOGGER.debug("Unable to install authenticated reload bridge: %s", exc)
 
 
 _install_signup_scroll_fix()
@@ -652,13 +647,13 @@ def _secret(name: str, default: str = "") -> str:
             value = st.secrets.get(name)
             if value is not None:
                 return str(value)
-            alias = _cognisweep_env_alias(name)
+            alias = cognisweep_env_alias(name)
             if alias:
                 value = st.secrets.get(alias)
                 if value is not None:
                     return str(value)
-        except Exception:
-            pass
+        except (AttributeError, KeyError, RuntimeError, TypeError, StreamlitSecretNotFoundError) as exc:
+            LOGGER.debug("Unable to read Streamlit AI secret %s: %s", name, exc)
     return default
 
 
@@ -666,8 +661,8 @@ def _session_value(name: str, default: str = "") -> str:
     if st is not None:
         try:
             return str(st.session_state.get(name, default) or default)
-        except Exception:
-            pass
+        except (AttributeError, RuntimeError, TypeError) as exc:
+            LOGGER.debug("Unable to read Streamlit session value %s: %s", name, exc)
     return default
 
 
@@ -715,7 +710,7 @@ def _blocked_host_reason(hostname: str) -> str:
         try:
             for info in socket.getaddrinfo(host, None):
                 candidates.append(ipaddress.ip_address(info[4][0]))
-        except Exception:
+        except (OSError, ValueError):
             candidates = []
 
     for ip in candidates:
@@ -834,7 +829,7 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
         normalized = normalize_payload(data)
         if normalized is not None:
             return normalized
-    except Exception:
+    except json.JSONDecodeError:
         pass
 
     for index, char in enumerate(text):

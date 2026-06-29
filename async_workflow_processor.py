@@ -30,6 +30,7 @@ import requests
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from app_runtime_config import runtime_env
 from cloud_object_storage import build_object_key, object_storage_provider, put_file, signed_url_for_key
 from pro_reconstruction import build_export_source_asset_from_bytes, sentence_segment_rows_for_pro
 from production_persistence import (
@@ -41,7 +42,7 @@ from production_persistence import (
 
 try:
     from translator_router import translate_batch
-except Exception as exc:  # pragma: no cover
+except ImportError as exc:  # pragma: no cover
     translate_batch = None
     logging.getLogger(__name__).warning("translator_router import failed: %s", exc)
 
@@ -71,28 +72,14 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def env_value(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = os.getenv(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 def env_int(name: str, default: int, minimum: int = 1) -> int:
     try:
         value = int(safe_text(env_value(name)))
-    except Exception:
+    except (TypeError, ValueError):
         value = default
     return max(minimum, value)
 
@@ -127,7 +114,7 @@ def read_spool(task_id: str) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
         LOGGER.warning("Unable to read worker spool %s: %s", path, exc)
         return None
 
@@ -226,12 +213,12 @@ def validate_manifest_for_read(manifest: Dict[str, Any]) -> None:
     declared_size = safe_text(manifest.get("size_bytes") or manifest.get("content_length") or manifest.get("bytes"))
     if declared_size:
         try:
-            if int(float(declared_size)) > manifest_max_bytes():
-                raise ValueError("Queued file manifest exceeds async worker file limits.")
-        except ValueError:
-            raise
-        except Exception:
+            parsed_size = int(float(declared_size))
+        except (TypeError, ValueError):
             LOGGER.warning("Queued file manifest has invalid size metadata for %s: %s", file_name, declared_size)
+        else:
+            if parsed_size > manifest_max_bytes():
+                raise ValueError("Queued file manifest exceeds async worker file limits.")
 
 
 def checked_local_manifest_bytes(path: Path, file_name: str) -> bytes:
@@ -253,12 +240,12 @@ def checked_remote_manifest_bytes(url: str, file_name: str) -> bytes:
         declared_length = safe_text(response.headers.get("Content-Length") if hasattr(response, "headers") else "")
         if declared_length:
             try:
-                if int(declared_length) > max_bytes:
-                    raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
-            except ValueError:
-                raise
-            except Exception:
+                parsed_length = int(declared_length)
+            except (TypeError, ValueError):
                 LOGGER.warning("Queued file %s has invalid Content-Length: %s", file_name, declared_length)
+            else:
+                if parsed_length > max_bytes:
+                    raise ValueError(f"Queued file {file_name} exceeds async worker file limits.")
         chunks: List[bytes] = []
         total = 0
         for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -503,7 +490,7 @@ def parse_rules_zip_from_bytes(data: bytes) -> Dict[str, Any]:
                         line = safe_text(line)
                         if line:
                             rules["instructions"].append(line)
-    except Exception as exc:
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile, zipfile.LargeZipFile, csv.Error, ValueError) as exc:
         rules["warnings"] = [f"Rules ZIP could not be parsed by worker: {exc}"]
     return rules
 

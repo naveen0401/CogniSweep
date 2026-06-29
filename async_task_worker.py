@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
+from app_runtime_config import runtime_env
 from production_persistence import fetch_saas_records, save_saas_record
 
 LOGGER = logging.getLogger("errorsweep.async_task_worker")
@@ -33,7 +34,7 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled", "needs_review"}
 
 try:
     from async_workflow_processor import process_next_queued_task, process_task_payload
-except Exception as exc:  # pragma: no cover - processor is optional in minimal receiver deployments
+except ImportError as exc:  # pragma: no cover - processor is optional in minimal receiver deployments
     LOGGER.warning("async_workflow_processor import failed: %s", exc)
     process_next_queued_task = None
     process_task_payload = None
@@ -43,22 +44,8 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def env_value(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = os.getenv(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 def now_iso() -> str:
@@ -112,7 +99,7 @@ def read_json_body(handler: BaseHTTPRequestHandler, max_bytes: int = 10 * 1024 *
     raw_length = handler.headers.get("Content-Length", "0")
     try:
         length = int(raw_length)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError("Content-Length is invalid.")
     if length <= 0:
         return {}
@@ -145,7 +132,7 @@ def read_spool(task_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
         LOGGER.warning("Unable to read async task spool %s: %s", path, exc)
         return None
 
@@ -246,7 +233,7 @@ def update_task_status(task_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     progress = updates.get("progress", existing.get("progress", 0))
     try:
         progress = max(0, min(100, int(progress or 0)))
-    except Exception:
+    except (TypeError, ValueError):
         progress = int(existing.get("progress") or 0)
     metadata = existing.get("metadata_json") if isinstance(existing.get("metadata_json"), dict) else {}
     patch_metadata = updates.get("metadata_json") if isinstance(updates.get("metadata_json"), dict) else updates.get("metadata")
@@ -347,7 +334,7 @@ class AsyncTaskWorkerHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = read_json_body(self)
-        except Exception as exc:
+        except ValueError as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": safe_text(exc)})
             return
         try:
@@ -416,7 +403,7 @@ def main() -> int:
         return 0
     try:
         validate_worker_token_config()
-    except Exception as exc:
+    except RuntimeError as exc:
         LOGGER.error("%s", exc)
         return 1
     run_server(args.host, args.port)

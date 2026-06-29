@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -25,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
+from app_runtime_config import runtime_env
 from billing_webhooks import normalize_billing_webhook, verify_billing_webhook_signature
 from production_persistence import fetch_saas_records, save_saas_record
 
@@ -83,22 +83,8 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def env_value(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = os.getenv(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 def now_iso() -> str:
@@ -117,7 +103,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 def env_int(name: str, default: int, minimum: int = 1) -> int:
     try:
         value = int(safe_text(env_value(name)))
-    except Exception:
+    except (TypeError, ValueError):
         value = default
     return max(minimum, value)
 
@@ -134,7 +120,7 @@ def parse_metadata(value: Any) -> Dict[str, Any]:
         try:
             data = json.loads(value)
             return data if isinstance(data, dict) else {}
-        except Exception:
+        except (TypeError, json.JSONDecodeError):
             return {}
     return {}
 
@@ -142,7 +128,7 @@ def parse_metadata(value: Any) -> Dict[str, Any]:
 def money_value(value: Any, fallback: float = 0.0) -> float:
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return fallback
 
 
@@ -180,7 +166,7 @@ def verify_signature(provider: str, raw_payload: str, headers: Mapping[str, str]
     if signature_header and secret_value:
         try:
             return "verified" if verify_billing_webhook_signature(resolved_provider, raw_payload, signature_header, secret_value) else "invalid"
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             LOGGER.warning("Webhook signature verification failed for %s: %s", resolved_provider, exc)
             return "unavailable"
     return "not_checked"
@@ -204,7 +190,7 @@ def event_replay_status(normalized: Dict[str, Any], now_seconds: Optional[float]
     raw_timestamp = normalized.get("event_created_at")
     try:
         event_seconds = int(float(raw_timestamp or 0))
-    except Exception:
+    except (TypeError, ValueError):
         event_seconds = 0
     if event_seconds <= 0:
         return "not_available"

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import os
 import shutil
 import tempfile
 from datetime import timedelta
@@ -22,25 +21,13 @@ from urllib.parse import quote
 
 import requests
 
+from app_runtime_config import cognisweep_env_alias, runtime_env
+
 LOGGER = logging.getLogger(__name__)
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env_value(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 DEFAULT_TIMEOUT = int(_env_value("ERRORSWEEP_OBJECT_STORAGE_TIMEOUT", "60"))
@@ -50,18 +37,24 @@ def _secret(name: str, default: str = "") -> str:
     value = _env_value(name, "")
     if value not in (None, ""):
         return str(value)
+    streamlit_secret_error = RuntimeError
     try:
         import streamlit as st
+        try:
+            from streamlit.errors import StreamlitSecretNotFoundError
+            streamlit_secret_error = StreamlitSecretNotFoundError
+        except ImportError:  # pragma: no cover - Streamlit API compatibility
+            pass
 
         value = st.secrets.get(name)
         if value not in (None, ""):
             return str(value)
-        alias = _cognisweep_env_alias(name)
+        alias = cognisweep_env_alias(name)
         if alias:
             value = st.secrets.get(alias)
             if value not in (None, ""):
                 return str(value)
-    except Exception as exc:
+    except (ImportError, AttributeError, KeyError, RuntimeError, TypeError, streamlit_secret_error) as exc:
         LOGGER.debug("Unable to read secret %s: %s", name, exc)
     return default
 

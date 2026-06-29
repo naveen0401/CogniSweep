@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+try:
+    from .checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+
 ROOT = Path(__file__).resolve().parents[1]
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
 STREAMLIT_TEMPLATE_PATH = ROOT / ".streamlit" / "secrets.toml.example"
@@ -96,10 +101,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
 def strip_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -143,17 +144,6 @@ def nonsecret_evidence(key: str, value: str) -> str:
     if SENSITIVE_KEY_RE.search(key):
         return "configured"
     return value
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
@@ -202,7 +192,7 @@ def require_positive_int(
     value = value_for(env, [name])
     try:
         ready = int(value) >= minimum
-    except Exception:
+    except (TypeError, ValueError):
         ready = False
     add(results, area, check, "Pass" if ready else status_when_missing, nonsecret_evidence(name, value), action)
 
@@ -367,7 +357,7 @@ def run_local_smoke(results: List[Dict[str, str]], timeout: int) -> None:
                 evidence,
                 "Fix local backup dry-run failures before deploying scheduled backups.",
             )
-        except Exception as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
             add(results, "Backup Smoke", "Backup worker dry run", "Blocker", safe_text(exc)[:220], "Run operational_backup_worker.py --once --dry-run manually and inspect logs.")
 
 

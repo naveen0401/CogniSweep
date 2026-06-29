@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import urlparse
 
+try:
+    from .checker_utils import aliases_for, missing_items_with_aliases
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, missing_items_with_aliases
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 ADAPTER_PATH = ROOT / "cloud_object_storage.py"
@@ -90,12 +95,7 @@ def missing_items(items: Iterable[str], text: str) -> List[str]:
 
 
 def missing_env_template_items(items: Iterable[str], text: str) -> List[str]:
-    missing: List[str] = []
-    for item in items:
-        if any(candidate in text for candidate in aliases_for(item)):
-            continue
-        missing.append(item)
-    return missing
+    return missing_items_with_aliases(items, text)
 
 
 def requirement_name(line: str) -> str:
@@ -162,17 +162,6 @@ def parse_env_file(path: Path) -> Dict[str, str]:
 
 def key_present(env: Dict[str, str], names: Sequence[str]) -> bool:
     return any(candidate in env and safe_text(env.get(candidate)) != "" and not is_placeholder(safe_text(env.get(candidate))) for name in names for candidate in aliases_for(name))
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
 
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
@@ -414,8 +403,15 @@ def probe_write(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         finally:
             try:
                 temp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                add(
+                    results,
+                    "Storage Probe",
+                    "Temporary probe file cleanup",
+                    "Warn",
+                    safe_text(exc)[:220],
+                    "Remove the local temporary probe file manually if cleanup failed.",
+                )
     except Exception as exc:
         add(results, "Storage Probe", "Write/readiness probe", "Blocker", safe_text(exc)[:220], "Check bucket credentials, permissions, network access, and provider SDK dependencies.")
     finally:

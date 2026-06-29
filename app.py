@@ -6314,16 +6314,15 @@ def sync_browser_session_cookie() -> None:
             try {{ return sharedStorage ? String(sharedStorage.getItem(signedOutKey) || "") : ""; }}
             catch (err) {{ return ""; }}
           }})();
-          if (value && (pendingLogout || pendingSignedOut)) {{
-            const freshSessionHandoff = String(currentUrl.searchParams.get("es_session") || "") === value;
-            if (freshSessionHandoff || currentAuthEntryUrl()) {{
-              try {{
-                if (sharedStorage) {{
-                  sharedStorage.removeItem(logoutKey);
-                  sharedStorage.removeItem(signedOutKey);
-                }}
-              }} catch (err) {{}}
-            }} else {{
+          const clearPendingLogoutMarkers = () => {{
+            try {{
+              if (sharedStorage) {{
+                sharedStorage.removeItem(String(logoutKey));
+                sharedStorage.removeItem(signedOutKey);
+              }}
+            }} catch (err) {{}}
+          }};
+          const clearStaleBrowserAuth = () => {{
             try {{
               if (sharedStorage) {{
                 sharedStorage.removeItem(storageKey);
@@ -6336,13 +6335,41 @@ def sync_browser_session_cookie() -> None:
               targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure;
               targetDoc.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax" + secure + domainAttr;
             }} catch (err) {{}}
+          }};
+          const redirectAfterPendingLogout = () => {{
+            try {{
+              const loc = hostWindow.location;
+              {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
+              const nextUrl = url.toString();
+              if (loc.href !== nextUrl) loc.replace(nextUrl);
+            }} catch (err) {{}}
+          }};
+          const redirectAfterPendingSignedOut = () => {{
             try {{
               const loc = hostWindow.location;
               {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
               if (loc.href !== nextUrl) loc.replace(nextUrl);
             }} catch (err) {{}}
-            return;
+          }};
+          if (value && pendingLogout) {{
+            const freshSessionHandoff = String(currentUrl.searchParams.get("es_session") || "") === value;
+            if (freshSessionHandoff || currentAuthEntryUrl()) {{
+              clearPendingLogoutMarkers();
+            }} else {{
+              clearStaleBrowserAuth();
+              redirectAfterPendingLogout();
+              return;
+            }}
+          }}
+          if (value && pendingSignedOut) {{
+            const freshSessionHandoff = String(currentUrl.searchParams.get("es_session") || "") === value;
+            if (freshSessionHandoff || currentAuthEntryUrl()) {{
+              clearPendingLogoutMarkers();
+            }} else {{
+              clearStaleBrowserAuth();
+              redirectAfterPendingSignedOut();
+              return;
             }}
           }}
           try {{
@@ -6360,16 +6387,17 @@ def sync_browser_session_cookie() -> None:
             const storage = sharedStorage || firstStorage();
             if (!storage) return;
             if (value) {{
-              storage.removeItem(logoutKey);
+              storage.removeItem(String(logoutKey));
               storage.removeItem(signedOutKey);
               storage.setItem(storageKey, value);
             }}
+            else if (!deferStorageClearForLogout) {{
+              storage.setItem(signedOutKey, String(Date.now()) + ":" + Math.random().toString(36).slice(2));
+              storage.removeItem(storageKey);
+              storage.removeItem(routeStorageKey);
+            }}
             else {{
               storage.setItem(signedOutKey, String(Date.now()) + ":" + Math.random().toString(36).slice(2));
-              if (!deferStorageClearForLogout) {{
-                storage.removeItem(storageKey);
-                storage.removeItem(routeStorageKey);
-              }}
             }}
           }} catch (err) {{}}
         }})();
@@ -6534,10 +6562,27 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const logoutValue = localStorage ? String(localStorage.getItem(logoutKey) || "") : "";
             const signedOutValue = localStorage ? String(localStorage.getItem(signedOutKey) || "") : "";
-            if (logoutValue || signedOutValue) {{
+            if (logoutValue) {{
               clearBrowserSessionToken("");
               try {{
-                if (sessionStorage && logoutValue) sessionStorage.setItem(handledLogoutKey, logoutValue);
+                if (sessionStorage) sessionStorage.setItem(handledLogoutKey, logoutValue);
+              }} catch (err) {{}}
+              if (publicEntry && !hasProtectedTarget) {{
+                try {{
+                  if (localStorage) {{
+                    localStorage.removeItem(logoutKey);
+                    localStorage.removeItem(signedOutKey);
+                  }}
+                }} catch (err) {{}}
+                return;
+              }}
+              routeToSignedOutLanding();
+              return;
+            }}
+            if (signedOutValue) {{
+              clearBrowserSessionToken("");
+              try {{
+                if (sessionStorage) sessionStorage.setItem(handledLogoutKey, signedOutValue);
               }} catch (err) {{}}
               if (publicEntry && !hasProtectedTarget) {{
                 try {{
@@ -22622,10 +22667,12 @@ def render_public_auth_session_resume_bridge() -> None:
           padding: 18px 22px;
         }}
 
+        body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid="stAppViewContainer"],
         body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"] {{
           visibility: hidden !important;
         }}
 
+        body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID},
         body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID} {{
           display: grid !important;
           visibility: visible !important;
@@ -22731,6 +22778,21 @@ def render_public_auth_session_resume_bridge() -> None:
             }} catch (err) {{}}
           }};
 
+          const finishLogoutResume = (storage, resumeSessionStorage, logoutMarkerValue) => {{
+            clearBrowserSessionToken(storage, "");
+            markHandled(resumeSessionStorage, handledLogoutKey, logoutMarkerValue);
+            try {{
+              if (storage) {{
+                storage.removeItem(routeStorageKey);
+                storage.removeItem(logoutKey);
+                storage.removeItem(signedOutKey);
+              }}
+            }} catch (err) {{}}
+            clearResumeState(resumeSessionStorage);
+            clearLogoutDoneParam();
+            revealPublicAuthPage();
+          }};
+
           const cleanTargetParams = (params) => {{
             const target = {{}};
             routeParamKeys.forEach((key) => {{
@@ -22779,19 +22841,13 @@ def render_public_auth_session_resume_bridge() -> None:
             const currentUrl = new URL(loc.href);
             const logoutValue = storage ? String(storage.getItem(logoutKey) || "") : "";
             const signedOutValue = storage ? String(storage.getItem(signedOutKey) || "") : "";
-            if (logoutValue || signedOutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
-              clearBrowserSessionToken(storage, "");
-              markHandled(resumeSessionStorage, handledLogoutKey, logoutValue || signedOutValue);
-              try {{
-                if (storage) {{
-                  storage.removeItem(routeStorageKey);
-                  storage.removeItem(logoutKey);
-                  storage.removeItem(signedOutKey);
-                }}
-              }} catch (err) {{}}
-              clearResumeState(resumeSessionStorage);
-              clearLogoutDoneParam();
-              revealPublicAuthPage();
+            if (signedOutValue) {{
+              finishLogoutResume(storage, resumeSessionStorage, signedOutValue);
+              return;
+            }}
+            if (logoutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
+              markHandled(resumeSessionStorage, handledLogoutKey, logoutValue);
+              finishLogoutResume(storage, resumeSessionStorage, "");
               return;
             }}
             const cookieToken = readCookie();
@@ -24783,9 +24839,9 @@ def review_job_id_for_job_record(job: Dict[str, Any]) -> str:
 
 
 def ensure_project_job_editor_session(job: Dict[str, Any]) -> str:
-    review_id = review_job_id_for_job_record(job)
-    if review_id:
-        return review_id
+    review_job_id = review_job_id_for_job_record(job)
+    if review_job_id:
+        return review_job_id
     if not project_job_is_active(job):
         return ""
     metadata = job_history_metadata(job)
@@ -24811,7 +24867,7 @@ def ensure_project_job_editor_session(job: Dict[str, Any]) -> str:
         })
     language = safe_text(job.get("language") or metadata.get("target_language")) or "French"
     file_name = safe_text(job.get("file_name") or metadata.get("file_name")) or f"{project_name or 'project'}_{language}_task"
-    review_id = save_review_session_to_store(
+    review_job_id = save_review_session_to_store(
         rows,
         f"Project task: {project_name or 'Project'}",
         language,
@@ -24823,23 +24879,23 @@ def ensure_project_job_editor_session(job: Dict[str, Any]) -> str:
             "source": "Project job recovery",
         },
     )
-    job["review_job_id"] = review_id
-    job["editor_job_id"] = review_id
+    job["review_job_id"] = review_job_id
+    job["editor_job_id"] = review_job_id
     job["segments"] = segment_count
     next_metadata = {
         **metadata,
-        "review_job_id": review_id,
-        "editor_job_id": review_id,
+        "review_job_id": review_job_id,
+        "editor_job_id": review_job_id,
         "segments": segment_count,
         "project_id": project_id,
         "project": project_name,
     }
     job["metadata_json"] = next_metadata
-    update_project_editor_session_metadata(review_id, rows, job)
+    update_project_editor_session_metadata(review_job_id, rows, job)
     persisted_job = persist_saas_record("jobs", dict(job))
     job.update(persisted_job)
     upsert_session_record("jobs", job)
-    return review_id
+    return review_job_id
 
 
 def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:

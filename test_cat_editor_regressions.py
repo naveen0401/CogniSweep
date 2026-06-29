@@ -493,7 +493,7 @@ def test_logout_routes_every_window_to_landing() -> None:
     assert 'LOGIN_BROADCAST_KEY = "errorsweep_login_broadcast"' in constants
     assert 'LOGOUT_DONE_QUERY_PARAM = "es_signed_out"' in constants
     assert "def render_global_logout_listener() -> None" in source
-    assert 'const listenerVersion = "auth-sync-v9-focus-logout-marker-2026-06-23";' in source
+    assert 'const listenerVersion = "auth-sync-v11-signed-out-consume-2026-06-29";' in source
     assert "window.addEventListener(\"storage\"" in source
     assert "clearAuthAndGoLanding" in source
     assert "handleLogoutValue" in source

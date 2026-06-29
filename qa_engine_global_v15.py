@@ -43,7 +43,7 @@ LOGGER = logging.getLogger(__name__)
 
 try:
     import language_tool_python
-except Exception as exc:
+except ImportError as exc:
     LOGGER.debug("language_tool_python is unavailable: %s", exc)
     language_tool_python = None
 
@@ -2946,7 +2946,7 @@ def _check_languagetool_public_http(text: str, code: str) -> List[Dict[str, Any]
             return []
         data = res.json()
         return data.get("matches", []) if isinstance(data, dict) else []
-    except Exception as exc:
+    except (requests.RequestException, ValueError) as exc:
         LOGGER.debug("LanguageTool public HTTP check failed for %s: %s", code, exc)
         return []
 
@@ -2955,7 +2955,7 @@ def _match_dict_to_finding(m: Dict[str, Any], target: str, code: str) -> Optiona
     try:
         start = int(m.get("offset", 0) or 0)
         length = int(m.get("length", 0) or 0)
-    except Exception as exc:
+    except (TypeError, ValueError) as exc:
         LOGGER.debug("Invalid LanguageTool match offsets: %s", exc)
         return None
     if length <= 0:

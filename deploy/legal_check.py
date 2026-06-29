@@ -17,6 +17,11 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
+try:
+    from .checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+
 ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT / "app.py"
 SCHEMA_PATH = ROOT / "supabase_v42_release_schema.sql"
@@ -105,10 +110,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
 def strip_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -149,17 +150,6 @@ def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on", "enabled"}
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
 
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:

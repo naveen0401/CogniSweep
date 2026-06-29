@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app_runtime_config import runtime_env
+
 LOGGER = logging.getLogger("errorsweep.worker_supervisor")
 
 
@@ -34,22 +36,8 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def env(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value).strip()
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value).strip()
-    return default
+    return runtime_env(name, default).strip()
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -62,7 +50,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 def env_int(name: str, default: int) -> int:
     try:
         return int(env(name, str(default)))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -250,8 +238,8 @@ def run_supervisor(specs: List[ServiceSpec], poll_seconds: int) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, request_stop)
-        except Exception:
-            pass
+        except (OSError, RuntimeError, ValueError) as exc:
+            LOGGER.debug("Unable to install signal handler for %s: %s", sig, exc)
 
     for spec in specs:
         start_service(spec)
@@ -310,7 +298,7 @@ def read_status() -> Dict[str, Any]:
         payload["available"] = True
         payload["status_file"] = str(path)
         return payload
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
         return {"available": False, "status_file": str(path), "error": safe_text(exc)}
 
 

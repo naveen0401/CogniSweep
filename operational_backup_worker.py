@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import tempfile
 import time
 import uuid
@@ -16,11 +15,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from app_runtime_config import runtime_env
 from production_persistence import SAAS_TABLES, fetch_saas_records, save_saas_record
 
 try:
     from cloud_object_storage import build_object_key, object_storage_status, put_file
-except Exception:  # pragma: no cover - optional integration
+except ImportError:  # pragma: no cover - optional integration
     build_object_key = None
     object_storage_status = None
     put_file = None
@@ -106,22 +106,8 @@ def _safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value).strip()
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value).strip()
-    return default
+    return runtime_env(name, default).strip()
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -134,7 +120,7 @@ def _bool_env(name: str, default: bool = False) -> bool:
 def _int_env(name: str, default: int) -> int:
     try:
         return int(_env(name, str(default)))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 

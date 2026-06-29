@@ -15,7 +15,7 @@ def plan_record(name: str) -> Dict[str, Any]:
 def format_money(amount: Any, currency: str = "INR", decimals: bool = False) -> str:
     try:
         value = float(amount or 0)
-    except Exception:
+    except (TypeError, ValueError):
         value = 0.0
     precision = 2 if decimals and value != int(value) else 0
     return f"{safe_text(currency or 'INR')} {value:,.{precision}f}"
@@ -24,7 +24,7 @@ def format_money(amount: Any, currency: str = "INR", decimals: bool = False) -> 
 def money_value(amount: Any) -> float:
     try:
         return max(0.0, float(amount or 0))
-    except Exception:
+    except (TypeError, ValueError):
         return 0.0
 
 
@@ -32,7 +32,7 @@ def invoice_amounts(total_amount: Any, tax_rate_percent: Any) -> Dict[str, float
     total = money_value(total_amount)
     try:
         tax_rate = max(0.0, float(tax_rate_percent or 0))
-    except Exception:
+    except (TypeError, ValueError):
         tax_rate = 0.0
     subtotal = total / (1 + tax_rate / 100) if tax_rate else total
     tax_amount = max(0.0, total - subtotal)

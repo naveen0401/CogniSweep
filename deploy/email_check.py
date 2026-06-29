@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+try:
+    from .checker_utils import aliases_for, missing_items_with_aliases
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, missing_items_with_aliases
+
 ROOT = Path(__file__).resolve().parents[1]
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
 STREAMLIT_TEMPLATE_PATH = ROOT / ".streamlit" / "secrets.toml.example"
@@ -119,17 +124,6 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
-
-
 def add(results: List[Dict[str, str]], area: str, check: str, status: str, evidence: str, action: str) -> None:
     results.append(
         {
@@ -153,7 +147,7 @@ def read_text(path: Path) -> str:
 
 
 def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
+    return missing_items_with_aliases(items, text)
 
 
 def requirement_name(line: str) -> str:

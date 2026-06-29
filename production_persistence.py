@@ -37,35 +37,24 @@ from urllib.parse import quote
 
 import requests
 
+from app_runtime_config import cognisweep_env_alias, runtime_env
 from local_file_lock import process_file_lock
 
 LOGGER = logging.getLogger(__name__)
 
 try:
     import streamlit as st
-except Exception:  # pragma: no cover
+    from streamlit.errors import StreamlitSecretNotFoundError
+except ImportError:  # pragma: no cover
     st = None
+    StreamlitSecretNotFoundError = RuntimeError
 
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days local fallback retention
 SUPABASE_TIMEOUT = 25
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env_value(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 LOCAL_USAGE_MAX_BYTES = int(_env_value("ERRORSWEEP_USAGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
@@ -209,12 +198,12 @@ def _secret(name: str, default: str = "") -> str:
             val = st.secrets.get(name)
             if val not in (None, ""):
                 return str(val)
-            alias = _cognisweep_env_alias(name)
+            alias = cognisweep_env_alias(name)
             if alias:
                 val = st.secrets.get(alias)
                 if val not in (None, ""):
                     return str(val)
-        except Exception as exc:
+        except (AttributeError, KeyError, RuntimeError, TypeError, StreamlitSecretNotFoundError) as exc:
             LOGGER.debug("Unable to read Streamlit secret %s: %s", name, exc)
     return default
 

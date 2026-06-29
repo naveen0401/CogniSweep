@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -18,6 +17,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from app_runtime_config import runtime_env
 from async_worker_queue import async_backend_status
 from cloud_object_storage import object_storage_status
 from email_dispatch_worker import dispatch_pending as dry_run_email_dispatch
@@ -46,22 +46,8 @@ def _safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value).strip()
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value).strip()
-    return default
+    return runtime_env(name, default).strip()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -147,7 +133,7 @@ def public_probe(url: str, timeout: int) -> Dict[str, str]:
     try:
         response = requests.get(url, timeout=timeout)
         return {"status": "ok" if response.status_code < 500 else "error", "detail": f"HTTP {response.status_code}"}
-    except Exception as exc:
+    except requests.RequestException as exc:
         return {"status": "error", "detail": _safe_text(exc)[:220]}
 
 
@@ -181,7 +167,7 @@ def deployment_pack_status() -> Dict[str, Any]:
     if compose_path.exists():
         try:
             compose_text = compose_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
+        except OSError:
             compose_text = ""
     present_services = [service for service in required_services if service in compose_text]
     return {

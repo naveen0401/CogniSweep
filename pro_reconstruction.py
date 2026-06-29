@@ -112,7 +112,7 @@ def split_text_into_sentence_units(text: str) -> List[Dict[str, Any]]:
 def _jsonable(value: Any) -> Any:
     try:
         return json.loads(json.dumps(value, ensure_ascii=False, default=safe_text))
-    except Exception:
+    except (TypeError, ValueError):
         return safe_text(value)
 
 

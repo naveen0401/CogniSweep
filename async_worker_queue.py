@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
 from typing import Any, Dict
@@ -19,25 +18,13 @@ from urllib.parse import urlparse
 
 import requests
 
+from app_runtime_config import cognisweep_env_alias, runtime_env
+
 LOGGER = logging.getLogger(__name__)
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env_value(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 DEFAULT_TIMEOUT = int(_env_value("ERRORSWEEP_ASYNC_QUEUE_TIMEOUT", "20"))
@@ -51,7 +38,7 @@ def _safe_response_text(response: requests.Response) -> str:
             if detail:
                 return str(detail)[:500]
         return json.dumps(data, ensure_ascii=False)[:500]
-    except Exception:
+    except (TypeError, ValueError):
         return (response.text or "")[:500]
 
 
@@ -82,18 +69,24 @@ def _secret(name: str, default: str = "") -> str:
     value = _env_value(name, "")
     if value not in (None, ""):
         return str(value)
+    streamlit_secret_error = RuntimeError
     try:
         import streamlit as st
+        try:
+            from streamlit.errors import StreamlitSecretNotFoundError
+            streamlit_secret_error = StreamlitSecretNotFoundError
+        except ImportError:  # pragma: no cover - Streamlit API compatibility
+            pass
 
         value = st.secrets.get(name)
         if value not in (None, ""):
             return str(value)
-        alias = _cognisweep_env_alias(name)
+        alias = cognisweep_env_alias(name)
         if alias:
             value = st.secrets.get(alias)
             if value not in (None, ""):
                 return str(value)
-    except Exception as exc:
+    except (ImportError, AttributeError, KeyError, RuntimeError, TypeError, streamlit_secret_error) as exc:
         LOGGER.debug("Unable to read secret %s: %s", name, exc)
     return default
 
@@ -165,7 +158,7 @@ def _enqueue_http(payload: Dict[str, Any], worker_url: str) -> Dict[str, Any]:
 def _enqueue_redis(payload: Dict[str, Any], redis_url: str, queue_name: str) -> Dict[str, Any]:
     try:
         import redis
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("redis package is required for Redis async queue support. Install requirements.txt.") from exc
     client = redis.Redis.from_url(redis_url)
     external_id = str(payload.get("task_id") or uuid.uuid4().hex)

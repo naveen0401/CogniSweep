@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import urlparse
 
+try:
+    from .checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
@@ -129,10 +134,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
 def requirement_name(line: str) -> str:
     text = line.strip()
     if not text or text.startswith("#") or text.startswith("-"):
@@ -186,17 +187,6 @@ def nonsecret_evidence(key: str, value: str) -> str:
     if SENSITIVE_KEY_RE.search(key):
         return "configured"
     return value
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
 
 
 def env_bool(env: Dict[str, str], name: str, default: bool = False) -> bool:
@@ -433,7 +423,7 @@ def run_subprocess_smoke(command: Sequence[str], env_updates: Dict[str, str], ti
     try:
         parsed = json.loads(output)
         detail = safe_text(parsed.get("final_status") or parsed.get("state") or parsed.get("enabled_count") or parsed.get("task_id") or "ok")
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         detail = "; ".join(line for line in output.splitlines()[:2] if line)[:220] or f"exit {completed.returncode}"
     return {"returncode": completed.returncode, "detail": detail}
 
@@ -468,7 +458,7 @@ def run_local_smokes(results: List[Dict[str, str]], timeout: int) -> None:
                     result["detail"],
                     "Fix local worker smoke failures before deploying the async services.",
                 )
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError) as exc:
                 add(results, "Async Smoke", label, "Blocker", safe_text(exc)[:220], "Run the worker smoke command manually and inspect logs.")
 
 
@@ -494,7 +484,7 @@ def probe_health(results: List[Dict[str, str]], env: Dict[str, str], timeout: in
             status = "Warn"
             evidence += " auth-gated"
         add(results, "Async Probe", "Receiver health", status, evidence, "Verify async_task_worker.py is reachable at /health from the deployment environment.")
-    except Exception as exc:
+    except requests.RequestException as exc:
         add(results, "Async Probe", "Receiver health", "Blocker", safe_text(exc)[:220], "Check async receiver URL, DNS, TLS, firewall, and service health.")
 
 

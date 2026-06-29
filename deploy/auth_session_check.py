@@ -23,6 +23,21 @@ from urllib.parse import urlparse
 
 import requests
 
+try:
+    from .checker_utils import (
+        aliases_for,
+        cognisweep_env_alias,
+        missing_items_with_aliases as missing_items,
+        template_keys_include,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import (
+        aliases_for,
+        cognisweep_env_alias,
+        missing_items_with_aliases as missing_items,
+        template_keys_include,
+    )
+
 ROOT = Path(__file__).resolve().parents[1]
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
 STREAMLIT_TEMPLATE_PATH = ROOT / ".streamlit" / "secrets.toml.example"
@@ -144,10 +159,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
 def strip_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -193,12 +204,6 @@ def nonsecret_evidence(key: str, value: str) -> str:
     if SENSITIVE_KEY_RE.search(key):
         return "configured"
     return value
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
 
 
 def env_value(env: Dict[str, str], name: str, default: str = "") -> str:
@@ -365,8 +370,8 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
     env_keys = active_template_keys(env_text)
     streamlit_keys = active_template_keys(streamlit_text)
 
-    missing_env = [key for key in REQUIRED_TEMPLATE_KEYS if key not in env_keys]
-    missing_streamlit = [key for key in REQUIRED_TEMPLATE_KEYS if key not in streamlit_keys]
+    missing_env = [key for key in REQUIRED_TEMPLATE_KEYS if not template_keys_include(env_keys, key)]
+    missing_streamlit = [key for key in REQUIRED_TEMPLATE_KEYS if not template_keys_include(streamlit_keys, key)]
     add(
         results,
         "Auth",

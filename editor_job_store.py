@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app_runtime_config import runtime_env
 from local_file_lock import process_file_lock
 
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 2  # 48 hours
@@ -27,22 +28,8 @@ LOGGER = logging.getLogger(__name__)
 _WRITE_LOCK = threading.RLock()
 
 
-def _cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def _env_value(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = _cognisweep_env_alias(name)
-    if alias:
-        value = os.environ.get(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 def _job_dir() -> Path:

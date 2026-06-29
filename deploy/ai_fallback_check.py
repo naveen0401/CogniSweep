@@ -18,6 +18,11 @@ from urllib.parse import urlparse
 
 import requests
 
+try:
+    from .checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for, cognisweep_env_alias, missing_items_with_aliases as missing_items
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 ENV_TEMPLATE_PATH = ROOT / "deploy" / ".env.production.example"
@@ -94,10 +99,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def missing_items(items: Iterable[str], text: str) -> List[str]:
-    return [item for item in items if item not in text]
-
-
 def strip_env_value(raw_value: str) -> str:
     value = raw_value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -131,12 +132,6 @@ def is_placeholder(value: str) -> bool:
     if not lowered:
         return True
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
 
 
 def env_value(env: Dict[str, str], name: str, default: str = "") -> str:

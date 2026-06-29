@@ -18,6 +18,11 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
+try:
+    from .checker_utils import aliases_for
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 PLACEHOLDER_MARKERS = (
@@ -86,17 +91,6 @@ def is_placeholder(value: str) -> bool:
     return any(marker in text for marker in PLACEHOLDER_MARKERS)
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
-
-
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:
     for name in names:
         for candidate in aliases_for(name):
@@ -161,7 +155,7 @@ def run_json_command(command: Sequence[str], timeout: int, env: Optional[Dict[st
     try:
         payload = json.loads(output)
         result, evidence = summary_text(payload, output)
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         result = "Pass" if completed.returncode == 0 else "Blocker"
         evidence = next((line.strip() for line in output.splitlines() if line.strip()), f"exit {completed.returncode}")[:220]
     return result, evidence, completed.returncode
@@ -209,7 +203,7 @@ def probe_http(url: str, timeout: int) -> Tuple[str, str]:
         return "Blocker", "missing or placeholder URL"
     try:
         response = requests.get(url, timeout=timeout)
-    except Exception as exc:
+    except requests.RequestException as exc:
         return "Blocker", safe_text(exc)[:220]
     if response.status_code < 500:
         return "Pass", f"HTTP {response.status_code}"

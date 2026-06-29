@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+try:
+    from .checker_utils import aliases_for
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import aliases_for
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / "deploy" / ".env.production"
 DEFAULT_SESSION_SECRET = "errorsweep-dev-session-secret-change-me"
@@ -81,17 +86,6 @@ def add_os_env(env: Dict[str, str]) -> Dict[str, str]:
         if key not in merged and value not in (None, ""):
             merged[key] = str(value)
     return merged
-
-
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def aliases_for(name: str) -> List[str]:
-    alias = cognisweep_env_alias(name)
-    return [name, alias] if alias else [name]
 
 
 def value_for(env: Dict[str, str], names: Sequence[str]) -> str:

@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+try:
+    from .checker_utils import template_has_env_key
+except ImportError:  # pragma: no cover - direct script execution
+    from checker_utils import template_has_env_key
+
 ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_DEPLOYMENT_FILES = [
@@ -24,6 +29,7 @@ REQUIRED_DEPLOYMENT_FILES = [
     "supabase_v42_release_schema.sql",
     ".streamlit/secrets.toml.example",
     "deploy/.env.production.example",
+    "deploy/checker_utils.py",
     "deploy/README_DEPLOYMENT.md",
     "deploy/LAUNCH_RUNBOOK.md",
     "deploy/ai_fallback_check.py",
@@ -253,20 +259,6 @@ def missing_items(items: Iterable[str], text: str) -> List[str]:
     return [item for item in items if item not in text]
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
-def template_has_env_key(text: str, key: str) -> bool:
-    names = [key]
-    alias = cognisweep_env_alias(key)
-    if alias:
-        names.append(alias)
-    return any(re.search(rf"^{re.escape(name)}\s*=", text, re.MULTILINE) for name in names)
-
-
 def requirement_name(line: str) -> str:
     text = line.strip()
     if not text or text.startswith("#") or text.startswith("-"):
@@ -407,293 +399,147 @@ def check_supabase_schema(results: List[Dict[str, str]]) -> None:
     )
 
 
-def check_supabase_schema_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/supabase_schema_check.py", "--json"]
+def add_json_subcheck(
+    results: List[Dict[str, str]],
+    area: str,
+    check: str,
+    script_path: str,
+    action: str,
+    manual_action: str,
+    *,
+    timeout: int = 60,
+) -> None:
+    command = [sys.executable, script_path, "--json"]
     try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Persistence", "Supabase schema drift check", "Warn", safe_text(exc)[:220], "Run deploy/supabase_schema_check.py manually.")
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        add(results, area, check, "Warn", safe_text(exc)[:220], manual_action)
         return
+
     output = completed.stdout or completed.stderr or ""
     try:
         payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
+        summary = payload.get("summary") if isinstance(payload, dict) else {}
+        summary = summary if isinstance(summary, dict) else {}
+        counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
         blocker_count = int(counts.get("Blocker") or 0)
         warn_count = int(counts.get("Warn") or 0)
         evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
         status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
         evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
         status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+
+    add(results, area, check, status, evidence, action)
+
+
+def check_supabase_schema_contract(results: List[Dict[str, str]]) -> None:
+    add_json_subcheck(
         results,
         "Persistence",
         "Supabase schema drift check",
-        status,
-        evidence,
+        "deploy/supabase_schema_check.py",
         "Keep supabase_v42_release_schema.sql aligned with production_persistence.py before running the schema in Supabase.",
+        "Run deploy/supabase_schema_check.py manually.",
     )
 
 
 def check_object_storage_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/object_storage_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Storage", "Object storage launch check", "Warn", safe_text(exc)[:220], "Run deploy/object_storage_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Storage",
         "Object storage launch check",
-        status,
-        evidence,
+        "deploy/object_storage_check.py",
         "Keep cloud_object_storage.py, provider dependencies, and storage env templates ready before configuring production buckets.",
+        "Run deploy/object_storage_check.py manually.",
     )
 
 
 def check_async_worker_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/async_worker_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Async", "Async worker launch check", "Warn", safe_text(exc)[:220], "Run deploy/async_worker_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Async",
         "Async worker launch check",
-        status,
-        evidence,
+        "deploy/async_worker_check.py",
         "Keep async queue, receiver, processor, supervisor, compose wiring, and worker templates deploy-ready.",
+        "Run deploy/async_worker_check.py manually.",
     )
 
 
 def check_backup_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/backup_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Backup", "Backup launch check", "Warn", safe_text(exc)[:220], "Run deploy/backup_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Backup",
         "Backup launch check",
-        status,
-        evidence,
+        "deploy/backup_check.py",
         "Keep operational backup worker, redaction, manifest/audit records, object-storage upload, supervisor wiring, and backup env templates deploy-ready.",
+        "Run deploy/backup_check.py manually.",
     )
 
 
 def check_billing_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/billing_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Billing", "Billing launch check", "Warn", safe_text(exc)[:220], "Run deploy/billing_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Billing",
         "Billing launch check",
-        status,
-        evidence,
+        "deploy/billing_check.py",
         "Keep billing provider env templates, provider signature checks, webhook receiver service, checkout settings, compose wiring, and receiver health smoke deploy-ready.",
+        "Run deploy/billing_check.py manually.",
     )
 
 
 def check_email_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/email_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Email", "Email launch check", "Warn", safe_text(exc)[:220], "Run deploy/email_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Email",
         "Email launch check",
-        status,
-        evidence,
+        "deploy/email_check.py",
         "Keep provider env templates, transactional templates, Resend/SendGrid/SMTP dispatch worker, supervisor wiring, and dry-run smoke deploy-ready.",
+        "Run deploy/email_check.py manually.",
     )
 
 
 def check_legal_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/legal_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Legal", "Legal launch check", "Warn", safe_text(exc)[:220], "Run deploy/legal_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Legal",
         "Legal launch check",
-        status,
-        evidence,
+        "deploy/legal_check.py",
         "Keep public legal routes, policy version controls, consent capture, privacy requests, subprocessor register, schema, and legal/WAF env keys deploy-ready.",
+        "Run deploy/legal_check.py manually.",
     )
 
 
 def check_ai_fallback_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/ai_fallback_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "AI", "AI fallback launch check", "Warn", safe_text(exc)[:220], "Run deploy/ai_fallback_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "AI",
         "AI fallback launch check",
-        status,
-        evidence,
+        "deploy/ai_fallback_check.py",
         "Keep managed_ai_router.py, AI env templates, URL safety, and platform fallback wiring deploy-ready.",
+        "Run deploy/ai_fallback_check.py manually.",
     )
 
 
 def check_auth_session_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/auth_session_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "Auth", "Auth/session launch check", "Warn", safe_text(exc)[:220], "Run deploy/auth_session_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "Auth",
         "Auth/session launch check",
-        status,
-        evidence,
+        "deploy/auth_session_check.py",
         "Keep production session secret, public URL, owner/workspace bootstrap hashes, and auth-token persistence deploy-ready.",
+        "Run deploy/auth_session_check.py manually.",
     )
 
 
 def check_mt_endpoint_contract(results: List[Dict[str, str]]) -> None:
-    command = [sys.executable, "deploy/mt_endpoint_check.py", "--json"]
-    try:
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
-    except Exception as exc:
-        add(results, "MT", "Managed MT posture check", "Warn", safe_text(exc)[:220], "Run deploy/mt_endpoint_check.py manually.")
-        return
-    output = completed.stdout or completed.stderr or ""
-    try:
-        payload = json.loads(output)
-        summary = payload.get("summary") or {}
-        counts = summary.get("counts") or {}
-        blocker_count = int(counts.get("Blocker") or 0)
-        warn_count = int(counts.get("Warn") or 0)
-        evidence = f"{summary.get('checks', 0)} check(s); {counts.get('Pass', 0)} pass / {warn_count} warn / {blocker_count} blocker"
-        status = "Blocker" if blocker_count else "Warn" if warn_count else "Pass"
-    except Exception:
-        evidence = output.splitlines()[0][:220] if output.splitlines() else f"exit {completed.returncode}"
-        status = "Pass" if completed.returncode == 0 else "Blocker"
-    add(
+    add_json_subcheck(
         results,
         "MT",
         "Managed MT posture check",
-        status,
-        evidence,
+        "deploy/mt_endpoint_check.py",
         "Keep retired local/self-hosted MT artifacts absent and leave Amazon Translate disabled until its adapter is implemented.",
+        "Run deploy/mt_endpoint_check.py manually.",
     )
 
 

@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse, unquo
 
 import requests
 
+from app_runtime_config import runtime_env
+
 
 SUPPORTED_MEDIA_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mp3", ".wav", ".m4a"})
 MEDIA_CONTENT_PREFIXES = ("audio/", "video/")
@@ -26,22 +28,8 @@ HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
 OCTET_STREAM_CONTENT_TYPES = {"application/octet-stream", "binary/octet-stream"}
 
 
-def cognisweep_env_alias(name: str) -> str:
-    if name.startswith("ERRORSWEEP_"):
-        return f"COGNISWEEP_{name[len('ERRORSWEEP_'):]}"
-    return ""
-
-
 def env_value(name: str, default: str = "") -> str:
-    value = os.getenv(name)
-    if value not in (None, ""):
-        return str(value)
-    alias = cognisweep_env_alias(name)
-    if alias:
-        value = os.getenv(alias)
-        if value not in (None, ""):
-            return str(value)
-    return default
+    return runtime_env(name, default)
 
 
 DEFAULT_MEDIA_URL_TIMEOUT_SECONDS = float(env_value("ERRORSWEEP_MEDIA_URL_TIMEOUT_SECONDS", "20"))
@@ -317,7 +305,7 @@ def fetch_media_url_to_temp(
             if written <= 0:
                 raise DirectMediaUrlError("The direct media URL returned an empty file.")
             os.replace(tmp_path, target_path)
-        except Exception:
+        except (DirectMediaUrlError, OSError, requests.RequestException):
             try:
                 tmp_path.unlink(missing_ok=True)
                 target_path.unlink(missing_ok=True)
@@ -362,5 +350,5 @@ def cleanup_fetched_media_record(record: Dict[str, Any]) -> bool:
         path = Path(_safe_text(record.get("path"))).resolve()
         path.unlink(missing_ok=True)
         return True
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return False

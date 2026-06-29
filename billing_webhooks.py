@@ -30,7 +30,7 @@ def _dig(data: Any, *path: str) -> Any:
 def _money_minor_to_major(value: Any) -> float:
     try:
         return round(float(value or 0) / 100, 2)
-    except Exception:
+    except (TypeError, ValueError):
         return 0.0
 
 
@@ -50,7 +50,7 @@ def _epoch_seconds(value: Any) -> int:
         return 0
     try:
         return int(float(text))
-    except Exception:
+    except (TypeError, ValueError):
         pass
     try:
         normalized = text.replace("Z", "+00:00")
@@ -58,7 +58,7 @@ def _epoch_seconds(value: Any) -> int:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return int(parsed.timestamp())
-    except Exception:
+    except ValueError:
         return 0
 
 
@@ -85,7 +85,7 @@ def verify_stripe_signature(raw_payload: str, signature_header: str, webhook_sec
     try:
         if tolerance_seconds > 0 and abs(time.time() - int(timestamp)) > tolerance_seconds:
             return False
-    except Exception:
+    except (TypeError, ValueError):
         return False
     signed_payload = f"{timestamp}.{raw_payload}".encode("utf-8")
     expected = hmac.new(webhook_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
