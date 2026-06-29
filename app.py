@@ -6154,6 +6154,16 @@ def restore_user_from_editor_launch_token(token: str) -> bool:
 
 
 def restore_session_from_cookie() -> None:
+    if query_get(LOGOUT_DONE_QUERY_PARAM) == "1":
+        st.session_state.pop("user", None)
+        st.session_state.pop("authenticated", None)
+        st.session_state.pop("_saas_state_hydrated", None)
+        st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
+        st.session_state.pop("_session_query_fallback_attached", None)
+        st.session_state.pop("_session_query_fallback_attach_attempts", None)
+        st.session_state["_clear_session_cookie"] = True
+        set_auth_debug_state(bool(browser_session_cookie()), False, "signed_out_marker_skip_restore")
+        return
     launch_token = query_get(EDITOR_LAUNCH_QUERY_PARAM)
     handoff_token = safe_text(query_get(SESSION_HANDOFF_QUERY_PARAM))
     token = browser_session_cookie()
@@ -6250,6 +6260,7 @@ def sync_browser_session_cookie() -> None:
           const storageKey = {storage_key_json};
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
+          const signedOutKey = storageKey + ":signed_out";
           const value = {token_json};
           const deferStorageClearForLogout = {defer_storage_clear_json};
           const candidateWindows = [window.parent, window.top, window];
@@ -6287,7 +6298,11 @@ def sync_browser_session_cookie() -> None:
             try {{ return sharedStorage ? String(sharedStorage.getItem(logoutKey) || "") : ""; }}
             catch (err) {{ return ""; }}
           }})();
-          if (value && pendingLogout) {{
+          const pendingSignedOut = (() => {{
+            try {{ return sharedStorage ? String(sharedStorage.getItem(signedOutKey) || "") : ""; }}
+            catch (err) {{ return ""; }}
+          }})();
+          if (value && (pendingLogout || pendingSignedOut)) {{
             try {{
               if (sharedStorage) {{
                 sharedStorage.removeItem(storageKey);
@@ -6302,7 +6317,7 @@ def sync_browser_session_cookie() -> None:
             }} catch (err) {{}}
             try {{
               const loc = hostWindow.location;
-              {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
+              {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
               if (loc.href !== nextUrl) loc.replace(nextUrl);
             }} catch (err) {{}}
@@ -6323,11 +6338,16 @@ def sync_browser_session_cookie() -> None:
             const storage = sharedStorage || firstStorage();
             if (!storage) return;
             if (value) {{
+              storage.removeItem(logoutKey);
+              storage.removeItem(signedOutKey);
               storage.setItem(storageKey, value);
             }}
-            else if (!deferStorageClearForLogout) {{
-              storage.removeItem(storageKey);
-              storage.removeItem(routeStorageKey);
+            else {{
+              storage.setItem(signedOutKey, String(Date.now()) + ":" + Math.random().toString(36).slice(2));
+              if (!deferStorageClearForLogout) {{
+                storage.removeItem(storageKey);
+                storage.removeItem(routeStorageKey);
+              }}
             }}
           }} catch (err) {{}}
         }})();
@@ -6368,6 +6388,7 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
           try {{
             const cookieName = {cookie_name_json};
             const storageKey = {storage_key_json};
+            const signedOutKey = storageKey + ":signed_out";
             const logoutKey = {logout_key_json};
             const routeParamKeys = {route_param_keys_json};
             const editorAuthFailedParam = {editor_auth_failed_param_json};
@@ -6490,10 +6511,11 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
             const cookieToken = readCookie(targetDoc);
             const storageToken = localStorage ? String(localStorage.getItem(storageKey) || "") : "";
             const logoutValue = localStorage ? String(localStorage.getItem(logoutKey) || "") : "";
-            if (logoutValue) {{
+            const signedOutValue = localStorage ? String(localStorage.getItem(signedOutKey) || "") : "";
+            if (logoutValue || signedOutValue) {{
               clearBrowserSessionToken("");
               try {{
-                if (sessionStorage) sessionStorage.setItem(handledLogoutKey, logoutValue);
+                if (sessionStorage && logoutValue) sessionStorage.setItem(handledLogoutKey, logoutValue);
               }} catch (err) {{}}
               if (publicEntry && !hasProtectedTarget) return;
               routeToSignedOutLanding();
@@ -6568,6 +6590,8 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
 
 
 def auth_bootstrap_pending(route: Optional[Dict[str, Any]] = None) -> bool:
+    if query_get(LOGOUT_DONE_QUERY_PARAM) == "1":
+        return False
     if st.session_state.get("authenticated") and st.session_state.get("user"):
         return False
     if query_get(EDITOR_AUTH_FAILED_QUERY_PARAM) == "1" or st.session_state.get("_editor_auth_restore_failed"):
@@ -6737,7 +6761,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "auth-sync-v9-focus-logout-marker-2026-06-23";
+          const listenerVersion = "auth-sync-v10-signed-out-marker-2026-06-29";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6751,6 +6775,7 @@ def render_global_logout_listener() -> None:
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
           const loginKey = {login_key_json};
+          const signedOutKey = storageKey + ":signed_out";
           const handledLogoutKey = logoutKey + ":handled";
           const handledLoginKey = loginKey + ":handled";
           const authShellSeenKey = storageKey + ":authenticated_shell_seen";
@@ -6805,6 +6830,13 @@ def render_global_logout_listener() -> None:
             }} catch (err) {{}}
             return "";
           }};
+          const currentSignedOutValue = () => {{
+            try {{
+              const storage = firstStorage();
+              return storage ? String(storage.getItem(signedOutKey) || "") : "";
+            }} catch (err) {{}}
+            return "";
+          }};
           const currentLoginValue = () => {{
             try {{
               const storage = firstStorage();
@@ -6856,6 +6888,7 @@ def render_global_logout_listener() -> None:
           }};
           const restoreAuthAndGoDashboard = (token) => {{
             if (!token) return;
+            if (currentLogoutValue() || currentSignedOutValue()) return;
             try {{
               const loc = firstWindow().location;
               const url = new URL(loc.href);
@@ -6888,6 +6921,7 @@ def render_global_logout_listener() -> None:
                 storage.removeItem(storageKey);
                 storage.removeItem(routeStorageKey);
                 storage.removeItem(loginKey);
+                storage.setItem(signedOutKey, marker || (String(Date.now()) + ":" + Math.random().toString(36).slice(2)));
               }}
             }} catch (err) {{}}
             try {{
@@ -6906,7 +6940,7 @@ def render_global_logout_listener() -> None:
                 return;
               }}
               markHandled(handledLogoutKey, marker);
-              {landing_redirect_url_js(include_logout_marker=True, include_signed_out_marker=True)}
+              {landing_redirect_url_js(include_signed_out_marker=True)}
               if (loc.href !== url.toString()) loc.replace(url.toString());
             }} catch (err) {{}}
           }};
@@ -6938,6 +6972,10 @@ def render_global_logout_listener() -> None:
               handleLogoutValue(value);
               return;
             }}
+            if (currentSignedOutValue()) {{
+              clearAuthAndGoLanding(currentLogoutValue());
+              return;
+            }}
             const loginValue = currentLoginValue();
             if (loginValue && loginValue !== seenLoginValue && loginValue !== handledValue(handledLoginKey)) {{
               handleLoginValue(loginValue);
@@ -6959,7 +6997,7 @@ def render_global_logout_listener() -> None:
               handleLoginValue(event.newValue);
               return;
             }}
-            if (event.key === storageKey && event.newValue && !currentLogoutValue()) restoreAuthAndGoDashboard(event.newValue);
+            if (event.key === storageKey && event.newValue && !currentLogoutValue() && !currentSignedOutValue()) restoreAuthAndGoDashboard(event.newValue);
           }};
           window.addEventListener("storage", handleStorageEvent);
           cleanup.push(() => window.removeEventListener("storage", handleStorageEvent));
@@ -7024,6 +7062,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
             const routeStorageKey = {route_storage_key_json};
             const logoutKey = {logout_key_json};
             const loginKey = {login_key_json};
+            const signedOutKey = storageKey + ":signed_out";
             const redirectToLanding = {redirect_to_landing_json};
             const logoutMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
             const handledLogoutKey = logoutKey + ":handled";
@@ -7071,6 +7110,7 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
                   storage.removeItem(storageKey);
                   storage.removeItem(routeStorageKey);
                   storage.removeItem(loginKey);
+                  storage.setItem(signedOutKey, logoutMarker);
                 }}
               }} catch (err) {{}}
             }};
@@ -7296,6 +7336,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
           const loginKey = {login_key_json};
+          const signedOutKey = storageKey + ":signed_out";
           const token = {token_json};
           const targetUrl = {target_url_json};
           const loginMarker = String(Date.now()) + ":" + Math.random().toString(36).slice(2);
@@ -7349,6 +7390,7 @@ def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
               const storage = firstStorage();
               if (storage) {{
                 storage.removeItem(logoutKey);
+                storage.removeItem(signedOutKey);
                 storage.setItem(storageKey, token);
                 storage.setItem(routeStorageKey, JSON.stringify({{"es_page": "Dashboard"}}));
                 storage.setItem(loginKey, loginMarker);
@@ -22535,6 +22577,7 @@ def render_public_auth_session_resume_bridge() -> None:
           const maskClass = {mask_class_json};
           const cookieName = {cookie_name_json};
           const storageKey = {storage_key_json};
+          const signedOutKey = storageKey + ":signed_out";
           const routeStorageKey = {route_storage_key_json};
           const logoutKey = {logout_key_json};
           const routeParamKeys = {route_param_keys_json};
@@ -22670,7 +22713,8 @@ def render_public_auth_session_resume_bridge() -> None:
             const loc = parentWin.location;
             const currentUrl = new URL(loc.href);
             const logoutValue = storage ? String(storage.getItem(logoutKey) || "") : "";
-            if (logoutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
+            const signedOutValue = storage ? String(storage.getItem(signedOutKey) || "") : "";
+            if (logoutValue || signedOutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
               clearBrowserSessionToken(storage, "");
               markHandled(resumeSessionStorage, handledLogoutKey, logoutValue);
               try {{
@@ -30568,13 +30612,23 @@ if __name__ == "__main__":
     if query_get("es_logout") == "1":
         logout()
 
-    skip_session_restore = bool(st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, False))
+    signed_out_marker_present = query_get(LOGOUT_DONE_QUERY_PARAM) == "1"
+    if signed_out_marker_present:
+        st.session_state.pop("user", None)
+        st.session_state.pop("authenticated", None)
+        st.session_state.pop("_saas_state_hydrated", None)
+        st.session_state.pop(LOGIN_SUCCESS_PENDING_KEY, None)
+        st.session_state.pop("_session_query_fallback_attached", None)
+        st.session_state.pop("_session_query_fallback_attach_attempts", None)
+        st.session_state["_clear_session_cookie"] = True
+
+    skip_session_restore = bool(st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, False)) or signed_out_marker_present
     if skip_session_restore:
         st.session_state.pop("_pending_session_cookie", None)
         set_auth_debug_state(
             bool(browser_session_cookie()),
             False,
-            "logout_skip_restore_once",
+            "signed_out_marker_skip_restore" if signed_out_marker_present else "logout_skip_restore_once",
             handoff_token_found=bool(query_get(SESSION_HANDOFF_QUERY_PARAM)),
         )
     else:
