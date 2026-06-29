@@ -6294,6 +6294,18 @@ def sync_browser_session_cookie() -> None:
           }};
           let sharedStorage = null;
           try {{ sharedStorage = firstStorage(); }} catch (err) {{}}
+          const currentUrl = new URL(hostWindow.location.href);
+          const normalizedPage = (raw) => String(raw || "")
+            .replace(/[+_-]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+          const authEntryPages = new Set(["login", "signup", "sign up", "reset", "oauth callback", "oauth_callback", "sso handoff", "sso_handoff"]);
+          const currentAuthEntryUrl = () => {{
+            const page = normalizedPage(currentUrl.searchParams.get("es_page"));
+            const route = normalizedPage(currentUrl.searchParams.get("route") || currentUrl.searchParams.get("public"));
+            return authEntryPages.has(page) || authEntryPages.has(route);
+          }};
           const pendingLogout = (() => {{
             try {{ return sharedStorage ? String(sharedStorage.getItem(logoutKey) || "") : ""; }}
             catch (err) {{ return ""; }}
@@ -6303,6 +6315,15 @@ def sync_browser_session_cookie() -> None:
             catch (err) {{ return ""; }}
           }})();
           if (value && (pendingLogout || pendingSignedOut)) {{
+            const freshSessionHandoff = String(currentUrl.searchParams.get("es_session") || "") === value;
+            if (freshSessionHandoff || currentAuthEntryUrl()) {{
+              try {{
+                if (sharedStorage) {{
+                  sharedStorage.removeItem(logoutKey);
+                  sharedStorage.removeItem(signedOutKey);
+                }}
+              }} catch (err) {{}}
+            }} else {{
             try {{
               if (sharedStorage) {{
                 sharedStorage.removeItem(storageKey);
@@ -6322,6 +6343,7 @@ def sync_browser_session_cookie() -> None:
               if (loc.href !== nextUrl) loc.replace(nextUrl);
             }} catch (err) {{}}
             return;
+            }}
           }}
           try {{
             const targetDoc = firstDocument();
@@ -6517,7 +6539,15 @@ def render_browser_session_bootstrap(route: Optional[Dict[str, Any]] = None) -> 
               try {{
                 if (sessionStorage && logoutValue) sessionStorage.setItem(handledLogoutKey, logoutValue);
               }} catch (err) {{}}
-              if (publicEntry && !hasProtectedTarget) return;
+              if (publicEntry && !hasProtectedTarget) {{
+                try {{
+                  if (localStorage) {{
+                    localStorage.removeItem(logoutKey);
+                    localStorage.removeItem(signedOutKey);
+                  }}
+                }} catch (err) {{}}
+                return;
+              }}
               routeToSignedOutLanding();
               return;
             }}
@@ -6761,7 +6791,7 @@ def render_global_logout_listener() -> None:
     domain_js = browser_cookie_domain_js_function()
     logout_runtime = f"""
         (function() {{
-          const listenerVersion = "auth-sync-v10-signed-out-marker-2026-06-29";
+          const listenerVersion = "auth-sync-v11-signed-out-consume-2026-06-29";
           const previousListener = window.__errorsweepGlobalLogoutListener;
           if (previousListener && previousListener.version === listenerVersion) return;
           if (previousListener && typeof previousListener.dispose === "function") {{
@@ -6872,7 +6902,7 @@ def render_global_logout_listener() -> None:
           let seenLogoutValue = handledValue(handledLogoutKey);
           let seenLoginValue = handledValue(handledLoginKey);
           let sawSessionToken = !!currentSessionValue();
-          const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
+          const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up", "reset", "oauth callback", "oauth_callback", "sso handoff", "sso_handoff"]);
           const normalizedPage = (value) => String(value || "").replace(/[+_-]/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
           const currentPublicEntryUrl = (url) => {{
             const route = normalizedPage(url.searchParams.get("route") || url.searchParams.get("public"));
@@ -6972,7 +7002,23 @@ def render_global_logout_listener() -> None:
               handleLogoutValue(value);
               return;
             }}
-            if (currentSignedOutValue()) {{
+            const signedOutValue = currentSignedOutValue();
+            if (signedOutValue) {{
+              const loc = firstWindow().location;
+              const currentUrl = new URL(loc.href);
+              const sessionValue = currentSessionValue();
+              if (!sessionValue && !authenticatedShellSeen() && currentPublicEntryUrl(currentUrl)) {{
+                const marker = currentLogoutValue() || signedOutValue;
+                markHandled(handledLogoutKey, marker);
+                try {{
+                  const storage = firstStorage();
+                  if (storage) {{
+                    storage.removeItem(logoutKey);
+                    storage.removeItem(signedOutKey);
+                  }}
+                }} catch (err) {{}}
+                return;
+              }}
               clearAuthAndGoLanding(currentLogoutValue());
               return;
             }}
@@ -7292,6 +7338,9 @@ def login_user(email: str, role: str, account_type: str, workspace: str = "Demo 
     query_clear(OAUTH_PROVIDER_PARAM)
     query_clear("es_restore")
     query_clear("es_restore_miss")
+    query_clear(LOGOUT_DONE_QUERY_PARAM)
+    st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, None)
+    st.session_state.pop(LOGOUT_BROWSER_CLEANUP_KEY, None)
 
 
 def render_login_success_handoff(target_route: Dict[str, Any]) -> None:
@@ -8565,6 +8614,22 @@ def public_route_for_es_page(page: str) -> str:
         if normalized_page == page_name:
             return route
     return PUBLIC_ES_PAGE_ALIASES.get(es_page_alias_key(page), "")
+
+
+SIGNED_OUT_MARKER_AUTH_ENTRY_ROUTES = {"login", "signup", "reset", OAUTH_CALLBACK_ROUTE, "sso_handoff"}
+
+
+def signed_out_marker_expires_on_auth_entry(route: Optional[Dict[str, Any]] = None) -> bool:
+    route = route or get_current_route()
+    route_public = safe_text(route.get("public") or route.get("route")).strip().lower()
+    page_public = public_route_for_es_page(safe_text(route.get("page") or route.get("es_page")))
+    query_public = public_route_for_es_page(query_get("es_page"))
+    legacy_public = safe_text(query_get("public") or query_get("route")).strip().lower()
+    return any(
+        value in SIGNED_OUT_MARKER_AUTH_ENTRY_ROUTES
+        for value in (route_public, page_public, query_public, legacy_public)
+        if value
+    )
 
 
 def authenticated_public_entry_route(route: Dict[str, Any]) -> bool:
@@ -22716,9 +22781,13 @@ def render_public_auth_session_resume_bridge() -> None:
             const signedOutValue = storage ? String(storage.getItem(signedOutKey) || "") : "";
             if (logoutValue || signedOutValue || currentUrl.searchParams.get(logoutDoneParam) === "1") {{
               clearBrowserSessionToken(storage, "");
-              markHandled(resumeSessionStorage, handledLogoutKey, logoutValue);
+              markHandled(resumeSessionStorage, handledLogoutKey, logoutValue || signedOutValue);
               try {{
-                if (storage) storage.removeItem(routeStorageKey);
+                if (storage) {{
+                  storage.removeItem(routeStorageKey);
+                  storage.removeItem(logoutKey);
+                  storage.removeItem(signedOutKey);
+                }}
               }} catch (err) {{}}
               clearResumeState(resumeSessionStorage);
               clearLogoutDoneParam();
@@ -30612,8 +30681,18 @@ if __name__ == "__main__":
     if query_get("es_logout") == "1":
         logout()
 
+    route_for_signed_out_marker = get_current_route()
     signed_out_marker_present = query_get(LOGOUT_DONE_QUERY_PARAM) == "1"
-    if signed_out_marker_present:
+    signed_out_marker_auth_entry = signed_out_marker_present and signed_out_marker_expires_on_auth_entry(route_for_signed_out_marker)
+    signed_out_marker_has_fresh_login = bool(
+        st.session_state.get("authenticated") and st.session_state.get("user")
+    ) or bool(st.session_state.get(LOGIN_SUCCESS_PENDING_KEY)) or bool(query_get(SESSION_HANDOFF_QUERY_PARAM)) or bool(query_get(OAUTH_ACCESS_TOKEN_PARAM))
+    if signed_out_marker_auth_entry:
+        query_clear(LOGOUT_DONE_QUERY_PARAM)
+    signed_out_marker_blocks_restore = signed_out_marker_present and not (
+        signed_out_marker_auth_entry and signed_out_marker_has_fresh_login
+    )
+    if signed_out_marker_blocks_restore:
         st.session_state.pop("user", None)
         st.session_state.pop("authenticated", None)
         st.session_state.pop("_saas_state_hydrated", None)
@@ -30622,13 +30701,13 @@ if __name__ == "__main__":
         st.session_state.pop("_session_query_fallback_attach_attempts", None)
         st.session_state["_clear_session_cookie"] = True
 
-    skip_session_restore = bool(st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, False)) or signed_out_marker_present
+    skip_session_restore = bool(st.session_state.pop(LOGOUT_SKIP_RESTORE_KEY, False)) or signed_out_marker_blocks_restore
     if skip_session_restore:
         st.session_state.pop("_pending_session_cookie", None)
         set_auth_debug_state(
             bool(browser_session_cookie()),
             False,
-            "signed_out_marker_skip_restore" if signed_out_marker_present else "logout_skip_restore_once",
+            "signed_out_marker_skip_restore" if signed_out_marker_blocks_restore else "logout_skip_restore_once",
             handoff_token_found=bool(query_get(SESSION_HANDOFF_QUERY_PARAM)),
         )
     else:
