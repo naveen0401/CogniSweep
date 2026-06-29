@@ -5888,6 +5888,20 @@ def render_parent_script(runtime: str, *, height: int = 0, scrolling: bool = Fal
     )
 
 
+def render_clear_editor_first_paint_bridge() -> None:
+    """Remove any editor-only preflight layout left by a previous route."""
+    class_json = json.dumps(EDITOR_FIRST_PAINT_CLASS)
+    render_parent_script(
+        f"""
+        try {{
+          document.body.classList.remove({class_json});
+        }} catch (err) {{}}
+        """.strip(),
+        height=0,
+        scrolling=False,
+    )
+
+
 def render_public_landing_canonical_redirect_bridge() -> None:
     """Redirect bare public roots to the canonical marketing landing URL."""
     target_url = safe_text(PUBLIC_LANDING_CANONICAL_URL)
@@ -7099,16 +7113,28 @@ def render_logout_bridge(redirect_to_landing: bool = True) -> None:
                 }}
               }} catch (err) {{}}
             }};
+            let landingRedirectStarted = false;
+            const refreshLogoutCleanup = () => {{
+              try {{
+                clearBrowserAuth();
+              }} catch (err) {{}}
+            }};
             const goLanding = () => {{
               clearBrowserAuth();
-              if (!redirectToLanding) return;
+              if (!redirectToLanding || landingRedirectStarted) return;
               const loc = firstWindow().location;
               {landing_redirect_url_js(include_signed_out_marker=True)}
               const nextUrl = url.toString();
-              if (loc.href !== nextUrl) loc.replace(nextUrl);
+              if (loc.href !== nextUrl) {{
+                landingRedirectStarted = true;
+                loc.replace(nextUrl);
+              }}
             }};
             goLanding();
-            [150, 500, 1200].forEach((delay) => window.setTimeout(goLanding, delay));
+            [300, 900].forEach((delay) => window.setTimeout(() => {{
+              if (landingRedirectStarted) refreshLogoutCleanup();
+              else goLanding();
+            }}, delay));
           }} catch (err) {{}}
         }})();
     """
@@ -22260,6 +22286,7 @@ LOGIN_SUBMIT_MASK_CLASS = "es-login-submit-pending"
 AUTH_RESUME_MARKER_ID = "errorsweep-auth-resume-marker"
 AUTH_RESUME_MASK_ID = "errorsweep-auth-resume-mask"
 AUTH_RESUME_MASK_CLASS = "es-auth-resume-pending"
+EDITOR_FIRST_PAINT_CLASS = "es-editor-first-paint"
 
 
 def render_public_auth_page_marker() -> None:
@@ -22443,7 +22470,7 @@ def render_login_submit_handoff_mask_bridge() -> None:
 
 
 def render_public_auth_session_resume_bridge() -> None:
-    """Hide public auth pages while an existing browser session opens the app."""
+    """Resume an existing browser session without blanking public pages first."""
     marker_id_json = json.dumps(AUTH_RESUME_MARKER_ID)
     mask_id_json = json.dumps(AUTH_RESUME_MASK_ID)
     mask_class_json = json.dumps(AUTH_RESUME_MASK_CLASS)
@@ -22453,6 +22480,7 @@ def render_public_auth_session_resume_bridge() -> None:
     logout_key_json = json.dumps(LOGOUT_BROADCAST_KEY)
     route_param_keys_json = json.dumps(list(ROUTE_STORAGE_PARAM_KEYS))
     logout_done_param_json = json.dumps(LOGOUT_DONE_QUERY_PARAM)
+    editor_first_paint_class_json = json.dumps(EDITOR_FIRST_PAINT_CLASS)
     domain_js = browser_cookie_domain_js_function()
     st.html(
         dedent(f"""
@@ -22487,12 +22515,10 @@ def render_public_auth_session_resume_bridge() -> None:
           padding: 18px 22px;
         }}
 
-        body:has(#{AUTH_RESUME_MARKER_ID}) [data-testid="stAppViewContainer"],
         body.{AUTH_RESUME_MASK_CLASS} [data-testid="stAppViewContainer"] {{
           visibility: hidden !important;
         }}
 
-        body:has(#{AUTH_RESUME_MARKER_ID}) #{AUTH_RESUME_MASK_ID},
         body.{AUTH_RESUME_MASK_CLASS} #{AUTH_RESUME_MASK_ID} {{
           display: grid !important;
           visibility: visible !important;
@@ -22513,9 +22539,14 @@ def render_public_auth_session_resume_bridge() -> None:
           const logoutKey = {logout_key_json};
           const routeParamKeys = {route_param_keys_json};
           const logoutDoneParam = {logout_done_param_json};
+          const editorFirstPaintClass = {editor_first_paint_class_json};
           const handledLogoutKey = logoutKey + ":handled";
           const publicEntryPages = new Set(["", "landing", "login", "signup", "sign up"]);
 {domain_js}
+
+          try {{
+            parentDoc.body.classList.remove(editorFirstPaintClass);
+          }} catch (err) {{}}
 
           const revealPublicAuthPage = () => {{
             try {{
@@ -30234,6 +30265,54 @@ def render_editor_shell_bridge() -> None:
         (() => {
           const parentDoc = window.parent && window.parent.document;
           if (!parentDoc) return;
+          const firstPaintClass = "es-editor-first-paint";
+          const firstPaintStyleId = "errorsweep-editor-first-paint-style";
+
+          const ensureFirstPaintStyle = () => {
+            if (parentDoc.getElementById(firstPaintStyleId)) return;
+            const style = parentDoc.createElement("style");
+            style.id = firstPaintStyleId;
+            style.textContent = `
+              body.${firstPaintClass},
+              body.${firstPaintClass} .stApp,
+              body.${firstPaintClass} [data-testid="stAppViewContainer"],
+              body.${firstPaintClass} [data-testid="stMain"],
+              body.${firstPaintClass} [data-testid="stMainBlockContainer"],
+              body.${firstPaintClass} .block-container {
+                background: #080a12 !important;
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                min-height: 0 !important;
+                width: 100vw !important;
+                max-width: 100vw !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow: hidden !important;
+              }
+              body.${firstPaintClass} [data-testid="stHeader"],
+              body.${firstPaintClass} footer,
+              body.${firstPaintClass} [data-testid="stToolbar"],
+              body.${firstPaintClass} [data-testid="stDecoration"],
+              body.${firstPaintClass} [data-testid="stStatusWidget"] {
+                display: none !important;
+                visibility: hidden !important;
+              }
+              body.${firstPaintClass} .block-container > div[data-testid="stVerticalBlock"] {
+                min-height: 100dvh !important;
+                gap: 0 !important;
+              }
+            `;
+            (parentDoc.head || parentDoc.documentElement).appendChild(style);
+          };
+
+          const clearFirstPaintClass = () => {
+            try {
+              parentDoc.body.classList.remove(firstPaintClass);
+            } catch (err) {}
+          };
+
+          ensureFirstPaintStyle();
+          parentDoc.body.classList.add(firstPaintClass);
 
           const applyEditorShell = () => {
             const shellMarker = parentDoc.getElementById("errorsweep-editor-shell-marker");
@@ -30304,6 +30383,7 @@ def render_editor_shell_bridge() -> None:
                 iframe.style.border = "0";
               });
             }
+            clearFirstPaintClass();
           };
 
           applyEditorShell();
@@ -30336,6 +30416,7 @@ def render_editor_app_shell(content_renderer) -> None:
 
 def render_root_app_shell(content_renderer, *, page_frame: bool = True, show_navigation: bool = True) -> None:
     """Render the authenticated app as a fixed two-row shell."""
+    render_clear_editor_first_paint_bridge()
     render_authenticated_logout_watchdog()
     render_login_submit_mask_clear_bridge()
     render_authenticated_shell_seen_bridge()
