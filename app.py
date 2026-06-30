@@ -377,7 +377,7 @@ def render_brand_logo_asset_override() -> None:
 
 st.set_page_config(
     page_title="CogniSweep",
-    page_icon="🧹",
+    page_icon=BRAND_LOGO_ASSET_CANDIDATES[0],
     layout="wide",
     initial_sidebar_state="collapsed",
 )

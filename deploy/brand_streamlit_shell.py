@@ -30,6 +30,7 @@ def share_metadata_block() -> str:
     <title>{SHARE_TITLE}</title>
     <meta name="description" content="{SHARE_DESCRIPTION}" />
     <meta name="application-name" content="CogniSweep" />
+    <link rel="icon" href="/cognisweep-logo.png" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CogniSweep" />
     <meta property="og:title" content="{SHARE_TITLE}" />
