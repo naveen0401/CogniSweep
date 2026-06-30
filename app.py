@@ -8674,8 +8674,8 @@ def render_koochi_chatbot() -> None:
                 height: 100%;
                 display: block;
                 object-fit: cover;
-                object-position: 50% 50%;
-                transform: scale(2.18);
+                object-position: 50% 52%;
+                transform: scale(1.72);
                 transform-origin: 50% 50%;
                 max-width: none;
               }}
@@ -23548,14 +23548,14 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp {
-          --es-lp-fixed-header-height: clamp(142px, 7.4vw, 156px);
+          --es-lp-fixed-header-height: clamp(176px, 9.4vw, 196px);
           overflow: visible !important;
           min-height: 100dvh !important;
           margin-top: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-          padding-top: calc(var(--es-lp-fixed-header-height) + 34px) !important;
+          padding-top: calc(var(--es-lp-fixed-header-height) + 28px) !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
@@ -23568,8 +23568,8 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           height: var(--es-lp-fixed-header-height) !important;
           min-height: var(--es-lp-fixed-header-height) !important;
           margin: 0 !important;
-          padding: 24px clamp(18px, 8vw, 184px) 18px !important;
-          align-items: center !important;
+          padding: 68px clamp(18px, 8vw, 184px) 20px !important;
+          align-items: flex-start !important;
           overflow: visible !important;
           border-bottom: 1px solid rgba(255,255,255,.12);
           background:
@@ -23590,14 +23590,14 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand .es-lp-logo {
-          width: clamp(56px, 3.7vw, 66px) !important;
-          height: clamp(56px, 3.7vw, 66px) !important;
-          border-radius: 18px !important;
+          width: clamp(50px, 3.2vw, 58px) !important;
+          height: clamp(50px, 3.2vw, 58px) !important;
+          border-radius: 16px !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand .es-lp-brand-name {
-          font-size: clamp(40px, 4vw, 58px) !important;
-          line-height: .98 !important;
+          font-size: clamp(34px, 3.25vw, 48px) !important;
+          line-height: 1 !important;
           padding-bottom: 0 !important;
         }
 
@@ -23608,6 +23608,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
 
         body:has(#errorsweep-landing-page-marker) .es-lp-actions {
           flex: 0 0 auto !important;
+          align-self: center !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-content {
