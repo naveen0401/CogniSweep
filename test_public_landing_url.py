@@ -46,9 +46,11 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
 
     assert "render_koochi_chatbot()" in landing
     assert '"name": "Koochi"' in koochi
+    assert '"logoSrc": logo_data_uri' in koochi
     assert "Ask Koochi" in koochi
+    assert "data-koochi-icon" in koochi
     assert "without a user AI API key" in koochi
-    assert "CogniSweep QA, translation, subtitling, transcription, scorecards" in koochi
+    assert "Ask me about CogniSweep QA, translation, media workflows, scorecards" in koochi
     assert "removeIfNotLandingRoute" in koochi
 
 

@@ -8418,6 +8418,7 @@ def public_login_link_target() -> str:
 def render_koochi_chatbot() -> None:
     """Install the no-API public CogniSweep assistant."""
     support_email = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or "support@cognisweep.com"
+    logo_data_uri = brand_logo_asset_data_uri()
     demo_href = f"mailto:{support_email}?subject=CogniSweep%20demo%20request"
     signup_href = public_page_link("signup")
     login_href = public_page_link("login")
@@ -8427,6 +8428,7 @@ def render_koochi_chatbot() -> None:
         "demoHref": demo_href,
         "signupHref": signup_href,
         "loginHref": login_href,
+        "logoSrc": logo_data_uri,
         "privacyHref": privacy_href,
         "supportEmail": support_email,
     }
@@ -8434,7 +8436,13 @@ def render_koochi_chatbot() -> None:
         f"""
         (() => {{
           const config = {json.dumps(bot_payload, ensure_ascii=True)};
+          const openStateKey = "cognisweep_koochi_open";
+          const safeSession = (() => {{
+            try {{ return window.sessionStorage || null; }} catch (err) {{ return null; }}
+          }})();
           const existing = document.getElementById("koochi-chatbot-root");
+          const wasOpen = (existing && existing.dataset.open === "true") ||
+            (safeSession && safeSession.getItem(openStateKey) === "1");
           if (existing) existing.remove();
 
           const answers = [
@@ -8510,67 +8518,119 @@ def render_koochi_chatbot() -> None:
           const root = document.createElement("section");
           root.id = "koochi-chatbot-root";
           root.setAttribute("aria-live", "polite");
+          if (wasOpen) root.dataset.open = "true";
           root.innerHTML = `
             <style>
               #koochi-chatbot-root {{
                 position: fixed;
-                right: clamp(14px, 2.2vw, 28px);
-                bottom: clamp(14px, 2.2vw, 28px);
+                right: clamp(16px, 2vw, 24px);
+                bottom: clamp(16px, 2vw, 24px);
                 z-index: 2147481900;
                 font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                 color: #0f172a;
               }}
               #koochi-chatbot-root * {{ box-sizing: border-box; }}
+              #koochi-chatbot-root button {{ font: inherit; }}
               .koochi-launch {{
                 display: inline-flex;
                 align-items: center;
-                gap: 10px;
-                border: 0;
+                gap: 11px;
+                min-height: 56px;
+                border: 1px solid rgba(203,213,225,.72);
                 border-radius: 999px;
-                padding: 12px 15px 12px 12px;
-                background: linear-gradient(135deg, #11f5b5, #4aa8ff 64%, #9c5cff);
-                color: #050713;
-                box-shadow: 0 18px 54px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.24) inset;
+                padding: 8px 15px 8px 8px;
+                background: rgba(255,255,255,.96);
+                color: #111827;
+                box-shadow: 0 16px 38px rgba(2,6,23,.22), 0 0 0 1px rgba(255,255,255,.72) inset;
+                backdrop-filter: blur(14px);
                 cursor: pointer;
-                font-weight: 950;
                 letter-spacing: 0;
+                transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+              }}
+              .koochi-launch:hover {{
+                transform: translateY(-2px);
+                border-color: rgba(74,168,255,.55);
+                box-shadow: 0 20px 46px rgba(2,6,23,.28), 0 0 0 1px rgba(255,255,255,.82) inset;
+              }}
+              .koochi-launch-copy {{
+                display: grid;
+                gap: 1px;
+                text-align: left;
+                white-space: nowrap;
+              }}
+              .koochi-launch-copy strong {{
+                display: block;
+                font-size: 14px;
+                line-height: 1.05;
+                font-weight: 900;
+              }}
+              .koochi-launch-copy span {{
+                color: #64748b;
+                display: block;
+                font-size: 11px;
+                font-weight: 750;
               }}
               .koochi-launch-icon,
               .koochi-avatar {{
-                width: 36px;
-                height: 36px;
-                flex: 0 0 36px;
-                border-radius: 14px;
                 display: inline-grid;
                 place-items: center;
+                overflow: hidden;
+                border: 1px solid rgba(62,42,128,.10);
+                border-radius: 10px;
                 background: #fffdf7;
                 color: #5b21b6;
                 font-weight: 1000;
-                box-shadow: inset 0 1px 0 rgba(255,255,255,.92);
+                box-shadow: 0 10px 22px rgba(86,52,176,.10), inset 0 1px 0 rgba(255,255,255,.92);
+              }}
+              .koochi-launch-icon {{
+                width: 40px;
+                height: 40px;
+                flex: 0 0 40px;
+              }}
+              .koochi-avatar {{
+                width: 42px;
+                height: 42px;
+                flex: 0 0 42px;
+              }}
+              .koochi-launch-icon img,
+              .koochi-avatar img {{
+                width: 100%;
+                height: 100%;
+                display: block;
+                object-fit: contain;
+                padding: 3px;
               }}
               .koochi-panel {{
                 display: none;
-                width: min(392px, calc(100vw - 28px));
-                max-height: min(680px, calc(100dvh - 32px));
+                width: min(364px, calc(100vw - 32px));
+                max-height: min(590px, calc(100dvh - 36px));
                 overflow: hidden;
-                border: 1px solid rgba(148,163,184,.28);
+                border: 1px solid rgba(203,213,225,.80);
                 border-radius: 8px;
-                background: rgba(255,255,255,.98);
-                box-shadow: 0 24px 80px rgba(2,6,23,.32);
+                background: #fff;
+                box-shadow: 0 26px 70px rgba(2,6,23,.30);
               }}
               #koochi-chatbot-root[data-open="true"] .koochi-launch {{ display: none; }}
               #koochi-chatbot-root[data-open="true"] .koochi-panel {{
                 display: grid;
-                grid-template-rows: auto minmax(0, 1fr) auto;
+                grid-template-rows: auto minmax(0, 1fr) auto auto;
               }}
               .koochi-head {{
+                position: relative;
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 gap: 12px;
-                padding: 14px 16px;
-                border-bottom: 1px solid rgba(226,232,240,.92);
-                background: linear-gradient(90deg, rgba(17,245,181,.12), rgba(74,168,255,.12), rgba(156,92,255,.12));
+                padding: 15px 15px 13px;
+                border-bottom: 1px solid rgba(226,232,240,.95);
+                background: #fff;
+              }}
+              .koochi-head::before {{
+                content: "";
+                position: absolute;
+                inset: 0 0 auto 0;
+                height: 3px;
+                background: linear-gradient(90deg, #11f5b5, #4aa8ff 58%, #9c5cff);
               }}
               .koochi-id {{
                 display: flex;
@@ -8580,76 +8640,92 @@ def render_koochi_chatbot() -> None:
               }}
               .koochi-id strong {{
                 display: block;
-                font-size: 15px;
+                font-size: 16px;
                 line-height: 1.1;
+                font-weight: 900;
               }}
               .koochi-id span {{
                 display: block;
                 color: #64748b;
                 font-size: 12px;
-                font-weight: 800;
+                font-weight: 750;
                 margin-top: 2px;
               }}
               .koochi-close {{
-                width: 34px;
-                height: 34px;
-                border: 1px solid rgba(148,163,184,.35);
+                width: 32px;
+                height: 32px;
+                border: 1px solid rgba(203,213,225,.9);
                 border-radius: 999px;
-                background: #fff;
-                color: #334155;
+                background: #f8fafc;
+                color: #475569;
                 cursor: pointer;
-                font-size: 20px;
+                font-size: 18px;
                 line-height: 1;
+                transition: background .16s ease, color .16s ease;
+              }}
+              .koochi-close:hover {{
+                background: #eef2f7;
+                color: #0f172a;
               }}
               .koochi-messages {{
-                min-height: 268px;
-                max-height: 430px;
+                min-height: 150px;
+                max-height: 300px;
                 overflow-y: auto;
-                padding: 14px 14px 10px;
-                background:
-                  radial-gradient(circle at 0 0, rgba(17,245,181,.10), transparent 34%),
-                  radial-gradient(circle at 100% 12%, rgba(156,92,255,.12), transparent 32%),
-                  #f8fafc;
+                padding: 14px 14px 12px;
+                background: #f8fafc;
               }}
               .koochi-msg {{
                 display: grid;
                 gap: 5px;
-                margin: 0 0 11px;
+                margin: 0 0 10px;
               }}
               .koochi-msg.user {{ justify-items: end; }}
               .koochi-bubble {{
-                max-width: 92%;
+                max-width: 94%;
                 border-radius: 8px;
-                padding: 10px 12px;
+                padding: 10px 11px;
                 font-size: 14px;
-                line-height: 1.42;
+                line-height: 1.45;
                 background: #fff;
                 color: #1e293b;
                 border: 1px solid rgba(226,232,240,.9);
-                box-shadow: 0 8px 24px rgba(15,23,42,.06);
+                box-shadow: 0 8px 20px rgba(15,23,42,.05);
                 overflow-wrap: anywhere;
               }}
               .koochi-msg.user .koochi-bubble {{
-                background: #111827;
+                background: #172033;
                 color: #fff;
-                border-color: #111827;
+                border-color: #172033;
               }}
               .koochi-quick {{
                 display: flex;
-                flex-wrap: wrap;
-                gap: 7px;
-                padding: 0 14px 12px;
-                background: #f8fafc;
+                flex-wrap: nowrap;
+                gap: 8px;
+                overflow-x: auto;
+                padding: 11px 14px;
+                background: #fff;
+                border-top: 1px solid rgba(226,232,240,.95);
+                scrollbar-width: none;
+              }}
+              .koochi-quick::-webkit-scrollbar {{
+                display: none;
               }}
               .koochi-chip {{
-                border: 1px solid rgba(124,58,237,.18);
+                flex: 0 0 auto;
+                border: 1px solid rgba(148,163,184,.38);
                 border-radius: 7px;
-                background: #ede9fe;
-                color: #3b0764;
-                padding: 7px 9px;
+                background: #f8fafc;
+                color: #25304a;
+                padding: 7px 10px;
                 font-size: 12px;
-                font-weight: 850;
+                font-weight: 820;
                 cursor: pointer;
+                transition: border-color .16s ease, background .16s ease, color .16s ease;
+              }}
+              .koochi-chip:hover {{
+                border-color: rgba(74,168,255,.62);
+                background: #eef6ff;
+                color: #0f172a;
               }}
               .koochi-foot {{
                 padding: 12px 14px 13px;
@@ -8658,7 +8734,7 @@ def render_koochi_chatbot() -> None:
               }}
               .koochi-form {{
                 display: grid;
-                grid-template-columns: minmax(0, 1fr) 42px;
+                grid-template-columns: minmax(0, 1fr) 64px;
                 gap: 8px;
               }}
               .koochi-input {{
@@ -8667,62 +8743,73 @@ def render_koochi_chatbot() -> None:
                 border: 1px solid rgba(148,163,184,.55);
                 border-radius: 8px;
                 padding: 0 12px;
+                background: #f8fafc;
+                color: #111827;
                 font: inherit;
+                font-size: 14px;
                 outline: none;
               }}
+              .koochi-input::placeholder {{ color: #94a3b8; }}
               .koochi-input:focus {{
                 border-color: #4aa8ff;
                 box-shadow: 0 0 0 3px rgba(74,168,255,.18);
+                background: #fff;
               }}
               .koochi-send {{
-                min-width: 42px;
+                min-width: 64px;
                 min-height: 40px;
                 border: 0;
                 border-radius: 8px;
                 background: linear-gradient(135deg, #11f5b5, #4aa8ff);
                 color: #050713;
                 cursor: pointer;
-                font-size: 18px;
-                font-weight: 950;
+                font-size: 13px;
+                font-weight: 900;
               }}
               .koochi-links {{
                 display: flex;
                 flex-wrap: wrap;
-                gap: 8px 12px;
+                gap: 7px 12px;
                 margin-top: 10px;
                 font-size: 12px;
                 color: #64748b;
               }}
               .koochi-links a {{
-                color: #5b21b6;
+                color: #4f46e5;
                 font-weight: 800;
                 text-decoration: none;
               }}
+              .koochi-links a:hover {{ text-decoration: underline; }}
               @media (max-width: 640px) {{
                 #koochi-chatbot-root {{
-                  right: 10px;
-                  bottom: 10px;
+                  right: 12px;
+                  bottom: 12px;
                 }}
                 .koochi-panel {{
-                  width: calc(100vw - 20px);
-                  max-height: calc(100dvh - 20px);
+                  width: calc(100vw - 24px);
+                  max-height: calc(100dvh - 24px);
                 }}
                 .koochi-messages {{
-                  max-height: min(390px, calc(100dvh - 254px));
+                  min-height: 132px;
+                  max-height: min(270px, calc(100dvh - 250px));
                 }}
-                .koochi-launch span:last-child {{
+                .koochi-launch-copy {{
                   display: none;
+                }}
+                .koochi-launch {{
+                  min-height: 54px;
+                  padding: 7px;
                 }}
               }}
             </style>
             <button class="koochi-launch" type="button" aria-label="Open Koochi assistant">
-              <span class="koochi-launch-icon">K</span>
-              <span>Ask Koochi</span>
+              <span class="koochi-launch-icon" data-koochi-icon></span>
+              <span class="koochi-launch-copy"><strong>Ask Koochi</strong><span>Product assistant</span></span>
             </button>
             <div class="koochi-panel" role="dialog" aria-label="Koochi CogniSweep assistant">
               <div class="koochi-head">
                 <div class="koochi-id">
-                  <span class="koochi-avatar">K</span>
+                  <span class="koochi-avatar" data-koochi-icon></span>
                   <div><strong>Koochi</strong><span>CogniSweep assistant</span></div>
                 </div>
                 <button class="koochi-close" type="button" aria-label="Close Koochi">&times;</button>
@@ -8743,6 +8830,20 @@ def render_koochi_chatbot() -> None:
               </div>
             </div>
           `;
+
+          root.querySelectorAll("[data-koochi-icon]").forEach((node) => {{
+            if (config.logoSrc) {{
+              const image = document.createElement("img");
+              image.src = config.logoSrc;
+              image.alt = "";
+              image.decoding = "async";
+              node.appendChild(image);
+            }} else {{
+              const fallback = document.createElement("span");
+              fallback.textContent = "K";
+              node.appendChild(fallback);
+            }}
+          }});
 
           const addMessage = (text, sender = "bot") => {{
             const messages = root.querySelector("[data-koochi-messages]");
@@ -8783,11 +8884,13 @@ def render_koochi_chatbot() -> None:
 
           root.querySelector(".koochi-launch").addEventListener("click", () => {{
             root.dataset.open = "true";
+            if (safeSession) safeSession.setItem(openStateKey, "1");
             const input = root.querySelector("[data-koochi-input]");
             window.setTimeout(() => input && input.focus(), 60);
           }});
           root.querySelector(".koochi-close").addEventListener("click", () => {{
             root.dataset.open = "false";
+            if (safeSession) safeSession.removeItem(openStateKey);
           }});
           root.querySelector("[data-koochi-form]").addEventListener("submit", (event) => {{
             event.preventDefault();
@@ -8835,6 +8938,7 @@ def render_koochi_chatbot() -> None:
           }};
           const removeIfNotLandingRoute = () => {{
             if (!isLandingRoute() && root.isConnected) {{
+              if (safeSession) safeSession.removeItem(openStateKey);
               root.remove();
             }}
           }};
@@ -8846,7 +8950,7 @@ def render_koochi_chatbot() -> None:
             }}
             removeIfNotLandingRoute();
           }}, 1500);
-          addMessage("Hi, I am Koochi. I can answer questions about CogniSweep QA, translation, subtitling, transcription, scorecards, pricing, partnerships, and product licensing.");
+          addMessage("Hi, I am Koochi. Ask me about CogniSweep QA, translation, media workflows, scorecards, pricing, or partnerships.");
         }})();
         """.strip(),
         height=0,
