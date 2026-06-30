@@ -23469,13 +23469,14 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp {
+          --es-lp-fixed-header-height: clamp(142px, 7.4vw, 156px);
           overflow: visible !important;
           min-height: 100dvh !important;
           margin-top: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-          padding-top: clamp(164px, 10.5vw, 202px) !important;
+          padding-top: calc(var(--es-lp-fixed-header-height) + 34px) !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
@@ -23485,9 +23486,12 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           width: 100% !important;
           max-width: none !important;
           box-sizing: border-box !important;
-          min-height: clamp(122px, 8vw, 158px) !important;
+          height: var(--es-lp-fixed-header-height) !important;
+          min-height: var(--es-lp-fixed-header-height) !important;
           margin: 0 !important;
-          padding: 18px clamp(18px, 8vw, 184px) !important;
+          padding: 24px clamp(18px, 8vw, 184px) 18px !important;
+          align-items: center !important;
+          overflow: visible !important;
           border-bottom: 1px solid rgba(255,255,255,.12);
           background:
             linear-gradient(90deg, rgba(0,65,57,.95), rgba(7,11,25,.96) 48%, rgba(61,24,99,.95));
@@ -23496,11 +23500,26 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand {
+          align-items: center !important;
           min-width: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand > div:last-child {
+          display: grid !important;
+          gap: 6px !important;
           min-width: 0 !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand .es-lp-logo {
+          width: clamp(56px, 3.7vw, 66px) !important;
+          height: clamp(56px, 3.7vw, 66px) !important;
+          border-radius: 18px !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand .es-lp-brand-name {
+          font-size: clamp(40px, 4vw, 58px) !important;
+          line-height: .98 !important;
+          padding-bottom: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-brand-kicker {
@@ -23848,11 +23867,15 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           .es-lp-mega-feature { grid-column: span 2; }
         }
         @media (max-width: 640px) {
+          body:has(#errorsweep-landing-page-marker) .es-lp {
+            --es-lp-fixed-header-height: 232px;
+          }
           body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-            padding-top: 260px !important;
+            padding-top: calc(var(--es-lp-fixed-header-height) + 28px) !important;
           }
           body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
-            min-height: 176px !important;
+            height: var(--es-lp-fixed-header-height) !important;
+            min-height: var(--es-lp-fixed-header-height) !important;
             padding: 18px 20px !important;
           }
           .es-lp-hero-top { flex-direction: column; align-items: flex-start; }

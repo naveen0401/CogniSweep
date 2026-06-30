@@ -54,6 +54,16 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
     assert "removeIfNotLandingRoute" in koochi
 
 
+def test_public_landing_uses_stable_fixed_header_spacing() -> None:
+    app = read(APP)
+    landing = app[app.index("def render_landing_page") : app.index("LOGIN_SUBMIT_MASK_ID")]
+
+    assert "--es-lp-fixed-header-height" in landing
+    assert "padding-top: calc(var(--es-lp-fixed-header-height) + 34px) !important" in landing
+    assert "height: var(--es-lp-fixed-header-height) !important" in landing
+    assert "font-size: clamp(40px, 4vw, 58px) !important" in landing
+
+
 def test_root_startup_installs_canonical_redirect_bridge() -> None:
     app = read(APP)
     bridge = function_body(app, "render_public_landing_canonical_redirect_bridge", "render_authenticated_shell_seen_bridge")
@@ -91,6 +101,7 @@ if __name__ == "__main__":
     test_public_landing_canonical_url_is_configured()
     test_public_landing_route_alias_renders_landing()
     test_public_landing_mounts_koochi_chatbot()
+    test_public_landing_uses_stable_fixed_header_spacing()
     test_root_startup_installs_canonical_redirect_bridge()
     test_caddy_redirects_bare_roots_to_canonical_landing()
     test_env_template_names_public_www_landing_url()
