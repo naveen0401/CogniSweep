@@ -6,6 +6,7 @@ APP = ROOT / "app.py"
 PLATFORM_CONSTANTS = ROOT / "app_platform_constants.py"
 CADDYFILE = ROOT / "deploy" / "Caddyfile"
 ENV_TEMPLATE = ROOT / "deploy" / ".env.production.example"
+KOOCHI_ICON = ROOT / "assets" / "koochi-chatbot-icon.jpeg"
 
 
 def read(path: Path) -> str:
@@ -46,7 +47,9 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
 
     assert "render_koochi_chatbot()" in landing
     assert '"name": "Koochi"' in koochi
-    assert "koochi_bot_girl_avatar_data_uri()" in koochi
+    assert KOOCHI_ICON.exists()
+    assert "koochi-chatbot-icon.jpeg" in app
+    assert "koochi_avatar_asset_data_uri()" in koochi
     assert '"avatarSrc": avatar_data_uri' in koochi
     assert "Ask Koochi" in koochi
     assert "data-koochi-icon" in koochi

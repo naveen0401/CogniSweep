@@ -322,6 +322,12 @@ BRAND_LOGO_ASSET_CANDIDATES = (
     Path(__file__).resolve().parent / "assets" / "cognisweep-logo.webp",
     Path(__file__).resolve().parent / "assets" / "cognisweep-logo.svg",
 )
+KOOCHI_AVATAR_ASSET_CANDIDATES = (
+    Path(__file__).resolve().parent / "assets" / "koochi-chatbot-icon.jpeg",
+    Path(__file__).resolve().parent / "assets" / "koochi-chatbot-icon.jpg",
+    Path(__file__).resolve().parent / "assets" / "koochi-chatbot-icon.png",
+    Path(__file__).resolve().parent / "assets" / "koochi-chatbot-icon.webp",
+)
 
 
 def brand_logo_asset_data_uri() -> str:
@@ -393,6 +399,26 @@ def koochi_bot_girl_avatar_data_uri() -> str:
     </svg>
     """
     return f"data:image/svg+xml,{quote(' '.join(svg.split()), safe='')}"
+
+
+def koochi_avatar_asset_data_uri() -> str:
+    mime_by_suffix = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    for path in KOOCHI_AVATAR_ASSET_CANDIDATES:
+        if not path.exists():
+            continue
+        mime = mime_by_suffix.get(path.suffix.lower(), "image/jpeg")
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except Exception as exc:
+            LOGGER.warning("Unable to load Koochi avatar asset %s: %s", path, exc)
+            return koochi_bot_girl_avatar_data_uri()
+        return f"data:{mime};base64,{encoded}"
+    return koochi_bot_girl_avatar_data_uri()
 
 
 def render_brand_logo_asset_override() -> None:
@@ -8468,7 +8494,7 @@ def public_login_link_target() -> str:
 def render_koochi_chatbot() -> None:
     """Install the no-API public CogniSweep assistant."""
     support_email = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or "support@cognisweep.com"
-    avatar_data_uri = koochi_bot_girl_avatar_data_uri()
+    avatar_data_uri = koochi_avatar_asset_data_uri()
     demo_href = f"mailto:{support_email}?subject=CogniSweep%20demo%20request"
     signup_href = public_page_link("signup")
     login_href = public_page_link("login")
@@ -8647,8 +8673,11 @@ def render_koochi_chatbot() -> None:
                 width: 100%;
                 height: 100%;
                 display: block;
-                object-fit: contain;
-                padding: 3px;
+                object-fit: cover;
+                object-position: 50% 50%;
+                transform: scale(2.18);
+                transform-origin: 50% 50%;
+                max-width: none;
               }}
               .koochi-panel {{
                 display: none;
