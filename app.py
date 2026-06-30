@@ -1276,9 +1276,9 @@ div[data-baseweb="select"] [data-baseweb="tag"]:hover {
   background: linear-gradient(90deg, #ffffff 0%, #b7f7df 42%, #94d5ff 72%, #e7d7ff 100%);
   background-clip: text;
   -webkit-background-clip: text;
-  font-size: clamp(44px, 5vw, 72px);
+  font-size: clamp(42px, 4.6vw, 66px);
   display: inline-block;
-  line-height: 1.16;
+  line-height: 1.1;
   padding-bottom: .14em;
   text-shadow: 0 24px 80px rgba(74,168,255,.20);
 }
@@ -1370,7 +1370,7 @@ div[data-baseweb="select"] [data-baseweb="tag"]:hover {
   max-width: 1120px;
   margin: 0 auto;
   color: #fff;
-  font-size: clamp(48px, 6.4vw, 84px);
+  font-size: clamp(46px, 5.8vw, 78px);
   line-height: 1.02;
   font-weight: 950;
   letter-spacing: -.04em;
@@ -22932,7 +22932,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-          padding-top: 118px !important;
+          padding-top: clamp(164px, 10.5vw, 202px) !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
@@ -22941,7 +22941,8 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           z-index: 2147482000 !important;
           width: 100% !important;
           max-width: none !important;
-          min-height: 96px !important;
+          box-sizing: border-box !important;
+          min-height: clamp(122px, 8vw, 158px) !important;
           margin: 0 !important;
           padding: 18px clamp(18px, 8vw, 184px) !important;
           border-bottom: 1px solid rgba(255,255,255,.12);
@@ -22951,8 +22952,25 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           backdrop-filter: blur(18px);
         }
 
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand {
+          min-width: 0 !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-hero-brand > div:last-child {
+          min-width: 0 !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-brand-kicker {
+          white-space: normal !important;
+          overflow-wrap: anywhere !important;
+        }
+
+        body:has(#errorsweep-landing-page-marker) .es-lp-actions {
+          flex: 0 0 auto !important;
+        }
+
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-content {
-          margin-top: 26px !important;
+          margin-top: 12px !important;
         }
 
         body:has(#errorsweep-landing-page-marker) [data-testid="stMainBlockContainer"]::-webkit-scrollbar,
@@ -23288,7 +23306,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
         @media (max-width: 640px) {
           body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-            padding-top: 196px !important;
+            padding-top: 260px !important;
           }
           body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
             min-height: 176px !important;
