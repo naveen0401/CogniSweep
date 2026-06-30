@@ -585,6 +585,8 @@ def check_ci_release_gate(results: List[Dict[str, str]]) -> None:
         "python test_dependency_locking.py",
         "python test_persistence_cache_hardening.py",
         "python test_qa_correction_cache.py",
+        "python test_scorecard_flow.py",
+        "python test_quality_context_flow.py",
         "python test_subtitle_external_editor_only.py",
         "python test_url_media_fetcher.py",
         "python test_language_resource_connectors.py",

@@ -96,6 +96,8 @@ jobs:
           python test_qa_correction_cache.py
           python test_release_gate_workflow.py
           python test_cat_editor_regressions.py
+          python test_scorecard_flow.py
+          python test_quality_context_flow.py
           python test_media_editor_reference.py
           python test_subtitle_external_editor_only.py
           python test_url_media_fetcher.py

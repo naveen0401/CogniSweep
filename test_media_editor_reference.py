@@ -88,6 +88,29 @@ def test_reference_media_editor_has_mobile_working_layout():
     assert "body.transcription-mode table" in mobile_css
 
 
+def test_reference_media_editor_export_includes_source_and_optional_qa():
+    html = REFERENCE_HTML.read_text(encoding="utf-8")
+
+    assert "const qualityContext = payload.quality_context || (payload.metadata || {}).quality_inputs || {};" in html
+    assert "async function sourceMediaExportFile()" in html
+    assert 'return { name: `source_file/${name}`, content }' in html
+    assert "async function mediaExportPackageFiles(packageKind)" in html
+    assert "const sourceFile = await sourceMediaExportFile();" in html
+    assert "if (sourceFile) files.push(sourceFile);" in html
+    assert "function shouldIncludeQaReport()" in html
+    assert "if (shouldIncludeQaReport())" in html
+    assert 'files.push({ name: "qa_run_report.xlsx", content: qaRunReportWorkbookBytes(packageKind) });' in html
+
+
+def test_reference_media_editor_qa_report_uses_validation_findings():
+    html = REFERENCE_HTML.read_text(encoding="utf-8")
+
+    assert "function qualityFindingsForRow(row, idx = 0)" in html
+    assert "validationFindingsForRow(row, idx).forEach" in html
+    assert "normalizeValidationFinding(item, idx)" in html
+    assert "qualityFindingsForRow(row, idx).forEach" in html
+
+
 if __name__ == "__main__":
     test_reference_media_editor_has_timing_quick_actions()
     test_reference_media_editor_updates_timing_metrics()
@@ -95,4 +118,6 @@ if __name__ == "__main__":
     test_reference_media_editor_has_real_logo_slot_and_route_back_button()
     test_reference_media_editor_filters_segment_resources_and_done_validation()
     test_reference_media_editor_has_mobile_working_layout()
+    test_reference_media_editor_export_includes_source_and_optional_qa()
+    test_reference_media_editor_qa_report_uses_validation_findings()
     print("Media editor reference checks passed.")

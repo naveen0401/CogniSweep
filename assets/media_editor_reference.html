@@ -1024,6 +1024,7 @@
 
   <script>
     const payload = __MEDIA_EDITOR_PAYLOAD__;
+    const qualityContext = payload.quality_context || (payload.metadata || {}).quality_inputs || {};
     const COMPLETED_WITH_WARNINGS_STATUS = "Completed with warnings";
     const statusOptions = ["Draft", "MT", "Fuzzy 75%", "Fuzzy 85%", "100%", "101%", "Needs Review", "Approved", COMPLETED_WITH_WARNINGS_STATUS, "Rejected", "Needs Rework", "Untranslated", "Existing", "Transcribed Source"];
     const MIN_MEDIA_SEGMENT_DURATION = 0.1;
@@ -1167,7 +1168,14 @@
       if (Array.isArray(row.qa)) {
         row.qa.forEach((item) => findings.push(normalizeValidationFinding(item, idx)));
       }
-      completionIgnoredFindings(row).forEach((item) => findings.push(normalizeValidationFinding(item, idx)));
+      completionIgnoredFindings(row).forEach((item) => {
+        const normalized = normalizeValidationFinding(item, idx);
+        findings.push({
+          ...normalized,
+          message: `Ignored completion warning: ${normalized.message || "Review this segment."}`,
+          category: normalized.category || "Completion Warning",
+        });
+      });
       const start = parseTimecode(row.start);
       const end = parseTimecode(row.end);
       const text = safe(row.target);
@@ -2262,19 +2270,88 @@
       }).join("\n\n");
     }
 
-    function qualityFindingsForRow(row) {
-      const qa = Array.isArray(row.qa) ? [...row.qa] : [];
-      const duration = Math.max(.1, parseTimecode(row.end) - parseTimecode(row.start));
-      const textLength = safe(row.target || row.source).length;
-      const cps = Math.round(textLength / duration);
-      if (!isTranscriptionMode() && cps > 20) qa.push({ severity: "Warn", message: `Reading speed is ${cps} CPS. Consider shortening this subtitle.` });
-      if (!isTranscriptionMode() && safe(row.target).length > 84) qa.push({ severity: "Warn", message: "Target text is long for a two-line subtitle." });
-      if (parseTimecode(row.end) <= parseTimecode(row.start)) qa.push({ severity: "Blocker", message: "End time must be after start time." });
-      if (!safe(row.target).trim()) qa.push({ severity: "Warn", message: `${targetColumnLabel()} text is blank.` });
-      completionIgnoredFindings(row).forEach((item) => qa.push({
-        severity: item.severity || "Review",
-        message: `Ignored completion warning: ${item.message || item.issue || "Review this segment."}`,
-      }));
+    function safeZipFileName(name, fallback = "source_media") {
+      return (safe(name).replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim() || fallback);
+    }
+
+    function base64ToBytes(value) {
+      const binary = atob(safe(value).replace(/\s+/g, ""));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      return bytes;
+    }
+
+    function textDataUriToBytes(value) {
+      try {
+        return new TextEncoder().encode(decodeURIComponent(value));
+      } catch (error) {
+        return new TextEncoder().encode(value);
+      }
+    }
+
+    async function sourceMediaExportFile() {
+      const media = payload.media || {};
+      const src = safe(media.src);
+      if (!src) return null;
+      const name = safeZipFileName(media.name || (payload.metadata || {}).file_name || "source_media");
+      if (src.startsWith("data:")) {
+        const comma = src.indexOf(",");
+        if (comma < 0) return null;
+        const meta = src.slice(0, comma);
+        const data = src.slice(comma + 1);
+        const content = /;base64/i.test(meta) ? base64ToBytes(data) : textDataUriToBytes(data);
+        return { name: `source_file/${name}`, content };
+      }
+      if (/^https?:\/\//i.test(src)) {
+        try {
+          const response = await fetch(src);
+          if (!response.ok) return null;
+          return { name: `source_file/${name}`, content: new Uint8Array(await response.arrayBuffer()) };
+        } catch (error) {
+          return null;
+        }
+      }
+      return null;
+    }
+
+    function qaReportContextLabels() {
+      const labels = [];
+      if (qualityContext?.has_ai_key) labels.push("AI API key");
+      if (qualityContext?.has_language_resources) labels.push("language resources");
+      if (qualityContext?.has_reference_docs) labels.push("reference docs");
+      if (qualityContext?.has_instructions) labels.push("instructions");
+      return labels;
+    }
+
+    function shouldIncludeQaReport() {
+      if (qualityContext && Object.prototype.hasOwnProperty.call(qualityContext, "has_any")) {
+        return Boolean(qualityContext.has_any);
+      }
+      return Boolean(
+        qualityContext?.has_ai_key
+        || qualityContext?.has_language_resources
+        || qualityContext?.has_reference_docs
+        || qualityContext?.has_instructions
+        || (Array.isArray((payload.resources || {}).tm) && (payload.resources || {}).tm.length)
+        || (Array.isArray((payload.resources || {}).glossary) && (payload.resources || {}).glossary.length)
+        || (Array.isArray((payload.resources || {}).dnt) && (payload.resources || {}).dnt.length)
+      );
+    }
+
+    function qualityFindingsForRow(row, idx = 0) {
+      const seen = new Set();
+      const qa = [];
+      validationFindingsForRow(row, idx).forEach((item) => {
+        const normalized = normalizeValidationFinding(item, idx);
+        const key = `${safe(normalized.severity)}|${safe(normalized.category)}|${safe(normalized.message)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        qa.push({
+          severity: normalized.severity || "Review",
+          message: normalized.message || "Review this segment.",
+          category: normalized.category || "Validation",
+        });
+      });
       return qa;
     }
 
@@ -2346,7 +2423,7 @@
     function qaReportRows(packageKind) {
       const findings = [];
       rows.forEach((row, idx) => {
-        qualityFindingsForRow(row).forEach((item) => {
+        qualityFindingsForRow(row, idx).forEach((item) => {
           findings.push({
             row: idx + 1,
             severity: safe(item.severity || item.Severity || item.label || "Review"),
@@ -2366,6 +2443,7 @@
         ["Rows", rows.length],
         ["Confirmed", `${confirmed} / ${rows.length}`],
         ["Findings", findings.length],
+        ["QA Context", qaReportContextLabels().join(", ") || "Provided context was not classified."],
         [],
         ["Row", "Severity", "Finding", "Start", "End", "Text"],
       ];
@@ -2381,8 +2459,10 @@
       return createXlsxBytes("QA Report", qaReportRows(packageKind));
     }
 
-    function mediaExportPackageFiles(packageKind) {
+    async function mediaExportPackageFiles(packageKind) {
       const files = [];
+      const sourceFile = await sourceMediaExportFile();
+      if (sourceFile) files.push(sourceFile);
       if (isTranscriptionMode()) {
         files.push({ name: "transcription_script.srt", content: rowsToSrt("target") });
         files.push({ name: "transcription_script.txt", content: rowsToPlainScript("target") });
@@ -2393,11 +2473,13 @@
       if (packageKind === "csv") {
         files.push({ name: "segments.csv", content: rowsCsv() });
       }
-      files.push({ name: "qa_run_report.xlsx", content: qaRunReportWorkbookBytes(packageKind) });
+      if (shouldIncludeQaReport()) {
+        files.push({ name: "qa_run_report.xlsx", content: qaRunReportWorkbookBytes(packageKind) });
+      }
       return files;
     }
 
-    function exportPackage(packageKind) {
+    async function exportPackage(packageKind) {
       if (!allRowsConfirmed()) {
         const pending = rows.length - confirmedCount();
         alert(`Tick ${pending} more segment${pending === 1 ? "" : "s"} Done before exporting.`);
@@ -2406,7 +2488,7 @@
       }
       const slug = payload.file_slug || "errorsweep_media_editor";
       const modeSlug = isTranscriptionMode() ? "transcription" : "subtitle";
-      const zip = createZipBlob(mediaExportPackageFiles(packageKind));
+      const zip = createZipBlob(await mediaExportPackageFiles(packageKind));
       downloadBlob(`${slug}_${modeSlug}_${packageKind}_package.zip`, zip);
     }
 

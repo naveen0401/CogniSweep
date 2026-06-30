@@ -1003,6 +1003,7 @@
     const uploadedContext = { fileName: '', text: '', error: '' };
     const exportAsset = {};
     const languageResources = { glossary: [], dnt: [], tm: [] };
+    const qualityContext = {};
     const backUrl = __CAT_EDITOR_BACK_URL__;
     const editorJobId = __CAT_EDITOR_JOB_ID__;
 
@@ -2935,6 +2936,31 @@
       return createZipBytes(files);
     }
 
+    function qaReportContextLabels() {
+      const labels = [];
+      if (qualityContext?.has_ai_key) labels.push('AI API key');
+      if (qualityContext?.has_language_resources) labels.push('language resources');
+      if (qualityContext?.has_reference_docs) labels.push('reference docs');
+      if (qualityContext?.has_instructions) labels.push('instructions');
+      return labels;
+    }
+
+    function shouldIncludeQaReport() {
+      if (qualityContext && Object.prototype.hasOwnProperty.call(qualityContext, 'has_any')) {
+        return Boolean(qualityContext.has_any);
+      }
+      return Boolean(
+        qualityContext?.has_ai_key
+        || qualityContext?.has_language_resources
+        || qualityContext?.has_reference_docs
+        || qualityContext?.has_instructions
+        || resourceList('glossary').length
+        || resourceList('dnt').length
+        || resourceList('tm').length
+        || String(uploadedContext?.text || '').trim()
+      );
+    }
+
     function translationQaReportRows() {
       const findings = rows.flatMap((row, idx) => [
         ...translationQaFindingsForRow(row, idx),
@@ -2951,6 +2977,7 @@
         ['Rows', rows.length],
         ['Confirmed', `${confirmed} / ${rows.length}`],
         ['Findings', findings.length],
+        ['QA Context', qaReportContextLabels().join(', ') || 'Provided context was not classified.'],
         [],
         ['Row', 'Severity', 'Finding', 'Source', 'Target'],
       ];
@@ -2990,12 +3017,13 @@
           exportButton.innerText = 'Exporting';
         }
         const translatedFile = await translatedOriginalFormatFile();
-        const zip = createZipBlob([
-          { name: translatedFile.name, content: translatedFile.content },
-          { name: 'qa_run_report.xlsx', content: translationQaWorkbookBytes() },
-        ]);
+        const packageFiles = [{ name: translatedFile.name, content: translatedFile.content }];
+        if (shouldIncludeQaReport()) {
+          packageFiles.push({ name: 'qa_run_report.xlsx', content: translationQaWorkbookBytes() });
+        }
+        const zip = createZipBlob(packageFiles);
         downloadBlob(exportPackageName(), zip);
-        updateFooter(`Exported ${translatedFile.name}`);
+        updateFooter(shouldIncludeQaReport() ? `Exported ${translatedFile.name} with QA report` : `Exported ${translatedFile.name}`);
       } catch (error) {
         const message = `${error?.name ? `${error.name}: ` : ''}${error?.message || error || 'Export failed'}`;
         updateFooter(message);

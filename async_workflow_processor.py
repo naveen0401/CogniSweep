@@ -495,6 +495,84 @@ def parse_rules_zip_from_bytes(data: bytes) -> Dict[str, Any]:
     return rules
 
 
+def merge_text_rules(rules: Dict[str, Any], text: str, source_name: str = "QA context") -> None:
+    """Extract deterministic glossary/DNT hints from inline QA instructions or references."""
+    value = safe_text(text)
+    if not value:
+        return
+    rules.setdefault("instructions", []).append({"text": value[:5000], "source": source_name})
+    for raw_line in value.splitlines():
+        line = safe_text(raw_line)
+        if not line or len(line) > 700:
+            continue
+        dnt_match = re.match(r"^(?:dnt|do\s*not\s*translate|locked\s*term|keep(?:\s+unchanged)?)\s*[:=-]\s*(.+)$", line, flags=re.I)
+        if dnt_match:
+            for term in re.split(r"[;,]|\t|\|", dnt_match.group(1)):
+                term = safe_text(term).strip("-* ")
+                if term:
+                    rules.setdefault("dnt", []).append({"term": term, "source": source_name})
+            continue
+        candidate = re.sub(r"^(?:glossary|term|terminology)\s*[:=-]\s*", "", line, flags=re.I).strip()
+        if "->" in candidate or "=>" in candidate:
+            sep = "->" if "->" in candidate else "=>"
+            source, target = [safe_text(part) for part in candidate.split(sep, 1)]
+            source = re.sub(r"^(?:source|src|english|term)\s*[:=]\s*", "", source, flags=re.I).strip()
+            target = re.sub(r"^(?:target|tgt|translation|preferred)\s*[:=]\s*", "", target, flags=re.I).strip()
+            if source and target and source.lower() != target.lower():
+                rules.setdefault("glossary", []).append({"source": source, "target": target, "source_name": source_name})
+            elif source:
+                rules.setdefault("dnt", []).append({"term": source, "source": source_name})
+
+
+def translation_context_metadata(
+    rules: Dict[str, Any],
+    reference_context: Dict[str, Any],
+    source_texts: List[str],
+    target_language: str,
+    domain: str,
+) -> Dict[str, Any]:
+    """Carry client context to async translation adapters."""
+    rule_pack = rules if isinstance(rules, dict) else {}
+    glossary: List[Dict[str, str]] = []
+    for item in rule_pack.get("glossary", []) or []:
+        if not isinstance(item, dict):
+            continue
+        source = safe_text(item.get("source") or item.get("source_term"))
+        target = safe_text(item.get("target") or item.get("target_term"))
+        if source or target:
+            glossary.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "source_name": safe_text(item.get("source_name") or item.get("source")),
+                }
+            )
+    dnt_terms = [
+        safe_text(item.get("term") if isinstance(item, dict) else item)
+        for item in rule_pack.get("dnt", []) or []
+        if safe_text(item.get("term") if isinstance(item, dict) else item)
+    ]
+    instructions = [
+        safe_text(item.get("text") if isinstance(item, dict) else item)
+        for item in rule_pack.get("instructions", []) or []
+        if safe_text(item.get("text") if isinstance(item, dict) else item)
+    ]
+    ref = reference_context if isinstance(reference_context, dict) else {}
+    return {
+        "target_language": safe_text(target_language),
+        "domain": safe_text(domain),
+        "dnt_terms": dnt_terms[:200],
+        "glossary": glossary[:200],
+        "instructions": instructions[:80],
+        "reference_context": {
+            "fileName": safe_text(ref.get("fileName")),
+            "text": safe_text(ref.get("text"))[:12000],
+        },
+        "segment_count": len(source_texts or []),
+        "sample_sources": [safe_text(text)[:500] for text in (source_texts or [])[:12] if safe_text(text)],
+    }
+
+
 def extract_placeholders(text: str) -> List[str]:
     return re.findall(r"\{\{[^{}]+\}\}|\{[^{}]+\}|%[0-9$.\-+]*[sdif]|</?[\w:-]+[^>]*>|https?://\S+|www\.\S+", text or "")
 
@@ -704,6 +782,7 @@ def load_task_inputs(payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dic
     task_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
     input_files = task_payload.get("input_files") if isinstance(task_payload.get("input_files"), list) else []
     rules_files = task_payload.get("rules_files") if isinstance(task_payload.get("rules_files"), list) else []
+    params = task_payload.get("parameters") if isinstance(task_payload.get("parameters"), dict) else {}
     if not input_files:
         raise ValueError("Queued workflow has no input file manifest.")
     primary = input_files[0]
@@ -714,6 +793,13 @@ def load_task_inputs(payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dic
         for key in ("glossary", "dnt", "instructions", "warnings"):
             rules.setdefault(key, [])
             rules[key].extend(parsed.get(key, []) or [])
+    merge_text_rules(rules, safe_text(params.get("qa_inline_instructions")), "QA run instructions")
+    reference_context = params.get("reference_context") if isinstance(params.get("reference_context"), dict) else {}
+    merge_text_rules(
+        rules,
+        safe_text(reference_context.get("text")),
+        safe_text(reference_context.get("fileName") or "Reference document"),
+    )
     return rows, rules, primary
 
 
@@ -779,6 +865,8 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     target_language = safe_text(params.get("target_language") or "Target")
     source_language = safe_text(params.get("source_language") or "English")
     domain = safe_text(params.get("domain") or "General")
+    reference_context = params.get("reference_context") if isinstance(params.get("reference_context"), dict) else {}
+    quality_inputs = params.get("quality_inputs") if isinstance(params.get("quality_inputs"), dict) else {}
     update_task(task_id, payload, status="running", progress=12)
     rows, rules, primary = load_task_inputs(payload)
     rows = sentence_segment_rows_for_pro(rows)
@@ -786,6 +874,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("No translatable rows were detected in the queued input file.")
     source_texts = [safe_text(row.get("source") or row.get("target")) for row in rows]
     protected_terms = [safe_text(item.get("term") if isinstance(item, dict) else item) for item in rules.get("dnt", []) or []]
+    client_context = translation_context_metadata(rules, reference_context, source_texts, target_language, domain)
     translations: List[str] = []
     usage: Dict[str, Any] = {"provider": "none", "model": "", "success": False, "error": "No worker translation route attempted."}
     route_error = ""
@@ -797,7 +886,12 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 target_language=target_language,
                 texts=source_texts,
                 protected_terms=protected_terms,
-                metadata={"workflow": "async_pro_translation", "domain": domain, "task_id": task_id},
+                metadata={
+                    "workflow": "async_pro_translation",
+                    "domain": domain,
+                    "task_id": task_id,
+                    "client_context": client_context,
+                },
             )
         except Exception as exc:
             route_error = safe_text(exc)
@@ -855,7 +949,10 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "source": "CogniSweep Async Pro",
             "status": "needs_review" if missing else "draft",
             "task_id": task_id,
+            "rules": rules,
+            "context": reference_context,
             "export_source": export_source,
+            "quality_inputs": quality_inputs,
         },
         user={"email": user_email, "workspace": workspace},
     )
@@ -891,6 +988,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 "review_job_id": review_job_id,
                 "editor_job_id": review_job_id,
                 "result_file_id": safe_text(review_manifest.get("id")),
+                "quality_inputs": quality_inputs,
             },
             "attachment_count": 1,
             "attachments_json": [review_manifest],
@@ -918,6 +1016,7 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "result_file": review_manifest,
             "job_id": job.get("id"),
             "review_job_id": review_job_id,
+            "quality_inputs": quality_inputs,
         },
     )
 

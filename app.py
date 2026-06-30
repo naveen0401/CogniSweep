@@ -10,9 +10,13 @@ import math
 import os
 import re
 import difflib
+import shutil
 import smtplib
+import struct
+import subprocess
 import tempfile
 import time
+import wave
 import zipfile
 import uuid
 import xml.etree.ElementTree as _StdET
@@ -132,7 +136,14 @@ from auth_security import (
 )
 from text_utils import safe_text
 
+BROWSER_TIMEZONE_QUERY_PARAM = "es_tz"
+SESSION_TOKEN_USER_FIELDS = ("email", "role", "account_type", "workspace", "plan", "status", "email_verified", "timezone")
+
 LOGGER = logging.getLogger(__name__)
+
+MEDIA_DEFAULT_SEGMENT_SECONDS = 4.0
+MEDIA_MAX_DURATION_SEGMENTS = 10000
+MEDIA_SOURCE_EXPORT_MAX_BYTES = MEDIA_URL_MAX_BYTES
 
 try:
     from streamlit_cookies_controller import CookieController
@@ -6297,7 +6308,7 @@ def sync_browser_session_cookie() -> None:
           const currentUrl = new URL(hostWindow.location.href);
           const normalizedPage = (raw) => String(raw || "")
             .replace(/[+_-]/g, " ")
-            .replace(/\s+/g, " ")
+            .replace(/\\s+/g, " ")
             .trim()
             .toLowerCase();
           const authEntryPages = new Set(["login", "signup", "sign up", "reset", "oauth callback", "oauth_callback", "sso handoff", "sso_handoff"]);
@@ -17893,7 +17904,91 @@ def media_export_qa_findings(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return findings
 
 
-def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_name: str = "") -> bytes:
+def media_quality_context_labels(quality_context: Optional[Dict[str, Any]] = None) -> List[str]:
+    context = quality_context if isinstance(quality_context, dict) else {}
+    labels: List[str] = []
+    if context.get("has_ai_key"):
+        labels.append("AI API key")
+    if context.get("has_language_resources"):
+        labels.append("language resources")
+    if context.get("has_reference_docs"):
+        labels.append("reference docs")
+    if context.get("has_instructions"):
+        labels.append("instructions")
+    return labels
+
+
+def should_include_media_qa_report(quality_context: Optional[Dict[str, Any]] = None) -> bool:
+    context = quality_context if isinstance(quality_context, dict) else {}
+    if "has_any" in context:
+        return bool(context.get("has_any"))
+    return bool(media_quality_context_labels(context))
+
+
+def safe_zip_member_name(name: str, fallback: str = "source_media") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "_", safe_text(name)).strip(" .")
+    return cleaned or fallback
+
+
+def media_source_zip_entry(source_media: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(source_media, dict):
+        return None
+    name = safe_zip_member_name(
+        source_media.get("name")
+        or source_media.get("media_preview_name")
+        or source_media.get("video_name")
+        or source_media.get("file_name")
+        or "source_media"
+    )
+    content = source_media.get("content")
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    if isinstance(content, (bytes, bytearray)):
+        return {"name": name, "content": bytes(content)}
+
+    path_value = safe_text(source_media.get("path") or source_media.get("media_preview_path") or source_media.get("local_path"))
+    storage_key = safe_text(source_media.get("media_preview_storage_key") or source_media.get("storage_key"))
+    storage_provider = safe_text(source_media.get("media_preview_storage_provider") or source_media.get("storage_provider"))
+    for candidate in (path_value, storage_key if storage_provider == "local" else ""):
+        if not candidate:
+            continue
+        try:
+            candidate_path = Path(candidate)
+            if candidate_path.exists() and candidate_path.is_file():
+                if candidate_path.stat().st_size > MEDIA_SOURCE_EXPORT_MAX_BYTES:
+                    LOGGER.warning("Skipping source media export because %s exceeds configured media export size.", candidate_path)
+                    continue
+                return {"name": name or candidate_path.name, "content": candidate_path.read_bytes()}
+        except Exception as exc:
+            LOGGER.warning("Unable to include source media %s in export ZIP: %s", candidate, exc)
+
+    public_url = safe_text(source_media.get("media_preview_public_url") or source_media.get("public_url"))
+    if public_url.startswith(("http://", "https://")):
+        try:
+            response = requests.get(public_url, stream=True, timeout=15)
+            response.raise_for_status()
+            chunks: List[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MEDIA_SOURCE_EXPORT_MAX_BYTES:
+                    LOGGER.warning("Skipping source media export because remote file exceeds configured media export size.")
+                    return None
+                chunks.append(chunk)
+            return {"name": name, "content": b"".join(chunks)}
+        except Exception as exc:
+            LOGGER.warning("Unable to download source media for export ZIP: %s", exc)
+    return None
+
+
+def media_export_qa_workbook(
+    rows: List[Dict[str, Any]],
+    workflow: str,
+    file_name: str = "",
+    quality_context: Optional[Dict[str, Any]] = None,
+) -> bytes:
     findings = media_export_qa_findings(rows)
     confirmed = sum(1 for row in rows or [] if is_segment_confirmed(row))
     wb = Workbook()
@@ -17919,18 +18014,20 @@ def media_export_qa_workbook(rows: List[Dict[str, Any]], workflow: str, file_nam
         ("Rows", len(rows or [])),
         ("Confirmed", f"{confirmed} / {len(rows or [])}"),
         ("Findings", len(findings)),
+        ("QA Context", ", ".join(media_quality_context_labels(quality_context)) or "Provided context was not classified."),
     ]
     for idx, (label, value) in enumerate(summary_rows, start=3):
         ws_summary.cell(idx, 1, label)
         ws_summary.cell(idx, 2, value)
         ws_summary.cell(idx, 1).font = Font(bold=True)
         ws_summary.cell(idx, 1).fill = PatternFill("solid", fgColor=blue)
-    ws_summary.cell(9, 1, "Result")
-    ws_summary.cell(9, 2, "REVIEW" if findings else "PASS")
-    ws_summary.cell(9, 1).font = Font(bold=True)
-    ws_summary.cell(9, 1).fill = PatternFill("solid", fgColor=blue)
-    ws_summary.cell(9, 2).font = Font(bold=True)
-    ws_summary.cell(9, 2).fill = PatternFill("solid", fgColor=yellow if findings else green)
+    result_row = 3 + len(summary_rows)
+    ws_summary.cell(result_row, 1, "Result")
+    ws_summary.cell(result_row, 2, "REVIEW" if findings else "PASS")
+    ws_summary.cell(result_row, 1).font = Font(bold=True)
+    ws_summary.cell(result_row, 1).fill = PatternFill("solid", fgColor=blue)
+    ws_summary.cell(result_row, 2).font = Font(bold=True)
+    ws_summary.cell(result_row, 2).fill = PatternFill("solid", fgColor=yellow if findings else green)
 
     headers = ["Row", "Severity", "Finding", "Start", "End", "Text"]
     for col_idx, header in enumerate(headers, start=1):
@@ -17978,10 +18075,20 @@ def rows_to_text_script(rows: List[Dict[str, Any]], use_target: bool = True) -> 
     return "\n\n".join(parts).encode("utf-8")
 
 
-def media_export_zip(rows: List[Dict[str, Any]], workflow: str, file_name: str = "media_editor", include_csv: bool = False) -> bytes:
+def media_export_zip(
+    rows: List[Dict[str, Any]],
+    workflow: str,
+    file_name: str = "media_editor",
+    include_csv: bool = False,
+    source_media: Optional[Dict[str, Any]] = None,
+    quality_context: Optional[Dict[str, Any]] = None,
+) -> bytes:
     workflow_label = safe_text(workflow) or "Media"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        source_entry = media_source_zip_entry(source_media)
+        if source_entry:
+            package.writestr(f"source_file/{safe_zip_member_name(source_entry.get('name'), 'source_media')}", source_entry.get("content", b""))
         if workflow_label.lower().startswith("transcription"):
             package.writestr("transcription_script.srt", rows_to_srt(rows, use_target=True))
             package.writestr("transcription_script.txt", rows_to_text_script(rows, use_target=True))
@@ -17990,7 +18097,8 @@ def media_export_zip(rows: List[Dict[str, Any]], workflow: str, file_name: str =
             package.writestr("target_script.srt", rows_to_srt(rows, use_target=True))
         if include_csv:
             package.writestr("segments.csv", rows_to_csv(rows))
-        package.writestr("qa_run_report.xlsx", media_export_qa_workbook(rows, workflow_label, file_name))
+        if should_include_media_qa_report(quality_context):
+            package.writestr("qa_run_report.xlsx", media_export_qa_workbook(rows, workflow_label, file_name, quality_context=quality_context))
     return buffer.getvalue()
 
 
@@ -18136,6 +18244,7 @@ def save_review_session_to_store(
     rules: Optional[Dict[str, Any]] = None,
     context: Optional[Dict[str, str]] = None,
     export_source: Optional[Dict[str, Any]] = None,
+    quality_inputs: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Save a Translation Studio review job for separate-tab editor use.
 
@@ -18158,6 +18267,7 @@ def save_review_session_to_store(
         "rules": rules or {},
         "context": context or {},
         "export_source": export_source or {},
+        "quality_inputs": quality_inputs or {},
     }
     payload = {
         "job_id": session_id,
@@ -18171,6 +18281,7 @@ def save_review_session_to_store(
         "job_type": "cat",
         "context": context or {},
         "export_source": export_source or {},
+        "quality_inputs": quality_inputs or {},
     }
     get_review_session_store()[session_id] = payload
 
@@ -18292,6 +18403,291 @@ def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> Tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _mp4_duration_seconds(path: Path) -> float:
+    container_boxes = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts", b"udta", b"meta"}
+
+    def read_boxes(handle, end_offset: int) -> float:
+        while handle.tell() + 8 <= end_offset:
+            box_start = handle.tell()
+            header = handle.read(8)
+            if len(header) != 8:
+                break
+            size, box_type = struct.unpack(">I4s", header)
+            header_size = 8
+            if size == 1:
+                large = handle.read(8)
+                if len(large) != 8:
+                    break
+                size = struct.unpack(">Q", large)[0]
+                header_size = 16
+            elif size == 0:
+                size = end_offset - box_start
+            if size < header_size:
+                break
+            box_end = min(end_offset, box_start + int(size))
+            if box_type == b"mvhd":
+                data = handle.read(max(0, min(32, box_end - handle.tell())))
+                if len(data) >= 20:
+                    version = data[0]
+                    try:
+                        if version == 1 and len(data) >= 32:
+                            timescale = struct.unpack(">I", data[20:24])[0]
+                            duration = struct.unpack(">Q", data[24:32])[0]
+                        else:
+                            timescale = struct.unpack(">I", data[12:16])[0]
+                            duration = struct.unpack(">I", data[16:20])[0]
+                        if timescale > 0 and duration > 0:
+                            return float(duration) / float(timescale)
+                    except struct.error:
+                        pass
+            elif box_type in container_boxes:
+                if box_type == b"meta":
+                    handle.seek(min(box_end, handle.tell() + 4))
+                duration = read_boxes(handle, box_end)
+                if duration > 0:
+                    return duration
+            handle.seek(box_end)
+        return 0.0
+
+    try:
+        with Path(path).open("rb") as handle:
+            return read_boxes(handle, Path(path).stat().st_size)
+    except Exception as exc:
+        LOGGER.debug("Unable to parse MP4 duration for %s: %s", path, exc)
+        return 0.0
+
+
+def _mp3_duration_seconds(path: Path) -> float:
+    bitrates = {
+        (3, 1): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+        (3, 2): [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+        (3, 3): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+        (2, 1): [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+        (2, 2): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+        (2, 3): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    }
+    try:
+        file_size = Path(path).stat().st_size
+        with Path(path).open("rb") as handle:
+            header = handle.read(10)
+            start_offset = 0
+            if len(header) == 10 and header[:3] == b"ID3":
+                tag_size = (
+                    ((header[6] & 0x7F) << 21)
+                    | ((header[7] & 0x7F) << 14)
+                    | ((header[8] & 0x7F) << 7)
+                    | (header[9] & 0x7F)
+                )
+                start_offset = 10 + tag_size
+                handle.seek(start_offset)
+            else:
+                handle.seek(0)
+            data = handle.read(4096)
+        for offset in range(0, max(0, len(data) - 4)):
+            header_int = struct.unpack(">I", data[offset:offset + 4])[0]
+            if (header_int & 0xFFE00000) != 0xFFE00000:
+                continue
+            version_bits = (header_int >> 19) & 0x3
+            layer_bits = (header_int >> 17) & 0x3
+            bitrate_index = (header_int >> 12) & 0xF
+            if version_bits == 1 or layer_bits == 0 or bitrate_index in {0, 15}:
+                continue
+            version = 3 if version_bits == 3 else 2
+            layer = 4 - layer_bits
+            bitrate_kbps = bitrates.get((version, layer), [0] * 16)[bitrate_index]
+            if bitrate_kbps > 0:
+                audio_bytes = max(0, file_size - start_offset - offset)
+                return float(audio_bytes * 8) / float(bitrate_kbps * 1000)
+    except Exception as exc:
+        LOGGER.debug("Unable to parse MP3 duration for %s: %s", path, exc)
+    return 0.0
+
+
+def probe_media_duration_seconds(path: Any, mime_type: str = "", file_name: str = "") -> float:
+    media_path = Path(path)
+    if not media_path.exists() or not media_path.is_file():
+        return 0.0
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(media_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            duration = float(safe_text(result.stdout).strip())
+            if duration > 0:
+                return duration
+        except Exception as exc:
+            LOGGER.debug("ffprobe duration detection failed for %s: %s", media_path, exc)
+
+    suffix = Path(file_name or media_path.name).suffix.lower()
+    mime_key = safe_text(mime_type).lower()
+    if suffix == ".wav" or "wav" in mime_key:
+        try:
+            with wave.open(str(media_path), "rb") as wav_file:
+                frame_rate = wav_file.getframerate()
+                frames = wav_file.getnframes()
+                if frame_rate > 0 and frames > 0:
+                    return float(frames) / float(frame_rate)
+        except Exception as exc:
+            LOGGER.debug("WAV duration detection failed for %s: %s", media_path, exc)
+    if suffix in {".mp4", ".mov", ".m4v", ".m4a"} or "mp4" in mime_key or "quicktime" in mime_key:
+        duration = _mp4_duration_seconds(media_path)
+        if duration > 0:
+            return duration
+    if suffix == ".mp3" or "mpeg" in mime_key or "mp3" in mime_key:
+        duration = _mp3_duration_seconds(media_path)
+        if duration > 0:
+            return duration
+    return 0.0
+
+
+def uploaded_media_duration_seconds(video_file: Any) -> float:
+    if video_file is None:
+        return 0.0
+    cache_key = hashlib.sha256(
+        f"{safe_text(getattr(video_file, 'name', 'media'))}:{safe_text(getattr(video_file, 'size', ''))}".encode("utf-8")
+    ).hexdigest()
+    cache = st.session_state.setdefault("media_duration_cache", {})
+    if cache_key in cache:
+        return float(cache.get(cache_key) or 0.0)
+
+    direct_path = safe_text(getattr(video_file, "path", ""))
+    if direct_path and Path(direct_path).exists():
+        duration = probe_media_duration_seconds(direct_path, getattr(video_file, "type", ""), getattr(video_file, "name", ""))
+        cache[cache_key] = duration
+        return duration
+
+    original_name = safe_text(getattr(video_file, "name", "")) or "media"
+    suffix = Path(original_name).suffix.lower() or ".bin"
+    tmp_path = media_preview_root() / f"duration_{uuid.uuid4().hex}{suffix}"
+    try:
+        stream_uploaded_file_to_path(video_file, tmp_path)
+        duration = probe_media_duration_seconds(tmp_path, getattr(video_file, "type", ""), original_name)
+        cache[cache_key] = duration
+        return duration
+    except Exception as exc:
+        LOGGER.debug("Unable to detect uploaded media duration for %s: %s", original_name, exc)
+        cache[cache_key] = 0.0
+        return 0.0
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError as exc:
+            LOGGER.debug("Unable to remove temporary duration probe file %s: %s", tmp_path, exc)
+        try:
+            video_file.seek(0)
+        except (AttributeError, OSError, ValueError) as exc:
+            LOGGER.debug("Unable to rewind uploaded media after duration probe: %s", exc)
+
+
+def media_duration_segment_count(duration_seconds: float, segment_seconds: float = MEDIA_DEFAULT_SEGMENT_SECONDS) -> int:
+    segment_seconds = max(0.5, float(segment_seconds or MEDIA_DEFAULT_SEGMENT_SECONDS))
+    duration_seconds = max(0.0, float(duration_seconds or 0.0))
+    if duration_seconds <= 0:
+        return 1
+    return max(1, min(MEDIA_MAX_DURATION_SEGMENTS, int(math.ceil(duration_seconds / segment_seconds))))
+
+
+def duration_based_media_segments(
+    duration_seconds: float,
+    segment_seconds: float = MEDIA_DEFAULT_SEGMENT_SECONDS,
+    transcription: bool = False,
+) -> List[Dict[str, Any]]:
+    segment_seconds = max(0.5, float(segment_seconds or MEDIA_DEFAULT_SEGMENT_SECONDS))
+    total_duration = max(float(duration_seconds or 0.0), segment_seconds)
+    count = media_duration_segment_count(total_duration, segment_seconds)
+    rows: List[Dict[str, Any]] = []
+    for idx in range(count):
+        start = round(idx * segment_seconds, 3)
+        end = round(min(total_duration, start + segment_seconds), 3)
+        if end <= start:
+            end = round(start + min(segment_seconds, 3.5), 3)
+        rows.append({
+            "id": idx + 1,
+            "start": start,
+            "end": end,
+            "source": "",
+            "target": "",
+            "status": "Draft",
+            "match": "Manual" if transcription else "",
+        })
+    return rows
+
+
+def _optional_media_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        if math.isfinite(seconds):
+            return seconds
+        return None
+    raw = safe_text(value).strip()
+    if not raw:
+        return None
+    try:
+        seconds = parse_timecode(raw) if ":" in raw else float(raw)
+    except Exception:
+        return None
+    return seconds if math.isfinite(seconds) else None
+
+
+def normalize_media_rows_to_duration(
+    rows: List[Dict[str, Any]],
+    duration_seconds: float,
+    segment_seconds: float = MEDIA_DEFAULT_SEGMENT_SECONDS,
+) -> List[Dict[str, Any]]:
+    normalized = [dict(row) for row in rows or []]
+    if not normalized:
+        return duration_based_media_segments(duration_seconds, segment_seconds)
+    total_duration = float(duration_seconds or 0.0)
+    segment_seconds = max(0.5, float(segment_seconds or MEDIA_DEFAULT_SEGMENT_SECONDS))
+
+    timed_rows = 0
+    for row in normalized:
+        start = _optional_media_seconds(row.get("start"))
+        end = _optional_media_seconds(row.get("end"))
+        if start is not None and end is not None and end > start:
+            timed_rows += 1
+
+    if total_duration > 0 and timed_rows == 0:
+        slot = max(0.1, total_duration / max(1, len(normalized)))
+        for idx, row in enumerate(normalized):
+            start = round(idx * slot, 3)
+            end = round(min(total_duration, start + slot), 3)
+            if end <= start:
+                end = round(start + 0.1, 3)
+            row["start"] = start
+            row["end"] = end
+        return normalized
+
+    cursor = 0.0
+    for idx, row in enumerate(normalized):
+        start = _optional_media_seconds(row.get("start"))
+        end = _optional_media_seconds(row.get("end"))
+        if start is None:
+            start = cursor
+        if end is None or end <= start:
+            end = start + segment_seconds
+        if total_duration > 0:
+            start = min(start, max(0.0, total_duration - 0.1))
+            end = min(max(end, start + 0.1), total_duration)
+        row["start"] = round(max(0.0, start), 3)
+        row["end"] = round(max(row["start"] + 0.1, end), 3)
+        cursor = row["end"]
+        row["id"] = row.get("id") or idx + 1
+    return normalized
 
 
 def job_attachment_root() -> Path:
@@ -18539,7 +18935,16 @@ def format_media_size(size_bytes: int) -> str:
     return f"{size:.1f} GB"
 
 
-def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video_file=None, target_language: str = "") -> str:
+def save_media_session_to_store(
+    workflow: str,
+    rows: List[Dict[str, Any]],
+    video_file=None,
+    target_language: str = "",
+    rules: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    quality_inputs: Optional[Dict[str, Any]] = None,
+    media_duration_seconds: float = 0.0,
+) -> str:
     """Save subtitle/transcription rows as an external media editor job.
 
     This fixes the workflow where video upload created rows but did not open a
@@ -18551,12 +18956,19 @@ def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video
     video_name = getattr(video_file, "name", "") if video_file is not None else ""
     video_type = getattr(video_file, "type", "") if video_file is not None else ""
     media_preview = save_media_preview_file(job_id, video_file)
+    rule_pack = rules if isinstance(rules, dict) else workspace_rules()
+    context_pack = context if isinstance(context, dict) else {}
+    quality_pack = quality_inputs if isinstance(quality_inputs, dict) else qa_quality_input_state(rule_pack, context_pack, "")
     metadata = {
         "title": f"CogniSweep {workflow} Editor",
         "target_language": target_language or st.session_state.get("subtitle_target_language", ""),
         "file_name": video_name or f"{workflow.lower()}_job",
         "video_name": video_name,
         "video_type": video_type,
+        "media_duration_seconds": round(float(media_duration_seconds or 0.0), 3),
+        "rules": rule_pack,
+        "context": context_pack,
+        "quality_inputs": quality_pack,
         **media_preview,
         "created": now_stamp() if "now_stamp" in globals() else "",
         "source": "Subtitle / Transcription Editor",
@@ -18569,6 +18981,9 @@ def save_media_session_to_store(workflow: str, rows: List[Dict[str, Any]], video
         "job_id": job_id,
         "rows": rows or [],
         "metadata": metadata,
+        "rules": rule_pack,
+        "context": context_pack,
+        "quality_inputs": quality_pack,
         "title": metadata["title"],
         "target_language": metadata.get("target_language", ""),
         "file_name": metadata.get("file_name", ""),
@@ -18660,6 +19075,8 @@ def load_review_session_from_store(session_id: str) -> bool:
     st.session_state.review_workspace_language = metadata.get("target_language") or payload.get("target_language") or ""
     st.session_state.review_workspace_file_name = metadata.get("file_name") or payload.get("file_name") or ""
     st.session_state.review_workspace_context = metadata.get("context") or payload.get("context") or {}
+    st.session_state.review_workspace_rules = metadata.get("rules") or payload.get("rules") or {}
+    st.session_state.review_workspace_quality_inputs = metadata.get("quality_inputs") or payload.get("quality_inputs") or {}
     export_source = metadata.get("export_source") or payload.get("export_source") or recover_pro_export_source_for_file(st.session_state.review_workspace_file_name)
     st.session_state.review_workspace_export_source = export_source or {}
     st.session_state.active_review_session_id = session_id
@@ -18674,6 +19091,7 @@ def prepare_human_review_session(
     rules: Optional[Dict[str, Any]] = None,
     context: Optional[Dict[str, str]] = None,
     export_source: Optional[Dict[str, Any]] = None,
+    quality_inputs: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Store rows in a durable Human Review session before opening the editor.
 
@@ -18721,9 +19139,20 @@ def prepare_human_review_session(
     st.session_state.review_workspace_language = target_language
     st.session_state.review_workspace_file_name = file_name
     st.session_state.review_workspace_context = context or {}
+    st.session_state.review_workspace_rules = rules or {}
+    st.session_state.review_workspace_quality_inputs = quality_inputs or {}
     st.session_state.review_workspace_export_source = export_source or {}
     st.session_state.review_workspace_created = now_stamp() if "now_stamp" in globals() else ""
-    session_id = save_review_session_to_store(prepared, source, target_language, file_name, rules=rules, context=context, export_source=export_source)
+    session_id = save_review_session_to_store(
+        prepared,
+        source,
+        target_language,
+        file_name,
+        rules=rules,
+        context=context,
+        export_source=export_source,
+        quality_inputs=quality_inputs,
+    )
     query_set("review_id", session_id)
 
 
@@ -19483,6 +19912,10 @@ def render_reference_cat_editor_shell(
     uploaded_context_json = json.dumps(uploaded_context or {}, ensure_ascii=False)
     export_asset_json = json.dumps(export_source or {}, ensure_ascii=False)
     language_resources_json = json.dumps(build_editor_language_resources(rules, component_rows, metadata), ensure_ascii=False)
+    quality_context = metadata.get("quality_inputs") if isinstance(metadata.get("quality_inputs"), dict) else {}
+    if not quality_context:
+        quality_context = st.session_state.get("review_workspace_quality_inputs") if isinstance(st.session_state.get("review_workspace_quality_inputs"), dict) else {}
+    quality_context_json = json.dumps(quality_context or {}, ensure_ascii=False)
     html = re.sub(r"const rows = \[.*?\];", lambda _match: f"const rows = {rows_json};", html, flags=re.S)
     html = re.sub(
         r"const uploadedContext = \{.*?\};",
@@ -19501,6 +19934,13 @@ def render_reference_cat_editor_shell(
     html = re.sub(
         r"const languageResources = \{.*?\};",
         lambda _match: f"const languageResources = {language_resources_json};",
+        html,
+        count=1,
+        flags=re.S,
+    )
+    html = re.sub(
+        r"const qualityContext = \{.*?\};",
+        lambda _match: f"const qualityContext = {quality_context_json};",
         html,
         count=1,
         flags=re.S,
@@ -19836,10 +20276,14 @@ def render_external_media_editor(job_id: str) -> None:
     )
 
     media_rows_for_download = edited.to_dict(orient="records")
+    media_rules = metadata.get("rules") if isinstance(metadata.get("rules"), dict) else {}
+    media_context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+    media_quality_context = metadata.get("quality_inputs") if isinstance(metadata.get("quality_inputs"), dict) else qa_quality_input_state(media_rules, media_context, "")
     blocked_media_completion = apply_validated_completion_flags(
         media_rows_for_download,
         editor_type=safe_text(workflow).lower() or "subtitling",
         domain=safe_text(workflow),
+        rules=media_rules or None,
     )
     if blocked_media_completion:
         st.warning(f"Smart Done left {blocked_media_completion} media segment(s) unmarked because validation findings remain.")
@@ -19859,8 +20303,22 @@ def render_external_media_editor(job_id: str) -> None:
         save_external_editor_payload(job_id, payload)
         st.success("Media editor draft saved.")
     media_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(file_name)).strip("_") or "media_editor"
-    c2.download_button("Download CSV ZIP", media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=True), file_name=f"{media_slug}_csv_package.zip", mime="application/zip", use_container_width=True, disabled=unconfirmed_media > 0)
-    c3.download_button("Download SRT ZIP", media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=False), file_name=f"{media_slug}_srt_package.zip", mime="application/zip", use_container_width=True, disabled=unconfirmed_media > 0)
+    c2.download_button(
+        "Download CSV ZIP",
+        media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=True, source_media=metadata, quality_context=media_quality_context),
+        file_name=f"{media_slug}_csv_package.zip",
+        mime="application/zip",
+        use_container_width=True,
+        disabled=unconfirmed_media > 0,
+    )
+    c3.download_button(
+        "Download SRT ZIP",
+        media_export_zip(media_rows_for_download, safe_text(workflow), str(file_name), include_csv=False, source_media=metadata, quality_context=media_quality_context),
+        file_name=f"{media_slug}_srt_package.zip",
+        mime="application/zip",
+        use_container_width=True,
+        disabled=unconfirmed_media > 0,
+    )
     if c4.button("Back", use_container_width=True, key=f"media_back_{job_id}"):
         query_clear("es_editor")
         query_clear("job_id")
@@ -19948,6 +20406,8 @@ def render_reference_media_editor_shell(
     component_rows: List[Dict[str, Any]] = []
     workflow_label = safe_text(metadata.get("workflow") or metadata.get("title") or "Subtitle / Transcription Workspace")
     editor_mode = "transcription" if "transcription" in workflow_label.lower() else "subtitling"
+    editor_rules = metadata.get("rules") if isinstance(metadata.get("rules"), dict) else workspace_rules()
+    quality_context = metadata.get("quality_inputs") if isinstance(metadata.get("quality_inputs"), dict) else {}
     for idx, row in enumerate(rows or []):
         qa_items = row.get("qa_findings") if isinstance(row.get("qa_findings"), list) else []
         quality: List[Dict[str, str]] = []
@@ -19980,7 +20440,7 @@ def render_reference_media_editor_shell(
                     row_index=idx + 1,
                     target_language=safe_text(metadata.get("target_language") or ""),
                     domain=workflow_label,
-                    rules=workspace_rules(),
+                    rules=editor_rules,
                 ),
                 "ignoredValidationFindings": ignored_findings,
                 "ignored_validation_findings": ignored_findings,
@@ -20001,10 +20461,13 @@ def render_reference_media_editor_shell(
             "workflow": workflow_label or "Subtitle / Transcription Workspace",
             "file_name": file_name,
             "target_language": safe_text(metadata.get("target_language") or ""),
+            "quality_inputs": quality_context,
+            "media_duration_seconds": safe_text(metadata.get("media_duration_seconds") or ""),
         },
         "media": media_preview_component_payload(media_source, media_type, media_name or file_name),
         "rows": component_rows,
-        "resources": build_editor_language_resources(workspace_rules(), component_rows, metadata),
+        "resources": build_editor_language_resources(editor_rules, component_rows, metadata),
+        "quality_context": quality_context,
     }
 
     html = reference_path.read_text(encoding="utf-8")
@@ -20505,6 +20968,8 @@ def segment_completion_validation_findings(
                 findings.append(qa_manual_finding(candidate, "Review", "Readability", f"Reading speed is {cps} CPS.", "Shorten the subtitle or adjust timing."))
             if len(text_value) > 84:
                 findings.append(qa_manual_finding(candidate, "Review", "Subtitle Length", "Target text is long for a two-line subtitle.", "Split or shorten the subtitle."))
+        if editor_key != "transcription":
+            findings.extend(delivery_quality_findings([candidate], target_language or "Target", domain or "Subtitling", rules))
 
     findings.extend(tm_completion_validation_findings(candidate, row_number, target_language=target_language))
     if isinstance(row.get("qa_findings"), list):
@@ -21297,6 +21762,8 @@ def call_main_api_translate(texts: List[str], target_language: str, domain: str,
             st.error(f"User AI route is not configured: {exc}")
             return ["" for _ in texts]
 
+        reference_text = ai_reference_context_for_rules(rules)
+        translation_items = ai_translation_payload_items(texts, target_language, rules)
         system_prompt = f"""
 You are CogniSweep AI, a professional localization translator.
 Return JSON only. Do not use markdown.
@@ -21311,9 +21778,14 @@ Hard rules:
 4. Square bracket UI labels may be localized inside brackets, but keep the bracket structure.
 5. Do not leave translations blank.
 6. Return a JSON object with key "items".
+7. Analyze the client reference context and each segment's language_resource_context before translating.
+8. Prefer exact translation-memory matches and required glossary targets unless the user instructions explicitly say otherwise.
 
 Client rules:
 {rules_text or "No uploaded or saved client rules were provided."}
+
+Client reference context:
+{reference_text or "No reference document text was provided."}
 
 Output shape:
 {{
@@ -21326,7 +21798,8 @@ Output shape:
             "target_language": target_language,
             "domain": domain,
             "rules_summary": rules_text,
-            "texts": [{"index": i, "source": text} for i, text in enumerate(texts)],
+            "reference_context": reference_text,
+            "segments": translation_items,
         }
 
         items, usage = ai_json_items(
@@ -21359,7 +21832,15 @@ Output shape:
 
 
 
-def generate_transcription_rows_from_video(video_file, locale: str = "en-US", prompt: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def generate_transcription_rows_from_video(
+    video_file,
+    locale: str = "en-US",
+    prompt: str = "",
+    duration_seconds: float = 0.0,
+    segment_seconds: float = MEDIA_DEFAULT_SEGMENT_SECONDS,
+    rules: Optional[Dict[str, Any]] = None,
+    domain: str = "Transcription",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Generate transcript rows from uploaded video/audio.
 
     v32 policy:
@@ -21367,12 +21848,13 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
     - Translation providers are not used for transcription.
     - If no user API key is available, return blank starter rows for manual human editing.
     """
+    fallback_rows = duration_based_media_segments(duration_seconds, segment_seconds, transcription=True)
     if video_file is None:
-        return default_subtitle_segments(10, transcription=True), {"success": False, "error": "No video uploaded."}
+        return fallback_rows, {"success": False, "error": "No video uploaded."}
 
     user_key = str(st.session_state.get("byo_openai_api_key", "") or "").strip()
     if not user_key:
-        return default_subtitle_segments(10, transcription=True), {
+        return fallback_rows, {
             "success": False,
             "provider": "manual_transcription",
             "engine": "manual_editor",
@@ -21380,25 +21862,31 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
         }
 
     if transcribe_media_file_to_rows is None:
-        return default_subtitle_segments(10, transcription=True), {"success": False, "error": "speech_transcription.py is missing."}
+        return fallback_rows, {"success": False, "error": "speech_transcription.py is missing."}
 
     media_record = save_media_preview_file(f"transcribe_{uuid.uuid4().hex}", video_file)
     media_path = safe_text(media_record.get("media_preview_path"))
     if not media_path:
-        return default_subtitle_segments(10, transcription=True), {
+        return fallback_rows, {
             "success": False,
             "provider": "manual_transcription",
             "engine": "manual_editor",
             "error": "Unable to save media file for transcription.",
         }
 
+    transcription_prompt = build_ai_transcription_prompt(
+        locale=locale,
+        rules=rules,
+        base_prompt=prompt,
+        domain=domain,
+    )
     rows, usage = transcribe_media_file_to_rows(
         media_path=media_path,
         filename=getattr(video_file, "name", "video.mp4"),
         mime_type=getattr(video_file, "type", "video/mp4") or "video/mp4",
         user_openai_key=user_key,
         locale=locale,
-        prompt=prompt,
+        prompt=transcription_prompt,
     )
     st.session_state.setdefault("ai_usage_events", [])
     user = current_user() or {}
@@ -21421,6 +21909,7 @@ def generate_transcription_rows_from_video(video_file, locale: str = "en-US", pr
         "segments": len(rows),
     })
     trim_session_list("ai_usage_events")
+    rows = normalize_media_rows_to_duration(rows or fallback_rows, duration_seconds, segment_seconds)
     return rows, usage
 
 
@@ -21456,15 +21945,20 @@ def call_main_api_qa(rows: List[Dict[str, Any]], domain: str, strictness: str = 
         return []
 
     rules_text = rules_summary_for_ai(rules)
+    reference_text = safe_text((rules or {}).get("_reference_context_text"))[:5000]
     system_prompt = f"""
 You are CogniSweep AI, a conservative localization QA reviewer.
 Return JSON only. Do not invent errors.
 Flag only real issues supported by source/target evidence.
 DNT/placeholder/number damage is severe. Empty target is Critical.
 Apply uploaded rules ZIP and saved Memory & Rules when judging glossary, DNT, style, and client instructions.
+Compare every segment against any supplied row-level language-resource context, reference document excerpts, and reviewer instructions.
 
 Client rules:
 {rules_text or "No uploaded or saved client rules were provided."}
+
+Reference documents:
+{reference_text or "No reference document text was provided."}
 
 Output shape:
 {{"items":[{{"id":1,"issue":"short issue","severity":"Minor|Major|Critical","suggestion":"fix","reason":"why"}}]}}
@@ -21473,8 +21967,14 @@ Output shape:
         "domain": domain,
         "strictness": strictness,
         "rules_summary": rules_text,
+        "reference_context": reference_text,
         "segments": [
-            {"id": r.get("id"), "source": r.get("source", ""), "target": r.get("target", "")}
+            {
+                "id": r.get("id"),
+                "source": r.get("source", ""),
+                "target": r.get("target", ""),
+                "language_resource_context": safe_text(r.get("_qa_resource_context"))[:2500],
+            }
             for r in rows[:80]
         ],
     }
@@ -21538,6 +22038,372 @@ def render_privacy_route_notice(context: str = "translation") -> None:
         st.warning(f"{context}: BYO external AI key is active. Confirm client approval before sending confidential or NDA text.")
     else:
         st.info(f"{context}: no user AI key is active, so CogniSweep will prepare manual Human Review rows.")
+
+
+HIGH_QUALITY_QA_MISSING_INPUT_NOTE = (
+    'As you have not provided any of these inputs - AI API key, language resources, '
+    'reference docs, or instructions - CogniSweep is unable to perform high quality QA checks. '
+    'Add at least one of them to compare the upload against client-specific context.'
+)
+
+
+def qa_workspace_language_resources_available(rules: Optional[Dict[str, Any]] = None) -> bool:
+    """Return whether this workspace has any saved or connected language assets."""
+    rule_pack = rules if isinstance(rules, dict) else {}
+    if rule_pack.get("glossary") or rule_pack.get("dnt"):
+        return True
+    for key in ("tm", "translation_memory", "glossary", "dnt"):
+        if st.session_state.get(key):
+            return True
+    try:
+        tm_limit = SESSION_COLLECTION_LIMITS.get("translation_memory", 1000)
+        if load_workspace_translation_memory(limit=tm_limit):
+            return True
+    except Exception as exc:
+        LOGGER.debug("Unable to inspect workspace TM availability for QA context: %s", exc)
+    try:
+        return bool(language_resource_connections_ready())
+    except Exception as exc:
+        LOGGER.debug("Unable to inspect external language-resource availability for QA context: %s", exc)
+    return False
+
+
+def qa_rules_have_user_instructions(rules: Optional[Dict[str, Any]] = None) -> bool:
+    """Detect explicit user/client instructions without counting internal helper notes."""
+    rule_pack = rules if isinstance(rules, dict) else {}
+    for item in rule_pack.get("instructions", []) or []:
+        if not isinstance(item, dict):
+            text = safe_text(item)
+            source = ""
+        else:
+            text = safe_text(item.get("text"))
+            source = safe_text(item.get("source")).strip().lower()
+        if not text:
+            continue
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        if source == "saved tm" and normalized == "prefer saved translation memory matches where applicable.":
+            continue
+        if normalized.startswith("compare against reference document:"):
+            continue
+        return True
+    return False
+
+
+def build_qa_rules_with_user_context(
+    rules: Optional[Dict[str, Any]],
+    reference_context: Optional[Dict[str, str]] = None,
+    inline_instructions: str = "",
+) -> Dict[str, Any]:
+    """Merge QA-only reference docs and inline instructions into the rule pack."""
+    merged = dict(rules or {})
+    chunks = list(merged.get("chunks") or [])
+    instructions = list(merged.get("instructions") or [])
+
+    inline_text = safe_text(inline_instructions)
+    if inline_text:
+        instructions.insert(0, {"text": inline_text, "source": "QA run instructions"})
+        chunks.insert(0, {"source": "QA run instructions", "text": inline_text[:50_000]})
+
+    ref = reference_context if isinstance(reference_context, dict) else {}
+    ref_text = safe_text(ref.get("text"))
+    ref_name = safe_text(ref.get("fileName") or "Reference document")
+    if ref_text:
+        instructions.insert(0, {"text": f"Compare against reference document: {ref_name}", "source": ref_name})
+        chunks.insert(0, {"source": ref_name, "text": ref_text[:200_000]})
+        merged["_reference_context_file"] = ref_name
+        merged["_reference_context_text"] = ref_text[:200_000]
+
+    merged["chunks"] = chunks
+    merged["instructions"] = instructions
+    return enrich_rules_from_chunks(merged)
+
+
+def qa_quality_input_state(
+    rules: Optional[Dict[str, Any]],
+    reference_context: Optional[Dict[str, str]] = None,
+    inline_instructions: str = "",
+) -> Dict[str, Any]:
+    rule_pack = rules if isinstance(rules, dict) else {}
+    ref = reference_context if isinstance(reference_context, dict) else {}
+    has_reference = bool(safe_text(ref.get("text")))
+    has_instructions = bool(safe_text(inline_instructions)) or qa_rules_have_user_instructions(rule_pack)
+    has_language_resources = qa_workspace_language_resources_available(rule_pack)
+    has_ai_key = user_ai_api_key_available()
+    return {
+        "has_ai_key": has_ai_key,
+        "has_language_resources": has_language_resources,
+        "has_reference_docs": has_reference,
+        "has_instructions": has_instructions,
+        "has_any": any([has_ai_key, has_language_resources, has_reference, has_instructions]),
+    }
+
+
+def render_qa_quality_input_notice(state: Dict[str, Any]) -> None:
+    if not state.get("has_any"):
+        st.warning(HIGH_QUALITY_QA_MISSING_INPUT_NOTE)
+        return
+    active = []
+    if state.get("has_ai_key"):
+        active.append("AI API key")
+    if state.get("has_language_resources"):
+        active.append("language resources")
+    if state.get("has_reference_docs"):
+        active.append("reference docs")
+    if state.get("has_instructions"):
+        active.append("instructions")
+    if active:
+        st.info("High-quality QA context active: " + ", ".join(active) + ".")
+
+
+def normalized_qa_resource_summary(resources: Dict[str, Any], limit: int = 10) -> str:
+    lines: List[str] = []
+    for item in resources.get("tm", [])[:limit]:
+        source = safe_text(item.get("source") or item.get("source_text"))
+        target = safe_text(item.get("target") or item.get("target_text"))
+        score = safe_text(item.get("match_score"))
+        label = safe_text(item.get("type") or item.get("provider") or "TM")
+        if source or target:
+            suffix = f" ({score}%)" if score else ""
+            lines.append(f"{label}{suffix}: {source} => {target}")
+    for item in resources.get("glossary", [])[:limit]:
+        source = safe_text(item.get("source") or item.get("source_term"))
+        target = safe_text(item.get("target") or item.get("target_term"))
+        if source or target:
+            lines.append(f"Glossary: {source} => {target}")
+    for item in resources.get("dnt", [])[:limit]:
+        term = safe_text(item.get("term"))
+        if term:
+            lines.append(f"DNT: {term}")
+    for item in resources.get("errors", [])[:3]:
+        lines.append(f"Resource warning: {safe_text(item.get('connection'))} {safe_text(item.get('code'))}".strip())
+    return "\n".join(lines)[:4000]
+
+
+def qa_row_language_resource_context(
+    row: Dict[str, Any],
+    rules: Optional[Dict[str, Any]] = None,
+    source_language: str = "",
+    target_language: str = "",
+    project_id: str = "",
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Compare one row against saved, uploaded, and connected language resources."""
+    source = safe_text(row.get("source"))
+    target = safe_text(row.get("target") or row.get("translation"))
+    if not source:
+        return [], ""
+
+    resources: Dict[str, Any] = {"tm": [], "glossary": [], "dnt": [], "errors": []}
+    for item in translation_memory_matches(source, source_language=source_language, target_language=target_language, limit=5):
+        resources["tm"].append(dict(item))
+
+    rule_pack = rules if isinstance(rules, dict) else {}
+    source_l = source.lower()
+    for item in rule_pack.get("glossary", []) or []:
+        if not isinstance(item, dict):
+            continue
+        source_term = safe_text(item.get("source_term") or item.get("source") or item.get("term"))
+        target_term = safe_text(item.get("target_term") or item.get("target"))
+        if source_term and source_term.lower() in source_l:
+            resources["glossary"].append({"source": source_term, "target": target_term, "provider": safe_text(item.get("source") or "Rules")})
+    for item in rule_pack.get("dnt", []) or []:
+        term = safe_text(item.get("term") if isinstance(item, dict) else item)
+        if term and term.lower() in source_l:
+            resources["dnt"].append({"term": term, "provider": safe_text(item.get("source") if isinstance(item, dict) else "Rules")})
+
+    external = external_language_resource_lookup(source, source_language, target_language, project_id)
+    resources["errors"].extend(external.get("errors", []))
+    for item in external.get("tm", []):
+        resources["tm"].append({
+            "source": safe_text(item.get("source_text")),
+            "target": safe_text(item.get("target_text")),
+            "match_score": item.get("match_score"),
+            "provider": safe_text(item.get("provider")),
+            "type": safe_text(item.get("provider") or "External TM"),
+        })
+    for item in external.get("glossary", []):
+        resources["glossary"].append({
+            "source": safe_text(item.get("source_term")),
+            "target": safe_text(item.get("target_term")),
+            "provider": safe_text(item.get("provider")),
+        })
+    for item in external.get("dnt", []):
+        resources["dnt"].append({
+            "term": safe_text(item.get("term")),
+            "provider": safe_text(item.get("provider")),
+        })
+
+    findings: List[Dict[str, Any]] = []
+    target_l = target.lower()
+    for item in resources.get("tm", []):
+        tm_source = safe_text(item.get("source") or item.get("source_text"))
+        tm_target = safe_text(item.get("target") or item.get("target_text"))
+        if not tm_source or not tm_target or not target:
+            continue
+        exact = tm_source.lower() == source_l
+        try:
+            score = float(item.get("match_score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        strong = exact or score >= 95
+        if strong and tm_target.lower() not in target_l:
+            severity = "Major" if exact else "Review"
+            findings.append(
+                qa_manual_finding(
+                    row,
+                    severity,
+                    "Translation Memory",
+                    "Strong translation-memory match is not reflected in the target.",
+                    f"Use or reconcile the TM target: {tm_target}",
+                )
+            )
+
+    for item in resources.get("glossary", []):
+        source_term = safe_text(item.get("source") or item.get("source_term"))
+        target_term = safe_text(item.get("target") or item.get("target_term"))
+        if source_term and target_term and source_term.lower() in source_l and target_term.lower() not in target_l:
+            findings.append(
+                qa_manual_finding(
+                    row,
+                    "Major",
+                    "Glossary",
+                    f"Required glossary target term is missing: {target_term}",
+                    f"Use glossary term: {target_term}",
+                )
+            )
+
+    for item in resources.get("dnt", []):
+        term = safe_text(item.get("term"))
+        if term and term.lower() in source_l and term not in target:
+            findings.append(
+                qa_manual_finding(
+                    row,
+                    "Major",
+                    "DNT",
+                    f"Do-not-translate term is missing or changed: {term}",
+                    f"Keep {term} unchanged.",
+                )
+            )
+
+    return dedupe_qa_findings(findings), normalized_qa_resource_summary(resources)
+
+
+def attach_qa_resource_context_to_rows(
+    rows: List[Dict[str, Any]],
+    rules: Optional[Dict[str, Any]] = None,
+    source_language: str = "",
+    target_language: str = "",
+    project_id: str = "",
+) -> Dict[str, List[Dict[str, Any]]]:
+    findings_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for idx, row in enumerate(rows or [], start=1):
+        if not isinstance(row, dict):
+            continue
+        row.setdefault("id", idx)
+        row.setdefault("location", f"Segment {row.get('id', idx)}")
+        findings, context = qa_row_language_resource_context(
+            row,
+            rules=rules,
+            source_language=source_language,
+            target_language=target_language,
+            project_id=project_id,
+        )
+        if context:
+            row["_qa_resource_context"] = context
+        if findings:
+            findings_by_id.setdefault(safe_text(row.get("id")), []).extend(findings)
+    return findings_by_id
+
+
+def ai_reference_context_for_rules(rules: Optional[Dict[str, Any]], max_chars: int = 9000) -> str:
+    """Build a compact reference/doc context block for AI generation prompts."""
+    rule_pack = rules if isinstance(rules, dict) else {}
+    blocks: List[str] = []
+    seen: Set[str] = set()
+
+    def add_block(label: str, text: Any, per_block_limit: int = 3000) -> None:
+        value = safe_text(text)
+        if not value:
+            return
+        normalized = re.sub(r"\s+", " ", value).strip().lower()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        source = safe_text(label) or "Reference"
+        blocks.append(f"{source}:\n{value[:per_block_limit]}")
+
+    add_block(
+        safe_text(rule_pack.get("_reference_context_file") or "Reference document"),
+        rule_pack.get("_reference_context_text"),
+        per_block_limit=5000,
+    )
+    for chunk in rule_pack.get("chunks", []) or []:
+        if not isinstance(chunk, dict):
+            continue
+        add_block(
+            safe_text(chunk.get("source") or "Client resource"),
+            chunk.get("text"),
+            per_block_limit=2500,
+        )
+        if len("\n\n".join(blocks)) >= max_chars:
+            break
+    return "\n\n".join(blocks)[:max_chars]
+
+
+def ai_translation_payload_items(
+    texts: List[str],
+    target_language: str,
+    rules: Optional[Dict[str, Any]] = None,
+    source_language: str = "",
+    project_id: str = "",
+) -> List[Dict[str, Any]]:
+    """Attach relevant language-resource context to every AI translation segment."""
+    items: List[Dict[str, Any]] = []
+    include_resource_context = qa_workspace_language_resources_available(rules)
+    context_cache: Dict[str, str] = {}
+    for idx, text in enumerate(texts or []):
+        source = safe_text(text)
+        item: Dict[str, Any] = {"index": idx, "source": source}
+        if include_resource_context and source:
+            cache_key = source.lower()
+            if cache_key not in context_cache:
+                try:
+                    _, context = qa_row_language_resource_context(
+                        {"id": idx, "source": source, "target": ""},
+                        rules=rules,
+                        source_language=source_language,
+                        target_language=target_language,
+                        project_id=project_id,
+                    )
+                except Exception as exc:
+                    LOGGER.debug("Unable to build AI language-resource context for segment %s: %s", idx + 1, exc)
+                    context = ""
+                context_cache[cache_key] = safe_text(context)[:2500]
+            if context_cache[cache_key]:
+                item["language_resource_context"] = context_cache[cache_key]
+        items.append(item)
+    return items
+
+
+def build_ai_transcription_prompt(
+    locale: str = "en-US",
+    rules: Optional[Dict[str, Any]] = None,
+    base_prompt: str = "",
+    domain: str = "Transcription",
+) -> str:
+    """Pass client terminology and reference hints into speech-to-text prompts."""
+    parts = [
+        f"Transcribe {domain} audio accurately for locale {safe_text(locale) or 'auto'}.",
+        "Use client terminology, product names, speaker names, acronyms, and locked terms exactly when they are audible.",
+    ]
+    if safe_text(base_prompt):
+        parts.append("User instructions:\n" + safe_text(base_prompt)[:2000])
+    rules_text = rules_summary_for_ai(rules)
+    if rules_text:
+        parts.append("Client rules and terminology:\n" + rules_text[:3500])
+    reference_text = ai_reference_context_for_rules(rules, max_chars=5000)
+    if reference_text:
+        parts.append("Reference context:\n" + reference_text)
+    return "\n\n".join(parts)[:12000]
 
 
 def run_global_qa_for_row(row: Dict[str, Any], target_language: str, domain: str, rules: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -21825,7 +22691,11 @@ def professional_qa_rows(segment_rows: List[Dict[str, Any]], detailed_findings: 
     return finding_rows, segment_overview, summary
 
 
-def create_qa_excel_report(segment_rows: List[Dict[str, Any]], detailed_findings: List[Dict[str, Any]]) -> bytes:
+def create_qa_excel_report(
+    segment_rows: List[Dict[str, Any]],
+    detailed_findings: List[Dict[str, Any]],
+    quality_context: Optional[Dict[str, Any]] = None,
+) -> bytes:
     finding_rows, segment_overview, summary = professional_qa_rows(segment_rows, detailed_findings)
     wb = Workbook()
     ws_summary = wb.active
@@ -21911,6 +22781,20 @@ def create_qa_excel_report(segment_rows: List[Dict[str, Any]], detailed_findings
         ("Status", "Segment Overview shows all uploaded segments, including clean pass rows."),
         ("Threshold", "PASS requires QA score >= 95 and zero Critical findings."),
     ]
+    if isinstance(quality_context, dict):
+        if not quality_context.get("has_any"):
+            notes.append(("High-quality QA context", HIGH_QUALITY_QA_MISSING_INPUT_NOTE))
+        else:
+            active = []
+            if quality_context.get("has_ai_key"):
+                active.append("AI API key")
+            if quality_context.get("has_language_resources"):
+                active.append("language resources")
+            if quality_context.get("has_reference_docs"):
+                active.append("reference docs")
+            if quality_context.get("has_instructions"):
+                active.append("instructions")
+            notes.append(("High-quality QA context", ", ".join(active) if active else "Basic deterministic QA only."))
     ws_instructions["A1"] = "Review Notes"
     ws_instructions["A1"].font = Font(bold=True, size=14)
     for idx, (label, text) in enumerate(notes, start=3):
@@ -25500,20 +26384,52 @@ def page_qa() -> None:
     render_upload_dropzone("Drop bilingual content here", "Supports Excel, CSV, DOCX, TXT, SRT, and VTT. Rules ZIP can be attached for client-specific QA.", "XLSX / CSV / DOCX / SRT")
     file = st.file_uploader("Upload bilingual file", type=["xlsx", "csv", "docx", "txt", "srt", "vtt"], key="qa_file")
     rules = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="qa_rules")
+    reference_upload = st.file_uploader(
+        "Upload reference docs (optional)",
+        type=["txt", "md", "csv", "tsv", "xlsx", "docx"],
+        key="qa_reference_file",
+        help="Reference docs are used for AI comparison when an AI key is active and for deterministic extraction of glossary, DNT, and correction patterns.",
+    )
+    qa_inline_instructions = st.text_area(
+        "QA instructions (optional)",
+        height=96,
+        placeholder="Example: Follow the client glossary strictly. Keep product names unchanged. Use formal tone.",
+        key="qa_inline_instructions",
+    )
     render_rules_zip_warning(rules)
-    c1, c2 = st.columns(2)
+    reference_context = parse_context_upload(reference_upload) if reference_upload is not None else {}
+    if reference_context.get("error"):
+        st.warning(reference_context["error"])
+    elif reference_context.get("text"):
+        st.info(f"Reference loaded: {safe_text(reference_context.get('fileName'))}")
+
+    base_client_rules = workspace_rules(rules)
+    client_rules = build_qa_rules_with_user_context(base_client_rules, reference_context, qa_inline_instructions)
+    quality_state = qa_quality_input_state(client_rules, reference_context, qa_inline_instructions)
+    render_qa_quality_input_notice(quality_state)
+
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
     strictness = c1.selectbox("Strictness", ["Lenient", "Standard", "Strict", "Very Strict"], index=2)
     domain = c2.selectbox("Domain", ["Auto-detect", "Software UI", "Marketing", "Legal", "Medical", "E-learning", "Subtitling", "General"])
+    source_language = c3.text_input("Source language", value="en")
+    target_language = c4.text_input("Target language", value="")
 
     if st.button("Run QA", use_container_width=True, disabled=file is None):
         task = create_task_record(
             "qa",
             f"QA report: {getattr(file, 'name', 'uploaded file')}",
-            metadata={"file_name": getattr(file, "name", ""), "strictness": strictness, "domain": domain},
+            metadata={
+                "file_name": getattr(file, "name", ""),
+                "strictness": strictness,
+                "domain": domain,
+                "source_language": source_language,
+                "target_language": target_language,
+                "quality_inputs": quality_state,
+            },
         )
         update_task_record(task["id"], status="running", progress=5)
         rows = extract_rows_from_upload(file)
-        for upload in (file, rules):
+        for upload in (file, rules, reference_upload):
             try:
                 if upload is not None and hasattr(upload, "seek"):
                     upload.seek(0)
@@ -25539,12 +26455,16 @@ def page_qa() -> None:
                 "file_name": getattr(file, "name", ""),
                 "strictness": strictness,
                 "domain": domain,
+                "source_language": source_language,
+                "target_language": target_language,
+                "qa_inline_instructions": safe_text(qa_inline_instructions),
+                "reference_context": reference_context,
+                "quality_inputs": quality_state,
                 "estimated_usage": usage_details,
             },
         ):
             return
         update_task_record(task["id"], progress=15, total_units=len(rows), processed_units=0)
-        client_rules = workspace_rules(rules)
         if client_rules.get("warnings"):
             for warning in client_rules.get("warnings", []):
                 st.warning(warning)
@@ -25554,6 +26474,19 @@ def page_qa() -> None:
             f"{len(client_rules.get('dnt', []))} DNT terms, "
             f"{len(client_rules.get('instructions', []))} instructions."
         )
+        if not quality_state.get("has_any"):
+            st.warning(HIGH_QUALITY_QA_MISSING_INPUT_NOTE)
+
+        effective_target_language = safe_text(target_language) or "Auto-detect"
+        resource_findings_by_id: Dict[str, List[Dict[str, Any]]] = {}
+        if quality_state.get("has_language_resources"):
+            with st.spinner("Comparing against language resources..."):
+                resource_findings_by_id = attach_qa_resource_context_to_rows(
+                    rows,
+                    rules=client_rules,
+                    source_language=source_language,
+                    target_language=target_language,
+                )
         ai_by_id: Dict[str, List[Dict[str, Any]]] = {}
         if st.session_state.get("byo_openai_api_key"):
             update_task_record(task["id"], progress=25, processed_units=0)
@@ -25577,7 +26510,8 @@ def page_qa() -> None:
                     row_findings.append(qa_manual_finding(r, "Major", "Placeholder", f"Missing placeholder {ph}", f"Keep {ph} unchanged in the target."))
             if src and tgt and src == tgt:
                 row_findings.append(qa_manual_finding(r, "Critical", "Untranslated Text", "Target is identical to source.", "Translate the source text or confirm this is intentionally unchanged."))
-            global_findings = run_global_qa_for_row(r, target_language="Auto-detect", domain=domain, rules=client_rules)
+            row_findings.extend(resource_findings_by_id.get(safe_text(r.get("id")), []))
+            global_findings = run_global_qa_for_row(r, target_language=effective_target_language, domain=domain, rules=client_rules)
             row_findings.extend(global_findings)
             for item in ai_by_id.get(safe_text(r.get("id")), []):
                 severity = safe_text(item.get("severity") or "Review").title()
@@ -25663,7 +26597,7 @@ def page_qa() -> None:
         st.dataframe(pd.DataFrame(segment_overview), use_container_width=True, hide_index=True)
         st.download_button(
             "Download Professional QA Excel",
-            create_qa_excel_report(findings, report_rows),
+            create_qa_excel_report(findings, report_rows, quality_state),
             file_name="qa_run_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
@@ -25709,9 +26643,24 @@ def page_pro() -> None:
         "Upload context file (optional)",
         type=["txt", "md", "csv", "tsv", "xlsx", "docx"],
         key="pro_context_file",
-        help="Optional reference context shown in the Human Review context viewer. The active segment is highlighted when it appears in this file.",
+        help="Optional reference context used by AI translation/QA and shown in the Human Review context viewer.",
+    )
+    pro_inline_instructions = st.text_area(
+        "Translation and QA instructions (optional)",
+        height=96,
+        placeholder="Example: Keep product names unchanged. Use formal tone. Glossary: source term => target term.",
+        key="pro_inline_instructions",
     )
     render_rules_zip_warning(rules_zip)
+    uploaded_context = parse_context_upload(context_upload) if context_upload is not None else {}
+    if uploaded_context.get("error"):
+        st.warning(uploaded_context["error"])
+    elif uploaded_context.get("text"):
+        st.info(f"Context loaded: {safe_text(uploaded_context.get('fileName'))}")
+    base_client_rules = workspace_rules(rules_zip)
+    client_rules = build_qa_rules_with_user_context(base_client_rules, uploaded_context, pro_inline_instructions)
+    pro_quality_state = qa_quality_input_state(client_rules, uploaded_context, pro_inline_instructions)
+    render_qa_quality_input_notice(pro_quality_state)
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
     target_language = c1.text_input("Target language", value="French")
     domain_choice = c2.selectbox("Domain", ["Auto-detect", "Software UI", "Marketing", "Legal", "Medical", "E-learning", "Subtitling", "Gaming", "Finance", "General"])
@@ -25721,16 +26670,16 @@ def page_pro() -> None:
         task = create_task_record(
             "pro_translation",
             f"Translation Studio: {getattr(uploaded, 'name', 'uploaded file')} -> {target_language}",
-            metadata={"file_name": getattr(uploaded, "name", ""), "target_language": target_language, "domain": domain_choice},
+            metadata={
+                "file_name": getattr(uploaded, "name", ""),
+                "target_language": target_language,
+                "domain": domain_choice,
+                "quality_inputs": pro_quality_state,
+            },
         )
         update_task_record(task["id"], status="running", progress=5)
         pro_export_source = build_pro_export_source_asset(uploaded)
         rows = sentence_segment_rows_for_pro(extract_rows_from_upload(uploaded))
-        uploaded_context = parse_context_upload(context_upload) if context_upload is not None else {}
-        if uploaded_context.get("error"):
-            st.warning(uploaded_context["error"])
-        elif uploaded_context.get("text"):
-            st.info(f"Context loaded: {safe_text(uploaded_context.get('fileName'))}")
         for upload in (uploaded, rules_zip, context_upload):
             try:
                 if upload is not None and hasattr(upload, "seek"):
@@ -25759,6 +26708,9 @@ def page_pro() -> None:
                 "domain": domain_choice,
                 "review_threshold": threshold,
                 "context_file_name": safe_text(uploaded_context.get("fileName")),
+                "qa_inline_instructions": safe_text(pro_inline_instructions),
+                "reference_context": uploaded_context,
+                "quality_inputs": pro_quality_state,
                 "estimated_usage": usage_details,
             },
         ):
@@ -25770,7 +26722,6 @@ def page_pro() -> None:
             st.warning(f"Sensitive text indicators found before translation: {labels}. Check client approval before using external BYO AI routes.")
         sample = " ".join([r.get("source", "") for r in rows[:20]])
         domain = auto_detect_domain(sample) if domain_choice == "Auto-detect" else domain_choice
-        client_rules = workspace_rules(rules_zip)
         if query_get("debug_translation") == "1" and is_owner():
             with st.expander("Translation run details", expanded=False):
                 st.write(f"Detected domain: {domain}")
@@ -25815,6 +26766,22 @@ def page_pro() -> None:
                     processed_units=idx,
                     total_units=len(rows),
                 )
+
+        if pro_quality_state.get("has_language_resources") and not manual_no_ai_mode:
+            with st.spinner("Comparing translations against language resources..."):
+                resource_findings_by_id = attach_qa_resource_context_to_rows(
+                    review_rows,
+                    rules=client_rules,
+                    target_language=target_language,
+                )
+            for r in review_rows:
+                resource_findings = resource_findings_by_id.get(safe_text(r.get("id")), [])
+                if resource_findings:
+                    existing = list(r.get("qa_findings") or [])
+                    r["qa_findings"] = dedupe_qa_findings(existing + resource_findings)[:10]
+                    r["qa_summary"] = summarize_qa_findings(r["qa_findings"])
+                    if r["status"] in {"MT", "Existing", "Approved"}:
+                        r["status"] = "Needs Review"
 
         if st.session_state.get("byo_openai_api_key"):
             ai_by_id: Dict[str, List[Dict[str, Any]]] = {}
@@ -25875,6 +26842,7 @@ def page_pro() -> None:
             rules=client_rules,
             context=uploaded_context,
             export_source=pro_export_source,
+            quality_inputs=pro_quality_state,
         )
         if manual_no_ai_mode:
             status = "Manual Review Ready"
@@ -25902,6 +26870,7 @@ def page_pro() -> None:
                 "status": status,
                 "missing": missing,
                 "segments": len(review_rows),
+                "quality_inputs": pro_quality_state,
             },
         })
         st.session_state.jobs.insert(0, pro_job)
@@ -25919,6 +26888,7 @@ def page_pro() -> None:
                 "status": status,
                 "missing": missing,
                 "review_job_id": st.session_state.get("active_review_session_id", ""),
+                "quality_inputs": pro_quality_state,
             },
         )
         record_billable_workflow_usage("pro_translation", review_rows, provider="errorsweep_pro", model="translate_qa_review")
@@ -26014,6 +26984,9 @@ def render_text_review_editor() -> None:
     if not rows:
         st.warning("No review segments are loaded yet.")
         return
+    review_rules = st.session_state.get("review_workspace_rules") if isinstance(st.session_state.get("review_workspace_rules"), dict) else {}
+    if not review_rules:
+        review_rules = workspace_rules()
 
     metadata = {
         "title": safe_text(st.session_state.get("review_workspace_source", "Human Review")) or "Human Review",
@@ -26022,6 +26995,7 @@ def render_text_review_editor() -> None:
         "source_language": safe_text(st.session_state.get("review_workspace_source_language", "en")) or "en",
         "context": st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
         "export_source": st.session_state.get("review_workspace_export_source") or {},
+        "quality_inputs": st.session_state.get("review_workspace_quality_inputs") or {},
     }
     qa_by_idx: Dict[int, List[Dict[str, Any]]] = {}
     for idx, row in enumerate(rows):
@@ -26032,7 +27006,7 @@ def render_text_review_editor() -> None:
         [dict(row) for row in rows],
         metadata,
         qa_by_idx,
-        rules=workspace_rules(),
+        rules=review_rules,
         job_id=safe_text(st.session_state.get("active_review_session_id")),
     )
 
@@ -26165,6 +27139,7 @@ def render_subtitle_transcription_setup() -> None:
                     st.session_state["subtitle_url_media_record"] = {}
             st.caption(BLOCKED_PLATFORM_MESSAGE)
     user_key_available = bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
+    media_duration_seconds = 0.0
     with st.container(key="media_compliance_panel"):
         st.markdown(
             '<div class="es-media-panel-title">Authorization</div><div class="es-media-muted">Confirm this before creating a workspace.</div>',
@@ -26175,6 +27150,33 @@ def render_subtitle_transcription_setup() -> None:
             key="media_compliance_ack",
         )
 
+    with st.container(key="media_qa_context_panel"):
+        st.markdown(
+            '<div class="es-media-panel-title">AI and QA context</div><div class="es-media-muted">Optional language resources, reference docs, and instructions are used by AI generation and the media QA report.</div>',
+            unsafe_allow_html=True,
+        )
+        qa_col1, qa_col2 = st.columns([0.42, 0.58], gap="large")
+        with qa_col1:
+            media_reference_upload = st.file_uploader(
+                "Upload media reference docs",
+                type=["txt", "md", "csv", "tsv", "xlsx", "docx"],
+                key="media_reference_file",
+                help="Optional. Used by transcription/subtitle AI and QA/report checks.",
+            )
+        with qa_col2:
+            media_inline_instructions = st.text_area(
+                "Media AI/QA instructions",
+                value="",
+                height=92,
+                key="media_inline_qa_instructions",
+                placeholder="Optional client instructions, terminology rules, subtitle style rules, or transcription expectations.",
+            )
+        media_reference_context = parse_context_upload(media_reference_upload) if media_reference_upload is not None else {}
+        media_base_rules = workspace_rules()
+        media_rules = build_qa_rules_with_user_context(media_base_rules, media_reference_context, media_inline_instructions)
+        media_quality_state = qa_quality_input_state(media_rules, media_reference_context, media_inline_instructions)
+        render_qa_quality_input_notice(media_quality_state)
+
     if video is not None:
         with st.container(key="media_preview_panel"):
             preview_col, info_col = st.columns([0.36, 0.64], gap="large")
@@ -26183,17 +27185,28 @@ def render_subtitle_transcription_setup() -> None:
                     f"{getattr(video, 'name', 'media')}:{getattr(video, 'size', '')}".encode("utf-8")
                 ).hexdigest()[:18]
                 preview_record = save_media_preview_file(f"setup_{preview_key}", video)
+                media_duration_seconds = probe_media_duration_seconds(
+                    preview_record.get("media_preview_path", ""),
+                    preview_record.get("media_preview_type", getattr(video, "type", "")),
+                    preview_record.get("media_preview_name", getattr(video, "name", "")),
+                ) or uploaded_media_duration_seconds(video)
+                st.session_state["subtitle_media_duration_seconds"] = round(float(media_duration_seconds or 0.0), 3)
                 preview_source, preview_type, preview_name = read_media_preview_bytes(preview_record)
                 render_media_preview(preview_source, preview_type or getattr(video, "type", "video/mp4"), preview_name or getattr(video, "name", "media"))
             with info_col:
                 st.markdown('<div class="es-media-panel-title">Media ready</div>', unsafe_allow_html=True)
                 st.success("Video/audio loaded.")
                 st.caption(f"{getattr(video, 'name', 'media')} - {media_source_mode} - {format_media_size(getattr(video, 'size', 0))}")
+                if media_duration_seconds > 0:
+                    st.caption(f"Detected duration: {format_time(media_duration_seconds, comma=False)}.")
+                else:
+                    st.caption("Duration could not be detected; CogniSweep will create one editable starter segment if no timed script or transcript is available.")
                 if user_key_available:
                     st.caption("Transcription route: user API key available.")
                 else:
                     st.caption("Transcription route: manual editing. No API key is available for speech-to-text.")
     else:
+        st.session_state["subtitle_media_duration_seconds"] = 0.0
         st.markdown(
             '<div class="es-media-status-note">Upload a video/audio file or load a direct file URL to unlock workspace creation.</div>',
             unsafe_allow_html=True,
@@ -26223,41 +27236,57 @@ def render_subtitle_transcription_setup() -> None:
             c1, c2, c3 = st.columns([1, 1, 1])
             subtitle_target_language = c1.text_input("Target subtitle language", value=st.session_state.get("subtitle_target_language", "French"), key="subtitle_target_lang_setup")
             speech_locale = c2.text_input("Source speech locale", value="en-US", help="Used only if no source file is uploaded and a user API key is available for transcription.")
-            starter_rows = c3.number_input("Starter rows", min_value=1, max_value=200, value=10, key="subtitle_starter_rows")
+            segment_seconds = c3.number_input(
+                "Segment length seconds",
+                min_value=0.5,
+                max_value=30.0,
+                value=MEDIA_DEFAULT_SEGMENT_SECONDS,
+                step=0.5,
+                key="subtitle_segment_seconds",
+            )
             auto_generate = st.checkbox(
                 "Generate draft target subtitles",
                 value=True,
                 help="If source rows exist and a user AI API key is active, CogniSweep generates draft target subtitles. Without a key, blank target rows are created for manual editing.",
             )
+            if media_duration_seconds > 0:
+                st.caption(f"Blank/untimed subtitle setup will create about {media_duration_segment_count(media_duration_seconds, segment_seconds)} segment(s) from the detected media duration.")
 
         if st.button("Create subtitling workspace", use_container_width=True, disabled=video is None or not media_compliance_ack):
             st.session_state.subtitle_target_language = subtitle_target_language
             if source_file:
-                rows = extract_rows_from_upload(source_file)
-                for i, row in enumerate(rows):
-                    row.setdefault("start", i * 4.0)
-                    row.setdefault("end", i * 4.0 + 3.5)
+                rows = normalize_media_rows_to_duration(extract_rows_from_upload(source_file), media_duration_seconds, segment_seconds)
+                for row in rows:
                     row.setdefault("target", "")
                     row.setdefault("status", "Untranslated")
                     row.setdefault("match", "")
             elif user_key_available:
                 with st.spinner("No source file uploaded. Transcribing source from video/audio using user API key..."):
-                    transcript_rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                    transcript_rows, usage = generate_transcription_rows_from_video(
+                        video,
+                        locale=speech_locale,
+                        prompt=media_inline_instructions,
+                        duration_seconds=media_duration_seconds,
+                        segment_seconds=segment_seconds,
+                        rules=media_rules,
+                        domain="Subtitling source transcription",
+                    )
                 rows = []
                 for i, transcript_row in enumerate(transcript_rows):
                     rows.append({
                         "id": i + 1,
-                        "start": transcript_row.get("start", i * 3.5),
-                        "end": transcript_row.get("end", i * 3.5 + 3.0),
+                        "start": transcript_row.get("start", i * segment_seconds),
+                        "end": transcript_row.get("end", i * segment_seconds + segment_seconds),
                         "source": transcript_row.get("target", ""),
                         "target": "",
                         "status": "Transcribed Source" if transcript_row.get("target") else "Untranslated",
                         "match": transcript_row.get("match", "STT"),
                     })
+                rows = normalize_media_rows_to_duration(rows, media_duration_seconds, segment_seconds)
                 if usage.get("error") and not usage.get("success"):
                     st.warning(f"Speech transcription was not available: {usage.get('error')}. Blank rows were created for manual subtitling.")
             else:
-                rows = default_subtitle_segments(int(starter_rows), transcription=False)
+                rows = duration_based_media_segments(media_duration_seconds, segment_seconds, transcription=False)
                 for row in rows:
                     row["source"] = ""
                     row["target"] = ""
@@ -26266,7 +27295,7 @@ def render_subtitle_transcription_setup() -> None:
                 st.info("No source file and no user API key were provided. Blank subtitle rows were created for manual source/target editing.")
 
             if target_file:
-                target_rows = extract_rows_from_upload(target_file)
+                target_rows = normalize_media_rows_to_duration(extract_rows_from_upload(target_file), media_duration_seconds, segment_seconds)
                 for i, target_row in enumerate(target_rows):
                     if i < len(rows):
                         rows[i]["target"] = target_row.get("target") or target_row.get("source") or ""
@@ -26275,7 +27304,7 @@ def render_subtitle_transcription_setup() -> None:
             has_source_text = any(safe_text(row.get("source", "")) for row in rows)
             if auto_generate and rows and has_source_text:
                 with st.spinner("Generating target subtitle draft..."):
-                    rows, missing = translate_subtitle_sources(rows, subtitle_target_language, domain="Subtitling", rules=workspace_rules())
+                    rows, missing = translate_subtitle_sources(rows, subtitle_target_language, domain="Subtitling", rules=media_rules)
                 if missing:
                     st.warning(f"Draft subtitles generated with {missing} untranslated row(s).")
                 else:
@@ -26283,7 +27312,16 @@ def render_subtitle_transcription_setup() -> None:
             elif auto_generate and rows and not has_source_text:
                 st.info("Draft target subtitles were skipped because there is no source text yet. Fill source rows manually, then translate/review later.")
 
-            job_id = save_media_session_to_store("Subtitling", rows, video_file=video, target_language=subtitle_target_language)
+            job_id = save_media_session_to_store(
+                "Subtitling",
+                rows,
+                video_file=video,
+                target_language=subtitle_target_language,
+                rules=media_rules,
+                context=media_reference_context,
+                quality_inputs=media_quality_state,
+                media_duration_seconds=media_duration_seconds,
+            )
             if media_source_mode == "Paste a direct file URL":
                 close_media = getattr(video, "close", None)
                 if callable(close_media):
@@ -26304,28 +27342,55 @@ def render_subtitle_transcription_setup() -> None:
             )
             c1, c2 = st.columns([1, 1])
             speech_locale = c1.text_input("Speech locale", value="en-US", key="transcription_locale")
-            starter_count = c2.number_input("Starter rows", min_value=1, max_value=200, value=10, key="transcription_starter_count")
+            transcription_segment_seconds = c2.number_input(
+                "Segment length seconds",
+                min_value=0.5,
+                max_value=30.0,
+                value=MEDIA_DEFAULT_SEGMENT_SECONDS,
+                step=0.5,
+                key="transcription_segment_seconds",
+            )
             auto_transcribe = st.checkbox(
                 "Auto-generate transcript using user API key",
                 value=user_key_available,
                 disabled=not user_key_available,
                 help="Speech-to-text is available only when the user has added an API key in Account. Without a key, the editor opens with blank rows for manual transcription.",
             )
+            if media_duration_seconds > 0:
+                st.caption(f"Manual transcription setup will create about {media_duration_segment_count(media_duration_seconds, transcription_segment_seconds)} segment(s) from the detected media duration.")
             if not user_key_available:
                 st.info("No user API key found. The transcription workspace will open with blank rows for manual editing.")
 
         if st.button("Create transcription workspace", use_container_width=True, disabled=video is None or not media_compliance_ack):
             if auto_transcribe and user_key_available:
                 with st.spinner("Creating transcript from video/audio using user API key..."):
-                    rows, usage = generate_transcription_rows_from_video(video, locale=speech_locale)
+                    rows, usage = generate_transcription_rows_from_video(
+                        video,
+                        locale=speech_locale,
+                        prompt=media_inline_instructions,
+                        duration_seconds=media_duration_seconds,
+                        segment_seconds=transcription_segment_seconds,
+                        rules=media_rules,
+                        domain="Transcription",
+                    )
                 if usage.get("error") and not usage.get("success"):
                     st.warning(f"Auto-transcription was not available: {usage.get('error')}. Blank rows were created for manual transcription.")
-                    rows = default_subtitle_segments(int(starter_count), transcription=True)
+                    rows = duration_based_media_segments(media_duration_seconds, transcription_segment_seconds, transcription=True)
             else:
-                rows = default_subtitle_segments(int(starter_count), transcription=True)
+                rows = duration_based_media_segments(media_duration_seconds, transcription_segment_seconds, transcription=True)
             if not rows:
-                rows = default_subtitle_segments(int(starter_count), transcription=True)
-            job_id = save_media_session_to_store("Transcription", rows, video_file=video, target_language="")
+                rows = duration_based_media_segments(media_duration_seconds, transcription_segment_seconds, transcription=True)
+            rows = normalize_media_rows_to_duration(rows, media_duration_seconds, transcription_segment_seconds)
+            job_id = save_media_session_to_store(
+                "Transcription",
+                rows,
+                video_file=video,
+                target_language="",
+                rules=media_rules,
+                context=media_reference_context,
+                quality_inputs=media_quality_state,
+                media_duration_seconds=media_duration_seconds,
+            )
             if media_source_mode == "Paste a direct file URL":
                 close_media = getattr(video, "close", None)
                 if callable(close_media):
@@ -26543,8 +27608,24 @@ def render_focused_subtitle_workspace() -> None:
         if unconfirmed:
             st.warning(f"Download is locked until all subtitle/transcription segments are ticked complete. Pending: {unconfirmed}.")
         legacy_file_name = safe_text(st.session_state.get("subtitle_video_name") or "subtitle_transcription")
-        c2.download_button("Download CSV ZIP", media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=True), "subtitle_transcription_csv_package.zip", "application/zip", use_container_width=True, disabled=unconfirmed > 0)
-        c3.download_button("Download SRT ZIP", media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=False), "subtitle_transcription_srt_package.zip", "application/zip", use_container_width=True, disabled=unconfirmed > 0)
+        legacy_media_metadata = st.session_state.get("subtitle_video_metadata", {}) if isinstance(st.session_state.get("subtitle_video_metadata"), dict) else {}
+        legacy_quality_context = st.session_state.get("subtitle_media_quality_inputs", {}) if isinstance(st.session_state.get("subtitle_media_quality_inputs"), dict) else {}
+        c2.download_button(
+            "Download CSV ZIP",
+            media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=True, source_media=legacy_media_metadata, quality_context=legacy_quality_context),
+            "subtitle_transcription_csv_package.zip",
+            "application/zip",
+            use_container_width=True,
+            disabled=unconfirmed > 0,
+        )
+        c3.download_button(
+            "Download SRT ZIP",
+            media_export_zip(st.session_state.subtitle_segments, workflow, legacy_file_name, include_csv=False, source_media=legacy_media_metadata, quality_context=legacy_quality_context),
+            "subtitle_transcription_srt_package.zip",
+            "application/zip",
+            use_container_width=True,
+            disabled=unconfirmed > 0,
+        )
 
 
 def render_subtitle_transcription_editor() -> None:
@@ -26745,7 +27826,10 @@ def page_human_review_workspace() -> None:
             source="Translation Studio",
             target_language=st.session_state.get("pro_post_edit_language", ""),
             file_name=st.session_state.get("pro_post_edit_file_name", ""),
+            rules=st.session_state.get("review_workspace_rules") if isinstance(st.session_state.get("review_workspace_rules"), dict) else {},
             context=st.session_state.get("review_workspace_context") or st.session_state.get("pro_post_edit_context", {}),
+            export_source=st.session_state.get("review_workspace_export_source") if isinstance(st.session_state.get("review_workspace_export_source"), dict) else {},
+            quality_inputs=st.session_state.get("review_workspace_quality_inputs") if isinstance(st.session_state.get("review_workspace_quality_inputs"), dict) else {},
         )
 
     if not st.session_state.get("review_segments"):
@@ -26949,6 +28033,118 @@ def build_scorecard_records(trans_rows: List[Dict[str, Any]], rev_rows: List[Dic
         "severity_counts": severity_counts,
     }
     return records, summary
+
+
+def scorecard_reviewer_rows_for_qa(
+    trans_rows: List[Dict[str, Any]],
+    rev_rows: List[Dict[str, Any]],
+    src_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    max_len = max(len(trans_rows or []), len(rev_rows or []), len(src_rows or []))
+    for idx in range(max_len):
+        t = trans_rows[idx] if idx < len(trans_rows or []) else {}
+        r = rev_rows[idx] if idx < len(rev_rows or []) else {}
+        s = src_rows[idx] if idx < len(src_rows or []) else {}
+        source = clean_scorecard_source_text(s.get("source") or r.get("source") or t.get("source") or "")
+        reviewer_target = safe_text(r.get("target") or r.get("translation") or r.get("source", ""))
+        translator_target = safe_text(t.get("target") or t.get("translation") or t.get("source", ""))
+        if not source and not reviewer_target:
+            continue
+        row_id = len(rows) + 1
+        rows.append({
+            "id": row_id,
+            "location": f"Reviewer final row {row_id}",
+            "source": source,
+            "target": reviewer_target,
+            "translation": reviewer_target,
+            "status": "Pass",
+            "issues": "",
+            "match": "Reviewer final",
+            "_translator_target": translator_target,
+        })
+    return rows
+
+
+def build_scorecard_qa_rows(
+    trans_rows: List[Dict[str, Any]],
+    rev_rows: List[Dict[str, Any]],
+    src_rows: List[Dict[str, Any]],
+    rules: Dict[str, Any],
+    source_language: str = "",
+    target_language: str = "",
+    domain: str = "Scorecard",
+    strictness: str = "Standard",
+    quality_state: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    qa_rows = scorecard_reviewer_rows_for_qa(trans_rows, rev_rows, src_rows)
+    state = quality_state if isinstance(quality_state, dict) else {}
+    if not state.get("has_any"):
+        return qa_rows, []
+
+    effective_target_language = safe_text(target_language) or "Auto-detect"
+    report_rows: List[Dict[str, Any]] = []
+    resource_findings_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    if state.get("has_language_resources"):
+        resource_findings_by_id = attach_qa_resource_context_to_rows(
+            qa_rows,
+            rules=rules,
+            source_language=source_language,
+            target_language=target_language,
+        )
+
+    ai_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    if st.session_state.get("byo_openai_api_key"):
+        for item in call_main_api_qa(qa_rows, domain=domain, strictness=strictness, rules=rules):
+            row_id = safe_text(item.get("id"))
+            if row_id:
+                ai_by_id.setdefault(row_id, []).append(item)
+
+    for row in qa_rows:
+        row_id = safe_text(row.get("id"))
+        src = safe_text(row.get("source"))
+        tgt = safe_text(row.get("target"))
+        row_findings: List[Dict[str, Any]] = []
+        if not tgt:
+            row_findings.append(qa_manual_finding(row, "Major", "Completeness", "Final/reviewer translation is blank.", "Add the missing final translation."))
+        for ph in re.findall(r"\{\{[^}]+\}\}", src):
+            if ph not in tgt:
+                row_findings.append(qa_manual_finding(row, "Major", "Placeholder", f"Missing placeholder {ph}", f"Keep {ph} unchanged in the final translation."))
+        if src and tgt and normalized_compare_text(src) == normalized_compare_text(tgt):
+            row_findings.append(qa_manual_finding(row, "Critical", "Untranslated Text", "Final/reviewer target is identical to source.", "Translate or explicitly confirm source text should remain unchanged."))
+        row_findings.extend(resource_findings_by_id.get(row_id, []))
+        row_findings.extend(run_global_qa_for_row(row, target_language=effective_target_language, domain=domain, rules=rules))
+        for item in ai_by_id.get(row_id, []):
+            severity = safe_text(item.get("severity") or "Review").title()
+            if severity not in {"Minor", "Major", "Critical"}:
+                severity = "Review"
+            ai_finding = qa_manual_finding(
+                row,
+                severity,
+                "AI QA",
+                safe_text(item.get("issue") or item.get("reason") or "AI reviewer flagged this scorecard segment."),
+                safe_text(item.get("suggestion") or ""),
+            )
+            ai_finding["Check Source"] = "CogniSweep AI QA"
+            ai_finding["Rule Source"] = "Uploaded/Saved Rules + AI"
+            ai_finding["Rule ID"] = "ai.scorecard_qa"
+            ai_finding["Explanation"] = safe_text(item.get("reason") or ai_finding["Explanation"])
+            row_findings.append(ai_finding)
+        row_findings = dedupe_qa_findings(row_findings)
+        row["status"] = qa_overall_status(row_findings)
+        row["issues"] = summarize_qa_findings(row_findings)
+        report_rows.extend(row_findings)
+
+    report_rows = dedupe_qa_findings(report_rows + delivery_quality_findings(qa_rows, effective_target_language, domain, rules))
+    findings_by_location: Dict[str, List[Dict[str, Any]]] = {}
+    for finding in report_rows:
+        findings_by_location.setdefault(safe_text(finding.get("Location")), []).append(finding)
+    for row in qa_rows:
+        location = safe_text(row.get("location") or f"Reviewer final row {row.get('id', '')}")
+        row_findings = findings_by_location.get(location, [])
+        row["status"] = qa_overall_status(row_findings)
+        row["issues"] = summarize_qa_findings(row_findings)
+    return qa_rows, report_rows
 
 
 def style_sheet_base(ws) -> None:
@@ -27167,7 +28363,34 @@ def page_scorecards() -> None:
     reviewer = st.file_uploader("Reviewer/final file", type=["xlsx", "csv", "docx", "txt"], key="score_reviewer")
     anonymize_export = st.checkbox("Anonymize translator/reviewer IDs in Excel export", value=True, key="scorecard_anonymize")
 
-    st.info("Scorecard output is always generated as an Excel workbook with: QA Eval Sheet, Quality Evaluation, and LQA Instructions.")
+    rules_upload = st.file_uploader("Upload scorecard QA rules ZIP (optional)", type=["zip"], key="scorecard_qa_rules")
+    render_rules_zip_warning(rules_upload)
+    reference_upload = st.file_uploader(
+        "Upload scorecard QA reference docs (optional)",
+        type=["txt", "md", "csv", "tsv", "xlsx", "docx"],
+        key="scorecard_reference_file",
+        help="Optional. Used only for the reviewer/final-file QA report.",
+    )
+    scorecard_inline_instructions = st.text_area(
+        "Scorecard QA instructions (optional)",
+        height=92,
+        key="scorecard_inline_qa_instructions",
+        placeholder="Optional reviewer/final QA expectations, client terminology, style rules, or delivery instructions.",
+    )
+    lang_cols = st.columns(2)
+    scorecard_source_language = lang_cols[0].text_input("QA source language", value="en", key="scorecard_source_language")
+    scorecard_target_language = lang_cols[1].text_input("QA target language", value="", key="scorecard_target_language")
+    reference_context = parse_context_upload(reference_upload) if reference_upload is not None else {}
+    if reference_context.get("error"):
+        st.warning(reference_context["error"])
+    elif reference_context.get("text"):
+        st.info(f"Scorecard QA reference loaded: {safe_text(reference_context.get('fileName'))}")
+    scorecard_base_rules = workspace_rules(rules_upload)
+    scorecard_rules = build_qa_rules_with_user_context(scorecard_base_rules, reference_context, scorecard_inline_instructions)
+    scorecard_quality_state = qa_quality_input_state(scorecard_rules, reference_context, scorecard_inline_instructions)
+    render_qa_quality_input_notice(scorecard_quality_state)
+
+    st.info("Translator scorecard is generated from reviewer recorded edits/issues against the translator file. Optional QA report checks the reviewer/final file because that is the final deliverable.")
     source_options: List[Dict[str, Any]] = []
     trans_options: List[Dict[str, Any]] = []
     rev_options: List[Dict[str, Any]] = []
@@ -27234,12 +28457,34 @@ def page_scorecards() -> None:
 
         xlsx_bytes = create_scorecard_excel(records, summary, anonymized=anonymize_export)
         st.download_button(
-            "Download Anonymized Excel Scorecard" if anonymize_export else "Download Excel Scorecard",
+            "Download Anonymized Translator Scorecard Excel" if anonymize_export else "Download Translator Scorecard Excel",
             xlsx_bytes,
             file_name="CogniSweep_Translator_Scorecard_Anonymized.xlsx" if anonymize_export else "CogniSweep_Translator_Scorecard.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+        if scorecard_quality_state.get("has_any"):
+            with st.spinner("Generating reviewer/final-file QA Excel..."):
+                qa_rows, qa_findings = build_scorecard_qa_rows(
+                    trans_rows,
+                    rev_rows,
+                    src_rows,
+                    rules=scorecard_rules,
+                    source_language=scorecard_source_language,
+                    target_language=scorecard_target_language,
+                    domain="Scorecard Reviewer Final",
+                    strictness="Standard",
+                    quality_state=scorecard_quality_state,
+                )
+            st.download_button(
+                "Download Reviewer Final QA Excel",
+                create_qa_excel_report(qa_rows, qa_findings, scorecard_quality_state),
+                file_name="CogniSweep_Reviewer_Final_QA_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.warning("Reviewer final QA report was not generated because no AI API key, language resources, reference docs, or instructions were provided.")
 
 
 def sectioned_page_layout(

@@ -1067,7 +1067,8 @@ def test_media_editor_uses_reference_template() -> None:
     assert '"back_url": back_url' in shell_body
     assert "render_editor_back_navigation_bridge(back_url)" in shell_body
     assert "media_preview_component_payload(media_source, media_type, media_name or file_name)" in shell_body
-    assert "build_editor_language_resources(workspace_rules(), component_rows, metadata)" in shell_body
+    assert 'editor_rules = metadata.get("rules") if isinstance(metadata.get("rules"), dict) else workspace_rules()' in shell_body
+    assert "build_editor_language_resources(editor_rules, component_rows, metadata)" in shell_body
     assert 'id="media-editor-page-marker"' in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_editor_content" in shell_body
     assert "body:has(#media-editor-page-marker) .st-key-errorsweep_shell_content" not in shell_body
@@ -1136,7 +1137,8 @@ def test_human_review_workspace_uses_reference_template() -> None:
     end = source.index("def render_focused_subtitle_workspace", start)
     body = source[start:end]
     assert "render_reference_cat_editor_shell" in body
-    assert "rules=workspace_rules()" in body
+    assert "review_rules = workspace_rules()" in body
+    assert "rules=review_rules" in body
     assert "st.data_editor" not in body
     assert "cat_v40" not in body
     assert "main_col, side_col" not in body

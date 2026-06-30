@@ -39,11 +39,16 @@ class FakeRequests:
         return FakeResponse([])
 
 
-def install_fake_supabase():
+def install_fake_supabase(monkeypatch=None):
     fake = FakeRequests()
-    pp._supabase_url = lambda: "https://example.supabase.co"
-    pp._service_key = lambda: "service-role"
-    pp.requests = fake
+    if monkeypatch is not None:
+        monkeypatch.setattr(pp, "_supabase_url", lambda: "https://example.supabase.co")
+        monkeypatch.setattr(pp, "_service_key", lambda: "service-role")
+        monkeypatch.setattr(pp, "requests", fake)
+    else:
+        pp._supabase_url = lambda: "https://example.supabase.co"
+        pp._service_key = lambda: "service-role"
+        pp.requests = fake
     return fake
 
 
@@ -60,8 +65,8 @@ def assert_raises_value_error(fn, expected):
     raise AssertionError("expected ValueError")
 
 
-def test_saas_fetch_requires_tenant_scope_or_platform_reason():
-    install_fake_supabase()
+def test_saas_fetch_requires_tenant_scope_or_platform_reason(monkeypatch):
+    install_fake_supabase(monkeypatch)
     assert_raises_value_error(
         lambda: pp.fetch_saas_records("users"),
         "requires workspace, user_email, or platform_scope_reason",
@@ -72,8 +77,8 @@ def test_saas_fetch_requires_tenant_scope_or_platform_reason():
     )
 
 
-def test_saas_fetch_delete_and_editor_queries_are_scoped():
-    fake = install_fake_supabase()
+def test_saas_fetch_delete_and_editor_queries_are_scoped(monkeypatch):
+    fake = install_fake_supabase(monkeypatch)
 
     pp.fetch_saas_records("jobs", workspace="Acme", limit=10)
     pp.fetch_persistent_usage_events(20, workspace="Acme")
@@ -88,8 +93,8 @@ def test_saas_fetch_delete_and_editor_queries_are_scoped():
     assert any("id=eq.job-123" in url for _, url in fake.calls)
 
 
-def test_platform_wide_reads_must_be_explicitly_labeled():
-    fake = install_fake_supabase()
+def test_platform_wide_reads_must_be_explicitly_labeled(monkeypatch):
+    fake = install_fake_supabase(monkeypatch)
 
     pp.fetch_saas_records("users", include_all_workspaces=True, platform_scope_reason="login_user_lookup")
     pp.fetch_persistent_usage_events(20, include_all_workspaces=True, platform_scope_reason="owner_usage_audit")
@@ -102,8 +107,8 @@ def test_platform_wide_reads_must_be_explicitly_labeled():
         assert "user_email" not in params
 
 
-def test_persistence_health_uses_platform_workspace_probe_scope():
-    fake = install_fake_supabase()
+def test_persistence_health_uses_platform_workspace_probe_scope(monkeypatch):
+    fake = install_fake_supabase(monkeypatch)
     health = pp.persistence_health()
 
     assert health["storage_mode"] == "supabase"

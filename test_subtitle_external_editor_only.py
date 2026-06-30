@@ -25,8 +25,9 @@ def test_subtitle_creation_only_launches_external_media_editor():
 
     assert 'enter_subtitle_workspace("Subtitling"' not in setup
     assert 'enter_subtitle_workspace("Transcription"' not in setup
-    assert 'save_media_session_to_store("Subtitling"' in setup
-    assert 'save_media_session_to_store("Transcription"' in setup
+    assert '"Subtitling",' in setup
+    assert '"Transcription",' in setup
+    assert "save_media_session_to_store(" in setup
     assert 'render_external_editor_link("Open Subtitle Editor", "media", job_id)' in setup
     assert 'render_external_editor_link("Open Transcription Editor", "media", job_id)' in setup
     assert "st.session_state.subtitle_segments = []" in setup
@@ -76,6 +77,23 @@ def test_media_studio_setup_uses_compact_professional_shell():
     assert ".st-key-media_compliance_panel" in page
 
 
+def test_media_studio_uses_duration_segments_and_qa_context():
+    text = source(APP)
+    setup = function_body(text, "render_subtitle_transcription_setup", "render_focused_subtitle_workspace")
+    export_zip = function_body(text, "media_export_zip", "get_review_session_store")
+
+    assert "Segment length seconds" in setup
+    assert "Starter rows" not in setup
+    assert "duration_based_media_segments(media_duration_seconds, segment_seconds" in setup
+    assert "duration_based_media_segments(media_duration_seconds, transcription_segment_seconds" in setup
+    assert "normalize_media_rows_to_duration" in setup
+    assert 'st.container(key="media_qa_context_panel")' in setup
+    assert "media_quality_state = qa_quality_input_state" in setup
+    assert "quality_inputs=media_quality_state" in setup
+    assert "source_media: Optional[Dict[str, Any]] = None" in export_zip
+    assert "if should_include_media_qa_report(quality_context):" in export_zip
+
+
 def test_subtitle_external_editor_regression_is_in_release_gate():
     assert "python test_subtitle_external_editor_only.py" in source(WORKFLOW)
     assert "python test_subtitle_external_editor_only.py" in source(RELEASE_CHECK)
@@ -86,5 +104,6 @@ if __name__ == "__main__":
     test_subtitle_page_no_longer_auto_renders_legacy_workspace()
     test_legacy_subtitle_workspace_routes_redirect_to_external_setup()
     test_media_studio_setup_uses_compact_professional_shell()
+    test_media_studio_uses_duration_segments_and_qa_context()
     test_subtitle_external_editor_regression_is_in_release_gate()
     print("Subtitle external editor-only checks passed.")
