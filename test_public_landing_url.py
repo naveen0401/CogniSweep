@@ -39,6 +39,19 @@ def test_public_landing_route_alias_renders_landing() -> None:
     assert 'render_landing_page("explicit_public_landing")' in public_app
 
 
+def test_public_landing_mounts_koochi_chatbot() -> None:
+    app = read(APP)
+    landing = app[app.index("def render_landing_page") : app.index("LOGIN_SUBMIT_MASK_ID")]
+    koochi = function_body(app, "render_koochi_chatbot", "route_query_for_page")
+
+    assert "render_koochi_chatbot()" in landing
+    assert '"name": "Koochi"' in koochi
+    assert "Ask Koochi" in koochi
+    assert "without a user AI API key" in koochi
+    assert "CogniSweep QA, translation, subtitling, transcription, scorecards" in koochi
+    assert "removeIfNotLandingRoute" in koochi
+
+
 def test_root_startup_installs_canonical_redirect_bridge() -> None:
     app = read(APP)
     bridge = function_body(app, "render_public_landing_canonical_redirect_bridge", "render_authenticated_shell_seen_bridge")
@@ -75,6 +88,7 @@ def test_env_template_names_public_www_landing_url() -> None:
 if __name__ == "__main__":
     test_public_landing_canonical_url_is_configured()
     test_public_landing_route_alias_renders_landing()
+    test_public_landing_mounts_koochi_chatbot()
     test_root_startup_installs_canonical_redirect_bridge()
     test_caddy_redirects_bare_roots_to_canonical_landing()
     test_env_template_names_public_www_landing_url()

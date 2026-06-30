@@ -8415,6 +8415,445 @@ def public_login_link_target() -> str:
     return 'target="_self"'
 
 
+def render_koochi_chatbot() -> None:
+    """Install the no-API public CogniSweep assistant."""
+    support_email = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or "support@cognisweep.com"
+    demo_href = f"mailto:{support_email}?subject=CogniSweep%20demo%20request"
+    signup_href = public_page_link("signup")
+    login_href = public_page_link("login")
+    privacy_href = public_page_link("privacy")
+    bot_payload = {
+        "name": "Koochi",
+        "demoHref": demo_href,
+        "signupHref": signup_href,
+        "loginHref": login_href,
+        "privacyHref": privacy_href,
+        "supportEmail": support_email,
+    }
+    render_parent_script(
+        f"""
+        (() => {{
+          const config = {json.dumps(bot_payload, ensure_ascii=True)};
+          const existing = document.getElementById("koochi-chatbot-root");
+          if (existing) existing.remove();
+
+          const answers = [
+            {{
+              id: "services",
+              label: "Services",
+              terms: ["service", "services", "what do you do", "features", "platform", "workflow"],
+              text: "CogniSweep supports localization QA, AI-assisted translation workflows, Human Review, subtitling, transcription, reviewer scorecards, glossary/DNT/TM checks, reference-document comparison, same-format exports, and Excel QA/scorecard reports."
+            }},
+            {{
+              id: "qa",
+              label: "QA checks",
+              terms: ["qa", "quality", "error", "errors", "checks", "report", "excel"],
+              text: "CogniSweep QA reviews uploaded bilingual content against placeholders, numbers, terminology, DNT terms, glossary, translation memory, reference docs, and instructions. When QA context is provided, it can export structured Excel reports for client handoff."
+            }},
+            {{
+              id: "translation",
+              label: "Translation",
+              terms: ["translation", "translate", "localized", "localization", "file format", "same format"],
+              text: "Translation Studio segments uploaded files, applies client resources, can use a user-provided AI API key for drafts, opens Human Review, and exports the translated file in the same source format whenever supported."
+            }},
+            {{
+              id: "media",
+              label: "Media",
+              terms: ["subtitle", "subtitling", "transcription", "transcribe", "audio", "video", "srt", "media"],
+              text: "For media work, CogniSweep creates subtitle or transcription segments from audio/video duration, supports manual or AI-assisted drafting when a user key is available, and exports ZIP packages with the source media, output files, and optional QA report."
+            }},
+            {{
+              id: "scorecards",
+              label: "Scorecards",
+              terms: ["scorecard", "reviewer", "translator", "review", "changes", "lqa"],
+              text: "Scorecards compare translator and reviewer/final files, categorize reviewer changes into error types, calculate translator scores, and export the scorecard in Excel format. Optional QA can run on the reviewer/final file when context is provided."
+            }},
+            {{
+              id: "pricing",
+              label: "Pricing",
+              terms: ["price", "pricing", "plan", "premium", "cost", "trial", "free"],
+              text: "CogniSweep is built to keep entry pricing accessible while still supporting high-quality QA evidence, structured reports, and production-ready workflows. Start with the lowest plan or request a demo for the best fit."
+            }},
+            {{
+              id: "partnership",
+              label: "Partnership",
+              terms: ["partner", "partnership", "agency", "lsp", "collaboration", "white label", "white-label"],
+              text: "Yes. CogniSweep is open to agency partnerships, LSP collaboration, workflow integrations, white-label conversations, and custom implementation for teams that want to add structured AI-assisted QA and localization operations."
+            }},
+            {{
+              id: "licensing",
+              label: "Product licensing",
+              terms: ["license", "licensing", "buy", "sell", "acquire", "acquisition", "custom", "implement", "own product"],
+              text: "If CogniSweep fits your current localization flow, we are open to strategic product discussions, custom implementation, licensing, or broader commercial conversations."
+            }},
+            {{
+              id: "demo",
+              label: "Book demo",
+              terms: ["demo", "meeting", "call", "contact", "support", "email"],
+              text: `You can request a demo by emailing ${{config.supportEmail}}. Share your workflow, sample file type, and target services such as QA, translation, subtitling, transcription, or scorecards.`
+            }},
+            {{
+              id: "api",
+              label: "AI API key",
+              terms: ["api", "key", "openai", "gemini", "ai key", "without key"],
+              text: "CogniSweep can work without a user AI API key by preparing manual review workflows and deterministic checks. When users add their own AI key, AI drafting and AI QA can use the provided client resources and instructions."
+            }}
+          ];
+
+          const quickIds = ["services", "qa", "translation", "media", "scorecards", "pricing", "partnership", "licensing", "demo"];
+          const escapeHtml = (value) => String(value || "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+          const root = document.createElement("section");
+          root.id = "koochi-chatbot-root";
+          root.setAttribute("aria-live", "polite");
+          root.innerHTML = `
+            <style>
+              #koochi-chatbot-root {{
+                position: fixed;
+                right: clamp(14px, 2.2vw, 28px);
+                bottom: clamp(14px, 2.2vw, 28px);
+                z-index: 2147481900;
+                font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                color: #0f172a;
+              }}
+              #koochi-chatbot-root * {{ box-sizing: border-box; }}
+              .koochi-launch {{
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+                border: 0;
+                border-radius: 999px;
+                padding: 12px 15px 12px 12px;
+                background: linear-gradient(135deg, #11f5b5, #4aa8ff 64%, #9c5cff);
+                color: #050713;
+                box-shadow: 0 18px 54px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.24) inset;
+                cursor: pointer;
+                font-weight: 950;
+                letter-spacing: 0;
+              }}
+              .koochi-launch-icon,
+              .koochi-avatar {{
+                width: 36px;
+                height: 36px;
+                flex: 0 0 36px;
+                border-radius: 14px;
+                display: inline-grid;
+                place-items: center;
+                background: #fffdf7;
+                color: #5b21b6;
+                font-weight: 1000;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.92);
+              }}
+              .koochi-panel {{
+                display: none;
+                width: min(392px, calc(100vw - 28px));
+                max-height: min(680px, calc(100dvh - 32px));
+                overflow: hidden;
+                border: 1px solid rgba(148,163,184,.28);
+                border-radius: 8px;
+                background: rgba(255,255,255,.98);
+                box-shadow: 0 24px 80px rgba(2,6,23,.32);
+              }}
+              #koochi-chatbot-root[data-open="true"] .koochi-launch {{ display: none; }}
+              #koochi-chatbot-root[data-open="true"] .koochi-panel {{
+                display: grid;
+                grid-template-rows: auto minmax(0, 1fr) auto;
+              }}
+              .koochi-head {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 14px 16px;
+                border-bottom: 1px solid rgba(226,232,240,.92);
+                background: linear-gradient(90deg, rgba(17,245,181,.12), rgba(74,168,255,.12), rgba(156,92,255,.12));
+              }}
+              .koochi-id {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                min-width: 0;
+              }}
+              .koochi-id strong {{
+                display: block;
+                font-size: 15px;
+                line-height: 1.1;
+              }}
+              .koochi-id span {{
+                display: block;
+                color: #64748b;
+                font-size: 12px;
+                font-weight: 800;
+                margin-top: 2px;
+              }}
+              .koochi-close {{
+                width: 34px;
+                height: 34px;
+                border: 1px solid rgba(148,163,184,.35);
+                border-radius: 999px;
+                background: #fff;
+                color: #334155;
+                cursor: pointer;
+                font-size: 20px;
+                line-height: 1;
+              }}
+              .koochi-messages {{
+                min-height: 268px;
+                max-height: 430px;
+                overflow-y: auto;
+                padding: 14px 14px 10px;
+                background:
+                  radial-gradient(circle at 0 0, rgba(17,245,181,.10), transparent 34%),
+                  radial-gradient(circle at 100% 12%, rgba(156,92,255,.12), transparent 32%),
+                  #f8fafc;
+              }}
+              .koochi-msg {{
+                display: grid;
+                gap: 5px;
+                margin: 0 0 11px;
+              }}
+              .koochi-msg.user {{ justify-items: end; }}
+              .koochi-bubble {{
+                max-width: 92%;
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-size: 14px;
+                line-height: 1.42;
+                background: #fff;
+                color: #1e293b;
+                border: 1px solid rgba(226,232,240,.9);
+                box-shadow: 0 8px 24px rgba(15,23,42,.06);
+                overflow-wrap: anywhere;
+              }}
+              .koochi-msg.user .koochi-bubble {{
+                background: #111827;
+                color: #fff;
+                border-color: #111827;
+              }}
+              .koochi-quick {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 7px;
+                padding: 0 14px 12px;
+                background: #f8fafc;
+              }}
+              .koochi-chip {{
+                border: 1px solid rgba(124,58,237,.18);
+                border-radius: 7px;
+                background: #ede9fe;
+                color: #3b0764;
+                padding: 7px 9px;
+                font-size: 12px;
+                font-weight: 850;
+                cursor: pointer;
+              }}
+              .koochi-foot {{
+                padding: 12px 14px 13px;
+                border-top: 1px solid rgba(226,232,240,.92);
+                background: #fff;
+              }}
+              .koochi-form {{
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 42px;
+                gap: 8px;
+              }}
+              .koochi-input {{
+                width: 100%;
+                min-height: 40px;
+                border: 1px solid rgba(148,163,184,.55);
+                border-radius: 8px;
+                padding: 0 12px;
+                font: inherit;
+                outline: none;
+              }}
+              .koochi-input:focus {{
+                border-color: #4aa8ff;
+                box-shadow: 0 0 0 3px rgba(74,168,255,.18);
+              }}
+              .koochi-send {{
+                min-width: 42px;
+                min-height: 40px;
+                border: 0;
+                border-radius: 8px;
+                background: linear-gradient(135deg, #11f5b5, #4aa8ff);
+                color: #050713;
+                cursor: pointer;
+                font-size: 18px;
+                font-weight: 950;
+              }}
+              .koochi-links {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px 12px;
+                margin-top: 10px;
+                font-size: 12px;
+                color: #64748b;
+              }}
+              .koochi-links a {{
+                color: #5b21b6;
+                font-weight: 800;
+                text-decoration: none;
+              }}
+              @media (max-width: 640px) {{
+                #koochi-chatbot-root {{
+                  right: 10px;
+                  bottom: 10px;
+                }}
+                .koochi-panel {{
+                  width: calc(100vw - 20px);
+                  max-height: calc(100dvh - 20px);
+                }}
+                .koochi-messages {{
+                  max-height: min(390px, calc(100dvh - 254px));
+                }}
+                .koochi-launch span:last-child {{
+                  display: none;
+                }}
+              }}
+            </style>
+            <button class="koochi-launch" type="button" aria-label="Open Koochi assistant">
+              <span class="koochi-launch-icon">K</span>
+              <span>Ask Koochi</span>
+            </button>
+            <div class="koochi-panel" role="dialog" aria-label="Koochi CogniSweep assistant">
+              <div class="koochi-head">
+                <div class="koochi-id">
+                  <span class="koochi-avatar">K</span>
+                  <div><strong>Koochi</strong><span>CogniSweep assistant</span></div>
+                </div>
+                <button class="koochi-close" type="button" aria-label="Close Koochi">&times;</button>
+              </div>
+              <div class="koochi-messages" data-koochi-messages></div>
+              <div class="koochi-quick" data-koochi-quick></div>
+              <div class="koochi-foot">
+                <form class="koochi-form" data-koochi-form>
+                  <input class="koochi-input" data-koochi-input placeholder="Ask about CogniSweep" autocomplete="off" />
+                  <button class="koochi-send" type="submit" aria-label="Send question">Send</button>
+                </form>
+                <div class="koochi-links">
+                  <a href="${{config.signupHref}}" target="_self">Start free</a>
+                  <a href="${{config.loginHref}}" target="_self">Login</a>
+                  <a href="${{config.demoHref}}">Book demo</a>
+                  <a href="${{config.privacyHref}}" target="_self">Privacy</a>
+                </div>
+              </div>
+            </div>
+          `;
+
+          const addMessage = (text, sender = "bot") => {{
+            const messages = root.querySelector("[data-koochi-messages]");
+            const item = document.createElement("div");
+            item.className = `koochi-msg ${{sender === "user" ? "user" : "bot"}}`;
+            item.innerHTML = `<div class="koochi-bubble">${{escapeHtml(text)}}</div>`;
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+          }};
+
+          const scoreAnswer = (question) => {{
+            const q = String(question || "").toLowerCase();
+            let best = null;
+            let bestScore = 0;
+            for (const answer of answers) {{
+              let score = 0;
+              for (const term of answer.terms) {{
+                const clean = String(term).toLowerCase();
+                if (q.includes(clean)) score += Math.max(1, clean.split(/\\s+/).length);
+              }}
+              if (score > bestScore) {{
+                best = answer;
+                bestScore = score;
+              }}
+            }}
+            return best || {{
+              text: "I can help with CogniSweep services, QA, translation, subtitling, transcription, scorecards, pricing, partnerships, licensing, and demos. Try one of the quick buttons or email us for a detailed workflow discussion."
+            }};
+          }};
+
+          const ask = (question, showUser = true) => {{
+            const value = String(question || "").trim();
+            if (!value) return;
+            if (showUser) addMessage(value, "user");
+            const answer = scoreAnswer(value);
+            window.setTimeout(() => addMessage(answer.text, "bot"), 180);
+          }};
+
+          root.querySelector(".koochi-launch").addEventListener("click", () => {{
+            root.dataset.open = "true";
+            const input = root.querySelector("[data-koochi-input]");
+            window.setTimeout(() => input && input.focus(), 60);
+          }});
+          root.querySelector(".koochi-close").addEventListener("click", () => {{
+            root.dataset.open = "false";
+          }});
+          root.querySelector("[data-koochi-form]").addEventListener("submit", (event) => {{
+            event.preventDefault();
+            const input = root.querySelector("[data-koochi-input]");
+            const value = input.value;
+            input.value = "";
+            ask(value, true);
+          }});
+
+          const quick = root.querySelector("[data-koochi-quick]");
+          quickIds.forEach((id) => {{
+            const answer = answers.find((item) => item.id === id);
+            if (!answer) return;
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "koochi-chip";
+            button.textContent = answer.label;
+            button.addEventListener("click", () => ask(answer.label, true));
+            quick.appendChild(button);
+          }});
+
+          document.body.appendChild(root);
+          const isLandingRoute = () => {{
+            try {{
+              const loc = window.location || {{}};
+              const params = new URLSearchParams(loc.search || "");
+              const routeValue = String(params.get("es_page") || params.get("public") || params.get("route") || "")
+                .replace(/[+_-]/g, " ")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+              const pathValue = String(loc.pathname || "")
+                .replace(/^\\/+|\\/+$/g, "")
+                .toLowerCase();
+              return (
+                !routeValue ||
+                routeValue === "landing" ||
+                routeValue === "software localization tool" ||
+                routeValue === "solutions/software-localization-tool" ||
+                pathValue === "solutions/software-localization-tool"
+              );
+            }} catch (err) {{
+              return true;
+            }}
+          }};
+          const removeIfNotLandingRoute = () => {{
+            if (!isLandingRoute() && root.isConnected) {{
+              root.remove();
+            }}
+          }};
+          window.setTimeout(removeIfNotLandingRoute, 800);
+          const koochiCleanupTimer = window.setInterval(() => {{
+            if (!root.isConnected) {{
+              window.clearInterval(koochiCleanupTimer);
+              return;
+            }}
+            removeIfNotLandingRoute();
+          }}, 1500);
+          addMessage("Hi, I am Koochi. I can answer questions about CogniSweep QA, translation, subtitling, transcription, scorecards, pricing, partnerships, and product licensing.");
+        }})();
+        """.strip(),
+        height=0,
+        scrolling=False,
+    )
+
+
 def route_query_for_page(page: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     params = {"es_page": normalize_es_page(page), "es_app_nav": "1"}
     for key, value in (extra or {}).items():
@@ -23333,6 +23772,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         </style>
         """).strip(),
     )
+    render_koochi_chatbot()
 
 
 LOGIN_SUBMIT_MASK_ID = "errorsweep-login-submit-mask"
