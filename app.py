@@ -345,6 +345,56 @@ def brand_logo_asset_data_uri() -> str:
     return ""
 
 
+def koochi_bot_girl_avatar_data_uri() -> str:
+    svg = """
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+      <defs>
+        <linearGradient id="bg" x1="18" y1="8" x2="84" y2="88" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#11f5b5"/>
+          <stop offset=".52" stop-color="#4aa8ff"/>
+          <stop offset="1" stop-color="#9c5cff"/>
+        </linearGradient>
+        <linearGradient id="hair" x1="18" y1="20" x2="78" y2="82" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3d2d74"/>
+          <stop offset=".6" stop-color="#52258d"/>
+          <stop offset="1" stop-color="#9c5cff"/>
+        </linearGradient>
+        <linearGradient id="skin" x1="30" y1="24" x2="68" y2="66" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#fff8f4"/>
+          <stop offset="1" stop-color="#f9d9cf"/>
+        </linearGradient>
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#2d185f" flood-opacity=".24"/>
+        </filter>
+      </defs>
+      <rect x="4" y="4" width="88" height="88" rx="24" fill="#fffdf7"/>
+      <rect x="6" y="6" width="84" height="84" rx="22" fill="url(#bg)" opacity=".12"/>
+      <path d="M25 44c0-18 10.2-30 25-30 13.7 0 23.2 10.4 23.2 25.2 0 8.6-2.6 17.2-7.2 24.5H31.4C27.2 57.9 25 51 25 44Z" fill="url(#hair)" filter="url(#shadow)"/>
+      <path d="M26.5 39.3c1.4-12.7 10.3-20.8 22.6-20.8 12.8 0 21 8.7 22 22.3-7.9-1.3-15.4-5.2-21.2-11.5-4.5 6.6-12.4 10.2-23.4 10Z" fill="#25173f" opacity=".72"/>
+      <rect x="27.8" y="36.5" width="43.8" height="33.8" rx="17" fill="url(#skin)"/>
+      <circle cx="28.6" cy="52.4" r="5.4" fill="#f9d9cf"/>
+      <circle cx="71.1" cy="52.4" r="5.4" fill="#f9d9cf"/>
+      <path d="M35.2 45.1c2.7-2.2 7.2-2.2 9.9 0" fill="none" stroke="#3d2d74" stroke-width="3.4" stroke-linecap="round"/>
+      <path d="M54.8 45.1c2.7-2.2 7.2-2.2 9.9 0" fill="none" stroke="#3d2d74" stroke-width="3.4" stroke-linecap="round"/>
+      <circle cx="40.3" cy="52.2" r="3.2" fill="#172033"/>
+      <circle cx="59.8" cy="52.2" r="3.2" fill="#172033"/>
+      <circle cx="41.4" cy="51" r="1" fill="#fff"/>
+      <circle cx="60.9" cy="51" r="1" fill="#fff"/>
+      <path d="M43.2 61.2c3.9 3 9.6 3 13.5 0" fill="none" stroke="#7c3aed" stroke-width="3" stroke-linecap="round"/>
+      <path d="M29.8 48.5h-4.3c-3.1 0-5.5 2.4-5.5 5.4v3c0 3 2.4 5.4 5.5 5.4h4.3" fill="none" stroke="#4aa8ff" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M70.2 48.5h4.3c3.1 0 5.5 2.4 5.5 5.4v3c0 3-2.4 5.4-5.5 5.4h-4.3" fill="none" stroke="#4aa8ff" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M75 61c0 7.5-5.2 11.5-14 11.5" fill="none" stroke="#4aa8ff" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="60.6" cy="72.5" r="3.8" fill="#11f5b5" stroke="#fff" stroke-width="2"/>
+      <path d="M43.4 16.6 40.5 9" stroke="#9c5cff" stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M56.6 16.6 59.5 9" stroke="#9c5cff" stroke-width="3.5" stroke-linecap="round"/>
+      <circle cx="40.2" cy="8.6" r="3.4" fill="#11f5b5"/>
+      <circle cx="59.8" cy="8.6" r="3.4" fill="#4aa8ff"/>
+      <path d="M30.4 78.6c4.4-6.2 11.2-9.4 19.6-9.4 8.5 0 15.3 3.2 19.6 9.4" fill="none" stroke="url(#bg)" stroke-width="7" stroke-linecap="round"/>
+    </svg>
+    """
+    return f"data:image/svg+xml,{quote(' '.join(svg.split()), safe='')}"
+
+
 def render_brand_logo_asset_override() -> None:
     logo_data_uri = brand_logo_asset_data_uri()
     if not logo_data_uri:
@@ -8418,7 +8468,7 @@ def public_login_link_target() -> str:
 def render_koochi_chatbot() -> None:
     """Install the no-API public CogniSweep assistant."""
     support_email = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or "support@cognisweep.com"
-    logo_data_uri = brand_logo_asset_data_uri()
+    avatar_data_uri = koochi_bot_girl_avatar_data_uri()
     demo_href = f"mailto:{support_email}?subject=CogniSweep%20demo%20request"
     signup_href = public_page_link("signup")
     login_href = public_page_link("login")
@@ -8428,7 +8478,7 @@ def render_koochi_chatbot() -> None:
         "demoHref": demo_href,
         "signupHref": signup_href,
         "loginHref": login_href,
-        "logoSrc": logo_data_uri,
+        "avatarSrc": avatar_data_uri,
         "privacyHref": privacy_href,
         "supportEmail": support_email,
     }
@@ -8832,9 +8882,9 @@ def render_koochi_chatbot() -> None:
           `;
 
           root.querySelectorAll("[data-koochi-icon]").forEach((node) => {{
-            if (config.logoSrc) {{
+            if (config.avatarSrc) {{
               const image = document.createElement("img");
-              image.src = config.logoSrc;
+              image.src = config.avatarSrc;
               image.alt = "";
               image.decoding = "async";
               node.appendChild(image);

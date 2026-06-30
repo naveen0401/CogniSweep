@@ -46,7 +46,8 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
 
     assert "render_koochi_chatbot()" in landing
     assert '"name": "Koochi"' in koochi
-    assert '"logoSrc": logo_data_uri' in koochi
+    assert "koochi_bot_girl_avatar_data_uri()" in koochi
+    assert '"avatarSrc": avatar_data_uri' in koochi
     assert "Ask Koochi" in koochi
     assert "data-koochi-icon" in koochi
     assert "without a user AI API key" in koochi
