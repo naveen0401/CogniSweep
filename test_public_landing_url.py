@@ -58,6 +58,21 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
     assert "removeIfNotLandingRoute" in koochi
 
 
+def test_koochi_uses_confident_product_intent_routing() -> None:
+    app = read(APP)
+    koochi = function_body(app, "render_koochi_chatbot", "route_query_for_page")
+
+    assert "const scoreIntent" in koochi
+    assert "const fallbackAnswer" in koochi
+    assert "outOfScopeTerms" in koochi
+    assert "negativeTerms" in koochi
+    assert "best.score < 4" in koochi
+    assert "I want to stay accurate" in koochi
+    assert "Scorecards compare translator and reviewer/final files" in koochi
+    assert "QA report generation is skipped" in koochi
+    assert "Koochi itself is a no-API product assistant" in koochi
+
+
 def test_public_landing_uses_stable_fixed_header_spacing() -> None:
     app = read(APP)
     landing = app[app.index("def render_landing_page") : app.index("LOGIN_SUBMIT_MASK_ID")]
@@ -105,6 +120,7 @@ if __name__ == "__main__":
     test_public_landing_canonical_url_is_configured()
     test_public_landing_route_alias_renders_landing()
     test_public_landing_mounts_koochi_chatbot()
+    test_koochi_uses_confident_product_intent_routing()
     test_public_landing_uses_stable_fixed_header_spacing()
     test_root_startup_installs_canonical_redirect_bridge()
     test_caddy_redirects_bare_roots_to_canonical_landing()

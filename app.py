@@ -8525,66 +8525,117 @@ def render_koochi_chatbot() -> None:
             {{
               id: "services",
               label: "Services",
-              terms: ["service", "services", "what do you do", "features", "platform", "workflow"],
-              text: "CogniSweep supports localization QA, AI-assisted translation workflows, Human Review, subtitling, transcription, reviewer scorecards, glossary/DNT/TM checks, reference-document comparison, same-format exports, and Excel QA/scorecard reports."
+              terms: [["service", 8], ["services", 8], ["what do you do", 10], ["features", 7], ["platform", 5], ["workflow", 5], ["localization", 5], ["cognisweep", 4]],
+              text: "CogniSweep is an AI localization command center for QA checks, translation review, Human Review, subtitling, transcription, scorecards, glossary/DNT/TM checks, reference-doc comparison, same-format exports, ZIP deliveries, and Excel-ready reports."
             }},
             {{
               id: "qa",
               label: "QA checks",
-              terms: ["qa", "quality", "error", "errors", "checks", "report", "excel"],
-              text: "CogniSweep QA reviews uploaded bilingual content against placeholders, numbers, terminology, DNT terms, glossary, translation memory, reference docs, and instructions. When QA context is provided, it can export structured Excel reports for client handoff."
+              terms: [["qa", 8], ["quality assurance", 9], ["quality check", 8], ["qa check", 10], ["error check", 8], ["errors", 5], ["terminology", 4], ["placeholder", 5], ["dnt", 5], ["glossary", 5], ["translation memory", 6], ["tm", 4]],
+              negativeTerms: [["scorecard", 5], ["translator score", 5], ["reviewer changes", 5]],
+              text: "CogniSweep QA compares uploaded content against placeholders, numbers, terminology, DNT terms, glossary, translation memory, reference docs, and user instructions. If QA context is available, it produces structured findings with severity, explanation, and suggested corrections."
+            }},
+            {{
+              id: "resources",
+              label: "Resources",
+              terms: [["language resource", 9], ["language resources", 9], ["reference doc", 8], ["reference docs", 8], ["instructions", 7], ["client rules", 7], ["style guide", 7], ["glossary", 5], ["dnt", 5], ["tm", 4], ["translation memory", 6], ["provided things", 5]],
+              text: "When users provide language resources, reference docs, and instructions, CogniSweep uses them as context for translation, subtitling, transcription, scorecards, and QA. If none are provided, QA report generation is skipped or limited, and the app explains that high-quality QA needs those inputs."
             }},
             {{
               id: "translation",
               label: "Translation",
-              terms: ["translation", "translate", "localized", "localization", "file format", "same format"],
-              text: "Translation Studio segments uploaded files, applies client resources, can use a user-provided AI API key for drafts, opens Human Review, and exports the translated file in the same source format whenever supported."
+              terms: [["translation", 9], ["translate", 9], ["translated file", 8], ["localize", 7], ["localized", 7], ["target language", 5], ["source language", 5], ["human review", 5]],
+              negativeTerms: [["transcription", 7], ["subtitle", 5], ["scorecard", 6]],
+              text: "Translation Studio separates uploaded content into editable segments when needed, applies user-provided resources and instructions, can use the user's AI API key for drafts, supports Human Review, and exports the translated file back in the same source format and internal pattern whenever supported."
+            }},
+            {{
+              id: "formats",
+              label: "File formats",
+              terms: [["file format", 9], ["same format", 10], ["source format", 9], ["inside pattern", 8], ["uploaded format", 8], ["format preserved", 8], ["download format", 7], ["xlsx", 4], ["docx", 4], ["srt", 4], ["zip", 3]],
+              text: "CogniSweep is designed to preserve the uploaded source file format and internal pattern for translation exports wherever the format is supported. Reports are exported separately, and delivery packages are zipped when a workflow needs multiple files."
             }},
             {{
               id: "media",
               label: "Media",
-              terms: ["subtitle", "subtitling", "transcription", "transcribe", "audio", "video", "srt", "media"],
-              text: "For media work, CogniSweep creates subtitle or transcription segments from audio/video duration, supports manual or AI-assisted drafting when a user key is available, and exports ZIP packages with the source media, output files, and optional QA report."
+              terms: [["media", 8], ["audio", 8], ["video", 8], ["duration", 6], ["segments from duration", 10], ["timed segment", 8], ["srt", 5], ["subtitle", 6], ["subtitling", 6], ["transcription", 6], ["transcribe", 6]],
+              text: "For audio and video, CogniSweep creates segments based on the media duration instead of forcing a fixed count. Subtitling exports source media, translated subtitle output, and optional QA report. Transcription exports source media, transcription output, and optional QA report."
+            }},
+            {{
+              id: "subtitling",
+              label: "Subtitling",
+              terms: [["subtitle", 10], ["subtitling", 10], ["caption", 7], ["captions", 7], ["srt", 7], ["timed subtitles", 9], ["translated subtitle", 8]],
+              negativeTerms: [["transcription only", 6]],
+              text: "Subtitling uses timed media segments, supports translation/review with available resources, and downloads a ZIP containing the source file, translated subtitle file, and QA report only when the required QA context is provided."
+            }},
+            {{
+              id: "transcription",
+              label: "Transcription",
+              terms: [["transcription", 10], ["transcribe", 10], ["speech to text", 9], ["audio to text", 9], ["transcription file", 8]],
+              negativeTerms: [["subtitle", 5], ["subtitling", 5]],
+              text: "Transcription turns audio or video speech into segmented text based on duration. The download package includes the source media, transcription file, and QA report only when the user provided the required QA inputs."
             }},
             {{
               id: "scorecards",
               label: "Scorecards",
-              terms: ["scorecard", "reviewer", "translator", "review", "changes", "lqa"],
-              text: "Scorecards compare translator and reviewer/final files, categorize reviewer changes into error types, calculate translator scores, and export the scorecard in Excel format. Optional QA can run on the reviewer/final file when context is provided."
+              terms: [["scorecard", 10], ["scorecards", 10], ["translator score", 9], ["reviewer file", 8], ["translator file", 8], ["reviewer changes", 9], ["changes done by reviewer", 10], ["lqa", 6], ["final file", 5], ["reviewed file", 6]],
+              negativeTerms: [["qa only", 4], ["translation draft", 4]],
+              text: "Scorecards compare translator and reviewer/final files, categorize reviewer changes into error types, assign scores to the translator's file, and export the scorecard in Excel format. If QA context is provided, QA runs on the reviewer/final file because that is the final deliverable."
             }},
             {{
-              id: "pricing",
-              label: "Pricing",
-              terms: ["price", "pricing", "plan", "premium", "cost", "trial", "free"],
-              text: "CogniSweep is built to keep entry pricing accessible while still supporting high-quality QA evidence, structured reports, and production-ready workflows. Start with the lowest plan or request a demo for the best fit."
-            }},
-            {{
-              id: "partnership",
-              label: "Partnership",
-              terms: ["partner", "partnership", "agency", "lsp", "collaboration", "white label", "white-label"],
-              text: "Yes. CogniSweep is open to agency partnerships, LSP collaboration, workflow integrations, white-label conversations, and custom implementation for teams that want to add structured AI-assisted QA and localization operations."
-            }},
-            {{
-              id: "licensing",
-              label: "Product licensing",
-              terms: ["license", "licensing", "buy", "sell", "acquire", "acquisition", "custom", "implement", "own product"],
-              text: "If CogniSweep fits your current localization flow, we are open to strategic product discussions, custom implementation, licensing, or broader commercial conversations."
-            }},
-            {{
-              id: "demo",
-              label: "Book demo",
-              terms: ["demo", "meeting", "call", "contact", "support", "email"],
-              text: `You can request a demo by emailing ${{config.supportEmail}}. Share your workflow, sample file type, and target services such as QA, translation, subtitling, transcription, or scorecards.`
+              id: "reports",
+              label: "Reports",
+              terms: [["report", 5], ["reports", 5], ["qa report", 10], ["excel report", 10], ["xlsx report", 9], ["scorecard excel", 10], ["download zip", 8], ["zip folder", 8], ["export", 4], ["delivery", 4]],
+              text: "QA reports and scorecards are exported in Excel format. Translation, subtitling, and transcription workflows use ZIP packages when multiple outputs are expected. If users do not provide the required QA context, CogniSweep skips the QA report instead of producing weak evidence."
             }},
             {{
               id: "api",
               label: "AI API key",
-              terms: ["api", "key", "openai", "gemini", "ai key", "without key"],
-              text: "CogniSweep can work without a user AI API key by preparing manual review workflows and deterministic checks. When users add their own AI key, AI drafting and AI QA can use the provided client resources and instructions."
+              terms: [["api", 6], ["api key", 10], ["ai key", 10], ["openai", 7], ["gemini", 6], ["without key", 8], ["without api", 8], ["own key", 8], ["user key", 8]],
+              text: "CogniSweep can guide workflows without a user AI API key, but AI drafting and AI QA become stronger when users add their own AI key plus language resources, reference docs, and instructions. Koochi itself is a no-API product assistant for answering CogniSweep questions."
+            }},
+            {{
+              id: "chatbot",
+              label: "Chatbot",
+              terms: [["chatbot", 10], ["bot", 8], ["koochi", 10], ["assistant", 7], ["answer questions", 8], ["without api", 6], ["site assistant", 8]],
+              text: "Koochi can answer focused questions about CogniSweep services, QA, translation, media workflows, scorecards, pricing, partnerships, licensing, and demos without requiring a user AI API key. For security and accuracy, it stays inside CogniSweep product topics."
+            }},
+            {{
+              id: "pricing",
+              label: "Pricing",
+              terms: [["price", 9], ["pricing", 9], ["plan", 7], ["premium", 7], ["cost", 8], ["trial", 8], ["free", 6], ["lowest", 5], ["subscription", 6]],
+              text: "CogniSweep is positioned for accessible entry pricing while still supporting high-quality localization QA evidence, structured Excel reports, and production-ready workflows. Start free or request a demo to map the right plan to your file volume and services."
+            }},
+            {{
+              id: "partnership",
+              label: "Partnership",
+              terms: [["partner", 9], ["partnership", 9], ["agency", 7], ["lsp", 7], ["collaboration", 7], ["white label", 8], ["white-label", 8], ["integration", 6]],
+              text: "Yes. CogniSweep is open to agency partnerships, LSP collaboration, workflow integrations, white-label conversations, and custom implementation for teams that want structured AI-assisted localization operations."
+            }},
+            {{
+              id: "licensing",
+              label: "Product licensing",
+              terms: [["license", 9], ["licensing", 9], ["buy product", 9], ["buy the product", 9], ["sell product", 9], ["sell the product", 9], ["purchase product", 8], ["acquire", 7], ["acquisition", 7], ["custom implementation", 8], ["implement product", 8], ["own product", 8]],
+              text: "If CogniSweep fits a client's current localization flow, we are open to strategic product discussions, licensing, custom implementation, and broader commercial conversations."
+            }},
+            {{
+              id: "security",
+              label: "Security",
+              terms: [["security", 8], ["privacy", 8], ["data", 5], ["client files", 7], ["confidential", 7], ["safe", 4]],
+              text: "CogniSweep is designed for business localization workflows with workspace controls, private file handling, production HTTPS, and privacy/legal pages. For enterprise security requirements, request a demo and share the compliance checklist."
+            }},
+            {{
+              id: "demo",
+              label: "Book demo",
+              terms: [["demo", 10], ["meeting", 8], ["call", 7], ["contact", 7], ["support", 6], ["email", 5], ["talk", 5], ["schedule", 7]],
+              text: `You can request a demo by emailing ${{config.supportEmail}}. Share your workflow, sample file type, target languages, and whether you need QA, translation, subtitling, transcription, scorecards, partnership, or licensing support.`
             }}
           ];
 
-          const quickIds = ["services", "qa", "translation", "media", "scorecards", "pricing", "partnership", "licensing", "demo"];
+          const quickIds = ["services", "qa", "resources", "translation", "media", "scorecards", "reports", "pricing", "partnership", "demo"];
+          const outOfScopeTerms = ["weather", "news", "movie", "song", "lyrics", "sports", "politics", "recipe", "homework", "math problem", "stock price", "medical", "legal advice"];
+          const fallbackAnswer = {{
+            text: "I want to stay accurate. I can answer CogniSweep questions about services, QA checks, translation, file formats, subtitling, transcription, scorecards, Excel reports, pricing, partnerships, licensing, and demos. Please ask about one of those topics."
+          }};
           const escapeHtml = (value) => String(value || "")
             .replaceAll("&", "&amp;")
             .replaceAll("<", "&lt;")
@@ -8765,6 +8816,7 @@ def render_koochi_chatbot() -> None:
                 padding: 10px 11px;
                 font-size: 14px;
                 line-height: 1.45;
+                white-space: pre-line;
                 background: #fff;
                 color: #1e293b;
                 border: 1px solid rgba(226,232,240,.9);
@@ -8933,24 +8985,70 @@ def render_koochi_chatbot() -> None:
             messages.scrollTop = messages.scrollHeight;
           }};
 
-          const scoreAnswer = (question) => {{
-            const q = String(question || "").toLowerCase();
-            let best = null;
-            let bestScore = 0;
-            for (const answer of answers) {{
-              let score = 0;
-              for (const term of answer.terms) {{
-                const clean = String(term).toLowerCase();
-                if (q.includes(clean)) score += Math.max(1, clean.split(/\\s+/).length);
-              }}
-              if (score > bestScore) {{
-                best = answer;
-                bestScore = score;
+          const normalizeQuestion = (value) => String(value || "")
+            .toLowerCase()
+            .replace(/&/g, " and ")
+            .replace(/[^a-z0-9@.+#\\/-]+/g, " ")
+            .replace(/\\s+/g, " ")
+            .trim();
+
+          const tokenSetFor = (normalized) => new Set(String(normalized || "").split(" ").filter((token) => token.length > 1));
+          const hasTerm = (normalized, tokens, term) => {{
+            const clean = normalizeQuestion(term);
+            if (!clean) return false;
+            if (clean.includes(" ")) return normalized.includes(clean);
+            return tokens.has(clean);
+          }};
+          const scoreIntent = (normalized, tokens, answer) => {{
+            let score = 0;
+            const hits = [];
+            const label = normalizeQuestion(answer.label);
+            if (label && normalized === label) {{
+              score += 80;
+              hits.push(label);
+            }}
+            for (const entry of answer.terms || []) {{
+              const term = entry[0];
+              const weight = Number(entry[1] || 1);
+              if (hasTerm(normalized, tokens, term)) {{
+                score += weight;
+                hits.push(term);
               }}
             }}
-            return best || {{
-              text: "I can help with CogniSweep services, QA, translation, subtitling, transcription, scorecards, pricing, partnerships, licensing, and demos. Try one of the quick buttons or email us for a detailed workflow discussion."
-            }};
+            for (const entry of answer.negativeTerms || []) {{
+              const term = entry[0];
+              const weight = Number(entry[1] || 1);
+              if (hasTerm(normalized, tokens, term)) score -= weight;
+            }}
+            return {{ answer, score, hits }};
+          }};
+
+          const scoreAnswer = (question) => {{
+            const normalized = normalizeQuestion(question);
+            const tokens = tokenSetFor(normalized);
+            if (!normalized) return fallbackAnswer;
+
+            const mentionsCogniSweep = ["cognisweep", "qa", "translation", "translate", "subtitle", "subtitling", "transcription", "scorecard", "koochi", "localization"].some((term) => hasTerm(normalized, tokens, term));
+            const outOfScope = !mentionsCogniSweep && outOfScopeTerms.some((term) => hasTerm(normalized, tokens, term));
+            if (outOfScope) {{
+              return {{
+                text: "I am focused on CogniSweep, so I should not answer that topic here. Ask me about localization QA, translation workflows, subtitling, transcription, scorecards, pricing, partnerships, licensing, or demos."
+              }};
+            }}
+
+            const ranked = answers
+              .map((answer) => scoreIntent(normalized, tokens, answer))
+              .filter((result) => result.score > 0)
+              .sort((left, right) => right.score - left.score);
+            const best = ranked[0] || null;
+            const second = ranked[1] || null;
+            if (!best || best.score < 4) return fallbackAnswer;
+            if (second && second.score >= 4 && best.score < 10 && Math.abs(best.score - second.score) <= 1) {{
+              return {{
+                text: `I found two possible CogniSweep topics: ${{best.answer.label}} and ${{second.answer.label}}. Please ask a little more specifically, or tap one of those quick topics so I can give the right answer.`
+              }};
+            }}
+            return best.answer;
           }};
 
           const ask = (question, showUser = true) => {{
