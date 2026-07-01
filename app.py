@@ -18864,6 +18864,8 @@ def new_editor_job_id() -> str:
 
 
 SUBMITTED_EDITOR_STATUSES = {"submitted", "complete", "completed", "done", "delivered", "approved", "confirmed"}
+PROJECT_REVIEW_READY_STATUSES = {"submitted", "complete", "completed", "done"}
+PROJECT_HISTORY_STATUSES = {"approved", "confirmed", "delivered", "reviewed", "closed", "archived"}
 SUBMITTED_EDITOR_REOPEN_ROLES = {
     "Platform Owner",
     "Workspace Owner",
@@ -26382,12 +26384,53 @@ def job_history_record_is_submitted(record: Dict[str, Any]) -> bool:
 def project_job_is_active(job: Dict[str, Any]) -> bool:
     metadata = job_history_metadata(job)
     status = safe_text(job.get("status") or metadata.get("status")).strip().lower()
-    archived_statuses = SUBMITTED_EDITOR_STATUSES | {"complete", "completed", "done", "delivered", "approved", "confirmed"}
+    archived_statuses = PROJECT_REVIEW_READY_STATUSES | PROJECT_HISTORY_STATUSES
     return status not in archived_statuses and not bool(safe_text(metadata.get("submitted_at")))
 
 
 def active_project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [job for job in project_jobs(project) if project_job_is_active(job)]
+
+
+def project_job_review_is_final(job: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(job)
+    status = safe_text(job.get("status") or metadata.get("status")).strip().lower()
+    return status in PROJECT_HISTORY_STATUSES or bool(safe_text(metadata.get("review_submitted_at") or metadata.get("history_at")))
+
+
+def project_job_is_review_ready(job: Dict[str, Any]) -> bool:
+    if project_job_review_is_final(job):
+        return False
+    metadata = job_history_metadata(job)
+    status = safe_text(job.get("status") or metadata.get("status")).strip().lower()
+    return status in PROJECT_REVIEW_READY_STATUSES or bool(safe_text(metadata.get("submitted_at")))
+
+
+def review_project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [job for job in project_jobs(project) if project_job_is_review_ready(job)]
+
+
+def mark_project_job_review_submitted(job: Dict[str, Any]) -> Dict[str, Any]:
+    reviewed_at = now_stamp()
+    reviewer_user = current_user() or {}
+    reviewer = safe_text(reviewer_user.get("email") or reviewer_user.get("username"))
+    metadata = job_history_metadata(job)
+    next_metadata = {
+        **metadata,
+        "previous_status": safe_text(job.get("status") or metadata.get("status")),
+        "status": "approved",
+        "review_submitted_at": reviewed_at,
+        "review_submitted_by": reviewer,
+        "history_at": reviewed_at,
+    }
+    job["status"] = "approved"
+    job["updated_at"] = reviewed_at
+    job["metadata_json"] = next_metadata
+    persisted_job = persist_saas_record("jobs", dict(job))
+    job.update(persisted_job)
+    upsert_session_record("jobs", job)
+    add_audit("Project task review submitted", safe_text(job.get("project")) or safe_text(job.get("id")))
+    return job
 
 
 def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
@@ -26924,7 +26967,7 @@ def page_projects() -> None:
 
 
 def page_jobs() -> None:
-    hero("Jobs", "Project job queue", "Select a project on the left, then open active tasks for work.")
+    hero("Jobs", "Project job queue", "Use Tasks for assigned work and Review for submitted work awaiting approval.")
     projects = st.session_state.get("projects", [])
     if not projects:
         st.html(
@@ -26942,30 +26985,61 @@ def page_jobs() -> None:
             navigate_es_page("Projects")
         return
 
+    selected_bucket = safe_text(st.session_state.get("selected_jobs_bucket") or "tasks").strip().lower()
+    if selected_bucket not in {"tasks", "review"}:
+        selected_bucket = "tasks"
     selected_id = safe_text(query_get("project_id") or st.session_state.get("selected_jobs_project_id"))
     selected_project = project_by_identity(selected_id) if selected_id else None
     if not selected_project:
-        selected_project = projects[0]
+        if selected_bucket == "review":
+            selected_project = next((project for project in projects if review_project_jobs(project)), projects[0])
+        else:
+            selected_project = next((project for project in projects if active_project_jobs(project)), projects[0])
         selected_id = project_identity(selected_project)
     st.session_state["selected_jobs_project_id"] = selected_id
+    st.session_state["selected_jobs_bucket"] = selected_bucket
 
     left, main = st.columns([0.24, 0.76], gap="small")
     with left:
         with st.container(border=True):
-            st.markdown("### Projects")
-            for idx, project in enumerate(projects):
-                project_id = project_identity(project)
-                project_name = safe_text(project.get("project")) or "Untitled project"
-                active = project_id == selected_id
-                if st.button(project_name, key=f"jobs_project_nav_{idx}", use_container_width=True, type="primary" if active else "secondary"):
-                    st.session_state["selected_jobs_project_id"] = project_id
-                    st.rerun()
+            task_total = sum(len(active_project_jobs(project)) for project in projects)
+            review_total = sum(len(review_project_jobs(project)) for project in projects)
+            st.markdown("### Work queue")
+            st.html(
+                f"""
+                <div class="es-history-left-stat"><span>Tasks</span><b>{task_total}</b></div>
+                <div class="es-history-left-stat"><span>Review</span><b>{review_total}</b></div>
+                """
+            )
+            with st.expander("Tasks", expanded=selected_bucket == "tasks"):
+                for idx, project in enumerate(projects):
+                    project_id = project_identity(project)
+                    project_name = safe_text(project.get("project")) or "Untitled project"
+                    count = len(active_project_jobs(project))
+                    label = f"{project_name} ({count})"
+                    active = selected_bucket == "tasks" and project_id == selected_id
+                    if st.button(label, key=f"jobs_project_nav_tasks_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                        st.session_state["selected_jobs_bucket"] = "tasks"
+                        st.session_state["selected_jobs_project_id"] = project_id
+                        st.rerun()
+            with st.expander("Review", expanded=selected_bucket == "review"):
+                for idx, project in enumerate(projects):
+                    project_id = project_identity(project)
+                    project_name = safe_text(project.get("project")) or "Untitled project"
+                    count = len(review_project_jobs(project))
+                    label = f"{project_name} ({count})"
+                    active = selected_bucket == "review" and project_id == selected_id
+                    if st.button(label, key=f"jobs_project_nav_review_{idx}", use_container_width=True, type="primary" if active else "secondary"):
+                        st.session_state["selected_jobs_bucket"] = "review"
+                        st.session_state["selected_jobs_project_id"] = project_id
+                        st.rerun()
 
     with main:
         with st.container(border=True):
             selected_project = project_by_identity(st.session_state.get("selected_jobs_project_id", "")) or selected_project
             all_jobs = project_jobs(selected_project)
-            jobs = active_project_jobs(selected_project)
+            selected_bucket = safe_text(st.session_state.get("selected_jobs_bucket") or "tasks").strip().lower()
+            jobs = review_project_jobs(selected_project) if selected_bucket == "review" else active_project_jobs(selected_project)
             selected_project["job_count"] = len(all_jobs)
             project_name = safe_text(selected_project.get("project")) or "Untitled project"
             target_languages = [safe_text(item) for item in safe_text(selected_project.get("targets")).split(",") if safe_text(item)]
@@ -26976,7 +27050,8 @@ def page_jobs() -> None:
             else:
                 target_summary = f"{len(target_languages)} target languages"
             full_targets = ", ".join(target_languages) or "Not set"
-            st.markdown(f"### Jobs in {project_name}")
+            frame_label = "Review" if selected_bucket == "review" else "Tasks"
+            st.markdown(f"### {frame_label} in {project_name}")
             st.html(
                 f"""
                 <div class="es-project-details-line" title="Targets: {escape(full_targets, quote=True)}">
@@ -26984,20 +27059,40 @@ def page_jobs() -> None:
                   <span><b>Source</b>{escape(safe_text(selected_project.get("source")) or "Not set")}</span>
                   <span><b>Targets</b>{escape(target_summary)}</span>
                   <span><b>Domain</b>{escape(safe_text(selected_project.get("domain")) or "General")}</span>
-                  <span><b>Active tasks</b>{len(jobs)}</span>
+                  <span><b>{escape(frame_label)}</b>{len(jobs)}</span>
                 </div>
                 """
             )
-            st.markdown("#### Task details")
+            st.markdown("#### Review details" if selected_bucket == "review" else "#### Task details")
             if jobs:
                 render_job_history_table([job_history_row_from_job(job) for job in jobs], f"jobs_page_tasks_{project_identity(selected_project)}")
+                if selected_bucket == "review":
+                    st.markdown("#### Submit review")
+                    for review_idx, job in enumerate(jobs):
+                        job_label = " / ".join(
+                            part for part in [
+                                safe_text(job.get("type")) or "Task",
+                                safe_text(job.get("language")),
+                                safe_text(job.get("file_name")),
+                            ]
+                            if part
+                        )
+                        c1, c2 = st.columns([0.72, 0.28])
+                        c1.caption(job_label or safe_text(job.get("id")) or "Review task")
+                        if c2.button("Submit to History", key=f"jobs_review_submit_{project_identity(selected_project)}_{review_idx}", use_container_width=True):
+                            mark_project_job_review_submitted(job)
+                            st.success("Review submitted. The task moved to History.")
+                            st.rerun()
                 focused_job_id = safe_text(query_get("job_id") or st.session_state.get("job_id", ""))
                 focused_job = next((job for job in jobs if safe_text(job.get("id")) == focused_job_id), None) if focused_job_id else None
                 if focused_job:
                     with st.expander("Focused job", expanded=True):
                         render_project_job_details(focused_job, "focused_project_job")
             else:
-                st.info("No active tasks in this project. Submitted tasks are available in History.")
+                if selected_bucket == "review":
+                    st.info("No jobs are waiting for review in this project. Reviewed jobs are available in History.")
+                else:
+                    st.info("No active tasks in this project. Submitted tasks move to Review before History.")
     return
 
 

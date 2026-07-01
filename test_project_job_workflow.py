@@ -68,7 +68,10 @@ def test_jobs_page_uses_clean_task_list_not_status_lanes() -> None:
     body = function_body(app, "page_jobs", "page_job_history")
 
     assert 'st.columns([0.24, 0.76], gap="small")' in body
-    assert 'key=f"jobs_project_nav_{idx}"' in body
+    assert 'st.expander("Tasks"' in body
+    assert 'st.expander("Review"' in body
+    assert 'key=f"jobs_project_nav_tasks_{idx}"' in body
+    assert 'key=f"jobs_project_nav_review_{idx}"' in body
     assert 'render_jobs_kanban(jobs)' not in body
     assert "display_records(jobs)" not in body
     assert "metrics([" not in body
@@ -78,7 +81,11 @@ def test_jobs_page_uses_clean_task_list_not_status_lanes() -> None:
     assert '"Workflow task monitor"' not in body
     assert "render_task_queue_panel()" not in body
     assert "active_project_jobs(selected_project)" in body
-    assert "Submitted tasks are available in History." in body
+    assert "review_project_jobs(selected_project)" in body
+    assert "Submit to History" in body
+    assert "mark_project_job_review_submitted(job)" in body
+    assert "Submitted tasks move to Review before History." in body
+    assert "Reviewed jobs are available in History." in body
 
 
 def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
@@ -90,6 +97,10 @@ def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
     assert "def job_single_assignee_display" in app
     assert "def ensure_project_job_editor_session" in app
     assert "def active_project_jobs" in app
+    assert "def review_project_jobs" in app
+    assert "def mark_project_job_review_submitted" in app
+    assert "PROJECT_REVIEW_READY_STATUSES" in app
+    assert "PROJECT_HISTORY_STATUSES" in app
     assert "candidates.extend(job_assignee_list(record))" in app
     assert "review_job_id = ensure_project_job_editor_session(job)" in row
     assert '"assignee": job_single_assignee_display(job)' in row
