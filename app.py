@@ -5221,7 +5221,7 @@ def ensure_social_login_user(profile: Dict[str, Any], provider: str) -> Tuple[Op
         return None, "No CogniSweep account exists for this Google email yet. Ask the workspace owner to invite this email, or enable public registration."
     launch_gate = public_signup_launch_gate()
     if launch_gate.get("locked"):
-        return None, "No CogniSweep account exists for this Google email yet. Public signup is still locked while launch checks are completed."
+        return None, "No CogniSweep account exists for this Google email yet. Public signup is temporarily locked while required signup checks are completed."
 
     display_name = social_profile_name(profile)
     workspace = unique_personal_workspace_name(display_name, email)
@@ -16996,6 +16996,15 @@ def public_launch_preflight_enforced() -> bool:
     return parse_bool_flag(secret("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "true"), True)
 
 
+SIGNUP_BLOCKING_PREFLIGHT_CHECKS = {
+    "Session secret",
+    "Public base URL",
+    "Supabase persistence",
+    "Tenant isolation",
+    "Transactional email",
+}
+
+
 def launch_preflight_blockers(rows: Optional[List[Dict[str, str]]] = None, health: Optional[Dict[str, Any]] = None, *, include_live_checks: bool = True) -> List[Dict[str, str]]:
     preflight_rows = rows if rows is not None else launch_preflight_rows(health, include_live_checks=include_live_checks)
     return [row for row in preflight_rows if safe_text(row.get("Status")) == "Blocker"]
@@ -17004,12 +17013,18 @@ def launch_preflight_blockers(rows: Optional[List[Dict[str, str]]] = None, healt
 def public_signup_launch_gate(health: Optional[Dict[str, Any]] = None, rows: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     if not public_launch_preflight_enforced():
         return {"locked": False, "enforced": False, "blockers": [], "blocker_count": 0}
-    blockers = launch_preflight_blockers(rows=rows, health=health, include_live_checks=False)
+    all_blockers = launch_preflight_blockers(rows=rows, health=health, include_live_checks=False)
+    blockers = [
+        row for row in all_blockers
+        if safe_text(row.get("Check")) in SIGNUP_BLOCKING_PREFLIGHT_CHECKS
+    ]
     return {
         "locked": bool(blockers),
         "enforced": True,
         "blockers": blockers,
         "blocker_count": len(blockers),
+        "preflight_blocker_count": len(all_blockers),
+        "ignored_blocker_count": max(0, len(all_blockers) - len(blockers)),
     }
 
 
@@ -24865,9 +24880,12 @@ def render_public_signup_launch_locked(gate: Dict[str, Any]) -> None:
         </div>
         """).strip(),
     )
-    st.markdown("## Public launch not open yet")
-    st.info("Signup is temporarily locked while CogniSweep completes production launch checks. Existing users can still log in.")
-    st.caption(f"Launch preflight is enforced and currently has {int(gate.get('blocker_count') or 0)} blocker(s). Platform Owners can review details in Platform Settings -> Launch Readiness.")
+    st.markdown("## Signup temporarily unavailable")
+    st.info("Signup is temporarily locked while CogniSweep completes required signup checks. Existing users can still log in.")
+    st.caption(
+        f"Signup preflight is enforced and currently has {int(gate.get('blocker_count') or 0)} signup-critical blocker(s). "
+        f"Full launch readiness has {int(gate.get('preflight_blocker_count') or gate.get('blocker_count') or 0)} blocker(s) for Platform Owners to review in Platform Settings -> Launch Readiness."
+    )
 
 
 def render_signup() -> None:
@@ -31681,15 +31699,21 @@ def render_platform_launch_readiness_section(health: Dict[str, Any]) -> None:
         ("Mode", "Production" if is_production_mode() else "Local", "environment"),
     ])
     metrics([
-        ("Launch lock", lock_state, f"{len(preflight_blockers)} blocker(s)"),
+        (
+            "Launch lock",
+            lock_state,
+            f"{int(launch_gate.get('blocker_count') or 0)} signup-critical / {len(preflight_blockers)} full",
+        ),
         ("Preflight warnings", len(preflight_warnings), "review before launch"),
         ("Public signup", "Enabled" if feature_flag("public_registration") else "Disabled", "feature flag"),
         ("Enforcement", "On" if public_launch_preflight_enforced() else "Off", "production guard"),
     ])
     if launch_gate.get("locked"):
-        st.warning("Public signup is locked until production launch blockers are resolved.")
+        st.warning("Public signup is locked until signup-critical launch blockers are resolved.")
     elif launch_gate.get("enforced"):
-        st.success("Public signup launch gate is enforced and no blockers are currently detected.")
+        st.success("Public signup launch gate is enforced and no signup-critical blockers are currently detected.")
+        if int(launch_gate.get("ignored_blocker_count") or 0):
+            st.caption("Full launch readiness still has non-signup blockers for Platform Owners to review.")
     else:
         st.info("Launch preflight enforcement is inactive outside production mode or when explicitly disabled.")
     st.dataframe(pd.DataFrame(readiness_rows), use_container_width=True, hide_index=True)

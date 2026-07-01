@@ -84,6 +84,21 @@ def test_public_landing_uses_stable_fixed_header_spacing() -> None:
     assert "font-size: clamp(34px, 3.25vw, 48px) !important" in landing
 
 
+def test_public_signup_gate_only_blocks_signup_critical_checks() -> None:
+    app = read(APP)
+    gate = function_body(app, "public_signup_launch_gate", "split_text_lines")
+    locked_page = function_body(app, "render_public_signup_launch_locked", "render_signup")
+
+    assert "SIGNUP_BLOCKING_PREFLIGHT_CHECKS" in app
+    assert '"Session secret"' in app
+    assert '"Supabase persistence"' in app
+    assert 'safe_text(row.get("Check")) in SIGNUP_BLOCKING_PREFLIGHT_CHECKS' in gate
+    assert '"preflight_blocker_count": len(all_blockers)' in gate
+    assert '"ignored_blocker_count"' in gate
+    assert "Signup temporarily unavailable" in locked_page
+    assert "signup-critical blocker" in locked_page
+
+
 def test_root_startup_installs_canonical_redirect_bridge() -> None:
     app = read(APP)
     bridge = function_body(app, "render_public_landing_canonical_redirect_bridge", "render_authenticated_shell_seen_bridge")
@@ -123,6 +138,7 @@ if __name__ == "__main__":
     test_public_landing_mounts_koochi_chatbot()
     test_koochi_uses_confident_product_intent_routing()
     test_public_landing_uses_stable_fixed_header_spacing()
+    test_public_signup_gate_only_blocks_signup_critical_checks()
     test_root_startup_installs_canonical_redirect_bridge()
     test_caddy_redirects_bare_roots_to_canonical_landing()
     test_env_template_names_public_www_landing_url()

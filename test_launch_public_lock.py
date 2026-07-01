@@ -20,14 +20,17 @@ def function_body(name: str, end_name: str) -> str:
     return text[start:end]
 
 
-def test_public_signup_is_locked_by_launch_preflight():
+def test_public_signup_is_locked_by_signup_critical_preflight():
     text = source()
     signup = function_body("render_signup", "render_public_document")
 
     assert "def public_launch_preflight_enforced" in text
     assert 'secret("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "true")' in text
+    assert "SIGNUP_BLOCKING_PREFLIGHT_CHECKS" in text
     assert "def public_signup_launch_gate" in text
     assert "include_live_checks=False" in text
+    assert 'safe_text(row.get("Check")) in SIGNUP_BLOCKING_PREFLIGHT_CHECKS' in text
+    assert '"preflight_blocker_count": len(all_blockers)' in text
     assert "def render_public_signup_launch_locked" in text
     assert 'launch_gate = public_signup_launch_gate()' in signup
     assert 'if launch_gate.get("locked")' in signup
@@ -41,7 +44,9 @@ def test_platform_settings_exposes_launch_lock_and_preflight_report():
     assert "preflight_rows = launch_preflight_rows(health)" in body
     assert "preflight_blockers = launch_preflight_blockers(rows=preflight_rows)" in body
     assert "launch_gate = public_signup_launch_gate(health=health, rows=preflight_rows)" in body
-    assert '("Launch lock", lock_state' in body
+    assert '"Launch lock"' in body
+    assert "signup-critical" in body
+    assert "Full launch readiness still has non-signup blockers" in body
     assert "Production preflight details" in body
     assert "launch_preflight_report(preflight_rows)" in body
 
@@ -58,7 +63,7 @@ def test_launch_lock_is_in_deploy_templates_and_checks():
 
 
 if __name__ == "__main__":
-    test_public_signup_is_locked_by_launch_preflight()
+    test_public_signup_is_locked_by_signup_critical_preflight()
     test_platform_settings_exposes_launch_lock_and_preflight_report()
     test_launch_lock_is_in_deploy_templates_and_checks()
     print("Public launch lock checks passed.")
