@@ -78,8 +78,9 @@ def test_public_landing_uses_stable_fixed_header_spacing() -> None:
     landing = app[app.index("def render_landing_page") : app.index("LOGIN_SUBMIT_MASK_ID")]
 
     assert "--es-lp-fixed-header-height" in landing
-    assert "padding-top: calc(var(--es-lp-fixed-header-height) + 28px) !important" in landing
+    assert "padding-top: calc(var(--es-lp-fixed-header-height) + 32px) !important" in landing
     assert "height: var(--es-lp-fixed-header-height) !important" in landing
+    assert "padding: 40px clamp(18px, 8vw, 184px) 20px !important" in landing
     assert "font-size: clamp(34px, 3.25vw, 48px) !important" in landing
 
 

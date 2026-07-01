@@ -23646,14 +23646,14 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp {
-          --es-lp-fixed-header-height: clamp(176px, 9.4vw, 196px);
+          --es-lp-fixed-header-height: clamp(156px, 8.4vw, 176px);
           overflow: visible !important;
           min-height: 100dvh !important;
           margin-top: 0 !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero {
-          padding-top: calc(var(--es-lp-fixed-header-height) + 28px) !important;
+          padding-top: calc(var(--es-lp-fixed-header-height) + 32px) !important;
         }
 
         body:has(#errorsweep-landing-page-marker) .es-lp-hero-top {
@@ -23666,7 +23666,7 @@ def render_landing_page(reason: str = "explicit_landing") -> None:
           height: var(--es-lp-fixed-header-height) !important;
           min-height: var(--es-lp-fixed-header-height) !important;
           margin: 0 !important;
-          padding: 68px clamp(18px, 8vw, 184px) 20px !important;
+          padding: 40px clamp(18px, 8vw, 184px) 20px !important;
           align-items: flex-start !important;
           overflow: visible !important;
           border-bottom: 1px solid rgba(255,255,255,.12);
