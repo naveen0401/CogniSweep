@@ -878,8 +878,9 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     translations: List[str] = []
     usage: Dict[str, Any] = {"provider": "none", "model": "", "success": False, "error": "No worker translation route attempted."}
     route_error = ""
+    managed_mt_allowed = bool(params.get("allow_managed_amazon_translate"))
     update_task(task_id, payload, status="running", progress=35, total_units=len(rows), processed_units=0)
-    if translate_batch is not None:
+    if translate_batch is not None and managed_mt_allowed:
         try:
             translations, usage = translate_batch(
                 source_language=source_language,
@@ -897,6 +898,9 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             route_error = safe_text(exc)
             translations = ["" for _ in source_texts]
             usage = {"provider": "managed_mt", "model": "amazon_translate_pending", "success": False, "error": route_error, "characters": sum(len(t) for t in source_texts), "requests": 1}
+    elif translate_batch is not None:
+        route_error = "Managed Amazon Translate is not entitled for this workspace."
+        translations = ["" for _ in source_texts]
     else:
         route_error = "translator_router is unavailable in this worker environment."
         translations = ["" for _ in source_texts]

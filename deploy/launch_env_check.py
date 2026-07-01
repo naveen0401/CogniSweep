@@ -408,9 +408,9 @@ def check_ai_mt(results: List[Dict[str, str]], env: Dict[str, str]) -> None:
         results,
         "MT",
         "Managed MT provider",
-        "Warn" if mt_provider == "amazon_translate" else "Pass",
+        "Pass" if mt_provider in {"disabled", "amazon_translate"} else "Warn",
         mt_provider,
-        "Leave COGNISWEEP_MT_PROVIDER/ERRORSWEEP_MT_PROVIDER disabled until the Amazon Translate adapter and tests are implemented.",
+        "Use disabled for Human Review only, or amazon_translate for Agency/Enterprise/custom managed MT.",
     )
 
 

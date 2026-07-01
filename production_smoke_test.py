@@ -393,13 +393,14 @@ def collect_results(probe_endpoints: bool = False, probe_timeout: int = 10) -> L
         "platform OpenAI" if openai_ready else "managed AI" if managed_ai_ready() else "missing",
         "Configure OPENAI_API_KEY or enable a live HTTPS managed OpenAI-compatible/vLLM endpoint.",
     )
+    mt_provider = _env("ERRORSWEEP_MT_PROVIDER", "disabled").lower() or "disabled"
     add_result(
         results,
         "MT",
         "Managed MT provider",
-        "Warn" if _env("ERRORSWEEP_MT_PROVIDER", "disabled").lower() == "amazon_translate" else "Pass",
-        _env("ERRORSWEEP_MT_PROVIDER", "disabled") or "disabled",
-        "Leave managed MT disabled until the Amazon Translate adapter and tests are implemented.",
+        "Pass" if mt_provider in {"disabled", "amazon_translate"} else "Warn",
+        mt_provider,
+        "Use disabled for Human Review only, or amazon_translate for entitled no-key managed MT.",
     )
 
     provider = _env("ERRORSWEEP_BILLING_PROVIDER").lower()

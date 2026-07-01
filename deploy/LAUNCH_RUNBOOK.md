@@ -225,9 +225,10 @@ $env:COGNISWEEP_MANAGED_AI_TOKEN="<managed-ai-token>"
 python deploy/ai_fallback_check.py --env-file deploy/.env.production --write-ai-env --ai-route managed --managed-base-url https://ai.cognisweep.com/v1 --managed-api-key-env COGNISWEEP_MANAGED_AI_TOKEN --managed-model your-model
 ```
 
-Managed MT is intentionally disabled for launch:
+Managed MT can remain disabled for Human Review only, or Amazon Translate can be enabled for entitled paid/custom workspaces:
 
 - `COGNISWEEP_MT_PROVIDER=disabled`
+- `COGNISWEEP_MT_PROVIDER=amazon_translate`
 
 Useful checks:
 
@@ -426,7 +427,7 @@ Then manually verify:
 | Object storage local fallback | Configure Supabase Storage, S3, or GCS for production. |
 | Async receiver or processor | Deploy the receiver/processor services and set worker env keys. |
 | Production AI fallback route | Configure `OPENAI_API_KEY` or a live managed OpenAI-compatible/vLLM endpoint. |
-| Managed MT provider | Leave `COGNISWEEP_MT_PROVIDER=disabled` until the Amazon Translate adapter is implemented and tested. |
+| Managed MT provider | Use `COGNISWEEP_MT_PROVIDER=disabled` for Human Review only, or `amazon_translate` for entitled paid/custom workspaces. |
 | Billing provider credentials | Configure live Razorpay or Stripe credentials. |
 | Webhook receiver URL | Set the public HTTPS billing webhook receiver URL. |
 | Webhook signature secret | Set the provider webhook signing secret. |

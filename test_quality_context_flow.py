@@ -76,6 +76,19 @@ def test_ai_generation_uses_reference_and_language_resources():
     assert 'item["language_resource_context"]' in payload_helper
 
 
+def test_user_ai_key_takes_priority_over_managed_amazon_translate():
+    text = source()
+    async_text = async_source()
+    translate = function_body(text, "call_main_api_translate", "generate_transcription_rows_from_video")
+    pro = function_body(text, "page_pro", "render_assist_panel")
+    async_pro = function_body(async_text, "process_pro_task", "process_task_payload")
+
+    assert translate.index("if user_key:") < translate.index("amazon_state = workspace_amazon_translate_state()")
+    assert '"allow_managed_amazon_translate": bool(amazon_state.get("allowed") and not user_ai_api_key_available())' in pro
+    assert "managed_mt_allowed = bool(params.get(\"allow_managed_amazon_translate\"))" in async_pro
+    assert "if translate_batch is not None and managed_mt_allowed:" in async_pro
+
+
 def test_media_transcription_passes_client_context_to_ai_prompt():
     text = source()
     transcribe = function_body(text, "generate_transcription_rows_from_video", "translate_subtitle_sources")
@@ -111,6 +124,7 @@ if __name__ == "__main__":
     test_each_workflow_collects_and_passes_quality_context()
     test_media_completion_validation_uses_client_rules_for_subtitles()
     test_ai_generation_uses_reference_and_language_resources()
+    test_user_ai_key_takes_priority_over_managed_amazon_translate()
     test_media_transcription_passes_client_context_to_ai_prompt()
     test_async_translation_carries_client_context_metadata()
     print("Quality context flow checks passed.")

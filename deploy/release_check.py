@@ -538,7 +538,7 @@ def check_mt_endpoint_contract(results: List[Dict[str, str]]) -> None:
         "MT",
         "Managed MT posture check",
         "deploy/mt_endpoint_check.py",
-        "Keep retired local/self-hosted MT artifacts absent and leave Amazon Translate disabled until its adapter is implemented.",
+        "Keep retired local/self-hosted MT artifacts absent and validate optional Amazon Translate configuration.",
         "Run deploy/mt_endpoint_check.py manually.",
     )
 

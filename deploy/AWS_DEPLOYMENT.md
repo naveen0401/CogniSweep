@@ -14,7 +14,7 @@ Start with a single Amazon EC2 host running the existing Docker Compose VPS stac
 | AWS credentials | EC2 instance profile IAM role |
 | DNS | Route 53 or your existing DNS provider |
 | Edge protection | CloudFront plus AWS WAF, or an Application Load Balancer plus AWS WAF |
-| Future managed machine translation | Amazon Translate |
+| Optional managed machine translation | Amazon Translate |
 | Persistent local container data | EBS volume mounted on the EC2 host |
 | Production database/auth tables | Keep the existing Supabase production setup unless you deliberately migrate persistence code |
 
@@ -98,7 +98,7 @@ COGNISWEEP_BACKUP_PROVIDER=s3
 COGNISWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
 COGNISWEEP_WAF_PROVIDER=aws-waf
 
-# Future managed MT. Leave disabled until the Amazon Translate adapter is implemented.
+# Optional managed MT. BYO user AI keys always take priority over this route.
 COGNISWEEP_MT_PROVIDER=disabled
 # COGNISWEEP_AWS_TRANSLATE_REGION=ap-south-1
 # COGNISWEEP_AWS_TRANSLATE_USE_BATCH=false
@@ -137,28 +137,28 @@ SES setup checklist:
 - Create SES SMTP credentials from the SES console and put them into `AWS_SES_SMTP_USERNAME` and `AWS_SES_SMTP_PASSWORD`.
 - Restart the Docker stack after changing `deploy/.env.production`.
 
-## Future AWS Machine Translation
+## Optional AWS Machine Translation
 
-When you are ready to move managed MT onto AWS, use Amazon Translate as the first managed provider to evaluate.
+When you are ready to offer no-key managed MT on AWS, use Amazon Translate as the managed provider.
 
 Current state:
 
 - CogniSweep's built-in MT route is implemented in `translator_router.py`.
 - Bundled local/self-hosted MT engines have been removed from this repository.
-- AWS MT is not active yet; do not add Amazon Translate env values to production expecting the app to use them until an adapter is implemented and tested.
+- Amazon Translate is optional. Enable it only when the EC2 role has Translate permissions and you want no-key managed MT for Agency, Enterprise, Unlimited, or owner-approved custom workspaces.
 
-Recommended future implementation:
+Recommended production controls:
 
-- Add an `amazon_translate` provider branch behind the existing `translate_batch(...)` API.
+- Keep the `amazon_translate` provider branch behind the existing `translate_batch(...)` API.
 - Use `boto3.client("translate")` with the EC2/ECS IAM role, not long-lived AWS keys.
-- Map CogniSweep language names to Amazon Translate language codes from `normalize_language(...)`.
+- Map CogniSweep language names to Amazon Translate language codes before invoking AWS.
 - Implement placeholder protection before calling Amazon Translate so variables, tags, URLs, and do-not-translate terms survive MT output.
 - Use `TranslateText` for short segments and UI strings.
 - Use S3-backed asynchronous batch translation only for large document batches where delayed completion is acceptable.
 - Support custom terminology for brand names, product terms, and do-not-translate terms after the base route is stable.
 - Validate key language pairs with your own production samples before enabling managed MT for customer workflows.
 
-Future production env names should be added only when the adapter lands. Suggested names:
+Production env names:
 
 ```dotenv
 COGNISWEEP_MT_PROVIDER=amazon_translate
@@ -168,7 +168,7 @@ COGNISWEEP_AWS_TRANSLATE_USE_BATCH=false
 # COGNISWEEP_AWS_TRANSLATE_TERMINOLOGY_NAMES=brand-terms,product-terms
 ```
 
-Add these IAM actions to the EC2/ECS role when the adapter is implemented:
+Add these IAM actions to the EC2/ECS role when Amazon Translate is enabled:
 
 ```json
 {
@@ -280,7 +280,7 @@ Move from EC2 Compose to ECS/Fargate when you need more than one app instance or
 - Put the app and public webhook behind an Application Load Balancer.
 - Keep S3 for object storage.
 - Move secrets into Secrets Manager or SSM Parameter Store.
-- Add Amazon Translate only after an adapter, language-pair tests, terminology tests, and cost controls are in place.
+- Enable Amazon Translate only after IAM permissions, language-pair tests, terminology tests, and cost controls are in place.
 
 ## AWS References
 

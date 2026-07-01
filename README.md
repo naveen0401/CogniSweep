@@ -94,7 +94,7 @@ Local JSON fallback is for development only. Public launch must use production S
 
 ## Managed Machine Translation
 
-Bundled local/self-hosted MT engines are retired. Keep `COGNISWEEP_MT_PROVIDER=disabled` for launch. Add Amazon Translate later behind `translator_router.translate_batch(...)` after language-pair tests, terminology tests, IAM permissions, and cost controls are ready.
+Bundled local/self-hosted MT engines are retired. Keep `COGNISWEEP_MT_PROVIDER=disabled` for Human Review only, or set `COGNISWEEP_MT_PROVIDER=amazon_translate` to offer Amazon Translate as a managed no-key route for Agency, Enterprise, Unlimited, and owner-approved custom workspaces. User-provided AI API keys always take priority over Amazon Translate.
 
 ## Platform AI Fallback
 

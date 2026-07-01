@@ -98,9 +98,13 @@ def test_multi_assignee_display_is_blank_except_single_recipient() -> None:
     assert "def ensure_project_job_editor_session" in app
     assert "def active_project_jobs" in app
     assert "def review_project_jobs" in app
+    assert "def learn_translation_memory_from_project_job" in app
     assert "def mark_project_job_review_submitted" in app
     assert "PROJECT_REVIEW_READY_STATUSES" in app
     assert "PROJECT_HISTORY_STATUSES" in app
+    assert "learn_translation_memory_from_rows(" in app
+    assert '"translation_memory_learned_final": learned_count' in app
+    assert 'source_type="project_review_final"' in app
     assert "candidates.extend(job_assignee_list(record))" in app
     assert "review_job_id = ensure_project_job_editor_session(job)" in row
     assert '"assignee": job_single_assignee_display(job)' in row

@@ -2,7 +2,7 @@
 
 Bundled local/self-hosted MT engines were retired. This checker keeps launch
 docs honest by verifying the legacy engine files and env keys are gone while
-leaving a clear placeholder for a future Amazon Translate adapter.
+allowing the managed Amazon Translate adapter to be enabled explicitly.
 """
 from __future__ import annotations
 
@@ -165,7 +165,7 @@ def validate_router(results: List[Dict[str, str]]) -> None:
         "Router compatibility API",
         "Pass" if text and not missing else "Blocker",
         "stable API present" if text and not missing else ", ".join(missing) or "missing",
-        "Keep translator_router.py import-compatible until the Amazon Translate adapter lands.",
+        "Keep translator_router.py import-compatible for Streamlit and async workers.",
     )
     forbidden_imports = [token for token in ("selfhosted_mt_clients", "local_translation_engine", "indictrans2_worker", "opus_mt", "madlad") if token in text]
     add(
@@ -206,15 +206,15 @@ def validate_templates(results: List[Dict[str, str]]) -> None:
         "removed" if not leaked_tokens else ", ".join(leaked_tokens),
         "Keep production templates free of retired local/self-hosted MT endpoint settings.",
     )
-    future_markers = ["COGNISWEEP_MT_PROVIDER", "COGNISWEEP_AWS_TRANSLATE_REGION"]
-    missing = [marker for marker in future_markers if marker not in combined]
+    managed_markers = ["COGNISWEEP_MT_PROVIDER", "COGNISWEEP_AWS_TRANSLATE_REGION"]
+    missing = [marker for marker in managed_markers if marker not in combined]
     add(
         results,
         "MT",
-        "Future Amazon Translate placeholders",
+        "Amazon Translate configuration placeholders",
         "Pass" if not missing else "Warn",
         "present" if not missing else ", ".join(missing),
-        "Keep disabled Amazon Translate placeholders documented for the future adapter.",
+        "Keep optional Amazon Translate provider and region settings documented.",
     )
 
 
@@ -237,10 +237,20 @@ def validate_env_config(results: List[Dict[str, str]], env_path: Path) -> Option
         results,
         "MT Config",
         "Managed MT provider",
-        "Warn" if provider == "amazon_translate" else "Pass",
+        "Pass" if provider in {"disabled", "amazon_translate"} else "Warn",
         provider or "disabled",
-        "Leave disabled until the Amazon Translate adapter and tests are implemented.",
+        "Use disabled for Human Review only, or amazon_translate for entitled paid workspaces.",
     )
+    if provider == "amazon_translate":
+        region = safe_text(env.get("COGNISWEEP_AWS_TRANSLATE_REGION") or env.get("ERRORSWEEP_AWS_TRANSLATE_REGION") or env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION"))
+        add(
+            results,
+            "MT Config",
+            "Amazon Translate region",
+            "Pass" if region else "Warn",
+            region or "default ap-south-1 fallback",
+            "Set COGNISWEEP_AWS_TRANSLATE_REGION/ERRORSWEEP_AWS_TRANSLATE_REGION for predictable AWS routing.",
+        )
     return env
 
 

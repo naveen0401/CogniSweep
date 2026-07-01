@@ -164,6 +164,20 @@ except Exception as exc:
     ai_json_items = None
     select_ai_route = None
 
+try:
+    from translator_router import (
+        TranslationRouteError,
+        builtin_engine_status,
+        current_builtin_engine_label,
+        translate_batch as managed_mt_translate_batch,
+    )
+except Exception as exc:
+    LOGGER.warning("translator_router import failed: %s", exc)
+    TranslationRouteError = RuntimeError
+    builtin_engine_status = None
+    current_builtin_engine_label = None
+    managed_mt_translate_batch = None
+
 # Speech-to-text helper for subtitle/transcription editor.
 # v32 policy: auto transcription only uses the user's own API key; no-key users get blank manual rows.
 try:
@@ -4355,6 +4369,7 @@ def is_production_mode() -> bool:
 
 FEATURE_FLAG_META = {
     "main_api_translation": ("AI draft translation", "Allow Pro/QA workflows to call customer BYO AI translation routes."),
+    "amazon_translate": ("Amazon Translate for paid plans", "Allow entitled Agency, Enterprise, and owner-approved workspaces to use platform-managed Amazon Translate."),
     "pro_human_review": ("Translation Studio Human Review", "Allow Translation Studio runs to open the Human Review workspace."),
     "scorecards": ("Scorecards", "Allow translator/reviewer scorecard generation workflows."),
     "subtitle_editor": ("Subtitle / Transcription Editor", "Allow subtitle and transcription workspace tools."),
@@ -4368,6 +4383,7 @@ def feature_flag_defaults() -> Dict[str, bool]:
     local_mode = not is_production_mode()
     return {
         "main_api_translation": True,
+        "amazon_translate": True,
         "pro_human_review": True,
         "scorecards": True,
         "subtitle_editor": True,
@@ -15558,6 +15574,94 @@ def workspace_subscription(workspace: str = "") -> Dict[str, Any]:
     }
 
 
+MANAGED_AMAZON_TRANSLATE_PLANS = {"agency", "enterprise", "unlimited"}
+
+
+def subscription_metadata(subscription: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = subscription.get("metadata_json") if isinstance(subscription, dict) else {}
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if isinstance(metadata, str):
+        try:
+            decoded = json.loads(metadata)
+            return decoded if isinstance(decoded, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def subscription_current_period_expired(subscription: Dict[str, Any]) -> bool:
+    raw = safe_text(subscription.get("current_period_end") if isinstance(subscription, dict) else "")
+    if not raw:
+        return False
+    expires_at = parse_datetime_value(raw, naive_tz=timezone.utc)
+    return bool(expires_at and datetime.now(timezone.utc) > expires_at.astimezone(timezone.utc))
+
+
+def subscription_active_for_access(subscription: Dict[str, Any]) -> Tuple[bool, str]:
+    status = safe_text(subscription.get("status") or "Active").lower()
+    if status in INACTIVE_SUBSCRIPTION_STATUSES:
+        return False, f"subscription is {subscription.get('status', status)}"
+    if subscription_current_period_expired(subscription):
+        return False, "subscription period has ended"
+    return True, ""
+
+
+def subscription_has_amazon_translate(subscription: Dict[str, Any]) -> bool:
+    active, _ = subscription_active_for_access(subscription)
+    if not active:
+        return False
+    metadata = subscription_metadata(subscription)
+    override = metadata.get("amazon_translate_enabled")
+    if override not in (None, ""):
+        return parse_bool_flag(override, False)
+    plan_name = safe_text(subscription.get("plan")).lower()
+    return plan_name in MANAGED_AMAZON_TRANSLATE_PLANS
+
+
+def workspace_amazon_translate_state(workspace: str = "") -> Dict[str, Any]:
+    workspace = safe_text(workspace or (current_user() or {}).get("workspace") or "Demo Workspace")
+    subscription = workspace_subscription(workspace)
+    active, access_reason = subscription_active_for_access(subscription)
+    plan_name = safe_text(subscription.get("plan") or "Trial")
+    entitlement = subscription_has_amazon_translate(subscription)
+    flag_enabled = feature_flag("amazon_translate")
+    router_ready = managed_mt_translate_batch is not None
+    engine_ready = False
+    engine_detail = ""
+    if callable(builtin_engine_status):
+        try:
+            status_rows = builtin_engine_status()
+            engine_ready = bool(status_rows and status_rows[0].get("ready"))
+            engine_detail = safe_text(status_rows[0].get("detail") if status_rows else "")
+        except Exception as exc:
+            engine_detail = safe_text(exc)
+    engine_label = current_builtin_engine_label() if callable(current_builtin_engine_label) else "Managed MT route unavailable"
+    allowed = bool(active and entitlement and flag_enabled and router_ready and engine_ready)
+    reasons: List[str] = []
+    if not active:
+        reasons.append(access_reason)
+    if not entitlement:
+        reasons.append("Amazon Translate is included only for Agency, Enterprise, Unlimited, or owner-approved custom access")
+    if not flag_enabled:
+        reasons.append("Amazon Translate feature flag is disabled")
+    if not router_ready:
+        reasons.append("Amazon Translate router is unavailable")
+    if router_ready and not engine_ready:
+        reasons.append(engine_detail or "Amazon Translate provider is not configured")
+    return {
+        "allowed": allowed,
+        "workspace": workspace,
+        "subscription": subscription,
+        "plan": plan_name,
+        "entitled": entitlement,
+        "feature_enabled": flag_enabled,
+        "engine_ready": engine_ready,
+        "engine_label": engine_label,
+        "reason": "; ".join(reason for reason in reasons if reason),
+    }
+
+
 def _usage_int(value: Any) -> int:
     try:
         return max(0, int(float(value or 0)))
@@ -15654,8 +15758,10 @@ def check_workspace_seat_allowance(workspace: str, email: str, status: str = "Ac
         return False, f"{email} is already listed in the {workspace} workspace.", state
 
     subscription_status = safe_text(state["subscription"].get("status") or "Active").lower()
-    if subscription_status in {"cancelled", "canceled", "expired", "past_due", "unpaid", "inactive"}:
+    if subscription_status in INACTIVE_SUBSCRIPTION_STATUSES:
         return False, f"Cannot add users because the {workspace} subscription is {state['subscription'].get('status', subscription_status)}. Renew or activate the plan from Billing.", state
+    if subscription_current_period_expired(state["subscription"]):
+        return False, f"Cannot add users because the {workspace} subscription period has ended. Extend access from Platform Settings or renew the plan from Billing.", state
 
     counted_status = safe_text(status or "Active").lower() in {"active", "invited"}
     if safe_text(workspace).lower() != "platform" and counted_status and state["used"] >= max(1, state["limit"]):
@@ -15687,8 +15793,10 @@ def check_workspace_usage_allowance(rows: List[Dict[str, Any]], purpose: str, wo
     if safe_text(workspace).lower() == UNLIMITED_ACCESS_WORKSPACE.lower() or plan_name.lower() == "unlimited":
         details["unlimited"] = True
         return True, "", details
-    if status in {"cancelled", "canceled", "expired", "past_due", "unpaid", "inactive"}:
+    if status in INACTIVE_SUBSCRIPTION_STATUSES:
         return False, f"{purpose} is blocked because the {workspace} subscription is {subscription.get('status', status)}. Activate or renew the plan from Billing.", details
+    if subscription_current_period_expired(subscription):
+        return False, f"{purpose} is blocked because the {workspace} subscription period has ended. Extend access from Platform Settings or renew the plan from Billing.", details
 
     over_segments = details["projected_segments"] > max(1, allowance["segments"])
     over_characters = details["projected_characters"] > max(1, allowance["characters"])
@@ -15891,6 +15999,96 @@ def activate_subscription(plan_name: str, billing_cycle: str, provider: str = ""
         f"Your workspace '{workspace}' is now on the {plan['name']} plan.",
         "billing.subscription_updated",
         metadata={"plan": plan["name"], "billing_cycle": cycle},
+        workspace=workspace,
+    )
+    return subscription
+
+
+def stable_subscription_id_for_workspace(workspace: str) -> str:
+    digest = hashlib.sha256(safe_text(workspace).lower().encode("utf-8")).hexdigest()[:16]
+    return f"subscription-{digest}"
+
+
+def save_owner_subscription_override(
+    *,
+    workspace: str,
+    plan_name: str,
+    status: str,
+    billing_cycle: str,
+    currency: str,
+    base_amount: float,
+    included_seats: int,
+    included_segments: int,
+    included_characters: int,
+    current_period_start: str,
+    current_period_end: Optional[str],
+    amazon_translate_enabled: bool,
+    custom_plan_name: str = "",
+    lease_term: str = "",
+    owner_notes: str = "",
+) -> Dict[str, Any]:
+    user = current_user() or {}
+    workspace = safe_text(workspace or user.get("workspace") or "Demo Workspace")
+    plan = plan_record(plan_name)
+    metadata = subscription_metadata(workspace_subscription(workspace))
+    metadata.update({
+        "owner_custom_access": True,
+        "custom_plan_name": safe_text(custom_plan_name),
+        "lease_term": safe_text(lease_term),
+        "owner_notes": safe_text(owner_notes),
+        "amazon_translate_enabled": bool(amazon_translate_enabled),
+        "updated_by": user.get("email", ""),
+        "updated_from": "Platform Settings",
+    })
+    subscription = persist_saas_record("subscriptions", {
+        "id": stable_subscription_id_for_workspace(workspace),
+        "workspace": workspace,
+        "user_email": safe_text(user.get("email")),
+        "plan": safe_text(plan_name or plan["name"]),
+        "status": safe_text(status or "Active"),
+        "billing_cycle": safe_text(billing_cycle or "custom"),
+        "currency": safe_text(currency or plan.get("currency", "INR")),
+        "base_amount": float(base_amount or 0),
+        "included_segments": max(0, int(included_segments or 0)),
+        "included_characters": max(0, int(included_characters or 0)),
+        "included_seats": max(0, int(included_seats or 0)),
+        "provider": "owner_custom",
+        "provider_customer_id": "",
+        "provider_subscription_id": "",
+        "current_period_start": safe_text(current_period_start),
+        "current_period_end": current_period_end,
+        "cancel_at_period_end": False,
+        "cancelled_at": None,
+        "cancellation_reason": "",
+        "metadata_json": metadata,
+        "created_at": now_stamp(),
+        "updated_at": now_stamp(),
+    })
+    st.session_state.setdefault("subscriptions", [])
+    st.session_state.subscriptions = [
+        item for item in st.session_state.subscriptions
+        if safe_text(item.get("workspace")) != workspace
+    ]
+    st.session_state.subscriptions.insert(0, subscription)
+    trim_session_list("subscriptions")
+    for workspace_record in st.session_state.get("workspaces", []):
+        if safe_text(workspace_record.get("workspace")) == workspace:
+            workspace_record["plan"] = safe_text(custom_plan_name) or safe_text(plan_name or plan["name"])
+            workspace_record["status"] = safe_text(status or "Active")
+            break
+    add_audit("Owner subscription override", f"{workspace}: {plan_name} / {status}")
+    queue_email_notification(
+        safe_text(subscription.get("user_email")) or user.get("email", ""),
+        "CogniSweep workspace access updated",
+        f"Owner settings updated access for '{workspace}' on the {safe_text(custom_plan_name) or safe_text(plan_name)} plan.",
+        "billing.owner_subscription_override",
+        metadata={
+            "workspace": workspace,
+            "plan": plan_name,
+            "custom_plan_name": custom_plan_name,
+            "amazon_translate_enabled": amazon_translate_enabled,
+            "current_period_end": current_period_end or "",
+        },
         workspace=workspace,
     )
     return subscription
@@ -16474,7 +16672,7 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
     managed_ai_ready = managed_ai_enabled and secret_is_configured("ERRORSWEEP_MANAGED_AI_BASE_URL")
     add("AI", "OPENAI_API_KEY or managed AI endpoint", secret_is_configured("OPENAI_API_KEY") or managed_ai_ready, "Production AI fallback", "BYO user keys are preferred, but public launch needs a platform fallback or live managed OpenAI-compatible/vLLM endpoint.")
     add("AI", "GEMINI_API_KEY", secret_is_configured("GEMINI_API_KEY"), "Optional platform route", "Configure if Gemini OpenAI-compatible routing will be offered as a platform-managed option.")
-    add("MT", "Amazon Translate adapter", True, "Future route not enabled", "No bundled MT engine is required for launch. Add the Amazon Translate adapter later before setting COGNISWEEP_MT_PROVIDER=amazon_translate.")
+    add("MT", "Amazon Translate adapter", True, "Optional managed route", "Enable COGNISWEEP_MT_PROVIDER=amazon_translate only for Agency, Enterprise, Unlimited, or owner-approved custom workspaces.")
     add("Feature flags", "public_registration", feature_flag("public_registration"), "Trial signup", "Controls public workspace creation.")
     add("Feature flags", "billing_collection", feature_flag("billing_collection"), "Paid plans", "Controls checkout/mandate creation.")
     return rows
@@ -16613,7 +16811,7 @@ def production_env_template() -> str:
         ERRORSWEEP_BACKUP_OBJECT_STORAGE_ENABLED=true
         ERRORSWEEP_BACKUP_OUTPUT_DIR=
 
-        # Future managed MT. Leave disabled until the Amazon Translate adapter is implemented.
+        # Optional managed MT. BYO user AI keys always take priority over this route.
         ERRORSWEEP_MT_PROVIDER=disabled
         # ERRORSWEEP_AWS_TRANSLATE_REGION=ap-south-1
         # ERRORSWEEP_AWS_TRANSLATE_USE_BATCH=false
@@ -16962,7 +17160,7 @@ def launch_preflight_rows(health: Optional[Dict[str, Any]] = None, *, include_li
             "MT",
             "Pass",
             "Managed MT is not enabled; no bundled local/self-hosted MT workers are deployed.",
-            "Future Amazon Translate work should add a new adapter and launch check.",
+            "Amazon Translate can be enabled as an optional no-key managed route for entitled workspaces.",
         )
 
     return rows
@@ -22363,6 +22561,9 @@ def current_ai_route_label() -> str:
         provider = safe_text(st.session_state.get("byo_ai_provider", "Custom API"))
         model = safe_text(st.session_state.get("byo_openai_model", ""))
         return f"BYO {provider} active" + (f" ({model})" if model else "")
+    amazon_state = workspace_amazon_translate_state() if "workspace_amazon_translate_state" in globals() else {}
+    if amazon_state.get("allowed"):
+        return "Managed Amazon Translate active"
     return "Manual Human Review - add a user AI API key for draft translations"
 
 
@@ -22370,16 +22571,31 @@ def user_ai_api_key_available() -> bool:
     return bool(str(st.session_state.get("byo_openai_api_key", "") or "").strip())
 
 
+def managed_translation_route_available() -> bool:
+    return bool(workspace_amazon_translate_state().get("allowed")) if "workspace_amazon_translate_state" in globals() else False
+
+
+def translation_draft_route_available() -> bool:
+    return user_ai_api_key_available() or managed_translation_route_available()
+
+
 def manual_review_mode_active() -> bool:
     """No AI/MT draft route is active; prepare blank rows for human translation."""
-    return not user_ai_api_key_available()
+    return not translation_draft_route_available()
 
 
 def render_no_ai_key_editor_notice(workflow_label: str = "this workflow") -> None:
-    st.info(
-        f"No AI API key is active for {workflow_label}, so CogniSweep will not generate AI translations. "
-        "The editor will still open for manual translation/post-editing, and connected TM, glossary, and DNT resources remain available."
-    )
+    amazon_state = workspace_amazon_translate_state() if "workspace_amazon_translate_state" in globals() else {}
+    if amazon_state.get("entitled") and not amazon_state.get("allowed"):
+        st.info(
+            f"Amazon Translate is included for this workspace, but it is not ready right now: {amazon_state.get('reason') or amazon_state.get('engine_label')}. "
+            "The editor will still open for manual translation/post-editing."
+        )
+    else:
+        st.info(
+            f"No AI API key or managed MT entitlement is active for {workflow_label}, so CogniSweep will not generate AI translations. "
+            "The editor will still open for manual translation/post-editing, and connected TM, glossary, and DNT resources remain available."
+        )
 
 
 def log_ai_usage_event(usage: Dict[str, Any], purpose: str, segment_count: int = 0) -> None:
@@ -22477,7 +22693,13 @@ def repair_translation_batch(sources: List[str], translations: List[str]) -> Lis
     return repaired
 
 
-def call_main_api_translate(texts: List[str], target_language: str, domain: str, rules: Optional[Dict[str, Any]] = None) -> List[str]:
+def call_main_api_translate(
+    texts: List[str],
+    target_language: str,
+    domain: str,
+    rules: Optional[Dict[str, Any]] = None,
+    source_language: str = "",
+) -> List[str]:
     """Translate through the v30 two-phase backend.
 
     User has BYO key:
@@ -22573,7 +22795,39 @@ Output shape:
         return repair_translation_batch(texts, result)
 
     # ----------------------------------------------------------
-    # NO USER KEY PATH: prepare manual Human Review rows.
+    # NO USER KEY PATH: entitled paid plans may use managed Amazon Translate.
+    # ----------------------------------------------------------
+    amazon_state = workspace_amazon_translate_state()
+    if amazon_state["allowed"] and managed_mt_translate_batch is not None:
+        protected_terms = [
+            safe_text(item.get("term") if isinstance(item, dict) else item)
+            for item in (rules or {}).get("dnt", []) or []
+            if safe_text(item.get("term") if isinstance(item, dict) else item)
+        ]
+        try:
+            translations, usage = managed_mt_translate_batch(
+                source_language=source_language or safe_text((rules or {}).get("source_language")) or "auto",
+                target_language=target_language,
+                texts=texts,
+                protected_terms=protected_terms,
+                metadata={
+                    "workflow": "streamlit_translation",
+                    "domain": domain,
+                    "workspace": amazon_state["workspace"],
+                    "plan": amazon_state["plan"],
+                    "quality_context_present": qa_quality_input_state(rules or {}, {}, "").get("has_any_context"),
+                },
+            )
+            log_ai_usage_event(usage, "amazon_translate", len(texts))
+            return repair_translation_batch(texts, translations)
+        except Exception as exc:
+            LOGGER.warning("Managed Amazon Translate failed; falling back to Human Review rows: %s", exc)
+            st.warning(f"Amazon Translate is included for this plan, but the managed route is not available right now: {safe_text(exc)[:220]}")
+    elif amazon_state.get("entitled") and feature_flag("amazon_translate") and not amazon_state["allowed"]:
+        st.info(f"Amazon Translate access is included in this plan, but it is not ready yet: {amazon_state.get('reason') or amazon_state.get('engine_label')}")
+
+    # ----------------------------------------------------------
+    # NO USER KEY AND NO MANAGED MT PATH: prepare manual Human Review rows.
     # ----------------------------------------------------------
     return ["" for _ in texts]
 
@@ -26028,7 +26282,7 @@ def create_project_tasks_for_project(
     uploaded_has_targets = uploaded_rows_have_targets(source_rows)
     domain = safe_text(project.get("domain")) or "General"
     task_type_key = safe_text(job_type).lower()
-    can_generate_ai = user_ai_api_key_available() and task_type_key in AI_TRANSLATION_TASK_TYPES and bool(parsed_source_rows)
+    can_generate_ai = translation_draft_route_available() and task_type_key in AI_TRANSLATION_TASK_TYPES and bool(parsed_source_rows)
     generate_ai = can_generate_ai and (ai_translation_choice == "generate" or (ai_translation_choice == "auto" and not uploaded_has_targets))
     client_rules = workspace_rules()
     records: List[Dict[str, Any]] = []
@@ -26215,16 +26469,16 @@ def render_project_job_form(project: Dict[str, Any], form_key: str, submit_label
     if assignment_files:
         preview_rows, _, _ = project_assignment_source_from_uploads(assignment_files or [])
     has_uploaded_translations = uploaded_rows_have_targets(preview_rows)
-    if user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES and has_uploaded_translations:
+    if translation_draft_route_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES and has_uploaded_translations:
         choice = st.radio(
-            "Uploaded file already contains translations. Do you want AI translation for this task?",
-            ["No, keep uploaded translations", "Yes, generate AI translation"],
+            "Uploaded file already contains translations. Do you want draft translation for this task?",
+            ["No, keep uploaded translations", "Yes, generate draft translation"],
             index=0,
             horizontal=True,
             key=f"{form_key}_ai_translation_choice",
         )
         ai_translation_choice = "generate" if choice.startswith("Yes") else "skip"
-    elif not user_ai_api_key_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES:
+    elif not translation_draft_route_available() and safe_text(job_type).lower() in AI_TRANSLATION_TASK_TYPES:
         st.caption(NO_AI_TASK_NOTE)
     note = st.text_area("Notes", height=80, key=f"{form_key}_note")
     submitted = st.button(submit_label, key=f"{form_key}_submit", use_container_width=True)
@@ -26410,11 +26664,41 @@ def review_project_jobs(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [job for job in project_jobs(project) if project_job_is_review_ready(job)]
 
 
+def learn_translation_memory_from_project_job(job: Dict[str, Any]) -> int:
+    review_job_id = review_job_id_for_job_record(job)
+    if not review_job_id:
+        return 0
+    payload = load_external_editor_payload(review_job_id)
+    if not payload:
+        return 0
+    rows = payload.get("rows") or []
+    payload_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    job_metadata = job_history_metadata(job)
+    metadata = {
+        **job_metadata,
+        **payload_metadata,
+        "project_id": safe_text(job.get("project_id") or job_metadata.get("project_id") or payload_metadata.get("project_id")),
+        "project": safe_text(job.get("project") or job_metadata.get("project") or payload_metadata.get("project")),
+        "source_language": safe_text(job_metadata.get("source_language") or payload_metadata.get("source_language") or payload_metadata.get("source_lang") or "en"),
+        "target_language": safe_text(job.get("language") or job_metadata.get("target_language") or payload_metadata.get("target_language") or payload.get("target_language")),
+        "domain": safe_text(job_metadata.get("domain") or payload_metadata.get("domain") or payload_metadata.get("workflow") or job.get("type") or "Project Review"),
+        "file_name": safe_text(job.get("file_name") or job_metadata.get("file_name") or payload_metadata.get("file_name") or payload.get("file_name")),
+        "review_id": review_job_id,
+    }
+    return learn_translation_memory_from_rows(
+        rows,
+        metadata,
+        job_id=safe_text(job.get("id") or job_metadata.get("job_id") or review_job_id),
+        source_type="project_review_final",
+    )
+
+
 def mark_project_job_review_submitted(job: Dict[str, Any]) -> Dict[str, Any]:
     reviewed_at = now_stamp()
     reviewer_user = current_user() or {}
     reviewer = safe_text(reviewer_user.get("email") or reviewer_user.get("username"))
     metadata = job_history_metadata(job)
+    learned_count = learn_translation_memory_from_project_job(job)
     next_metadata = {
         **metadata,
         "previous_status": safe_text(job.get("status") or metadata.get("status")),
@@ -26422,6 +26706,7 @@ def mark_project_job_review_submitted(job: Dict[str, Any]) -> Dict[str, Any]:
         "review_submitted_at": reviewed_at,
         "review_submitted_by": reviewer,
         "history_at": reviewed_at,
+        "translation_memory_learned_final": learned_count,
     }
     job["status"] = "approved"
     job["updated_at"] = reviewed_at
@@ -27505,6 +27790,7 @@ def page_pro() -> None:
         st.warning("Translation Studio and Human Review are currently disabled by Platform Settings.")
         return
     manual_no_ai_mode = manual_review_mode_active()
+    amazon_state = workspace_amazon_translate_state()
     st.caption(f"AI access: {current_ai_route_label()}")
     if user_ai_api_key_available():
         render_privacy_route_notice("Translation route")
@@ -27583,7 +27869,7 @@ def page_pro() -> None:
             return
         if usage_message:
             st.warning(usage_message)
-        if not manual_no_ai_mode and queue_external_workflow_if_configured(
+        if not manual_no_ai_mode and not user_ai_api_key_available() and queue_external_workflow_if_configured(
             task,
             "pro_translation",
             uploaded,
@@ -27598,14 +27884,16 @@ def page_pro() -> None:
                 "reference_context": uploaded_context,
                 "quality_inputs": pro_quality_state,
                 "estimated_usage": usage_details,
+                "allow_managed_amazon_translate": bool(amazon_state.get("allowed") and not user_ai_api_key_available()),
+                "managed_amazon_translate_plan": amazon_state.get("plan", ""),
             },
         ):
             return
         update_task_record(task["id"], progress=12, total_units=len(rows), processed_units=0)
         sensitive = sensitive_rows_summary(rows)
-        if sensitive["matches"] and user_ai_api_key_available():
+        if sensitive["matches"] and not manual_no_ai_mode:
             labels = ", ".join(f"row {m['row']} ({', '.join(m['kinds'])})" for m in sensitive["matches"])
-            st.warning(f"Sensitive text indicators found before translation: {labels}. Check client approval before using external BYO AI routes.")
+            st.warning(f"Sensitive text indicators found before translation: {labels}. Check client approval before using external translation routes.")
         sample = " ".join([r.get("source", "") for r in rows[:20]])
         domain = auto_detect_domain(sample) if domain_choice == "Auto-detect" else domain_choice
         if query_get("debug_translation") == "1" and is_owner():
@@ -30245,6 +30533,7 @@ def page_billing() -> None:
     allowance = workspace_usage_allowance(workspace)
     usage = workspace_usage_totals(workspace)
     seat_state = workspace_seat_state(workspace)
+    amazon_state = workspace_amazon_translate_state(workspace)
     billing_provider = billing_provider_label()
     selected_section, content_col = sectioned_page_layout(
         "billing",
@@ -30272,6 +30561,7 @@ def page_billing() -> None:
                 ("Plan", subscription.get("plan", "Trial"), safe_text(subscription.get("status", "Active"))),
                 ("Seats", f"{seat_state['used']:,}/{seat_state['limit']:,}", "active + invited"),
                 ("Segments", f"{usage['segments']:,}/{allowance['segments']:,}", "usage allowance"),
+                ("Amazon MT", "Included" if amazon_state.get("entitled") else "Not included", "ready" if amazon_state.get("allowed") else safe_text(amazon_state.get("reason"))[:60]),
                 ("Gateway", billing_provider, "ready" if billing_provider_ready(billing_provider) else "needs setup"),
             ])
             st.progress(min(1.0, seat_state["used"] / max(1, seat_state["limit"])), text="Seat usage")
@@ -31881,6 +32171,139 @@ def render_platform_feature_flags_section() -> None:
                 st.info("No feature flags changed.")
 
 
+def _date_from_subscription_value(value: Any, fallback_days: int = 30):
+    dt = parse_datetime_value(value, naive_tz=timezone.utc)
+    if dt is None:
+        return (datetime.now(local_timezone()) + timedelta(days=fallback_days)).date()
+    return dt.astimezone(local_timezone()).date()
+
+
+def render_platform_plan_entitlements_section() -> None:
+    st.markdown("### Plans & Entitlements")
+    st.caption("Owner controls for custom leases, extra app time, usage limits, and managed Amazon Translate access.")
+    workspaces = platform_settings_workspaces()
+    if not workspaces:
+        st.info("No workspaces are available yet.")
+        return
+    selected_workspace = st.selectbox("Workspace", workspaces, key="owner_entitlement_workspace")
+    subscription = workspace_subscription(selected_workspace)
+    allowance = workspace_usage_allowance(selected_workspace)
+    usage = workspace_usage_totals(selected_workspace)
+    amazon_state = workspace_amazon_translate_state(selected_workspace)
+    metadata = subscription_metadata(subscription)
+    active, access_reason = subscription_active_for_access(subscription)
+    metrics([
+        ("Plan", subscription.get("plan", "Trial"), subscription.get("status", "Active")),
+        ("Access", "Active" if active else "Blocked", access_reason or "period valid"),
+        ("Segments", f"{usage['segments']:,}/{allowance['segments']:,}", "used / limit"),
+        ("Amazon MT", "Allowed" if amazon_state["allowed"] else "Not active", amazon_state.get("engine_label", "")),
+    ])
+    if callable(builtin_engine_status):
+        st.dataframe(pd.DataFrame(builtin_engine_status()), use_container_width=True, hide_index=True)
+
+    plan_names = [plan["name"] for plan in PLAN_CATALOG]
+    current_plan = safe_text(subscription.get("plan") or "Trial")
+    current_index = plan_names.index(current_plan) if current_plan in plan_names else plan_names.index("Enterprise")
+    start_default = _date_from_subscription_value(subscription.get("current_period_start"), fallback_days=0)
+    end_default = _date_from_subscription_value(subscription.get("current_period_end"), fallback_days=30)
+    no_fixed_end_default = not safe_text(subscription.get("current_period_end"))
+    with st.form("owner_plan_entitlements_form", enter_to_submit=False):
+        c1, c2, c3 = st.columns([1, 1, 1])
+        plan_name = c1.selectbox("Base plan", plan_names, index=current_index)
+        status = c2.selectbox(
+            "Status",
+            ["Active", "Trial", "Paused", "Past Due", "Cancelled", "Expired"],
+            index=0 if safe_text(subscription.get("status") or "Active") not in {"Trial", "Paused", "Past Due", "Cancelled", "Expired"} else ["Active", "Trial", "Paused", "Past Due", "Cancelled", "Expired"].index(safe_text(subscription.get("status"))),
+        )
+        billing_cycle = c3.selectbox(
+            "Billing cycle",
+            ["monthly", "annual", "custom", "lease"],
+            index=["monthly", "annual", "custom", "lease"].index(safe_text(subscription.get("billing_cycle") or "monthly")) if safe_text(subscription.get("billing_cycle") or "monthly") in {"monthly", "annual", "custom", "lease"} else 2,
+        )
+        custom_plan_name = st.text_input(
+            "Custom plan display name",
+            value=safe_text(metadata.get("custom_plan_name")),
+            placeholder="Example: Enterprise lease - 6 months",
+        )
+        l1, l2, l3 = st.columns(3)
+        included_seats = l1.number_input("Seat limit", min_value=1, max_value=1_000_000, value=max(1, int(allowance["seats"])), step=1)
+        included_segments = l2.number_input("Segment limit", min_value=1, max_value=1_000_000_000, value=max(1, int(allowance["segments"])), step=100)
+        included_characters = l3.number_input("Character limit", min_value=1, max_value=1_000_000_000_000, value=max(1, int(allowance["characters"])), step=10_000)
+        p1, p2, p3 = st.columns(3)
+        currency = p1.text_input("Currency", value=safe_text(subscription.get("currency") or plan_record(plan_name).get("currency", "INR")))
+        base_amount = p2.number_input("Agreed amount", min_value=0.0, max_value=100_000_000.0, value=float(subscription.get("base_amount") or 0), step=100.0)
+        extra_days = p3.number_input("Add extra days", min_value=0, max_value=3650, value=0, step=1, help="Adds days on top of the selected end date or calculated lease period.")
+        t1, t2, t3, t4 = st.columns(4)
+        access_start_date = t1.date_input("Access start", value=start_default)
+        no_fixed_end = t2.checkbox("No fixed end", value=no_fixed_end_default)
+        access_end_date = t3.date_input("Access end", value=end_default)
+        lease_months = t4.number_input("Lease months", min_value=0, max_value=120, value=0, step=1)
+        lease_years = st.number_input("Lease years", min_value=0, max_value=10, value=0, step=1)
+        amazon_default = subscription_has_amazon_translate(subscription)
+        amazon_translate_enabled = st.checkbox(
+            "Include managed Amazon Translate",
+            value=amazon_default,
+            help="Agency, Enterprise, and Unlimited include this automatically. Use this to grant or revoke custom access.",
+        )
+        owner_notes = st.text_area("Owner notes", value=safe_text(metadata.get("owner_notes")), height=80)
+        submitted = st.form_submit_button("Save custom access", use_container_width=True)
+
+    if submitted:
+        period_start = datetime.combine(access_start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        lease_days = int(lease_years) * 365 + int(lease_months) * 30
+        if no_fixed_end and lease_days <= 0 and int(extra_days) <= 0:
+            period_end = None
+        else:
+            base_end_date = access_end_date
+            if lease_days > 0:
+                base_end_date = (datetime.now(local_timezone()) + timedelta(days=lease_days)).date()
+            final_end_date = base_end_date + timedelta(days=int(extra_days or 0))
+            period_end = datetime.combine(final_end_date, datetime.max.time().replace(microsecond=0), tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        lease_term_parts = []
+        if lease_years:
+            lease_term_parts.append(f"{int(lease_years)} year(s)")
+        if lease_months:
+            lease_term_parts.append(f"{int(lease_months)} month(s)")
+        if extra_days:
+            lease_term_parts.append(f"{int(extra_days)} extra day(s)")
+        saved = save_owner_subscription_override(
+            workspace=selected_workspace,
+            plan_name=plan_name,
+            status=status,
+            billing_cycle=billing_cycle,
+            currency=currency,
+            base_amount=float(base_amount or 0),
+            included_seats=int(included_seats),
+            included_segments=int(included_segments),
+            included_characters=int(included_characters),
+            current_period_start=period_start,
+            current_period_end=period_end,
+            amazon_translate_enabled=amazon_translate_enabled,
+            custom_plan_name=custom_plan_name,
+            lease_term=", ".join(lease_term_parts),
+            owner_notes=owner_notes,
+        )
+        st.success(f"Updated {selected_workspace} access: {saved.get('plan')} / {saved.get('status')}.")
+        st.rerun()
+
+    subscription_rows = [
+        item for item in st.session_state.get("subscriptions", [])
+        if safe_text(item.get("workspace")) == selected_workspace
+    ]
+    if subscription_rows:
+        st.markdown("#### Subscription records")
+        display_rows = []
+        for row in subscription_rows[:10]:
+            item = dict(row)
+            meta = subscription_metadata(item)
+            item["amazon_translate_enabled"] = meta.get("amazon_translate_enabled", subscription_has_amazon_translate(item))
+            item["custom_plan_name"] = meta.get("custom_plan_name", "")
+            if isinstance(item.get("metadata_json"), (dict, list)):
+                item["metadata_json"] = json.dumps(item["metadata_json"], ensure_ascii=False)[:260]
+            display_rows.append(item)
+        st.dataframe(pd.DataFrame(display_records(display_rows)), use_container_width=True, hide_index=True)
+
+
 def render_platform_object_storage_section() -> None:
     st.markdown("### Object storage")
     storage_health = object_storage_status() if object_storage_status is not None else {
@@ -32051,6 +32474,7 @@ def page_platform_settings() -> None:
         ]),
         ("Operations", [
             ("Feature Flags", "Platform capability switches"),
+            ("Plans & Entitlements", "Custom access, leases, usage limits, and managed MT"),
             ("Object Storage", "Uploads and generated files"),
             ("File Manifest", "Stored file records"),
             ("Async Task Queue", "Worker handoff and task state"),
@@ -32194,6 +32618,8 @@ def page_platform_settings() -> None:
             render_platform_launch_configuration_section(health)
         elif selected_section == "Feature Flags":
             render_platform_feature_flags_section()
+        elif selected_section == "Plans & Entitlements":
+            render_platform_plan_entitlements_section()
         elif selected_section == "Object Storage":
             render_platform_object_storage_section()
         elif selected_section == "File Manifest":
@@ -32251,6 +32677,9 @@ def page_platform_settings() -> None:
 
         elif selected_section == "Feature Flags":
             render_platform_feature_flags_section()
+
+        elif selected_section == "Plans & Entitlements":
+            render_platform_plan_entitlements_section()
 
         elif selected_section == "Object Storage":
             render_platform_object_storage_section()
