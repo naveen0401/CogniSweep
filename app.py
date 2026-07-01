@@ -16415,7 +16415,8 @@ def launch_configuration_rows(health: Optional[Dict[str, Any]] = None) -> List[D
         })
 
     add("Core", "ERRORSWEEP_ENV=production", is_production_mode(), "Public launch", "Enables production safety checks.")
-    add("Core", "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true", public_launch_preflight_enforced() or not is_production_mode(), "Public launch", "Locks public signup while launch preflight blockers remain.")
+    add("Core", "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true", public_launch_preflight_enforced() or not is_production_mode(), "Public launch", "Keeps launch readiness visible for Platform Owners.")
+    add("Core", "ERRORSWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT=false", not public_signup_preflight_lock_enabled(), "Trial signup", "Leave false to keep public signup open while non-signup launch readiness items are reviewed.")
     add("Core", "ERRORSWEEP_SESSION_SECRET", launch_secret_is_ready("ERRORSWEEP_SESSION_SECRET", min_length=32), "Public launch", "Use a long random value. Never use the dev default.")
     add("Core", "ERRORSWEEP_PUBLIC_BASE_URL", launch_secret_is_ready("ERRORSWEEP_PUBLIC_BASE_URL") and safe_text(secret("ERRORSWEEP_PUBLIC_BASE_URL", "")).startswith("https://"), "Public links", "Used in verification/reset and outbound links.")
     add("Auth", "ERRORSWEEP_OWNER_USERNAME", launch_secret_is_ready("ERRORSWEEP_OWNER_USERNAME"), "Public launch", "Production platform owner bootstrap email.")
@@ -16487,6 +16488,7 @@ def production_env_template() -> str:
 
         ERRORSWEEP_ENV=production
         ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT=true
+        ERRORSWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT=false
         ERRORSWEEP_PUBLIC_BASE_URL=https://app.cognisweep.com
         ERRORSWEEP_SESSION_SECRET=replace-with-a-long-random-secret
 
@@ -16996,6 +16998,12 @@ def public_launch_preflight_enforced() -> bool:
     return parse_bool_flag(secret("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "true"), True)
 
 
+def public_signup_preflight_lock_enabled() -> bool:
+    if not public_launch_preflight_enforced():
+        return False
+    return parse_bool_flag(secret("ERRORSWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT", "false"), False)
+
+
 SIGNUP_BLOCKING_PREFLIGHT_CHECKS = {
     "Session secret",
     "Public base URL",
@@ -17018,9 +17026,11 @@ def public_signup_launch_gate(health: Optional[Dict[str, Any]] = None, rows: Opt
         row for row in all_blockers
         if safe_text(row.get("Check")) in SIGNUP_BLOCKING_PREFLIGHT_CHECKS
     ]
+    hard_lock = public_signup_preflight_lock_enabled()
     return {
-        "locked": bool(blockers),
+        "locked": bool(blockers) and hard_lock,
         "enforced": True,
+        "hard_lock": hard_lock,
         "blockers": blockers,
         "blocker_count": len(blockers),
         "preflight_blocker_count": len(all_blockers),
@@ -31706,12 +31716,14 @@ def render_platform_launch_readiness_section(health: Dict[str, Any]) -> None:
         ),
         ("Preflight warnings", len(preflight_warnings), "review before launch"),
         ("Public signup", "Enabled" if feature_flag("public_registration") else "Disabled", "feature flag"),
-        ("Enforcement", "On" if public_launch_preflight_enforced() else "Off", "production guard"),
+        ("Signup hard lock", "On" if launch_gate.get("hard_lock") else "Off", "optional guard"),
     ])
     if launch_gate.get("locked"):
         st.warning("Public signup is locked until signup-critical launch blockers are resolved.")
     elif launch_gate.get("enforced"):
-        st.success("Public signup launch gate is enforced and no signup-critical blockers are currently detected.")
+        st.success("Public signup is open. Launch preflight remains visible for Platform Owner review.")
+        if int(launch_gate.get("blocker_count") or 0) and not launch_gate.get("hard_lock"):
+            st.caption("Signup-critical blockers are being tracked, but the optional public signup hard lock is off.")
         if int(launch_gate.get("ignored_blocker_count") or 0):
             st.caption("Full launch readiness still has non-signup blockers for Platform Owners to review.")
     else:

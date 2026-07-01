@@ -20,17 +20,21 @@ def function_body(name: str, end_name: str) -> str:
     return text[start:end]
 
 
-def test_public_signup_is_locked_by_signup_critical_preflight():
+def test_public_signup_hard_lock_is_optional():
     text = source()
     signup = function_body("render_signup", "render_public_document")
 
     assert "def public_launch_preflight_enforced" in text
+    assert "def public_signup_preflight_lock_enabled" in text
     assert 'secret("ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT", "true")' in text
+    assert 'secret("ERRORSWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT", "false")' in text
     assert "SIGNUP_BLOCKING_PREFLIGHT_CHECKS" in text
     assert "def public_signup_launch_gate" in text
     assert "include_live_checks=False" in text
     assert 'safe_text(row.get("Check")) in SIGNUP_BLOCKING_PREFLIGHT_CHECKS' in text
     assert '"preflight_blocker_count": len(all_blockers)' in text
+    assert '"hard_lock": hard_lock' in text
+    assert '"locked": bool(blockers) and hard_lock' in text
     assert "def render_public_signup_launch_locked" in text
     assert 'launch_gate = public_signup_launch_gate()' in signup
     assert 'if launch_gate.get("locked")' in signup
@@ -45,7 +49,9 @@ def test_platform_settings_exposes_launch_lock_and_preflight_report():
     assert "preflight_blockers = launch_preflight_blockers(rows=preflight_rows)" in body
     assert "launch_gate = public_signup_launch_gate(health=health, rows=preflight_rows)" in body
     assert '"Launch lock"' in body
+    assert '"Signup hard lock"' in body
     assert "signup-critical" in body
+    assert "Public signup is open" in body
     assert "Full launch readiness still has non-signup blockers" in body
     assert "Production preflight details" in body
     assert "launch_preflight_report(preflight_rows)" in body
@@ -54,16 +60,20 @@ def test_platform_settings_exposes_launch_lock_and_preflight_report():
 def test_launch_lock_is_in_deploy_templates_and_checks():
     key = "ERRORSWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT"
     alias = "COGNISWEEP_ENFORCE_PUBLIC_LAUNCH_PREFLIGHT"
+    hard_lock_key = "ERRORSWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT"
+    hard_lock_alias = "COGNISWEEP_LOCK_PUBLIC_SIGNUP_ON_PREFLIGHT"
 
     assert f"{key}=true" in source(ENV_TEMPLATE) or f"{alias}=true" in source(ENV_TEMPLATE)
     assert f'{key} = "true"' in source(STREAMLIT_TEMPLATE) or f'{alias} = "true"' in source(STREAMLIT_TEMPLATE)
+    assert f"{hard_lock_key}=false" in source(ENV_TEMPLATE) or f"{hard_lock_alias}=false" in source(ENV_TEMPLATE)
+    assert f'{hard_lock_key} = "false"' in source(STREAMLIT_TEMPLATE) or f'{hard_lock_alias} = "false"' in source(STREAMLIT_TEMPLATE)
     assert key in source(RELEASE_CHECK)
     assert "Public launch preflight lock" in source(LAUNCH_ENV_CHECK)
     assert "Public launch preflight lock" in source(SMOKE_TEST)
 
 
 if __name__ == "__main__":
-    test_public_signup_is_locked_by_signup_critical_preflight()
+    test_public_signup_hard_lock_is_optional()
     test_platform_settings_exposes_launch_lock_and_preflight_report()
     test_launch_lock_is_in_deploy_templates_and_checks()
     print("Public launch lock checks passed.")
