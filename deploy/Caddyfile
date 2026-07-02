@@ -21,6 +21,12 @@
             file_server
         }
 
+        @faviconFiles path /favicon.ico /favicon.png /apple-touch-icon.png
+        handle @faviconFiles {
+            root * /srv/cognisweep-public
+            file_server
+        }
+
         @seoFiles path /robots.txt /sitemap.xml
         handle @seoFiles {
             root * /srv/cognisweep-public

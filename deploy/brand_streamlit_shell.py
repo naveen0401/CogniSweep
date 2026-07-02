@@ -21,8 +21,15 @@ SHARE_DESCRIPTION = (
 )
 SHARE_URL = "https://www.cognisweep.com/solutions/software-localization-tool"
 SHARE_IMAGE_URL = "https://www.cognisweep.com/cognisweep-logo.png"
+FAVICON_ICO_URL = "/favicon.ico"
+FAVICON_PNG_URL = "/favicon.png"
+APPLE_TOUCH_ICON_URL = "/apple-touch-icon.png"
 MARKER_START = "<!-- CogniSweep share metadata -->"
 MARKER_END = "<!-- /CogniSweep share metadata -->"
+ICON_LINK_PATTERN = re.compile(
+    r"\s*<link\b(?=[^>]*\brel=[\"'](?:shortcut icon|icon|apple-touch-icon)[\"'])[^>]*>",
+    flags=re.IGNORECASE,
+)
 
 
 def share_metadata_block() -> str:
@@ -30,7 +37,9 @@ def share_metadata_block() -> str:
     <title>{SHARE_TITLE}</title>
     <meta name="description" content="{SHARE_DESCRIPTION}" />
     <meta name="application-name" content="CogniSweep" />
-    <link rel="icon" href="/cognisweep-logo.png" />
+    <link rel="shortcut icon" href="{FAVICON_ICO_URL}" />
+    <link rel="icon" type="image/png" href="{FAVICON_PNG_URL}" />
+    <link rel="apple-touch-icon" href="{APPLE_TOUCH_ICON_URL}" />
     <link rel="canonical" href="{SHARE_URL}" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CogniSweep" />
@@ -47,6 +56,7 @@ def share_metadata_block() -> str:
 
 
 def branded_index_html(html: str) -> str:
+    html = ICON_LINK_PATTERN.sub("", html)
     block = share_metadata_block()
     marked_pattern = re.compile(
         rf"\s*{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}",
