@@ -19,8 +19,8 @@ SHARE_DESCRIPTION = (
     "CogniSweep is a SaaS workspace for translation, transcription, subtitling, "
     "localization QA, glossary, DNT, and translation memory workflows."
 )
-SHARE_URL = "https://cognisweep.com/"
-SHARE_IMAGE_URL = "https://cognisweep.com/cognisweep-logo.png"
+SHARE_URL = "https://www.cognisweep.com/solutions/software-localization-tool"
+SHARE_IMAGE_URL = "https://www.cognisweep.com/cognisweep-logo.png"
 MARKER_START = "<!-- CogniSweep share metadata -->"
 MARKER_END = "<!-- /CogniSweep share metadata -->"
 
@@ -31,6 +31,7 @@ def share_metadata_block() -> str:
     <meta name="description" content="{SHARE_DESCRIPTION}" />
     <meta name="application-name" content="CogniSweep" />
     <link rel="icon" href="/cognisweep-logo.png" />
+    <link rel="canonical" href="{SHARE_URL}" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CogniSweep" />
     <meta property="og:title" content="{SHARE_TITLE}" />

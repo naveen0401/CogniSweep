@@ -120,10 +120,11 @@ def test_caddy_redirects_bare_roots_to_canonical_landing() -> None:
 
     assert "{$COGNISWEEP_DOMAIN:cognisweep.com}, {$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}" in caddy
     assert "@apexLanding" in caddy
-    assert "host {$COGNISWEEP_DOMAIN:cognisweep.com}" in caddy
+    assert "host cognisweep.com" in caddy
     assert "query \"\"" in caddy
-    assert "redir @apexLanding https://{$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}/solutions/software-localization-tool 308" in caddy
+    assert "redir @apexLanding https://www.cognisweep.com/solutions/software-localization-tool 308" in caddy
     assert "@wwwRootLanding" in caddy
+    assert "host www.cognisweep.com" in caddy
     assert "redir @wwwRootLanding /solutions/software-localization-tool 308" in caddy
     assert caddy.index("reverse_proxy @billing") < caddy.index("reverse_proxy errorsweep-app:8501")
 

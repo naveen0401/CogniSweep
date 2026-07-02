@@ -11,7 +11,9 @@ def test_streamlit_shell_branding_replaces_default_title():
     branded = branded_index_html(html)
 
     assert "<title>CogniSweep | Localization SaaS Workspace</title>" in branded
+    assert 'rel="canonical" href="https://www.cognisweep.com/solutions/software-localization-tool"' in branded
     assert 'property="og:title"' in branded
+    assert 'property="og:url" content="https://www.cognisweep.com/solutions/software-localization-tool"' in branded
     assert "Streamlit</title>" not in branded
 
 
@@ -20,6 +22,8 @@ def test_static_share_preview_is_cognisweep_branded():
 
     assert "CogniSweep | Localization SaaS Workspace" in html
     assert 'property="og:title"' in html
+    assert 'rel="canonical" href="https://www.cognisweep.com/solutions/software-localization-tool"' in html
+    assert 'property="og:url" content="https://www.cognisweep.com/solutions/software-localization-tool"' in html
     assert "cognisweep-logo.png" in html
     assert "Streamlit" not in html
 
@@ -30,4 +34,19 @@ def test_caddy_serves_social_preview_before_streamlit_proxy():
     assert "@socialPreview" in caddyfile
     assert "WhatsApp" in caddyfile
     assert "/share-preview.html" in caddyfile
+    assert "@seoFiles" in caddyfile
+    assert "path /robots.txt /sitemap.xml" in caddyfile
+    assert caddyfile.index("@seoFiles") < caddyfile.index("@socialPreview")
     assert "reverse_proxy errorsweep-app:8501" in caddyfile
+
+
+def test_static_seo_files_point_to_canonical_landing():
+    robots = (ROOT / "deploy" / "public" / "robots.txt").read_text(encoding="utf-8")
+    sitemap = (ROOT / "deploy" / "public" / "sitemap.xml").read_text(encoding="utf-8")
+
+    canonical = "https://www.cognisweep.com/solutions/software-localization-tool"
+    assert "User-agent: *" in robots
+    assert "Allow: /" in robots
+    assert "Sitemap: https://www.cognisweep.com/sitemap.xml" in robots
+    assert f"<loc>{canonical}</loc>" in sitemap
+    assert "<urlset" in sitemap

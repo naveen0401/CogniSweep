@@ -21,6 +21,26 @@
             file_server
         }
 
+        @seoFiles path /robots.txt /sitemap.xml
+        handle @seoFiles {
+            root * /srv/cognisweep-public
+            file_server
+        }
+
+        @apexLanding {
+            host cognisweep.com
+            path /
+            query ""
+        }
+        redir @apexLanding https://www.cognisweep.com/solutions/software-localization-tool 308
+
+        @wwwRootLanding {
+            host www.cognisweep.com
+            path /
+            query ""
+        }
+        redir @wwwRootLanding /solutions/software-localization-tool 308
+
         @socialPreview {
             path / /solutions/software-localization-tool
             header_regexp User-Agent (?i)(WhatsApp|facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|TelegramBot|SkypeUriPreview|Googlebot|Bingbot)
@@ -30,20 +50,6 @@
             rewrite * /share-preview.html
             file_server
         }
-
-        @apexLanding {
-            host {$COGNISWEEP_DOMAIN:cognisweep.com}
-            path /
-            query ""
-        }
-        redir @apexLanding https://{$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}/solutions/software-localization-tool 308
-
-        @wwwRootLanding {
-            host {$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com}
-            path /
-            query ""
-        }
-        redir @wwwRootLanding /solutions/software-localization-tool 308
 
         @billing path /webhooks/billing/*
         reverse_proxy @billing errorsweep-billing-webhook:8301
