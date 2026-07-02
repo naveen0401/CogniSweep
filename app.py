@@ -14047,7 +14047,10 @@ def queue_external_workflow_if_configured(
             },
         )
         add_audit("External task queued", f"{workflow}: {queued.get('provider')} {queued.get('external_id')}")
-        st.success(f"Task queued on external worker ({queued.get('provider')}). You can track it from Jobs.")
+        if safe_text(workflow) == "pro_translation":
+            st.success(f"Translation task queued on external worker ({queued.get('provider')}). Track it on this Translation page.")
+        else:
+            st.success(f"Task queued on external worker ({queued.get('provider')}). You can track it from Jobs.")
         if input_manifests:
             st.caption(f"Stored input file: {safe_text(input_manifests[0].get('storage_key', ''))[:180]}")
         return True
@@ -14332,6 +14335,134 @@ def render_task_queue_panel(limit: int = 12) -> None:
                 row["metadata_json"] = json.dumps(row["metadata_json"], ensure_ascii=False)
             rows.append(row)
         st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
+
+
+def is_direct_translation_studio_record(record: Dict[str, Any]) -> bool:
+    if not isinstance(record, dict):
+        return False
+    metadata = job_history_metadata(record)
+    has_project_context = any(
+        safe_text(value)
+        for value in (
+            record.get("project_id"),
+            record.get("project"),
+            metadata.get("project_id"),
+            metadata.get("project"),
+        )
+    )
+    if has_project_context:
+        return False
+    task_type = safe_text(record.get("task_type")).lower()
+    workflow = safe_text(metadata.get("workflow") or record.get("workflow")).lower()
+    source = safe_text(metadata.get("source") or record.get("source")).lower()
+    label = safe_text(record.get("label") or metadata.get("label")).lower()
+    record_type = safe_text(record.get("type") or metadata.get("type")).lower()
+    return (
+        task_type in {"pro_translation", "pro", "translate_review"}
+        or workflow in {"pro_translation", "translation_studio", "translate_review"}
+        or source in {"translation studio", "cognisweep async pro"}
+        or label.startswith("translation studio:")
+        or record_type == "pro translation"
+    )
+
+
+def direct_translation_studio_record_is_submitted(record: Dict[str, Any]) -> bool:
+    metadata = job_history_metadata(record)
+    status = safe_text(record.get("status") or metadata.get("status")).strip().lower()
+    return (
+        status in {"submitted", "approved", "confirmed", "delivered"}
+        or bool(safe_text(record.get("submitted_at") or metadata.get("submitted_at") or metadata.get("history_at")))
+    )
+
+
+def direct_translation_studio_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
+    if is_owner():
+        return True
+    if not job_history_workspace_matches(record, user):
+        return False
+    metadata = job_history_metadata(record)
+    email = safe_text(user.get("email")).strip().lower()
+    if not email:
+        return True
+    candidates = [
+        record.get("user_email"),
+        record.get("email"),
+        metadata.get("user_email"),
+        metadata.get("email"),
+        metadata.get("owner_email"),
+        metadata.get("submitted_by"),
+    ]
+    if any(safe_text(candidate).strip().lower() == email for candidate in candidates):
+        return True
+    if account_type_for_user(user) == "individual":
+        has_explicit_user = any(safe_text(candidate).strip() for candidate in candidates)
+        return not has_explicit_user
+    return False
+
+
+def active_direct_translation_studio_tasks_for_user(user: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
+    refresh_task_queue_state_for_user()
+    tasks = [
+        task
+        for task in st.session_state.get("task_queue", [])
+        if isinstance(task, dict)
+        and is_direct_translation_studio_record(task)
+        and not direct_translation_studio_record_is_submitted(task)
+        and direct_translation_studio_record_matches_user(task, user)
+    ]
+    return sorted(tasks, key=job_history_sort_value, reverse=True)[: max(1, int(limit or 12))]
+
+
+def render_direct_translation_task_actions(task: Dict[str, Any], key_prefix: str) -> None:
+    metadata = coerce_json_dict(task.get("metadata_json"))
+    summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
+    if summary:
+        summary_bits = []
+        for key in ("status", "segments", "missing_or_review", "route", "route_error"):
+            value = safe_text(summary.get(key))
+            if value:
+                summary_bits.append(f"{key.replace('_', ' ').title()}: {value}")
+        if summary_bits:
+            st.caption(" | ".join(summary_bits))
+
+    review_job_id = task_review_job_id(task)
+    if review_job_id:
+        render_editor_open_link("Open Human Review Editor", human_review_editor_link(review_job_id))
+    else:
+        st.caption("The Human Review workspace will appear here when background translation finishes.")
+
+    result_file = metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {}
+    if result_file:
+        rendered = render_file_manifest_action(result_file, f"{key_prefix}_result", "Download review workbook")
+        if not rendered:
+            st.caption("Review workbook is recorded but is not directly downloadable from this deployment.")
+
+
+def render_translation_studio_task_panel(limit: int = 8) -> None:
+    user = current_user() or {}
+    tasks = active_direct_translation_studio_tasks_for_user(user, limit=limit)
+    if not tasks:
+        return
+    st.markdown("### Translation page tasks")
+    st.caption("Direct Translation Studio runs stay here. After you submit the Human Review editor, they move to History.")
+    if st.button("Refresh translation tasks", key="translation_page_refresh_tasks", use_container_width=True):
+        refresh_task_queue_state_for_user(force=True)
+        st.rerun()
+    for idx, task in enumerate(tasks):
+        label = safe_text(task.get("label") or task.get("task_type") or "Translation Studio task")
+        status = safe_text(task.get("status") or "queued")
+        display_status = "Review ready" if status.lower() == "completed" and task_review_job_id(task) else status
+        progress = max(0, min(100, int(task.get("progress", 0) or 0)))
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([0.46, 0.24, 0.30])
+            c1.markdown(f"**{label}**")
+            c1.caption(f"Translation Studio | {format_local_time(task.get('updated_at', task.get('created_at', '')))}")
+            c2.markdown(f"`{display_status}`")
+            c2.caption(f"{int(task.get('processed_units') or 0)}/{int(task.get('total_units') or 0)} segments")
+            c3.progress(progress / 100, text=f"{progress}%")
+            if safe_text(task.get("error")):
+                st.caption(f"Error: {safe_text(task.get('error'))[:240]}")
+            render_direct_translation_task_actions(task, f"translation_task_{idx}_{safe_text(task.get('id'))}")
 
 
 def render_usage_task_links(limit: int = 8) -> None:
@@ -20551,6 +20682,36 @@ def mark_related_editor_records_submitted(job_id: str, metadata: Dict[str, Any])
         job["updated_at"] = submitted_at
         job["metadata_json"] = next_metadata
         persist_saas_record("jobs", dict(job))
+
+    for task in st.session_state.get("task_queue", []):
+        if not isinstance(task, dict):
+            continue
+        task_metadata = coerce_json_dict(task.get("metadata_json"))
+        task_ids = {
+            safe_text(task.get("id")),
+            safe_text(task.get("result_ref")),
+            safe_text(task.get("review_job_id")),
+            safe_text(task.get("editor_job_id")),
+            safe_text(task_metadata.get("job_id")),
+            safe_text(task_metadata.get("review_job_id")),
+            safe_text(task_metadata.get("editor_job_id")),
+            safe_text(task_metadata.get("task_id")),
+        }
+        pro_summary = task_metadata.get("pro_summary") if isinstance(task_metadata.get("pro_summary"), dict) else {}
+        task_ids.update(
+            {
+                safe_text(pro_summary.get("job_id")),
+                safe_text(pro_summary.get("review_job_id")),
+                safe_text(pro_summary.get("editor_job_id")),
+            }
+        )
+        if not related_ids.intersection(value for value in task_ids if value):
+            continue
+        next_metadata = {**task_metadata, "status": "submitted", "submitted_at": submitted_at, "submitted_by": submitter}
+        task["status"] = "submitted"
+        task["updated_at"] = submitted_at
+        task["metadata_json"] = next_metadata
+        persist_saas_record("task_queue", dict(task))
 
 
 def submit_external_editor_payload(job_id: str, payload: Dict[str, Any], editor_type: str = "") -> bool:
@@ -27029,11 +27190,29 @@ def job_history_rows_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
     refresh_task_queue_state_for_user()
     rows: List[Dict[str, Any]] = []
     for job in st.session_state.get("jobs", []):
+        if is_direct_translation_studio_record(job):
+            if not direct_translation_studio_record_is_submitted(job):
+                continue
+            if direct_translation_studio_record_matches_user(job, user):
+                rows.append(job_history_row_from_job(job))
+            continue
         if isinstance(job, dict) and job_history_record_matches_user(job, user):
             rows.append(job_history_row_from_job(job))
     for editor_job in job_history_editor_jobs_for_user(user):
+        if is_direct_translation_studio_record(editor_job):
+            if not direct_translation_studio_record_is_submitted(editor_job):
+                continue
+            if direct_translation_studio_record_matches_user(editor_job, user):
+                rows.append(job_history_row_from_editor_job(editor_job))
+            continue
         rows.append(job_history_row_from_editor_job(editor_job))
     for task in st.session_state.get("task_queue", []):
+        if is_direct_translation_studio_record(task):
+            if not direct_translation_studio_record_is_submitted(task):
+                continue
+            if direct_translation_studio_record_matches_user(task, user):
+                rows.append(job_history_row_from_task(task))
+            continue
         if isinstance(task, dict) and job_history_record_matches_user(task, user):
             rows.append(job_history_row_from_task(task))
 
@@ -27808,6 +27987,7 @@ def page_pro() -> None:
             render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
         else:
             st.error("Missing review_id. Run Translation Studio before opening Human Review.")
+    render_translation_studio_task_panel()
     render_upload_dropzone("Drop source or bilingual content here", "CogniSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "pptx", "txt", "html", "json", "xml", "xlf", "xliff", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")

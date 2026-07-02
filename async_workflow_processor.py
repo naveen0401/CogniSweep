@@ -970,41 +970,12 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         task_id,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    job = save_saas_record(
-        "jobs",
-        {
-            "workspace": workspace,
-            "user_email": user_email,
-            "created": now_iso(),
-            "type": "Pro Translation",
-            "language": target_language,
-            "status": summary["status"],
-            "segments": len(review_rows),
-            "note": f"Async Pro translation generated for {manifest_file_name(primary)}",
-            "review_job_id": review_job_id,
-            "editor_job_id": review_job_id,
-            "metadata_json": {
-                "workflow": "pro_translation",
-                "source": "CogniSweep Async Pro",
-                "file_name": manifest_file_name(primary),
-                "target_language": target_language,
-                "task_id": task_id,
-                "review_job_id": review_job_id,
-                "editor_job_id": review_job_id,
-                "result_file_id": safe_text(review_manifest.get("id")),
-                "quality_inputs": quality_inputs,
-            },
-            "attachment_count": 1,
-            "attachments_json": [review_manifest],
-        },
-        user={"email": user_email, "workspace": workspace},
-    )
     log_persistent_usage_event(
         {**usage, "segments": len(review_rows), "characters": sum(len(t) for t in source_texts), "requests": usage.get("requests", 1)},
         purpose="pro_translation",
         segment_count=len(review_rows),
         user={"email": user_email, "workspace": workspace},
-        metadata={"task_id": task_id, "job_id": job.get("id"), "review_job_id": review_job_id, "result_file_id": review_manifest.get("id")},
+        metadata={"task_id": task_id, "review_job_id": review_job_id, "result_file_id": review_manifest.get("id")},
     )
     status = "needs_review" if missing else "completed"
     return update_task(
@@ -1014,12 +985,16 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         progress=100,
         processed_units=len(review_rows),
         total_units=len(review_rows),
-        result_ref=safe_text(job.get("id")),
+        result_ref=review_job_id,
         metadata={
             "pro_summary": summary,
             "result_file": review_manifest,
-            "job_id": job.get("id"),
             "review_job_id": review_job_id,
+            "editor_job_id": review_job_id,
+            "workflow": "pro_translation",
+            "source": "CogniSweep Async Pro",
+            "file_name": manifest_file_name(primary),
+            "target_language": target_language,
             "quality_inputs": quality_inputs,
         },
     )
