@@ -5,7 +5,9 @@ ROOT = Path(__file__).resolve().parent
 APP = ROOT / "app.py"
 PLATFORM_CONSTANTS = ROOT / "app_platform_constants.py"
 CADDYFILE = ROOT / "deploy" / "Caddyfile"
+DOCKERFILE = ROOT / "Dockerfile"
 ENV_TEMPLATE = ROOT / "deploy" / ".env.production.example"
+STREAMLIT_CONFIG = ROOT / ".streamlit" / "config.toml"
 KOOCHI_ICON = ROOT / "assets" / "koochi-chatbot-icon.jpeg"
 
 
@@ -74,6 +76,15 @@ def test_public_routes_mount_cookie_consent_banner() -> None:
     assert "Privacy" in banner
     assert "cookieDomainAttribute(window.location.hostname)" in banner
     assert "cognisweep-cookie-visible" in banner
+
+
+def test_streamlit_optional_usage_telemetry_is_disabled() -> None:
+    dockerfile = read(DOCKERFILE)
+    streamlit_config = read(STREAMLIT_CONFIG)
+
+    assert "STREAMLIT_BROWSER_GATHER_USAGE_STATS=false" in dockerfile
+    assert "[browser]" in streamlit_config
+    assert "gatherUsageStats = false" in streamlit_config
 
 
 def test_koochi_uses_confident_product_intent_routing() -> None:
@@ -165,6 +176,7 @@ if __name__ == "__main__":
     test_public_landing_route_alias_renders_landing()
     test_public_landing_mounts_koochi_chatbot()
     test_public_routes_mount_cookie_consent_banner()
+    test_streamlit_optional_usage_telemetry_is_disabled()
     test_koochi_uses_confident_product_intent_routing()
     test_public_landing_uses_stable_fixed_header_spacing()
     test_public_signup_gate_tracks_blockers_without_default_lock()
