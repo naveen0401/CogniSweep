@@ -63,6 +63,16 @@
             file_server
         }
 
+        handle /solutions/software-localization-tool/_stcore/* {
+            uri strip_prefix /solutions/software-localization-tool
+            reverse_proxy errorsweep-app:8501
+        }
+
+        handle /solutions/software-localization-tool/static/* {
+            uri strip_prefix /solutions/software-localization-tool
+            reverse_proxy errorsweep-app:8501
+        }
+
         @billing path /webhooks/billing/*
         reverse_proxy @billing errorsweep-billing-webhook:8301
 

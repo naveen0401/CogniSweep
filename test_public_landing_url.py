@@ -128,7 +128,10 @@ def test_caddy_redirects_bare_roots_to_canonical_landing() -> None:
     assert "@wwwRootLanding" in caddy
     assert "host www.cognisweep.com" in caddy
     assert "redir @wwwRootLanding /solutions/software-localization-tool 308" in caddy
-    assert caddy.index("reverse_proxy @billing") < caddy.index("reverse_proxy errorsweep-app:8501")
+    assert "handle /solutions/software-localization-tool/_stcore/*" in caddy
+    assert "handle /solutions/software-localization-tool/static/*" in caddy
+    assert "uri strip_prefix /solutions/software-localization-tool" in caddy
+    assert caddy.index("reverse_proxy @billing") < caddy.rindex("reverse_proxy errorsweep-app:8501")
 
 
 def test_env_template_names_public_www_landing_url() -> None:
