@@ -116,6 +116,36 @@ def test_browser_eval_pattern_removed() -> None:
     assert ".eval(" not in app
 
 
+def test_vps_caddy_hardens_zap_reported_response_headers() -> None:
+    caddy = read_text("deploy/Caddyfile")
+
+    required_deferred_headers = [
+        "Content-Security-Policy",
+        "Strict-Transport-Security",
+        "X-Frame-Options",
+        "X-Content-Type-Options",
+        "Referrer-Policy",
+        "Permissions-Policy",
+        "Cache-Control",
+        "Pragma",
+        "Expires",
+    ]
+
+    for header in required_deferred_headers:
+        assert f">{header}" in caddy
+
+    assert "frame-ancestors 'self'" in caddy
+    assert 'object-src \'none\'' in caddy
+    assert "no-store, no-cache, must-revalidate, max-age=0" in caddy
+    assert (
+        '>Set-Cookie "^(_streamlit_xsrf=[^;]+; Path=/; SameSite=Lax)$" "$1; Secure"'
+        in caddy
+    )
+    assert "_streamlit_xsrf" in caddy
+    # Streamlit's frontend must read this double-submit XSRF cookie.
+    assert "HttpOnly" not in caddy
+
+
 if __name__ == "__main__":
     test_owner_credentials_are_secret_backed()
     test_runtime_and_billing_config_are_extracted_from_app_module()
@@ -125,4 +155,5 @@ if __name__ == "__main__":
     test_dependencies_are_pinned_and_lockfile_exists()
     test_retired_local_mt_servers_are_absent()
     test_browser_eval_pattern_removed()
+    test_vps_caddy_hardens_zap_reported_response_headers()
     print("Security audit regression checks passed.")

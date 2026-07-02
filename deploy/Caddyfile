@@ -1,6 +1,19 @@
 {$COGNISWEEP_DOMAIN:cognisweep.com}, {$COGNISWEEP_WWW_DOMAIN:www.cognisweep.com} {
     encode gzip zstd
 
+    header {
+        >Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss: ws: blob:; media-src 'self' data: blob: https:; frame-src 'self' blob: data: https://www.youtube.com https://www.youtube-nocookie.com; worker-src 'self' blob:"
+        >Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        >X-Frame-Options "SAMEORIGIN"
+        >X-Content-Type-Options "nosniff"
+        >Referrer-Policy "strict-origin-when-cross-origin"
+        >Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+        >Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+        >Pragma "no-cache"
+        >Expires "0"
+        >Set-Cookie "^(_streamlit_xsrf=[^;]+; Path=/; SameSite=Lax)$" "$1; Secure"
+    }
+
     route {
         @shareAsset path /cognisweep-logo.png
         handle @shareAsset {
