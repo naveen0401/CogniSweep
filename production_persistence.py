@@ -184,6 +184,33 @@ SAAS_COLUMNS = {
     },
 }
 
+SAAS_TIMESTAMP_FIELDS = {
+    "accepted_at",
+    "cancelled_at",
+    "created_at",
+    "current_period_end",
+    "current_period_start",
+    "dismissed_at",
+    "due_at",
+    "ends_at",
+    "expires_at",
+    "finished_at",
+    "fulfilled_at",
+    "last_response_at",
+    "last_success_at",
+    "last_tested_at",
+    "profile_completed_at",
+    "profile_prompt_dismissed_at",
+    "read_at",
+    "resolved_at",
+    "sent_at",
+    "started_at",
+    "starts_at",
+    "updated_at",
+    "used_at",
+    "verified_at",
+}
+
 
 # ==========================================================
 # Secrets / config
@@ -544,6 +571,10 @@ def _normalise_saas_record(collection: str, record: Dict[str, Any], user: Option
     item.setdefault("user_email", item.get("email") or item.get("actor") or _current_user_email(user))
     item.setdefault("created_at", item.get("created") or item.get("date") or item.get("time") or _now_iso())
     item["updated_at"] = _now_iso()
+    for field in SAAS_TIMESTAMP_FIELDS.intersection(item):
+        value = item.get(field)
+        if isinstance(value, str) and not value.strip():
+            item[field] = _now_iso() if field in {"created_at", "updated_at"} else None
     return item
 
 

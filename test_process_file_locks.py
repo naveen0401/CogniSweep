@@ -122,6 +122,27 @@ def test_process_file_lock_allows_normal_persistence_collection_flows():
             os.environ["ERRORSWEEP_ENV"] = previous_env
 
 
+def test_task_queue_blank_timestamps_are_normalised_to_null():
+    record = persistence._normalise_saas_record(
+        "task_queue",
+        {
+            "id": "task-with-empty-timestamps",
+            "workspace": "Acme",
+            "user_email": "owner@example.com",
+            "task_type": "pro_translation",
+            "label": "Queued translation",
+            "status": "queued",
+            "started_at": "",
+            "finished_at": "",
+        },
+    )
+
+    assert record["started_at"] is None
+    assert record["finished_at"] is None
+    assert record["created_at"]
+    assert record["updated_at"]
+
+
 def test_process_file_lock_checks_are_in_release_gate():
     workflow = source(WORKFLOW)
     release_check = source(RELEASE_CHECK)
@@ -134,5 +155,6 @@ if __name__ == "__main__":
     test_local_fallback_uses_process_file_locks()
     test_process_file_lock_allows_normal_local_editor_flows()
     test_process_file_lock_allows_normal_persistence_collection_flows()
+    test_task_queue_blank_timestamps_are_normalised_to_null()
     test_process_file_lock_checks_are_in_release_gate()
     print("Process file lock checks passed.")
