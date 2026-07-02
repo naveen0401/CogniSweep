@@ -14048,7 +14048,7 @@ def queue_external_workflow_if_configured(
         )
         add_audit("External task queued", f"{workflow}: {queued.get('provider')} {queued.get('external_id')}")
         if safe_text(workflow) == "pro_translation":
-            st.success(f"Translation task queued on external worker ({queued.get('provider')}). Track it on this Translation page.")
+            st.success(f"Translation task queued on external worker ({queued.get('provider')}). Track it from History when processing is complete.")
         else:
             st.success(f"Task queued on external worker ({queued.get('provider')}). You can track it from Jobs.")
         if input_manifests:
@@ -14335,134 +14335,6 @@ def render_task_queue_panel(limit: int = 12) -> None:
                 row["metadata_json"] = json.dumps(row["metadata_json"], ensure_ascii=False)
             rows.append(row)
         st.dataframe(pd.DataFrame(display_records(rows)), use_container_width=True, hide_index=True)
-
-
-def is_direct_translation_studio_record(record: Dict[str, Any]) -> bool:
-    if not isinstance(record, dict):
-        return False
-    metadata = job_history_metadata(record)
-    has_project_context = any(
-        safe_text(value)
-        for value in (
-            record.get("project_id"),
-            record.get("project"),
-            metadata.get("project_id"),
-            metadata.get("project"),
-        )
-    )
-    if has_project_context:
-        return False
-    task_type = safe_text(record.get("task_type")).lower()
-    workflow = safe_text(metadata.get("workflow") or record.get("workflow")).lower()
-    source = safe_text(metadata.get("source") or record.get("source")).lower()
-    label = safe_text(record.get("label") or metadata.get("label")).lower()
-    record_type = safe_text(record.get("type") or metadata.get("type")).lower()
-    return (
-        task_type in {"pro_translation", "pro", "translate_review"}
-        or workflow in {"pro_translation", "translation_studio", "translate_review"}
-        or source in {"translation studio", "cognisweep async pro"}
-        or label.startswith("translation studio:")
-        or record_type == "pro translation"
-    )
-
-
-def direct_translation_studio_record_is_submitted(record: Dict[str, Any]) -> bool:
-    metadata = job_history_metadata(record)
-    status = safe_text(record.get("status") or metadata.get("status")).strip().lower()
-    return (
-        status in {"submitted", "approved", "confirmed", "delivered"}
-        or bool(safe_text(record.get("submitted_at") or metadata.get("submitted_at") or metadata.get("history_at")))
-    )
-
-
-def direct_translation_studio_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]) -> bool:
-    if is_owner():
-        return True
-    if not job_history_workspace_matches(record, user):
-        return False
-    metadata = job_history_metadata(record)
-    email = safe_text(user.get("email")).strip().lower()
-    if not email:
-        return True
-    candidates = [
-        record.get("user_email"),
-        record.get("email"),
-        metadata.get("user_email"),
-        metadata.get("email"),
-        metadata.get("owner_email"),
-        metadata.get("submitted_by"),
-    ]
-    if any(safe_text(candidate).strip().lower() == email for candidate in candidates):
-        return True
-    if account_type_for_user(user) == "individual":
-        has_explicit_user = any(safe_text(candidate).strip() for candidate in candidates)
-        return not has_explicit_user
-    return False
-
-
-def active_direct_translation_studio_tasks_for_user(user: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
-    refresh_task_queue_state_for_user()
-    tasks = [
-        task
-        for task in st.session_state.get("task_queue", [])
-        if isinstance(task, dict)
-        and is_direct_translation_studio_record(task)
-        and not direct_translation_studio_record_is_submitted(task)
-        and direct_translation_studio_record_matches_user(task, user)
-    ]
-    return sorted(tasks, key=job_history_sort_value, reverse=True)[: max(1, int(limit or 12))]
-
-
-def render_direct_translation_task_actions(task: Dict[str, Any], key_prefix: str) -> None:
-    metadata = coerce_json_dict(task.get("metadata_json"))
-    summary = metadata.get("pro_summary") if isinstance(metadata.get("pro_summary"), dict) else {}
-    if summary:
-        summary_bits = []
-        for key in ("status", "segments", "missing_or_review", "route", "route_error"):
-            value = safe_text(summary.get(key))
-            if value:
-                summary_bits.append(f"{key.replace('_', ' ').title()}: {value}")
-        if summary_bits:
-            st.caption(" | ".join(summary_bits))
-
-    review_job_id = task_review_job_id(task)
-    if review_job_id:
-        render_editor_open_link("Open Human Review Editor", human_review_editor_link(review_job_id))
-    else:
-        st.caption("The Human Review workspace will appear here when background translation finishes.")
-
-    result_file = metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {}
-    if result_file:
-        rendered = render_file_manifest_action(result_file, f"{key_prefix}_result", "Download review workbook")
-        if not rendered:
-            st.caption("Review workbook is recorded but is not directly downloadable from this deployment.")
-
-
-def render_translation_studio_task_panel(limit: int = 8) -> None:
-    user = current_user() or {}
-    tasks = active_direct_translation_studio_tasks_for_user(user, limit=limit)
-    if not tasks:
-        return
-    st.markdown("### Translation page tasks")
-    st.caption("Direct Translation Studio runs stay here. After you submit the Human Review editor, they move to History.")
-    if st.button("Refresh translation tasks", key="translation_page_refresh_tasks", use_container_width=True):
-        refresh_task_queue_state_for_user(force=True)
-        st.rerun()
-    for idx, task in enumerate(tasks):
-        label = safe_text(task.get("label") or task.get("task_type") or "Translation Studio task")
-        status = safe_text(task.get("status") or "queued")
-        display_status = "Review ready" if status.lower() == "completed" and task_review_job_id(task) else status
-        progress = max(0, min(100, int(task.get("progress", 0) or 0)))
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([0.46, 0.24, 0.30])
-            c1.markdown(f"**{label}**")
-            c1.caption(f"Translation Studio | {format_local_time(task.get('updated_at', task.get('created_at', '')))}")
-            c2.markdown(f"`{display_status}`")
-            c2.caption(f"{int(task.get('processed_units') or 0)}/{int(task.get('total_units') or 0)} segments")
-            c3.progress(progress / 100, text=f"{progress}%")
-            if safe_text(task.get("error")):
-                st.caption(f"Error: {safe_text(task.get('error'))[:240]}")
-            render_direct_translation_task_actions(task, f"translation_task_{idx}_{safe_text(task.get('id'))}")
 
 
 def render_usage_task_links(limit: int = 8) -> None:
@@ -18945,6 +18817,77 @@ def rows_to_srt(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
     return "\n".join(out).encode("utf-8")
 
 
+def rows_to_vtt(rows: List[Dict[str, Any]], use_target: bool = True) -> bytes:
+    out = ["WEBVTT", ""]
+    for i, row in enumerate(rows, start=1):
+        text = safe_text(row.get("target" if use_target else "source", ""))
+        if not text:
+            text = safe_text(row.get("source", ""))
+        out.append(f"{format_time(row.get('start', (i - 1) * 4), comma=False)} --> {format_time(row.get('end', (i - 1) * 4 + 3), comma=False)}")
+        out.append(text)
+        out.append("")
+    return "\n".join(out).encode("utf-8")
+
+
+def translated_rows_text(rows: List[Dict[str, Any]]) -> bytes:
+    parts = []
+    for row in rows or []:
+        target = safe_text(row.get("target"))
+        parts.append(target or safe_text(row.get("source")))
+    return "\n".join(parts).encode("utf-8")
+
+
+def export_source_bytes(export_source: Optional[Dict[str, Any]]) -> bytes:
+    if not isinstance(export_source, dict):
+        return b""
+    encoded = safe_text(export_source.get("bytes_b64"))
+    if not encoded:
+        return b""
+    try:
+        return base64.b64decode(encoded)
+    except Exception as exc:
+        LOGGER.warning("Unable to decode Pro export source bytes: %s", exc)
+        return b""
+
+
+def translation_delivery_zip(
+    rows: List[Dict[str, Any]],
+    source_file_name: str,
+    export_source: Optional[Dict[str, Any]] = None,
+    quality_context: Optional[Dict[str, Any]] = None,
+    qa_findings: Optional[List[Dict[str, Any]]] = None,
+) -> bytes:
+    file_name = safe_zip_member_name(source_file_name or "source_file")
+    suffix = Path(file_name).suffix.lower()
+    stem = Path(file_name).stem or "translated_file"
+    if suffix == ".srt":
+        translated_name = f"{stem}_translated.srt"
+        translated_bytes = rows_to_srt(rows, use_target=True)
+    elif suffix == ".vtt":
+        translated_name = f"{stem}_translated.vtt"
+        translated_bytes = rows_to_vtt(rows, use_target=True)
+    elif suffix == ".csv":
+        translated_name = f"{stem}_translated.csv"
+        translated_bytes = rows_to_csv(rows)
+    elif suffix == ".txt":
+        translated_name = f"{stem}_translated.txt"
+        translated_bytes = translated_rows_text(rows)
+    else:
+        translated_name = f"{stem}_translated.txt"
+        translated_bytes = translated_rows_text(rows)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        source_bytes = export_source_bytes(export_source)
+        if source_bytes:
+            package.writestr(f"source_file/{file_name}", source_bytes)
+        package.writestr(f"translated_file/{translated_name}", translated_bytes)
+        package.writestr("translated_segments.csv", rows_to_csv(rows))
+        if should_include_media_qa_report(quality_context):
+            package.writestr("qa_run_report.xlsx", create_qa_excel_report(rows, qa_findings or [], quality_context))
+    return buffer.getvalue()
+
+
 def media_export_qa_findings(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     for idx, row in enumerate(rows or [], start=1):
@@ -19890,6 +19833,61 @@ def save_job_attachment_files(job_id: str, uploaded_files: List[Any], purpose: s
     return manifests
 
 
+def persist_generated_result_file(
+    data: bytes,
+    file_name: str,
+    purpose: str,
+    object_id: str,
+    mime_type: str = "application/octet-stream",
+) -> Dict[str, Any]:
+    """Persist a generated delivery artifact and return a file manifest."""
+    user = current_user() or {}
+    workspace = user.get("workspace", "Demo Workspace")
+    safe_object_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", safe_text(object_id) or uuid.uuid4().hex)
+    safe_name = re.sub(r"[^A-Za-z0-9_. -]+", "_", safe_text(file_name) or "result").strip(" .") or "result"
+    target_dir = job_attachment_root() / safe_object_id / "results"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / safe_name
+    target_path.write_bytes(data or b"")
+    sha = hashlib.sha256(data or b"").hexdigest()
+    storage_result = store_file_object(target_path, workspace, purpose, safe_object_id, safe_name, mime_type)
+    manifest = persist_saas_record(
+        "files",
+        {
+            "workspace": workspace,
+            "user_email": user.get("email", ""),
+            "file_name": safe_name,
+            "purpose": purpose,
+            "mime_type": mime_type,
+            "size_bytes": len(data or b""),
+            "sha256": sha,
+            "storage_key": storage_result.get("storage_key", str(target_path)),
+            "storage_provider": storage_result.get("storage_provider", "local"),
+            "storage_bucket": storage_result.get("storage_bucket", ""),
+            "public_url": storage_result.get("public_url", ""),
+            "local_path": storage_result.get("local_path", str(target_path)),
+            "status": storage_result.get("status", "stored"),
+            "created_at": now_stamp(),
+            "updated_at": now_stamp(),
+        },
+    )
+    st.session_state.setdefault("files", [])
+    st.session_state.files.insert(0, manifest)
+    trim_session_list("files")
+    return {
+        "id": manifest.get("id", ""),
+        "file_name": safe_name,
+        "size_bytes": len(data or b""),
+        "sha256": sha,
+        "storage_key": manifest.get("storage_key", ""),
+        "storage_provider": manifest.get("storage_provider", "local"),
+        "storage_bucket": manifest.get("storage_bucket", ""),
+        "public_url": manifest.get("public_url", ""),
+        "local_path": manifest.get("local_path", str(target_path)),
+        "mime_type": manifest.get("mime_type", mime_type),
+    }
+
+
 def save_media_preview_file(job_id: str, video_file) -> Dict[str, str]:
     if video_file is None:
         return {}
@@ -20471,7 +20469,7 @@ def render_last_media_editor_link() -> None:
         return
     workflow = safe_text(st.session_state.get("last_media_editor_workflow", "Subtitling"))
     label = "Open Transcription Editor" if workflow.lower().startswith("transcription") else "Open Subtitle Editor"
-    st.info("Your latest media job opens in the CAT editor tab only. The older in-page subtitle workspace is no longer used.")
+    st.info("Your latest media job can be reopened in Human Editor. Direct media runs also appear in History.")
     if manual_review_mode_active():
         render_no_ai_key_editor_notice("Media Studio")
     render_external_editor_link(label, "media", job_id)
@@ -26796,6 +26794,45 @@ def job_history_record_is_submitted(record: Dict[str, Any]) -> bool:
     return status in SUBMITTED_EDITOR_STATUSES or bool(safe_text(metadata.get("submitted_at")))
 
 
+def job_history_is_direct_workflow_record(record: Dict[str, Any]) -> bool:
+    if not isinstance(record, dict):
+        return False
+    metadata = job_history_metadata(record)
+    project_values = (
+        record.get("project_id"),
+        record.get("project"),
+        metadata.get("project_id"),
+        metadata.get("project"),
+    )
+    if any(safe_text(value) for value in project_values):
+        return False
+    values = " ".join(
+        safe_text(value).lower()
+        for value in (
+            record.get("task_type"),
+            record.get("type"),
+            record.get("job_type"),
+            record.get("label"),
+            record.get("source"),
+            metadata.get("workflow"),
+            metadata.get("source"),
+            metadata.get("label"),
+            metadata.get("job_type"),
+        )
+    )
+    return any(
+        marker in values
+        for marker in (
+            "pro_translation",
+            "translation studio",
+            "cognisweep async pro",
+            "subtitle / transcription editor",
+            "subtitling",
+            "media",
+        )
+    )
+
+
 def project_job_is_active(job: Dict[str, Any]) -> bool:
     metadata = job_history_metadata(job)
     status = safe_text(job.get("status") or metadata.get("status")).strip().lower()
@@ -26884,7 +26921,8 @@ def job_history_record_matches_user(record: Dict[str, Any], user: Dict[str, Any]
         return True
     if not job_history_workspace_matches(record, user):
         return False
-    if job_history_record_is_submitted(record):
+    direct_workflow_record = job_history_is_direct_workflow_record(record)
+    if job_history_record_is_submitted(record) and not direct_workflow_record:
         return can_reopen_submitted_editor_task(user)
     metadata = job_history_metadata(record)
     email = safe_text(user.get("email")).strip().lower()
@@ -27097,6 +27135,8 @@ def job_history_row_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "deadline_at": safe_text(metadata.get("deadline_at")),
         "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
         "no_ai_note": safe_text(metadata.get("no_ai_note")),
+        "result_file": metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {},
+        "result_files": coerce_manifest_list(metadata.get("result_files")),
         "created": safe_text(job.get("created") or job.get("created_at") or metadata.get("created")),
         "updated_at": safe_text(job.get("updated_at") or job.get("created_at") or job.get("created")),
         "editor_url": editor_url,
@@ -27130,6 +27170,8 @@ def job_history_row_from_editor_job(record: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": safe_text(metadata.get("assignee")),
         "deadline_at": safe_text(metadata.get("deadline_at")),
         "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
+        "result_file": metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {},
+        "result_files": coerce_manifest_list(metadata.get("result_files")),
         "created": safe_text(record.get("created_at") or record.get("created") or metadata.get("created")),
         "updated_at": safe_text(record.get("updated_at") or record.get("created_at") or metadata.get("created")),
         "editor_url": job_history_editor_url(record),
@@ -27167,6 +27209,8 @@ def job_history_row_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "assignee": safe_text(metadata.get("assignee")),
         "deadline_at": safe_text(metadata.get("deadline_at")),
         "deadline_timezone": safe_text(metadata.get("deadline_timezone")),
+        "result_file": metadata.get("result_file") if isinstance(metadata.get("result_file"), dict) else {},
+        "result_files": coerce_manifest_list(metadata.get("result_files")),
         "created": safe_text(task.get("created_at")),
         "updated_at": safe_text(task.get("updated_at") or task.get("created_at")),
         "editor_url": editor_url,
@@ -27190,29 +27234,11 @@ def job_history_rows_for_user(user: Dict[str, Any]) -> List[Dict[str, Any]]:
     refresh_task_queue_state_for_user()
     rows: List[Dict[str, Any]] = []
     for job in st.session_state.get("jobs", []):
-        if is_direct_translation_studio_record(job):
-            if not direct_translation_studio_record_is_submitted(job):
-                continue
-            if direct_translation_studio_record_matches_user(job, user):
-                rows.append(job_history_row_from_job(job))
-            continue
         if isinstance(job, dict) and job_history_record_matches_user(job, user):
             rows.append(job_history_row_from_job(job))
     for editor_job in job_history_editor_jobs_for_user(user):
-        if is_direct_translation_studio_record(editor_job):
-            if not direct_translation_studio_record_is_submitted(editor_job):
-                continue
-            if direct_translation_studio_record_matches_user(editor_job, user):
-                rows.append(job_history_row_from_editor_job(editor_job))
-            continue
         rows.append(job_history_row_from_editor_job(editor_job))
     for task in st.session_state.get("task_queue", []):
-        if is_direct_translation_studio_record(task):
-            if not direct_translation_studio_record_is_submitted(task):
-                continue
-            if direct_translation_studio_record_matches_user(task, user):
-                rows.append(job_history_row_from_task(task))
-            continue
         if isinstance(task, dict) and job_history_record_matches_user(task, user):
             rows.append(job_history_row_from_task(task))
 
@@ -27307,6 +27333,25 @@ def render_job_history_table(rows: List[Dict[str, Any]], key: str) -> None:
             """
         )
     st.html(f'<section class="es-history-list">{"".join(rendered_rows)}</section>')
+    downloadable_rows: List[Tuple[int, Dict[str, Any], List[Dict[str, Any]]]] = []
+    for idx, row in enumerate(rows):
+        result_files = coerce_manifest_list(row.get("result_files"))
+        result_file = row.get("result_file") if isinstance(row.get("result_file"), dict) else {}
+        if result_file:
+            result_files.insert(0, result_file)
+        if result_files:
+            downloadable_rows.append((idx, row, result_files))
+    if downloadable_rows:
+        st.markdown("#### Downloads")
+        for idx, row, result_files in downloadable_rows:
+            with st.container(border=True):
+                st.caption(safe_text(row.get("label") or row.get("type") or "History item"))
+                for file_idx, manifest in enumerate(result_files[:3]):
+                    file_name = safe_text(manifest.get("file_name"))
+                    label = "Download result" if file_idx == 0 else f"Download {file_name or f'file {file_idx + 1}'}"
+                    rendered = render_file_manifest_action(manifest, f"{key}_history_{idx}_{file_idx}", label)
+                    if not rendered:
+                        st.caption(f"{file_name or 'Result file'} is recorded but is not directly downloadable from this deployment.")
 
 
 def page_projects() -> None:
@@ -27987,7 +28032,6 @@ def page_pro() -> None:
             render_editor_open_link("Open Human Review workspace", human_review_editor_link(review_job_id))
         else:
             st.error("Missing review_id. Run Translation Studio before opening Human Review.")
-    render_translation_studio_task_panel()
     render_upload_dropzone("Drop source or bilingual content here", "CogniSweep will translate, apply saved/uploaded rules, run QA, and prepare a Human Review workspace.", "XLSX / CSV / DOCX / PPTX / SRT")
     uploaded = st.file_uploader("Upload source or bilingual file", type=["xlsx", "csv", "docx", "pptx", "txt", "html", "json", "xml", "xlf", "xliff", "srt", "vtt"], key="pro_file")
     rules_zip = st.file_uploader("Upload rules ZIP (optional)", type=["zip"], key="pro_rules")
@@ -28049,24 +28093,29 @@ def page_pro() -> None:
             return
         if usage_message:
             st.warning(usage_message)
-        if not manual_no_ai_mode and not user_ai_api_key_available() and queue_external_workflow_if_configured(
-            task,
-            "pro_translation",
-            uploaded,
-            rules_zip,
-            parameters={
-                "file_name": getattr(uploaded, "name", ""),
-                "target_language": target_language,
-                "domain": domain_choice,
-                "review_threshold": threshold,
-                "context_file_name": safe_text(uploaded_context.get("fileName")),
-                "qa_inline_instructions": safe_text(pro_inline_instructions),
-                "reference_context": uploaded_context,
-                "quality_inputs": pro_quality_state,
-                "estimated_usage": usage_details,
-                "allow_managed_amazon_translate": bool(amazon_state.get("allowed") and not user_ai_api_key_available()),
-                "managed_amazon_translate_plan": amazon_state.get("plan", ""),
-            },
+        if (
+            not manual_no_ai_mode
+            and not user_ai_api_key_available()
+            and not amazon_state.get("allowed")
+            and queue_external_workflow_if_configured(
+                task,
+                "pro_translation",
+                uploaded,
+                rules_zip,
+                parameters={
+                    "file_name": getattr(uploaded, "name", ""),
+                    "target_language": target_language,
+                    "domain": domain_choice,
+                    "review_threshold": threshold,
+                    "context_file_name": safe_text(uploaded_context.get("fileName")),
+                    "qa_inline_instructions": safe_text(pro_inline_instructions),
+                    "reference_context": uploaded_context,
+                    "quality_inputs": pro_quality_state,
+                    "estimated_usage": usage_details,
+                    "allow_managed_amazon_translate": bool(amazon_state.get("allowed") and not user_ai_api_key_available()),
+                    "managed_amazon_translate_plan": amazon_state.get("plan", ""),
+                },
+            )
         ):
             return
         update_task_record(task["id"], progress=12, total_units=len(rows), processed_units=0)
@@ -28186,6 +28235,20 @@ def page_pro() -> None:
                     r["status"] = "Needs Review"
 
         missing_rate = missing / max(len(review_rows), 1)
+        delivery_zip = translation_delivery_zip(
+            review_rows,
+            getattr(uploaded, "name", "uploaded_file"),
+            export_source=pro_export_source,
+            quality_context=pro_quality_state,
+            qa_findings=gate_findings,
+        )
+        delivery_manifest = persist_generated_result_file(
+            delivery_zip,
+            "CogniSweep_Translation_Delivery.zip",
+            "pro_translation_delivery",
+            safe_text(task.get("id")) or uuid.uuid4().hex,
+            "application/zip",
+        )
         # IMPORTANT: seed the dedicated Human Review workspace BEFORE any button click.
         # Without this, the Human Review page can open with no rows and look blank.
         prepare_human_review_session(
@@ -28225,6 +28288,7 @@ def page_pro() -> None:
                 "missing": missing,
                 "segments": len(review_rows),
                 "quality_inputs": pro_quality_state,
+                "result_file": delivery_manifest,
             },
         })
         st.session_state.jobs.insert(0, pro_job)
@@ -28243,6 +28307,7 @@ def page_pro() -> None:
                 "missing": missing,
                 "review_job_id": st.session_state.get("active_review_session_id", ""),
                 "quality_inputs": pro_quality_state,
+                "result_file": delivery_manifest,
             },
         )
         record_billable_workflow_usage("pro_translation", review_rows, provider="errorsweep_pro", model="translate_qa_review")
@@ -28280,11 +28345,13 @@ def page_pro() -> None:
             else:
                 st.error("Review job was not created. Please rerun Translation Studio.")
         with cta2:
-            uploaded_suffix = Path(getattr(uploaded, "name", "")).suffix.lower()
-            if uploaded_suffix == ".csv":
-                st.download_button("Download draft CSV", rows_to_csv(review_rows), "errorsweep_pro_draft_review_rows.csv", "text/csv", use_container_width=True)
-            else:
-                st.info("Same-format export is available from Human Review after every segment is confirmed.")
+            st.download_button(
+                "Download delivery ZIP",
+                delivery_zip,
+                "CogniSweep_Translation_Delivery.zip",
+                "application/zip",
+                use_container_width=True,
+            )
         st.caption("Human Review opens in the full-window CAT editor with TM, glossary, DNT, QA, issues, and history in the assist panel.")
 
         if not manual_no_ai_mode:
@@ -28601,7 +28668,7 @@ def render_subtitle_transcription_setup() -> None:
             auto_generate = st.checkbox(
                 "Generate draft target subtitles",
                 value=True,
-                help="If source rows exist and a user AI API key is active, CogniSweep generates draft target subtitles. Without a key, blank target rows are created for manual editing.",
+                help="If source rows exist and an AI or managed MT route is available, CogniSweep generates draft target subtitles. Otherwise blank target rows are created for manual editing.",
             )
             if media_duration_seconds > 0:
                 st.caption(f"Blank/untimed subtitle setup will create about {media_duration_segment_count(media_duration_seconds, segment_seconds)} segment(s) from the detected media duration.")
@@ -28684,10 +28751,50 @@ def render_subtitle_transcription_setup() -> None:
                 st.session_state["subtitle_url_media_record"] = {}
             st.session_state.subtitle_editor_active = False
             st.session_state.subtitle_segments = []
-            st.success("Subtitling editor job created. Open it in the separate editor window below.")
-            if manual_review_mode_active():
-                render_no_ai_key_editor_notice("Media Studio")
-            render_external_editor_link("Open Subtitle Editor", "media", job_id)
+            media_payload = get_review_session_store().get(job_id, {})
+            media_metadata = media_payload.get("metadata") if isinstance(media_payload.get("metadata"), dict) else {}
+            delivery_zip = media_export_zip(
+                rows,
+                "Subtitling",
+                getattr(video, "name", "subtitling_media"),
+                include_csv=True,
+                source_media=media_metadata,
+                quality_context=media_quality_state,
+            )
+            delivery_manifest = persist_generated_result_file(
+                delivery_zip,
+                "CogniSweep_Subtitling_Delivery.zip",
+                "media_subtitling_delivery",
+                job_id,
+                "application/zip",
+            )
+            media_metadata = {**media_metadata, "result_file": delivery_manifest}
+            if isinstance(media_payload, dict):
+                media_payload["metadata"] = media_metadata
+                get_review_session_store()[job_id] = media_payload
+            for recent_job in st.session_state.get("owner_recent_editor_jobs", []):
+                if isinstance(recent_job, dict) and safe_text(recent_job.get("id") or recent_job.get("job_id")) == job_id:
+                    recent_job["result_file"] = delivery_manifest
+                    recent_job["metadata_json"] = {**coerce_json_dict(recent_job.get("metadata_json")), "result_file": delivery_manifest}
+            if save_persistent_editor_job is not None:
+                try:
+                    save_persistent_editor_job("media", rows, metadata=media_metadata, job_id=job_id, user=current_user() or {})
+                except Exception as exc:
+                    LOGGER.warning("Unable to update media job delivery manifest: %s", exc)
+            st.success("Subtitling draft is ready. Download it now or open Human Editor for post-editing.")
+            action_col1, action_col2 = st.columns(2)
+            with action_col1:
+                st.download_button(
+                    "Download delivery ZIP",
+                    delivery_zip,
+                    "CogniSweep_Subtitling_Delivery.zip",
+                    "application/zip",
+                    use_container_width=True,
+                )
+            with action_col2:
+                if manual_review_mode_active():
+                    render_no_ai_key_editor_notice("Media Studio")
+                render_external_editor_link("Open Human Editor", "media", job_id)
     else:
         with st.container(key="media_transcription_options"):
             st.markdown(

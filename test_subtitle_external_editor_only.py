@@ -28,7 +28,7 @@ def test_subtitle_creation_only_launches_external_media_editor():
     assert '"Subtitling",' in setup
     assert '"Transcription",' in setup
     assert "save_media_session_to_store(" in setup
-    assert 'render_external_editor_link("Open Subtitle Editor", "media", job_id)' in setup
+    assert 'render_external_editor_link("Open Human Editor", "media", job_id)' in setup
     assert 'render_external_editor_link("Open Transcription Editor", "media", job_id)' in setup
     assert "st.session_state.subtitle_segments = []" in setup
     assert "render_last_media_editor_link()" in setup

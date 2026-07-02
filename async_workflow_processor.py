@@ -72,6 +72,11 @@ def safe_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def safe_filename(value: Any, fallback: str = "file") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "_", safe_text(value)).strip(" .")
+    return cleaned or fallback
+
+
 def env_value(name: str, default: str = "") -> str:
     return runtime_env(name, default)
 
@@ -748,6 +753,82 @@ def create_review_workbook(rows: List[Dict[str, Any]], summary: Dict[str, Any]) 
     return buffer.getvalue()
 
 
+def format_timed(seconds: Any, comma: bool = True) -> str:
+    try:
+        value = max(float(seconds), 0.0)
+    except Exception:
+        value = 0.0
+    hours = int(value // 3600)
+    minutes = int((value % 3600) // 60)
+    secs = value % 60
+    separator = "," if comma else "."
+    return f"{hours:02d}:{minutes:02d}:{int(secs):02d}{separator}{int((secs % 1) * 1000):03d}"
+
+
+def rows_to_csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
+    if not rows:
+        return b""
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+
+def rows_to_timed_text(rows: List[Dict[str, Any]], use_target: bool = True, vtt: bool = False) -> bytes:
+    output: List[str] = ["WEBVTT", ""] if vtt else []
+    for idx, row in enumerate(rows or [], start=1):
+        text = safe_text(row.get("target" if use_target else "source")) or safe_text(row.get("source"))
+        start = row.get("start", (idx - 1) * 4)
+        end = row.get("end", (idx - 1) * 4 + 3)
+        if not vtt:
+            output.append(str(idx))
+        output.append(f"{format_timed(start, comma=not vtt)} --> {format_timed(end, comma=not vtt)}")
+        output.append(text)
+        output.append("")
+    return "\n".join(output).encode("utf-8")
+
+
+def translated_rows_text(rows: List[Dict[str, Any]]) -> bytes:
+    return "\n".join(
+        safe_text(row.get("target")) or safe_text(row.get("source"))
+        for row in rows or []
+    ).encode("utf-8")
+
+
+def create_translation_delivery_zip(
+    rows: List[Dict[str, Any]],
+    primary_manifest: Dict[str, Any],
+    review_workbook: bytes = b"",
+) -> bytes:
+    source_name = safe_filename(manifest_file_name(primary_manifest) or "source_file")
+    suffix = Path(source_name).suffix.lower()
+    stem = Path(source_name).stem or "translated_file"
+    if suffix == ".srt":
+        translated_name = f"{stem}_translated.srt"
+        translated_bytes = rows_to_timed_text(rows, use_target=True, vtt=False)
+    elif suffix == ".vtt":
+        translated_name = f"{stem}_translated.vtt"
+        translated_bytes = rows_to_timed_text(rows, use_target=True, vtt=True)
+    elif suffix == ".csv":
+        translated_name = f"{stem}_translated.csv"
+        translated_bytes = rows_to_csv_bytes(rows)
+    elif suffix == ".txt":
+        translated_name = f"{stem}_translated.txt"
+        translated_bytes = translated_rows_text(rows)
+    else:
+        translated_name = f"{stem}_translated.txt"
+        translated_bytes = translated_rows_text(rows)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        try:
+            package.writestr(f"source_file/{source_name}", manifest_bytes(primary_manifest))
+        except Exception as exc:
+            LOGGER.warning("Unable to include source file in Pro delivery ZIP: %s", exc)
+        package.writestr(f"translated_file/{translated_name}", translated_bytes)
+        package.writestr("translated_segments.csv", rows_to_csv_bytes(rows))
+        if review_workbook:
+            package.writestr("human_review_workbook.xlsx", review_workbook)
+    return buffer.getvalue()
+
+
 def persist_result_file(data: bytes, file_name: str, workspace: str, user_email: str, purpose: str, object_id: str, mime_type: str) -> Dict[str, Any]:
     output_path = results_root() / f"{object_id}_{file_name}"
     output_path.write_bytes(data)
@@ -970,12 +1051,22 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         task_id,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    delivery_zip = create_translation_delivery_zip(review_rows, primary, review_workbook=workbook)
+    delivery_manifest = persist_result_file(
+        delivery_zip,
+        "CogniSweep_Translation_Delivery.zip",
+        workspace,
+        user_email,
+        "pro_translation_delivery",
+        task_id,
+        "application/zip",
+    )
     log_persistent_usage_event(
         {**usage, "segments": len(review_rows), "characters": sum(len(t) for t in source_texts), "requests": usage.get("requests", 1)},
         purpose="pro_translation",
         segment_count=len(review_rows),
         user={"email": user_email, "workspace": workspace},
-        metadata={"task_id": task_id, "review_job_id": review_job_id, "result_file_id": review_manifest.get("id")},
+        metadata={"task_id": task_id, "review_job_id": review_job_id, "result_file_id": delivery_manifest.get("id"), "review_workbook_file_id": review_manifest.get("id")},
     )
     status = "needs_review" if missing else "completed"
     return update_task(
@@ -988,7 +1079,8 @@ def process_pro_task(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         result_ref=review_job_id,
         metadata={
             "pro_summary": summary,
-            "result_file": review_manifest,
+            "result_file": delivery_manifest,
+            "result_files": [review_manifest],
             "review_job_id": review_job_id,
             "editor_job_id": review_job_id,
             "workflow": "pro_translation",
