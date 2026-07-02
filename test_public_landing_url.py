@@ -159,7 +159,11 @@ def test_caddy_redirects_bare_roots_to_canonical_landing() -> None:
     assert "redir @wwwRootLanding /solutions/software-localization-tool 308" in caddy
     assert "handle /solutions/software-localization-tool/_stcore/*" in caddy
     assert "handle /solutions/software-localization-tool/static/*" in caddy
+    assert "path_regexp canonicalComponentStcore ^/solutions/software-localization-tool/component/.*/_stcore/(.*)$" in caddy
+    assert "rewrite * /_stcore/{re.canonicalComponentStcore.1}" in caddy
     assert "handle /solutions/software-localization-tool/component/*" in caddy
+    assert "path_regexp componentStcore ^/component/.*/_stcore/(.*)$" in caddy
+    assert "rewrite * /_stcore/{re.componentStcore.1}" in caddy
     assert "uri strip_prefix /solutions/software-localization-tool" in caddy
     assert caddy.index("reverse_proxy @billing") < caddy.rindex("reverse_proxy errorsweep-app:8501")
 

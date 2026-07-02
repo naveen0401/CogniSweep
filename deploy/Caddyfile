@@ -73,8 +73,20 @@
             reverse_proxy errorsweep-app:8501
         }
 
+        @canonicalComponentStcore path_regexp canonicalComponentStcore ^/solutions/software-localization-tool/component/.*/_stcore/(.*)$
+        handle @canonicalComponentStcore {
+            rewrite * /_stcore/{re.canonicalComponentStcore.1}
+            reverse_proxy errorsweep-app:8501
+        }
+
         handle /solutions/software-localization-tool/component/* {
             uri strip_prefix /solutions/software-localization-tool
+            reverse_proxy errorsweep-app:8501
+        }
+
+        @componentStcore path_regexp componentStcore ^/component/.*/_stcore/(.*)$
+        handle @componentStcore {
+            rewrite * /_stcore/{re.componentStcore.1}
             reverse_proxy errorsweep-app:8501
         }
 
