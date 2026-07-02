@@ -21,7 +21,7 @@
             file_server
         }
 
-        @faviconFiles path /favicon.ico /favicon.png /apple-touch-icon.png
+        @faviconFiles path /favicon.ico /favicon-48x48.png /favicon-96x96.png /favicon.png /apple-touch-icon.png
         handle @faviconFiles {
             root * /srv/cognisweep-public
             file_server

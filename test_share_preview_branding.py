@@ -19,7 +19,9 @@ def test_streamlit_shell_branding_replaces_default_title_and_favicon():
 
     assert "<title>CogniSweep | Localization SaaS Workspace</title>" in branded
     assert 'rel="shortcut icon" href="/favicon.ico"' in branded
-    assert 'rel="icon" type="image/png" href="/favicon.png"' in branded
+    assert 'rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png"' in branded
+    assert 'rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png"' in branded
+    assert 'rel="icon" type="image/png" sizes="512x512" href="/favicon.png"' in branded
     assert 'rel="apple-touch-icon" href="/apple-touch-icon.png"' in branded
     assert "./favicon.png" not in branded
     assert "./static/" not in branded
@@ -38,7 +40,9 @@ def test_static_share_preview_is_cognisweep_branded():
     assert 'property="og:title"' in html
     assert 'rel="canonical" href="https://www.cognisweep.com/solutions/software-localization-tool"' in html
     assert 'rel="shortcut icon" href="/favicon.ico"' in html
-    assert 'rel="icon" type="image/png" href="/favicon.png"' in html
+    assert 'rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png"' in html
+    assert 'rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png"' in html
+    assert 'rel="icon" type="image/png" sizes="512x512" href="/favicon.png"' in html
     assert 'rel="apple-touch-icon" href="/apple-touch-icon.png"' in html
     assert 'property="og:url" content="https://www.cognisweep.com/solutions/software-localization-tool"' in html
     assert "cognisweep-logo.png" in html
@@ -53,7 +57,7 @@ def test_caddy_serves_social_preview_before_streamlit_proxy():
     assert "WhatsApp" in caddyfile
     assert "/share-preview.html" in caddyfile
     assert "@faviconFiles" in caddyfile
-    assert "path /favicon.ico /favicon.png /apple-touch-icon.png" in caddyfile
+    assert "path /favicon.ico /favicon-48x48.png /favicon-96x96.png /favicon.png /apple-touch-icon.png" in caddyfile
     assert "@seoFiles" in caddyfile
     assert "path /robots.txt /sitemap.xml" in caddyfile
     assert caddyfile.index("@faviconFiles") < caddyfile.index("@seoFiles")
@@ -77,5 +81,7 @@ def test_static_favicon_files_exist_for_crawlers():
     public = ROOT / "deploy" / "public"
 
     assert (public / "favicon.ico").exists()
+    assert (public / "favicon-48x48.png").exists()
+    assert (public / "favicon-96x96.png").exists()
     assert (public / "favicon.png").exists()
     assert (public / "apple-touch-icon.png").exists()

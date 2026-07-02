@@ -22,6 +22,8 @@ SHARE_DESCRIPTION = (
 SHARE_URL = "https://www.cognisweep.com/solutions/software-localization-tool"
 SHARE_IMAGE_URL = "https://www.cognisweep.com/cognisweep-logo.png"
 FAVICON_ICO_URL = "/favicon.ico"
+FAVICON_48_URL = "/favicon-48x48.png"
+FAVICON_96_URL = "/favicon-96x96.png"
 FAVICON_PNG_URL = "/favicon.png"
 APPLE_TOUCH_ICON_URL = "/apple-touch-icon.png"
 MARKER_START = "<!-- CogniSweep share metadata -->"
@@ -42,7 +44,9 @@ def share_metadata_block() -> str:
     <meta name="description" content="{SHARE_DESCRIPTION}" />
     <meta name="application-name" content="CogniSweep" />
     <link rel="shortcut icon" href="{FAVICON_ICO_URL}" />
-    <link rel="icon" type="image/png" href="{FAVICON_PNG_URL}" />
+    <link rel="icon" type="image/png" sizes="48x48" href="{FAVICON_48_URL}" />
+    <link rel="icon" type="image/png" sizes="96x96" href="{FAVICON_96_URL}" />
+    <link rel="icon" type="image/png" sizes="512x512" href="{FAVICON_PNG_URL}" />
     <link rel="apple-touch-icon" href="{APPLE_TOUCH_ICON_URL}" />
     <link rel="canonical" href="{SHARE_URL}" />
     <meta property="og:type" content="website" />
