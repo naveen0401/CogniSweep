@@ -8507,6 +8507,212 @@ def public_login_link_target() -> str:
     return 'target="_self"'
 
 
+def render_cookie_consent_banner() -> None:
+    """Show a first-visit cookie notice on public pages."""
+    cookie_href = public_page_link("cookies")
+    privacy_href = public_page_link("privacy")
+    payload = {
+        "storageKey": "cognisweep_cookie_consent_v1",
+        "cookieName": "cognisweep_cookie_consent",
+        "cookieHref": cookie_href,
+        "privacyHref": privacy_href,
+        "version": "2026-07-02",
+    }
+    domain_js = browser_cookie_domain_js_function()
+    render_parent_script(
+        f"""
+        (() => {{
+          const config = {json.dumps(payload, ensure_ascii=True)};
+          const existing = document.getElementById("cognisweep-cookie-consent-root");
+          if (existing) existing.remove();
+          const safeStorage = (() => {{
+            try {{ return window.localStorage || null; }} catch (err) {{}}
+            return null;
+          }})();
+          const readStoredChoice = () => {{
+            try {{
+              const stored = safeStorage ? JSON.parse(safeStorage.getItem(config.storageKey) || "null") : null;
+              if (stored && stored.version === config.version && stored.choice) return stored.choice;
+            }} catch (err) {{}}
+            try {{
+              const prefix = config.cookieName + "=";
+              for (const part of String(document.cookie || "").split(";")) {{
+                const item = part.trim();
+                if (item.startsWith(prefix)) return decodeURIComponent(item.slice(prefix.length)).split("|")[0];
+              }}
+            }} catch (err) {{}}
+            return "";
+          }};
+          if (readStoredChoice()) {{
+            document.body.classList.remove("cognisweep-cookie-visible");
+            return;
+          }}
+
+{domain_js}
+
+          const root = document.createElement("section");
+          root.id = "cognisweep-cookie-consent-root";
+          root.setAttribute("role", "dialog");
+          root.setAttribute("aria-label", "CogniSweep cookie notice");
+          root.innerHTML = `
+            <style>
+              #cognisweep-cookie-consent-root {{
+                position: fixed;
+                left: clamp(14px, 2vw, 24px);
+                bottom: clamp(14px, 2vw, 24px);
+                z-index: 2147482050;
+                width: min(620px, calc(100vw - 28px));
+                color: #172033;
+                font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              }}
+              #cognisweep-cookie-consent-root * {{ box-sizing: border-box; }}
+              .cs-cookie-card {{
+                border: 1px solid rgba(203,213,225,.88);
+                border-radius: 8px;
+                background: rgba(255,255,255,.98);
+                box-shadow: 0 22px 60px rgba(2,6,23,.28), inset 0 1px 0 rgba(255,255,255,.9);
+                overflow: hidden;
+              }}
+              .cs-cookie-bar {{
+                height: 3px;
+                background: linear-gradient(90deg, #11f5b5, #4aa8ff 58%, #9c5cff);
+              }}
+              .cs-cookie-body {{
+                display: grid;
+                gap: 13px;
+                padding: 17px 18px 16px;
+              }}
+              .cs-cookie-title {{
+                margin: 0;
+                font-size: 15px;
+                line-height: 1.2;
+                font-weight: 900;
+                color: #0f172a;
+                letter-spacing: 0;
+              }}
+              .cs-cookie-copy {{
+                margin: 0;
+                color: #475569;
+                font-size: 13px;
+                line-height: 1.48;
+              }}
+              .cs-cookie-actions {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 9px;
+                align-items: center;
+              }}
+              .cs-cookie-btn {{
+                min-height: 38px;
+                border-radius: 8px;
+                border: 1px solid rgba(148,163,184,.48);
+                background: #f8fafc;
+                color: #172033;
+                padding: 0 13px;
+                cursor: pointer;
+                font: inherit;
+                font-size: 13px;
+                font-weight: 850;
+              }}
+              .cs-cookie-btn.primary {{
+                border: 0;
+                background: linear-gradient(135deg, #11f5b5, #4aa8ff);
+                color: #050713;
+                padding-inline: 16px;
+              }}
+              .cs-cookie-btn:hover {{
+                border-color: rgba(74,168,255,.68);
+                background: #eef6ff;
+              }}
+              .cs-cookie-btn.primary:hover {{
+                background: linear-gradient(135deg, #16e6ad, #62b5ff);
+              }}
+              .cs-cookie-links {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-left: auto;
+                font-size: 12px;
+                font-weight: 800;
+              }}
+              .cs-cookie-links a {{
+                color: #4f46e5;
+                text-decoration: none;
+              }}
+              .cs-cookie-links a:hover {{ text-decoration: underline; }}
+              body.cognisweep-cookie-visible #koochi-chatbot-root {{
+                bottom: 152px;
+              }}
+              @media (max-width: 640px) {{
+                #cognisweep-cookie-consent-root {{
+                  left: 12px;
+                  right: 12px;
+                  bottom: 12px;
+                  width: auto;
+                }}
+                .cs-cookie-actions {{
+                  align-items: stretch;
+                }}
+                .cs-cookie-btn {{
+                  flex: 1 1 150px;
+                }}
+                .cs-cookie-links {{
+                  width: 100%;
+                  margin-left: 0;
+                }}
+                body.cognisweep-cookie-visible #koochi-chatbot-root {{
+                  bottom: 206px;
+                }}
+              }}
+            </style>
+            <div class="cs-cookie-card">
+              <div class="cs-cookie-bar"></div>
+              <div class="cs-cookie-body">
+                <div>
+                  <h2 class="cs-cookie-title">Cookie preferences</h2>
+                  <p class="cs-cookie-copy">CogniSweep uses essential cookies and browser storage for secure sessions, routing, downloads, and remembering choices. Optional analytics stay off unless you accept them.</p>
+                </div>
+                <div class="cs-cookie-actions">
+                  <button class="cs-cookie-btn primary" type="button" data-cookie-choice="all">Accept all</button>
+                  <button class="cs-cookie-btn" type="button" data-cookie-choice="essential">Necessary only</button>
+                  <span class="cs-cookie-links">
+                    <a href="${{config.cookieHref}}" target="_self">Cookie Notice</a>
+                    <a href="${{config.privacyHref}}" target="_self">Privacy</a>
+                  </span>
+                </div>
+              </div>
+            </div>
+          `;
+          const rememberChoice = (choice) => {{
+            const value = {{
+              choice,
+              version: config.version,
+              acceptedAt: new Date().toISOString()
+            }};
+            try {{
+              if (safeStorage) safeStorage.setItem(config.storageKey, JSON.stringify(value));
+            }} catch (err) {{}}
+            try {{
+              const secure = window.location.protocol === "https:" ? "; Secure" : "";
+              const encoded = encodeURIComponent(choice + "|" + config.version);
+              document.cookie = config.cookieName + "=" + encoded +
+                "; Max-Age=31536000; Path=/; SameSite=Lax" + secure + cookieDomainAttribute(window.location.hostname);
+            }} catch (err) {{}}
+            document.body.classList.remove("cognisweep-cookie-visible");
+            root.remove();
+          }};
+          root.querySelectorAll("[data-cookie-choice]").forEach((button) => {{
+            button.addEventListener("click", () => rememberChoice(button.dataset.cookieChoice || "essential"));
+          }});
+          document.body.appendChild(root);
+          document.body.classList.add("cognisweep-cookie-visible");
+        }})();
+        """.strip(),
+        height=0,
+        scrolling=False,
+    )
+
+
 def render_koochi_chatbot() -> None:
     """Install the no-API public CogniSweep assistant."""
     support_email = safe_text(secret("ERRORSWEEP_SUPPORT_EMAIL", "")) or "support@cognisweep.com"
@@ -25852,6 +26058,7 @@ def render_public_app() -> None:
         or "landing"
     ).strip().lower()
     render_router_debug_panel({"route": route, "public": route}, f"public:{route}")
+    render_cookie_consent_banner()
     if route == "login":
         render_login()
     elif route == "signup":

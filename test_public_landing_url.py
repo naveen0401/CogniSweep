@@ -58,6 +58,24 @@ def test_public_landing_mounts_koochi_chatbot() -> None:
     assert "removeIfNotLandingRoute" in koochi
 
 
+def test_public_routes_mount_cookie_consent_banner() -> None:
+    app = read(APP)
+    public_app = function_body(app, "render_public_app", "page_dashboard")
+    banner = function_body(app, "render_cookie_consent_banner", "render_koochi_chatbot")
+
+    assert "render_cookie_consent_banner()" in public_app
+    assert "cognisweep_cookie_consent_v1" in banner
+    assert "cognisweep_cookie_consent" in banner
+    assert "Cookie preferences" in banner
+    assert "Accept all" in banner
+    assert "Necessary only" in banner
+    assert "data-cookie-choice" in banner
+    assert "Cookie Notice" in banner
+    assert "Privacy" in banner
+    assert "cookieDomainAttribute(window.location.hostname)" in banner
+    assert "cognisweep-cookie-visible" in banner
+
+
 def test_koochi_uses_confident_product_intent_routing() -> None:
     app = read(APP)
     koochi = function_body(app, "render_koochi_chatbot", "route_query_for_page")
@@ -146,6 +164,7 @@ if __name__ == "__main__":
     test_public_landing_canonical_url_is_configured()
     test_public_landing_route_alias_renders_landing()
     test_public_landing_mounts_koochi_chatbot()
+    test_public_routes_mount_cookie_consent_banner()
     test_koochi_uses_confident_product_intent_routing()
     test_public_landing_uses_stable_fixed_header_spacing()
     test_public_signup_gate_tracks_blockers_without_default_lock()
