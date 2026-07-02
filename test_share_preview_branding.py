@@ -10,6 +10,8 @@ def test_streamlit_shell_branding_replaces_default_title_and_favicon():
     html = (
         "<html><head>\n"
         '    <link rel="shortcut icon" href="./favicon.png" />\n'
+        '    <script type="module" crossorigin src="./static/js/index.js"></script>\n'
+        '    <link rel="stylesheet" crossorigin href="./static/css/index.css">\n'
         "    <title>Streamlit</title>\n"
         "</head><body></body></html>"
     )
@@ -20,6 +22,9 @@ def test_streamlit_shell_branding_replaces_default_title_and_favicon():
     assert 'rel="icon" type="image/png" href="/favicon.png"' in branded
     assert 'rel="apple-touch-icon" href="/apple-touch-icon.png"' in branded
     assert "./favicon.png" not in branded
+    assert "./static/" not in branded
+    assert 'src="/static/js/index.js"' in branded
+    assert 'href="/static/css/index.css"' in branded
     assert 'rel="canonical" href="https://www.cognisweep.com/solutions/software-localization-tool"' in branded
     assert 'property="og:title"' in branded
     assert 'property="og:url" content="https://www.cognisweep.com/solutions/software-localization-tool"' in branded

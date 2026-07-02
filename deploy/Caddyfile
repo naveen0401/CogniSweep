@@ -40,6 +40,12 @@
         }
         redir @apexLanding https://www.cognisweep.com/solutions/software-localization-tool 308
 
+        @apexCanonicalLanding {
+            host cognisweep.com
+            path /solutions/software-localization-tool
+        }
+        redir @apexCanonicalLanding https://www.cognisweep.com/solutions/software-localization-tool 308
+
         @wwwRootLanding {
             host www.cognisweep.com
             path /

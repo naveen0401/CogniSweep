@@ -123,6 +123,8 @@ def test_caddy_redirects_bare_roots_to_canonical_landing() -> None:
     assert "host cognisweep.com" in caddy
     assert "query \"\"" in caddy
     assert "redir @apexLanding https://www.cognisweep.com/solutions/software-localization-tool 308" in caddy
+    assert "@apexCanonicalLanding" in caddy
+    assert "redir @apexCanonicalLanding https://www.cognisweep.com/solutions/software-localization-tool 308" in caddy
     assert "@wwwRootLanding" in caddy
     assert "host www.cognisweep.com" in caddy
     assert "redir @wwwRootLanding /solutions/software-localization-tool 308" in caddy

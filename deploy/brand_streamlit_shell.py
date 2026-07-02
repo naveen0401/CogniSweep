@@ -32,6 +32,10 @@ ICON_LINK_PATTERN = re.compile(
 )
 
 
+def normalize_static_asset_paths(html: str) -> str:
+    return html.replace("./static/", "/static/")
+
+
 def share_metadata_block() -> str:
     return f"""    {MARKER_START}
     <title>{SHARE_TITLE}</title>
@@ -56,6 +60,7 @@ def share_metadata_block() -> str:
 
 
 def branded_index_html(html: str) -> str:
+    html = normalize_static_asset_paths(html)
     html = ICON_LINK_PATTERN.sub("", html)
     block = share_metadata_block()
     marked_pattern = re.compile(
